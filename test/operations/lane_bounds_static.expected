@@ -32,3 +32,8 @@ Where condition annotated half with modulus 8: accepted when comp_prec keeps hal
 Where condition annotated half with modulus 8: refused when comp_prec widens half to single: true
 If condition annotated half with modulus 8: accepted when comp_prec keeps half: true
 If condition annotated half with modulus 8: refused when comp_prec widens half to single: true
+byte lane modulus Constant_bits 260 wraps to 4 and is accepted at single: true
+byte lane modulus Constant_bits (-1) wraps to 255 and is refused at single: true
+byte lane modulus Fixed_idx 260 wraps to 4 and is accepted at single: true
+byte lane modulus Fixed_idx (-1) wraps to 255 and is refused at single: true
+Vectorized bf16 loop with loop-invariant mod-8 lane extract matches serial twin bitwise: true

@@ -1,3 +1,6 @@
+(* cc-fp-contract: no-contraction -- Threefry uniform draws and plain addition, no product feeding
+   an add *)
+
 (* gh-ocannl-2412: static twin of [debug_check_lane_bounds]. At the shared [Raise_backend.compile]
    site before rendering, [Low_level.validate_lane_bounds] refuses any
    [Uint4x32_to_prec_uniform_lane] whose lane operand has the form [Mod (_, K)] with fixed integer
@@ -87,6 +90,8 @@ let mk_virtual prec dims label =
   Ll_test.virtualize tn;
   tn
 
+let bits_equal a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
+
 (* 1. Every scalar precision in [Ops.scalar_precs]: K = lanes + 1 refused, K = lanes accepted. *)
 let () =
   List.iter Ops.scalar_precs ~f:(fun prec ->
@@ -112,16 +117,28 @@ let () =
         (compile_outcome ~name:("lbs_bad_" ^ ps) opt_bad);
       let run_good () =
         let out_good = mk_node prec [| lanes |] ("lbs_good_" ^ ps) in
+        let ref_out = mk_node prec [| lanes |] ("lbs_ref_" ^ ps) in
         let i_good = Ll_test.sym () in
         let llc_good =
-          Ll_test.loop_n i_good lanes
-            (Ll_test.set_at out_good (Ll_test.iter i_good) (lane_extract (mod_lane i_good lanes)))
+          LL.unflat_lines
+            [
+              Ll_test.set_from_vec ~length:lanes ~vec_unop:Ops.Uint4x32_to_prec_uniform ref_out
+                [| Idx.Fixed_idx 0 |] (bits, u4);
+              Ll_test.loop_n i_good lanes
+                (Ll_test.set_at out_good (Ll_test.iter i_good)
+                   (lane_extract (mod_lane i_good lanes)));
+            ]
         in
         let name = "lbs_good_" ^ ps in
-        let opt_good = Ll_test.optimize ~materialized:[ out_good ] ~name llc_good in
-        match Ll_test.execute ~name opt_good ~seed:[] ~read:[ out_good ] with
-        | [ values ] ->
+        let opt_good = Ll_test.optimize ~materialized:[ out_good; ref_out ] ~name llc_good in
+        (* Distinct seeds on the two buffers so any skipped store shows up as a mismatch. *)
+        let seed =
+          [ (out_good, Array.create ~len:lanes 0.); (ref_out, Array.create ~len:lanes 1.) ]
+        in
+        match Ll_test.execute ~name opt_good ~seed ~read:[ out_good; ref_out ] with
+        | [ values; ref_values ] ->
             Array.length values = lanes
+            && Array.equal bits_equal values ref_values
             && List.length (List.dedup_and_sort (Array.to_list values) ~compare:Float.compare) > 1
         | _ -> false
       in
@@ -322,3 +339,67 @@ let () =
          String.is_substring msg ~substring:"a guard condition"
          && String.is_substring msg ~substring:"renders at single (4 lanes)"
          && String.is_substring msg ~substring:"fixed modulus 8 > 4"))
+
+(* 9. Modulus conversion at the lane operand's evaluation precision (unsigned wrap). *)
+let () =
+  let out = mk_node Ops.single [| 4 |] "lbs_byte_mod_out" in
+  let i = Ll_test.sym () in
+  let byte_mod_lane m =
+    LL.Binop
+      ( Ops.Uint4x32_to_prec_uniform_lane,
+        (bits, u4),
+        (LL.Binop (Ops.Mod, (LL.Embed_index (Ll_test.iter i), Ops.byte), (m, Ops.byte)), Ops.byte)
+      )
+  in
+  let llc_of m = Ll_test.loop_n i 4 (Ll_test.set_at out (Ll_test.iter i) (byte_mod_lane m)) in
+  p "byte lane modulus Constant_bits 260 wraps to 4 and is accepted at single"
+    (Option.is_none (LL.lane_bounds_violation (llc_of (LL.Constant_bits 260L))));
+  p "byte lane modulus Constant_bits (-1) wraps to 255 and is refused at single"
+    (Option.exists
+       (LL.lane_bounds_violation (llc_of (LL.Constant_bits (-1L))))
+       ~f:(fun msg ->
+         String.is_substring msg ~substring:(Tn.label_name out)
+         && String.is_substring msg ~substring:"renders at single (4 lanes)"
+         && String.is_substring msg ~substring:"fixed modulus 255 > 4"));
+  p "byte lane modulus Fixed_idx 260 wraps to 4 and is accepted at single"
+    (Option.is_none (LL.lane_bounds_violation (llc_of (LL.Embed_index (Idx.Fixed_idx 260)))));
+  p "byte lane modulus Fixed_idx (-1) wraps to 255 and is refused at single"
+    (Option.exists
+       (LL.lane_bounds_violation (llc_of (LL.Embed_index (Idx.Fixed_idx (-1)))))
+       ~f:(fun msg ->
+         String.is_substring msg ~substring:(Tn.label_name out)
+         && String.is_substring msg ~substring:"renders at single (4 lanes)"
+         && String.is_substring msg ~substring:"fixed modulus 255 > 4"))
+
+(* 10. Vectorized inner loop over narrow storage with a loop-invariant lane extract (modulus 8 at
+   bf16): [C_syntax.try_vectorize] must not splat the RNG extract at widened f32 (4 lanes), which
+   would read lanes 4..7 out of bounds on cc. *)
+let () =
+  let x = mk_node Ops.bfloat16 [| 8 |] "lbs_vec_x" in
+  let out_vec = mk_node Ops.bfloat16 [| 8; 8 |] "lbs_vec_out" in
+  let out_ser = mk_node Ops.bfloat16 [| 8; 8 |] "lbs_ser_out" in
+  let build axis out =
+    let row = Ll_test.sym () and col = Ll_test.sym () in
+    let draw = lane_extract (mod_lane row 8) in
+    let rhs =
+      LL.Binop (Ops.Add, (Ll_test.get x [| Ll_test.iter col |], Ops.bfloat16), (draw, Ops.bfloat16))
+    in
+    Ll_test.loop_n row 8
+      (Ll_test.loop_n ~axis col 8 (Ll_test.set out [| Ll_test.iter row; Ll_test.iter col |] rhs))
+  in
+  let llc = LL.unflat_lines [ build LL.Vectorized out_vec; build LL.Serial out_ser ] in
+  let opt = Ll_test.optimize ~materialized:[ x; out_vec; out_ser ] ~name:"lbs_vec_bf16" llc in
+  let seed =
+    [
+      (x, Array.init 8 ~f:(fun j -> Float.of_int (j + 1)));
+      (out_vec, Array.create ~len:64 (-1.));
+      (out_ser, Array.create ~len:64 (-2.));
+    ]
+  in
+  match Ll_test.execute ~name:"lbs_vec_bf16" opt ~seed ~read:[ out_vec; out_ser ] with
+  | [ vec_vals; ser_vals ] ->
+      p "Vectorized bf16 loop with loop-invariant mod-8 lane extract matches serial twin bitwise"
+        (Array.length vec_vals = 64
+        && Array.equal bits_equal vec_vals ser_vals
+        && Array.for_all vec_vals ~f:(fun v -> Float.(v >= 1. && v < 10.)))
+  | _ -> assert false

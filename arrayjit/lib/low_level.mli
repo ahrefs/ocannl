@@ -1375,10 +1375,12 @@ val validate_lane_bounds : ?site:string -> ?comp_prec:(Ops.prec -> Ops.prec) -> 
 (** gh-ocannl-2412: static twin of [debug_check_lane_bounds]. Refuses any
     [Uint4x32_to_prec_uniform_lane] whose lane operand (after peeling transparent [Identity] /
     [Arg1] / [Arg2] wrappers) has the form [Mod (_, K)] where [K] is a fixed integer
-    ([Embed_index (Fixed_idx K)], an integral finite [Constant], or [Constant_bits]) strictly
-    greater than {!Ops.vec_unop_lanes} of the precision the call renders at. [comp_prec] is the
-    backend's [compute_prec] (used for heterogeneous guard and [Where]-condition slots; store and
-    scope-local slots carrying an RNG conversion always render at storage precision).
+    ([Embed_index (Fixed_idx K)], an integral finite [Constant] representable at the lane operand's
+    evaluation precision, or [Constant_bits]) whose value after conversion to the lane operand's
+    evaluation precision is strictly greater than {!Ops.vec_unop_lanes} of the precision the call
+    renders at. [comp_prec] is the backend's [compute_prec] (used for heterogeneous guard and
+    [Where]-condition slots; store and scope-local slots carrying an RNG conversion always render at
+    storage precision).
 
     Boundary: this check judges only a fixed-modulus [Mod] operand. Dynamic lane operands (such as
     buffer reads, variable moduli, non-[Mod] expressions, or negative lanes) are left to the cc-only

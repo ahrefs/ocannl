@@ -8265,8 +8265,15 @@ module C_syntax (B : C_syntax_config) = struct
             lanes
       in
       let written = Hashtbl.create (module Int) in
-      List.iter sets ~f:(fun (tn, idcs, _) ->
-          if not (Ops.equal_prec (comp_prec (Lazy.force tn.Tn.storage_prec)) prec) then
+      List.iter sets ~f:(fun (tn, idcs, llsc) ->
+          let store_prec = Lazy.force tn.Tn.storage_prec in
+          if not (Ops.equal_prec (comp_prec store_prec) prec) then raise Vectorization_declined;
+          (* gh-ocannl-2412: an RNG conversion picks both its generator and its lane count from the
+             precision it renders at ([renders_at_store_prec]), so splatting a loop-invariant RNG
+             subexpression at a widened compute precision [prec] would run the wrong generator and
+             read past its lanes. Decline to vectorize so the serial path renders at storage
+             precision, matching [try_vectorize_reduce]'s [Skip_accum_pinned] decline. *)
+          if mentions_rng_conversion llsc && not (Ops.equal_prec store_prec prec) then
             raise Vectorization_declined;
           match Hashtbl.add written ~key:tn.Tn.uid ~data:idcs with
           | `Ok -> ()

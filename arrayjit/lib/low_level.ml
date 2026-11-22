@@ -13202,21 +13202,50 @@ let lane_bounds_violation ?(comp_prec = Fn.id) (llc : t) : string option =
         unwrap_transparent v
     | sc -> sc
   in
-  let fixed_modulus_above ~lanes = function
-    | Embed_index (Indexing.Fixed_idx k) when k > lanes -> Some (Int.to_string k)
-    | Constant c when Float.is_finite c && Float.is_integer c && Float.(c > Float.of_int lanes) ->
+  let convert_int64_above ~lanes ~lane_prec (k64 : int64) : string option =
+    match lane_prec with
+    | Ops.Byte_prec _ ->
+        let v = Int64.to_int_exn (Int64.bit_and k64 0xFFL) in
+        Option.some_if (v > lanes) (Int.to_string v)
+    | Ops.Uint16_prec _ ->
+        let v = Int64.to_int_exn (Int64.bit_and k64 0xFFFFL) in
+        Option.some_if (v > lanes) (Int.to_string v)
+    | Ops.Int32_prec _ ->
+        let v = Int32.to_int64 (Int64.to_int32_trunc k64) in
+        Option.some_if Int64.(v > Int64.of_int lanes) (Int64.to_string v)
+    | Ops.Uint32_prec _ ->
+        let v = Int64.bit_and k64 0xFFFF_FFFFL in
+        Option.some_if Int64.(v > Int64.of_int lanes) (Int64.to_string v)
+    | Ops.Int64_prec _ -> Option.some_if Int64.(k64 > Int64.of_int lanes) (Int64.to_string k64)
+    | Ops.Uint64_prec _ ->
+        if Int64.(k64 < 0L) then Some (Printf.sprintf "%Lu" k64)
+        else Option.some_if Int64.(k64 > Int64.of_int lanes) (Int64.to_string k64)
+    | _ -> Option.some_if Int64.(k64 > Int64.of_int lanes) (Int64.to_string k64)
+  in
+  let fixed_modulus_above ~lanes ~lane_prec = function
+    | Embed_index (Indexing.Fixed_idx k) ->
+        let k64 =
+          match Ops.index_prec () with
+          | Ops.Int32_prec _ -> Int32.to_int64 (Int32.of_int_trunc k)
+          | _ -> Int64.of_int k
+        in
+        convert_int64_above ~lanes ~lane_prec k64
+    | Constant c
+      when Float.is_finite c && Float.is_integer c
+           && ((not (Ops.is_integer lane_prec)) || Ops.integer_constant_converts lane_prec c)
+           && Float.(c > Float.of_int lanes) ->
         Some (Printf.sprintf "%.0f" c)
-    | Constant_bits k when Int64.(k > Int64.of_int lanes) -> Some (Int64.to_string k)
+    | Constant_bits k -> convert_int64_above ~lanes ~lane_prec k
     | _ -> None
   in
-  let check_lane ~tn ~scope ~prec lane =
+  let check_lane ~tn ~scope ~prec ~lane_prec lane =
     match prec with
     | Ops.Void_prec | Ops.Uint4x32_prec _ -> ()
     | _ -> (
         let lanes = Ops.vec_unop_lanes prec in
         match unwrap_transparent lane with
         | Binop (Ops.Mod, _, (m, _)) -> (
-            match fixed_modulus_above ~lanes (unwrap_transparent m) with
+            match fixed_modulus_above ~lanes ~lane_prec (unwrap_transparent m) with
             | Some k_str ->
                 raise
                   (Lane_bounds_malformed
@@ -13278,9 +13307,10 @@ let lane_bounds_violation ?(comp_prec = Fn.id) (llc : t) : string option =
         scalar ~tn ~scope ~prec:ps.(1) v2;
         scalar ~tn ~scope ~prec:ps.(2) v3
     | Binop (Ops.Uint4x32_to_prec_uniform_lane, (v1, p1), (v2, p2)) ->
-        check_lane ~tn ~scope ~prec v2;
+        let lane_prec = comp_prec p2 in
+        check_lane ~tn ~scope ~prec ~lane_prec v2;
         scalar ~tn ~scope ~prec:(comp_prec p1) v1;
-        scalar ~tn ~scope ~prec:(comp_prec p2) v2
+        scalar ~tn ~scope ~prec:lane_prec v2
     | Binop (op, (v1, p1), (v2, p2)) -> (
         match Ops.binop_conditionality op with
         | Ops.Only_first -> scalar ~tn ~scope ~prec v1
