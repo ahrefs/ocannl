@@ -1167,3 +1167,16 @@ byte-for-byte. The batch's baseline exited 0 (`20261110T173928Z-99425`).
 | `max_elt`, `reduce` and Stdlib's folds are reductions | `verdict_scan.ml`: only the four Base fold names | Failed: refuses piped and applied max_elt and reduce metrics bounded from above, but accepts lower margins, orderings, mapped errors and shadowing | `20261110T174613Z-81694` |
 | Bounds are read only over settled metrics | `verdict_scan.ml`: bounds derived in the metric stage | Failed: refuses loop-carried ref metrics bounded from above, but accepts lower margins, orderings, one-cell errors and shadowing | `20261110T174702Z-17772` |
 | A loop-carried bound on a name holding a difference is a tolerance | `verdict_scan.ml`: only an abs-of-difference written in the bound | Failed: refuses loop-carried ref metrics bounded from above, but accepts lower margins, orderings, one-cell errors and shadowing | `20261110T174747Z-71254` |
+
+## RNG scope collapse controls (gh-ocannl-1997)
+
+- On macbook-pro (cc, M4 Pro), making `rng_collapsible` always accept left
+  `test_uniform_virtual_lane`, its `-lane_checked` variant, and its `-outlined` variant green
+  (`20261122T214748Z-75163`, exit 0). The float rows still exercise cross-precision parity.
+  The uint16 row also reaches `integer_scope_exact`, which has no range proof for an RNG
+  lane conversion at a different precision.
+- Removing the RNG clause of the separate render-time check in `C_syntax.exact_scope_collapse`
+  exposed the missing local with the original draw fixture (`20261122T213013Z-36967`, exit 1).
+  With a zero addend on the host, the same removal also fails the bitwise readback at
+  `narrow_compute_f32=true` (`20261122T214552Z-20651`, exit 1). The zero-addend fixture passes
+  with the render-time clause in place (`20261122T214748Z-75163`, exit 0).
