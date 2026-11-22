@@ -5,9 +5,10 @@
 # `dune runtest` is a poor bargain (its own lock, the outer run's DUNE_*).
 # Usage: tools/test-affected-tests.sh [--self-check] [--keep] [--only REGEX]
 #
-# --self-check replaces each selected control's literal edits to the fixture
-# reader with identity edits. It checks the same assertions and requires each
-# control to reject its no-op. Fixture setup, mutation setup and reader
+# Put --self-check before the shared options. It replaces each selected control's
+# literal edits to the fixture reader with identity edits and requires the same
+# assertions to reject each no-op.
+# Fixture setup, mutation setup and reader
 # completion failures that invalidate a control remain failures. Ordinary
 # legs keep their assertions. The sweep follows calls to run_affected_mutant.
 # It does not scan shell text or mutate fixture inputs.

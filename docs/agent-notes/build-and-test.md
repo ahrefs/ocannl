@@ -4222,7 +4222,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   actual mutations too. A selected control goes through `run_affected_mutant` and gives one
   `report_mutant` verdict, directly or through `expect_mutant`. Before judging a no-op, the runner
   requires its completion marker and corresponding status, or the specific refusal declared by
-  a control over an invalid invocation. Use `--self-check --only REGEX` to audit selected controls.
+  a control over an invalid invocation. When adding or changing a control, run
+  `tools/test-affected-tests.sh --self-check --only REGEX` for its leg and cite the result in the PR.
   - Reach is link-level: a module reaches its whole library, and every stanza requiring it.
     So a change in `arrayjit/lib`, `tensor/` or a widely linked `test/support` library reaches
     much of the per-test alias set, including `arrayjit/test` and the `test/training` members:
