@@ -11023,6 +11023,26 @@
  (modules metal_failure_classes)
  (libraries base stdio arrayjit.ir arrayjit.verdict))
 
+; gh-ocannl-2406: Metal's floating-point contraction gate (metal_fp_contract=off -> #pragma STDC
+; FP_CONTRACT OFF): header emission, compiler_contraction_off capability, kernel-cache separation,
+; single-expression probe, FMA-sensitive multiply-add chain, and explicit FMA preservation.
+
+(test
+ (name metal_fp_contract)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules metal_fp_contract)
+ (libraries
+  base
+  stdio
+  arrayjit.verdict
+  arrayjit.utils
+  arrayjit.ir
+  ll_test
+  test_utils))
+
 (test
  ; ocannl-backend: metal -- `Context.metal ()`, then compares the launch fill's multiprocessor count
  ; with ioreg's gpu-core-count (gh-ocannl-1638); the off-platform `select` arm replays the golden.
@@ -17674,7 +17694,8 @@
 
 ; gh-ocannl-1457: a tensorized matmul's Tile_mma scalar fallback under a contraction-off compile is
 ; the serial loop's two-rounding f32 chain, bitwise, on non-dyadic operands: packed seeds on cc, and
-; a hand-applied Tensorize under precise math on CUDA and HIP (gh-ocannl-1834); skipped elsewhere.
+; a hand-applied Tensorize under the reproducible contraction pin on CUDA, HIP and Metal
+; (gh-ocannl-1834, gh-ocannl-2406); skipped elsewhere.
 
 (test
  (name tile_fallback_unfused)

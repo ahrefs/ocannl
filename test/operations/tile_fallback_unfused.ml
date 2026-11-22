@@ -18,14 +18,15 @@
    fused.
 
    Two legs. The cc leg holds packed seeds (found through the CPU seeder) on 33x40x37 data. The GPU
-   leg (gh-ocannl-1834), open on CUDA and HIP, holds a hand-applied [Tensorize] on 48x32x37 data
-   under [cuda_fast_math=false] / [hip_fast_math=false], also stated in-process before the first
-   compile: nvrtc then compiles with [--fmad=false] and hiprtc with [-ffp-contract=off]. The seeder
-   cannot supply those seeds -- it withholds an f32 tensorized capability on CUDA (wmma needs tf32,
-   off here) and on HIP (rocWMMA has no f32 shape) -- and for the same reason the statement declines
-   to the lane-0 scalar fallback there, which the leg claims from the routine's census rather than
-   assuming. Its schedule is [schedule_mma_matmul]'s: the zeroing's column loop and the lane loop
-   are both Workgroup(32), hence the GPU data's 32 columns. Every claim of a leg is skipped
+   leg (gh-ocannl-1834, gh-ocannl-2406), open on CUDA, HIP and Metal, holds a hand-applied
+   [Tensorize] on 48x32x37 data under [cuda_fast_math=false] / [hip_fast_math=false] /
+   [metal_fp_contract=off], also stated in-process before the first compile: nvrtc then compiles
+   with [--fmad=false], hiprtc with [-ffp-contract=off], and Metal emits [#pragma STDC FP_CONTRACT
+   OFF]. The statement declines to the lane-0 scalar fallback on every GPU backend: CUDA wmma needs
+   tf32 (off here), HIP rocWMMA has no f32 shape, and Metal's 8x8x8 [simdgroup_float8x8] requires k
+   divisible by 8 (k = 37 here); the leg claims [Scalar_fallback] from the routine's census rather
+   than assuming. Its schedule is [schedule_mma_matmul]'s: the zeroing's column loop and the lane
+   loop are both Workgroup(32), hence the GPU data's 32 columns. Every claim of a leg is skipped
    elsewhere; the digits of any disagreement go to stderr. *)
 
 open Base
@@ -47,10 +48,11 @@ let () = Utils.state_config ~key:"fp_contract" ~data:"false"
 let () = Utils.state_config ~key:"cc_vector_bytes" ~data:"0"
 let () = Utils.state_config ~key:"cuda_fast_math" ~data:"false"
 let () = Utils.state_config ~key:"hip_fast_math" ~data:"false"
+let () = Utils.state_config ~key:"metal_fp_contract" ~data:"off"
 let () = Utils.state_config ~key:"tf32_matmuls" ~data:"false"
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cc = List.mem [ "cc"; "multidev_cc" ] backend_name ~equal:String.equal
-let on_cuda_or_hip = List.mem [ "cuda"; "hip" ] backend_name ~equal:String.equal
+let on_gpu = List.mem [ "cuda"; "hip"; "metal" ] backend_name ~equal:String.equal
 let accum_prec = Ll_test.backend_accum_prec
 
 let named name (comp : Asgns.comp) : Asgns.comp =
@@ -137,7 +139,7 @@ let cpu_limits =
 (* The claims, each leg open on its backends and skipped by name elsewhere, each written once
    (gh-ocannl-1703). *)
 let cc_leg = Verdict.leg ~when_:on_cc ~on:backend_name ()
-let gpu_leg = Verdict.leg ~when_:on_cuda_or_hip ~on:backend_name ()
+let gpu_leg = Verdict.leg ~when_:on_gpu ~on:backend_name ()
 
 let results =
   lazy
@@ -261,15 +263,14 @@ let () =
   in_leg ~leg:cc_leg "every packed seed's fallback computes the two-rounding f32 chain bitwise"
     (fun label ->
       p_all ~min:2 label (snd (Lazy.force results)) ~f:(fun (_, got) -> bitwise got cpu.unfused));
-  in_leg ~leg:gpu_leg "the CUDA/HIP kernel compile pins contraction off under precise math"
+  in_leg ~leg:gpu_leg "the GPU kernel compile pins contraction off under the reproducible pin"
     (fun label -> p label (Lazy.force gpu_results).contraction_off);
-  in_leg ~leg:gpu_leg "the CUDA/HIP serial loop computes the two-rounding f32 chain bitwise"
+  in_leg ~leg:gpu_leg "the GPU serial loop computes the two-rounding f32 chain bitwise"
     (fun label -> p label (bitwise (Lazy.force gpu_results).serial gpu.unfused));
   in_leg ~leg:gpu_leg
-    "the CUDA/HIP tensorized f32 matmul renders its Tile_mma through the scalar fallback"
-    (fun label ->
+    "the GPU tensorized f32 matmul renders its Tile_mma through the scalar fallback" (fun label ->
       p label
         (Ir.C_syntax.equal_tensorization (Lazy.force gpu_results).tensorization
            Ir.C_syntax.Scalar_fallback));
-  in_leg ~leg:gpu_leg "the CUDA/HIP fallback computes the two-rounding f32 chain bitwise"
-    (fun label -> p label (bitwise (Lazy.force gpu_results).got gpu.unfused))
+  in_leg ~leg:gpu_leg "the GPU fallback computes the two-rounding f32 chain bitwise" (fun label ->
+      p label (bitwise (Lazy.force gpu_results).got gpu.unfused))

@@ -53,10 +53,46 @@ let () =
       List.equal Ir.Compiler_options.equal_metal_option
         (Ir.Compiler_options.metal ~routine_logging ~math_api)
         want);
-  (* gh-ocannl-1457: the math regime enters the schedule-cache key from the same builder: nothing on
-     the default modern regime (its keys stay valid), and the legacy sequence itself on the
-     other. *)
-  Verdict.p "the modern Metal math regime adds no schedule-cache component"
-    (Option.is_none (Ir.Compiler_options.metal_regime_tag Modern_split));
-  Verdict.p "the legacy Metal math regime adds a schedule-cache component"
-    (Option.is_some (Ir.Compiler_options.metal_regime_tag Legacy))
+  (* gh-ocannl-1457, gh-ocannl-2406: the math and contraction regimes enter the schedule-cache key
+     from the same builders: nothing on the default modern unpinned regime (its keys stay valid),
+     the legacy sequence on macOS 14, and [metal-fp-contract:off/mma-fallback-unfused] when
+     contraction is pinned off. *)
+  Verdict.p
+    "the modern Metal math regime with contraction unpinned adds no schedule-cache component"
+    (Option.is_none (Ir.Compiler_options.metal_regime_tag ~contraction_off:false Modern_split));
+  Verdict.p "the legacy Metal math regime with contraction unpinned adds a schedule-cache component"
+    (Option.is_some (Ir.Compiler_options.metal_regime_tag ~contraction_off:false Legacy));
+  Verdict.p
+    "metal_fp_contract=off adds metal-fp-contract:off and mma-fallback-unfused on the modern regime"
+    (Option.equal String.equal
+       (Ir.Compiler_options.metal_regime_tag ~contraction_off:true Modern_split)
+       (Some "metal-fp-contract:off/mma-fallback-unfused"));
+  Verdict.p
+    "metal_fp_contract=off appends metal-fp-contract:off and mma-fallback-unfused on the legacy \
+     regime"
+    (match
+       ( Ir.Compiler_options.metal_regime_tag ~contraction_off:false Legacy,
+         Ir.Compiler_options.metal_regime_tag ~contraction_off:true Legacy )
+     with
+    | Some base, Some pinned ->
+        String.equal pinned (base ^ "/metal-fp-contract:off/mma-fallback-unfused")
+    | _ -> false);
+  Verdict.p "metal_fp_contract parser accepts auto and off case-insensitively and rejects others"
+    ((not (Ir.Compiler_options.metal_fp_contract_off_of_string "auto"))
+    && (not (Ir.Compiler_options.metal_fp_contract_off_of_string " AUTO "))
+    && Ir.Compiler_options.metal_fp_contract_off_of_string "off"
+    && Ir.Compiler_options.metal_fp_contract_off_of_string " OFF "
+    &&
+      try
+        ignore (Ir.Compiler_options.metal_fp_contract_off_of_string "fast" : bool);
+        false
+      with Invalid_argument msg -> String.is_substring msg ~substring:"metal_fp_contract");
+  let header_auto = Ir.Compiler_options.metal_includes ~contraction_off:false in
+  let header_off = Ir.Compiler_options.metal_includes ~contraction_off:true in
+  Verdict.p
+    "metal_includes omits the contraction pragma under auto and emits #pragma STDC FP_CONTRACT OFF \
+     under off"
+    ((not (String.is_substring header_auto ~substring:Ir.Compiler_options.metal_fp_contract_pragma))
+    && String.is_substring header_off ~substring:Ir.Compiler_options.metal_fp_contract_pragma
+    && (not (Ir.Compiler_options.metal_includes_contraction_off header_auto))
+    && Ir.Compiler_options.metal_includes_contraction_off header_off)

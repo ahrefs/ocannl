@@ -1,3 +1,7 @@
 the selector seam drives every Metal API/debug option sequence: true
-the modern Metal math regime adds no schedule-cache component: true
-the legacy Metal math regime adds a schedule-cache component: true
+the modern Metal math regime with contraction unpinned adds no schedule-cache component: true
+the legacy Metal math regime with contraction unpinned adds a schedule-cache component: true
+metal_fp_contract=off adds metal-fp-contract:off and mma-fallback-unfused on the modern regime: true
+metal_fp_contract=off appends metal-fp-contract:off and mma-fallback-unfused on the legacy regime: true
+metal_fp_contract parser accepts auto and off case-insensitively and rejects others: true
+metal_includes omits the contraction pragma under auto and emits #pragma STDC FP_CONTRACT OFF under off: true

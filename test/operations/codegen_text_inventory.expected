@@ -273,6 +273,7 @@ test/operations/ll_test_dump.ml [run by @test/operations/runtest-ll_test_dump]
     "out[0] := 5.0"
     "out[0] := 7.0"
 test/operations/masked_persistent_fragment.ml [pins through Ll_test.resident_regions, haystack unvalidated; run by @test/operations/runtest-masked_persistent_fragment; also pins text this scan cannot name: untraced callback, opaque aggregate component]
+test/operations/metal_fp_contract.ml [run by @test/operations/runtest-metal_fp_contract; also pins text this scan cannot name: untraced callback, opaque aggregate component, mutation or unseen buffer write]
 test/operations/mixed_prec_twin_rounding.ml [run by @test/operations/runtest-mixed_prec_twin_rounding; also pins text this scan cannot name: computed fragment]
     "= FLOAT_TO_HALF(" ^ ... ^ "[0])"
     "FLOAT_TO_HALF(" ^ ... ^ "[0])"
@@ -733,6 +734,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-log_index_width_narrow
 @test/operations/runtest-log_index_width_wide
 @test/operations/runtest-masked_persistent_fragment
+@test/operations/runtest-metal_fp_contract
 @test/operations/runtest-micrograd_demo_logging
 @test/operations/runtest-mixed_prec_twin_rounding
 @test/operations/runtest-mma_operand_loads
@@ -908,6 +910,7 @@ test/operations/local_binder_gate.ml [through Ll_test.execute; through Ll_test.l
 test/operations/local_scope_sibling_reads.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-local_scope_sibling_reads]
 test/operations/matmul_interchange.ml [through Ll_test.execute_with_census; run by @test/operations/runtest-matmul_interchange, @test/operations/runtest-matmul_interchange-tf32]
 test/operations/metal_bounded_failure.ml [through Ll_test.run_routine; run by @test/operations/runtest-metal_bounded_failure]
+test/operations/metal_fp_contract.ml [through Ll_test.execute; run by @test/operations/runtest-metal_fp_contract]
 test/operations/metal_gpu_hang_failure.ml [through Ll_test.run_routine; run by @test/operations/slow-metal_gpu_hang_failure]
 test/operations/metal_hang_declines.ml [prelowered compile; run by @test/operations/runtest-metal_hang_declines]
 test/operations/metal_reap_failure.ml [through Ll_test.run_routine; run by @test/operations/runtest-metal_reap_failure]
@@ -1059,6 +1062,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-matmul_interchange
 @test/operations/runtest-matmul_interchange-tf32
 @test/operations/runtest-metal_bounded_failure
+@test/operations/runtest-metal_fp_contract
 @test/operations/runtest-metal_hang_declines
 @test/operations/runtest-metal_reap_failure
 @test/operations/runtest-metal_routine_log_delivery

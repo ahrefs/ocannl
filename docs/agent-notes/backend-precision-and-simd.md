@@ -1886,45 +1886,51 @@ files.
   `fp_contract=false`: the IR licence's explicit `FMA` would fail the two-rounding oracle under
   any compile pin. `tile_mma_declines` pins the register-tiled census with the contraction
   licence off.
-- **The contraction pin is a per-backend fact read off the compile's own option builder**
-  (gh-ocannl-1457): `compiler_contraction_off` is cc's `Cc_backend.contraction_off`
+- **The contraction pin is a per-backend fact read off the compile's own option or header builder**
+  (gh-ocannl-1457, gh-ocannl-2406): `compiler_contraction_off` is cc's `Cc_backend.contraction_off`
   (`Compiler_options.clang_contraction_off` over the fast-math and contraction flags in compile
   order: `-ffp-contract=off` after `-ffast-math` still pins), CUDA's
   `Compiler_options.nvrtc_contraction_off` (`--fmad=false`, `cuda_fast_math=false`), HIP's
-  `clang_contraction_off` over `hip_math_options` (`hip_fast_math=false`), and Metal's `false`,
-  though MSL source CAN pin it (gh-ocannl-1836): no gate emits the pin yet. `MTLCompileOptions`
-  has no contraction property; a pragma in the source does it. Measured on mac-studio (M4 Max,
-  macOS 27.2.1, Metal front end 32023.922) through `newLibraryWithSource` at MSL 3.1 and 3.2,
-  under the backend's Safe-plus-fast-functions, the legacy `fastMathEnabled=false`, Relaxed and
-  Fast, with `a = b = 1 + 2^-12`, `c = -(1 + 2^-11)` read from a buffer: the one statement
-  `(a * b) + c` returns `2^-24` (fused) bare and under `#pragma METAL fp math_mode(safe)`, and
-  `0` (the serial two roundings, cc's value under `off`) under each of `#pragma METAL fp
-  contract(off)`, `#pragma clang fp contract(off)` and `#pragma STDC FP_CONTRACT OFF`, at file
-  scope or at the top of the kernel body, with no diagnostic. The MSL specification (4.1, section
-  1.6.3, "Math Intrinsics Compiler Options") documents `#pragma METAL fp contract([off | on |
-  fast])` and `#pragma STDC FP_CONTRACT OFF`. It ties them to no language version, but documents
-  them beside the options of the Xcode 16 / macOS 15 SDKs. The backend's macOS 14 `Legacy` path
-  is unmeasured, so a join there should use `STDC FP_CONTRACT OFF`, the C standard's spelling, or
-  check that path first. `tools/metal_contract_probe.swift` reruns the probe in one command, and
-  its exit status is the verdict. Split over two statements (`p = a *
-  b; p + c`) it is `0` bare under Safe and legacy -- Safe contracts within an expression, like
-  `-ffp-contract=on` -- but `2^-24` under Relaxed and Fast, which each pragma brings to `0` too.
-  An explicit `fma(a, b, c)` stays fused under the pragma. The AIR agrees (`xcrun -sdk macosx
-  metal -S -emit-llvm -fmetal-math-mode=safe`): the bare expression lowers to `llvm.fmuladd.f32`,
-  each pragma to a plain `fmul` then `fadd`, and under Fast or Relaxed the pragma drops the
-  `contract` fast-math flag. The command line's `-ffp-contract=off` gives the same AIR but is no
-  switch for a backend compiling source at run time. Joining `compiler_contraction_off` needs a
-  reproducible-side gate (it changes every Metal kernel's arithmetic, and costs: under the
-  backend's options the pin measured 1.02x on a naive 1024^3 f32 matmul, 0.774 ms bare against
-  0.792 ms pinned, and 1.69x on an ALU-bound eight-chain `x * m + c` loop, 1.550 against
-  2.612 ms, GPU-clock medians of 21 interleaved repeats on mac-studio), the pragma in the kernel
-  header, the `mma-fallback-unfused` tag component and a Metal leg in `tile_fallback_unfused`.
-  Only an explicit pin counts, never a toolchain default. Cache
-  identity: cc's tag carries the flags, CUDA's `/nvrtc-math:` and HIP's `/hiprtc-math:` the precise
-  switches, and each adds `mma-fallback-unfused` under the pin, so a crown timed with the fused
-  tile does not replay; Metal's tag carries `Compiler_options.metal_regime_tag` -- nothing on the
-  default modern option split, the legacy sequence (macOS 14, `fastMathEnabled=false`, precise
-  functions) otherwise. The compile-options tests pin the predicate against each builder.
+  `clang_contraction_off` over `hip_math_options` (`hip_fast_math=false`), and Metal's
+  `Compiler_options.metal_includes_contraction_off` over `Compiler_options.metal_includes`
+  (`metal_fp_contract=off`). `MTLCompileOptions` has no contraction property; a pragma in the
+  source does it (gh-ocannl-1836). Measured on mac-studio (M4 Max, macOS 27.2.1 Build 26B131,
+  Metal front end 32023.922) and macbook-pro (M4 Pro, macOS 27.2.1 Build 26B131, Xcode `metal` CLI
+  absent; runtime `newLibraryWithSource`) at MSL 3.1 and 3.2, under the backend's
+  Safe-plus-fast-functions, the legacy `fastMathEnabled=false`, Relaxed and Fast, with
+  `a = b = 1 + 2^-12`, `c = -(1 + 2^-11)` read from a buffer: the one statement `(a * b) + c`
+  returns `2^-24` (fused) bare and under `#pragma METAL fp math_mode(safe)`, and `0` (the serial
+  two roundings, cc's value under `off`) under each of `#pragma METAL fp contract(off)`,
+  `#pragma clang fp contract(off)` and `#pragma STDC FP_CONTRACT OFF`, at file scope or at the top
+  of the kernel body, with no diagnostic. The MSL specification (4.1, section 1.6.3, "Math
+  Intrinsics Compiler Options") documents `#pragma METAL fp contract([off | on | fast])` and
+  `#pragma STDC FP_CONTRACT OFF`. It ties them to no language version, but documents them beside
+  the options of the Xcode 16 / macOS 15 SDKs. The backend's macOS 14 `Legacy` path is unmeasured,
+  so `metal_fp_contract=off` emits `#pragma STDC FP_CONTRACT OFF`, the C standard's spelling.
+  `tools/metal_contract_probe.swift` reruns the probe in one command, and its exit status is the
+  verdict. Split over two statements (`p = a * b; p + c`) it is `0` bare under Safe and legacy --
+  Safe contracts within an expression, like `-ffp-contract=on` -- but `2^-24` under Relaxed and
+  Fast, which each pragma brings to `0` too. An explicit `fma(a, b, c)` stays fused under the
+  pragma. The AIR agrees (`xcrun -sdk macosx metal -S -emit-llvm -fmetal-math-mode=safe`): the bare
+  expression lowers to `llvm.fmuladd.f32`, each pragma to a plain `fmul` then `fadd`, and under
+  Fast or Relaxed the pragma drops the `contract` fast-math flag. The command line's
+  `-ffp-contract=off` gives the same AIR but is no switch for a backend compiling source at run
+  time. `metal_fp_contract` (`auto | off`, default `auto`, pinned `off` in `reproducible` and
+  stated `auto` in `approximate`, gh-ocannl-2406) gates the pragma because the pin changes every
+  Metal kernel's arithmetic and costs (mac-studio M4 Max: 1.02x on a naive 1024^3 f32 matmul,
+  0.774 ms bare against 0.792 ms pinned, and 1.69x on an ALU-bound eight-chain `x * m + c` loop,
+  1.550 against 2.612 ms, GPU-clock medians of 21 interleaved repeats). Executed through OCANNL on
+  both mac-studio (M4 Max) and macbook-pro (M4 Pro): `test/operations/metal_fp_contract` verifies
+  the capability flip, header pragma, `(a * b) + c` moving from `0x1p-24` (`auto`) to `0x0p+0`
+  (`off`) without kernel-cache aliasing, explicit `fma` staying `0x1p-24`, and a 37-term
+  multiply-add chain moving from `max |auto - unfused| = 0x1.8p-11` to `0x0p+0` bitwise;
+  `test/operations/tile_fallback_unfused`'s GPU leg now includes Metal (`0x0p+0` on both Macs).
+  Only an explicit pin counts, never a toolchain default. Cache identity: cc's tag carries the
+  flags, CUDA's `/nvrtc-math:` and HIP's `/hiprtc-math:` the precise switches, and each adds
+  `mma-fallback-unfused` under the pin, so a crown timed with the fused tile does not replay;
+  Metal's tag carries `Compiler_options.metal_regime_tag` -- `None` on the default modern unpinned
+  regime, `metal-math:<legacy>` on macOS 14, and `metal-fp-contract:off/mma-fallback-unfused`
+  under `metal_fp_contract=off`. The compile-options tests pin the predicate against each builder.
 ## SIMD operations and rounding
 - **gfx11's WMMA returns the exact sum only when the products share a sign** (gh-ocannl-1420; the
   bf16 builtins, gh-ocannl-1509). The

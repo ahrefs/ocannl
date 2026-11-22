@@ -1,0 +1,8 @@
+the host emulation separates one rounding per step from two on the chain: true
+compiler_contraction_off is false under metal_fp_contract=auto and true under off: true
+the generated Metal header omits #pragma STDC FP_CONTRACT OFF under auto and emits it under off: true
+recompiling the same-named probe hits the kernel cache under auto and misses after flipping to off: true
+under metal_fp_contract=auto, (a * b) + c computes a legal rounding (fused 2^-24 or serial +0.0): true
+under metal_fp_contract=off, (a * b) + c rounds twice to +0.0 bitwise: true
+under metal_fp_contract=off, explicit fma(a, b, c) still computes the fused 2^-24 bitwise: true
+under metal_fp_contract=off, the FMA-sensitive chain computes the two-rounding f32 chain bitwise: true
