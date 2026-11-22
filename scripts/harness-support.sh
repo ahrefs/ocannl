@@ -642,6 +642,23 @@ mutant() { # NAME AWK_PROGRAM [AWK_OPTION...], uses caller's SRC and TMP
   bash -n "$out" || return 1
   printf '%s' "$out"
 }
+# Rewrite exact physical lines. Each requested source line must occur once.
+harness_line_mutant() { # SCRIPT OUTPUT [FROM TO]...
+  perl -e '
+    my ($src, $out, %to) = @ARGV;
+    my %n;
+    open(my $in, "<", $src) or exit 1;
+    open(my $o, ">", $out) or exit 1;
+    while (my $l = <$in>) {
+      chomp $l;
+      if (exists $to{$l}) { $n{$l}++; $l = $to{$l} }
+      print $o "$l\n";
+    }
+    close $o or exit 1;
+    exit((grep { ($n{$_} || 0) != 1 } keys %to) ? 1 : 0);
+  ' "$@"
+}
+
 # In-process re-entrant rejection primitive: require the precise status AND
 # diagnostic, never treat an unavailable command or syntax error as a verdict.
 harness_rejected() { # EXPECTED_RC PATTERN LOG COMMAND [ARG...]
