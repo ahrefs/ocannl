@@ -45,9 +45,18 @@
 # sent a TERM, and what ran is printed -- and so does a signal to this
 # script. N is a positive integer; 1, the default, runs one member at a time
 # with its output live, as before the option.
-# In serial, ordinary completion waits for EOF on the captured stderr.
-# A descendant that inherits the descriptor keeps the member open until
-# it closes it. An interrupted member instead stops its stderr relay.
+# In serial, each member writes its captured stderr (and stdout under
+# --ci-real-dune) directly to its per-member output file while a dispatcher-
+# owned live relay streams that file to stderr (and stdout). Verdict scans
+# therefore read complete capture files even if downstream consumption stalls
+# or a descendant holds an output descriptor open. After ordinary completion,
+# the dispatcher marks the member finished so each relay drains up to the
+# member's exit size and exits, bounding that drain to ~1 s (20 ticks of
+# 0.05 s) before stopping any still-running relay (TERM, 0.5 s grace, KILL)
+# and reaping it. An interrupted member (129, 130, 143) stops and reaps its
+# relays at once, and the EXIT trap stops and reaps any active relays (including
+# one just forked before registration) when the dispatcher exits, including on
+# a signal sent only to the dispatcher's PID.
 #
 # --expected-skips FILE runs every member strict (OCANNL_TOOL_HARNESS_STRICT=1)
 # except for the skips FILE lists, so a skip that newly appears on the
@@ -260,7 +269,60 @@ members() {
 unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_NO_DUNE \
   OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD
 scratch=()
-serial_relay=
+# Bound how long serial mode waits for a live relay to finish streaming after a
+# member exits, and how long relay teardown waits after TERM before escalating
+# to KILL so a stopped or TERM-ignoring relay cannot hang cleanup.
+serial_drain_ticks=20
+serial_kill_grace_ticks=10
+serial_relays=()
+kill_serial_relays() { # PID... : TERM, bounded grace, then KILL survivors
+  local ticks=0 live still pid
+  [ $# -gt 0 ] || return 0
+  for pid in "$@"; do
+    kill -TERM "$pid" 2>/dev/null || :
+  done
+  while [ "$ticks" -lt "$serial_kill_grace_ticks" ]; do
+    live=$(trap '' HUP INT TERM; jobs -pr; jobs -ps)
+    still=0
+    for pid in "$@"; do
+      case $'\n'"$live"$'\n' in
+        *$'\n'"$pid"$'\n'*) still=1; break ;;
+      esac
+    done
+    [ "$still" = 0 ] && return 0
+    ticks=$((ticks + 1))
+    sleep 0.05
+  done
+  live=$(trap '' HUP INT TERM; jobs -pr; jobs -ps)
+  for pid in "$@"; do
+    case $'\n'"$live"$'\n' in
+      *$'\n'"$pid"$'\n'*) kill -KILL "$pid" 2>/dev/null || : ;;
+    esac
+  done
+}
+stop_serial_relays() {
+  local live pid to_kill=() all_pids=() seen=$'\n'
+  [ "$jobs" = 1 ] || return 0
+  # In serial mode, live background jobs are exclusively our own relays; reading
+  # the job table also covers a relay forked just before serial_relays recorded it.
+  live=$(trap '' HUP INT TERM; jobs -pr; jobs -ps)
+  for pid in $live; do
+    to_kill+=("$pid")
+    all_pids+=("$pid")
+    seen=$seen$pid$'\n'
+  done
+  for pid in ${serial_relays[@]+"${serial_relays[@]}"}; do
+    case $seen in
+      *$'\n'"$pid"$'\n'*) ;;
+      *) all_pids+=("$pid"); seen=$seen$pid$'\n' ;;
+    esac
+  done
+  [ ${#to_kill[@]} -eq 0 ] || kill_serial_relays "${to_kill[@]}"
+  for pid in ${all_pids[@]+"${all_pids[@]}"}; do
+    wait "$pid" 2>/dev/null || :
+  done
+  serial_relays=()
+}
 # The signals the parallel run relays are pinned at their default before the
 # EXIT trap (gh-ocannl-2332): `trap ''` records the default as each one's
 # original, and the reset leaves it untrapped, so a member forked as one
@@ -270,7 +332,7 @@ serial_relay=
 # EXIT trap.
 trap '' HUP INT TERM
 trap - HUP INT TERM
-trap 'status=$?; [ -z "$serial_relay" ] || kill -TERM "$serial_relay" 2>/dev/null; rm -rf ${scratch[@]+"${scratch[@]}"}; [ -z "$slot_record" ] || echo "$status" >"$slot_record"' EXIT
+trap 'status=$?; stop_serial_relays; rm -rf ${scratch[@]+"${scratch[@]}"}; [ -z "$slot_record" ] || echo "$status" >"$slot_record"' EXIT
 # Refuse a list (exit 2, before any member runs) holding any line but the
 # three forms the header names, or an entry naming a harness this run does not
 # select, or one listed twice.
@@ -480,27 +542,124 @@ member_output() { # SCRIPT: sets output
   output=$outputs/${1//\//_}.out
 }
 command_not_found='^(.+: line [0-9]+: .+|[^:]+: [^:]+): command not found$'
-capture_status() { # SCRIPT COMMAND_RC TEE_RC
+capture_status() { # SCRIPT COMMAND_RC RELAY_RC
   if [ "$3" != 0 ]; then
-    printf 'harnesses: %s: could not capture member output (tee exit %s)\n' "$1" "$3" >&2
+    printf 'harnesses: %s: could not relay member output (relay exit %s)\n' "$1" "$3" >&2
     [ "$2" != 0 ] || return 1
   fi
   return "$2"
 }
-serial_member() { # SCRIPT STDERR [ARGS...]
-  local script=$1 error=$2 rc=0 relay_rc=0
-  shift 2
-  tee "$error" <"$outputs/stderr.fifo" >&2 &
-  serial_relay=$!
-  OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" "$@" 2>"$outputs/stderr.fifo" || rc=$?
+# Stream a growing capture file to stdout until $done appears, then drain up to
+# the file's size when $done was observed and exit. Using a regular file keeps
+# verdict capture complete even if downstream blocks or a descendant holds the
+# descriptor open after the member exits.
+serial_relay_perl='
+  my ($path, $done) = @ARGV;
+  open my $fh, "<", $path or exit 1;
+  binmode $fh;
+  binmode STDOUT;
+  my ($buf, $pos, $limit) = ("", 0, undef);
+  while (1) {
+    if (!defined $limit && -e $done) {
+      $limit = -s $path;
+      $limit = 0 if !defined $limit;
+    }
+    my $want = 8192;
+    if (defined $limit) {
+      $want = $limit - $pos;
+      last if $want <= 0;
+      $want = 8192 if $want > 8192;
+    }
+    my $n = sysread($fh, $buf, $want);
+    exit 1 if !defined $n;
+    if ($n > 0) {
+      $pos += $n;
+      my $off = 0;
+      while ($off < $n) {
+        my $w = syswrite(STDOUT, $buf, $n - $off, $off);
+        exit 1 if !defined $w;
+        $off += $w;
+      }
+      next;
+    }
+    last if defined $limit;
+    select undef, undef, undef, 0.02;
+  }
+'
+drain_serial_relays() { # sets serial_relay_rc to first unexpected non-zero relay status
+  local ticks=0 live= still=0 pid to_kill=() stopped=$'\n' relay_rc
+  serial_relay_rc=0
+  [ ${#serial_relays[@]} -gt 0 ] || return 0
+  while :; do
+    live=$(trap '' HUP INT TERM; jobs -pr; jobs -ps)
+    still=0
+    for pid in ${serial_relays[@]+"${serial_relays[@]}"}; do
+      case $'\n'"$live"$'\n' in
+        *$'\n'"$pid"$'\n'*) still=1; break ;;
+      esac
+    done
+    [ "$still" = 0 ] && break
+    [ "$ticks" -ge "$serial_drain_ticks" ] && break
+    ticks=$((ticks + 1))
+    sleep 0.05
+  done
+  if [ "$still" = 1 ]; then
+    for pid in ${serial_relays[@]+"${serial_relays[@]}"}; do
+      case $'\n'"$live"$'\n' in
+        *$'\n'"$pid"$'\n'*)
+          to_kill+=("$pid")
+          stopped=$stopped$pid$'\n' ;;
+      esac
+    done
+    [ ${#to_kill[@]} -eq 0 ] || kill_serial_relays "${to_kill[@]}"
+  fi
+  for pid in ${serial_relays[@]+"${serial_relays[@]}"}; do
+    relay_rc=0
+    wait "$pid" 2>/dev/null || relay_rc=$?
+    case $stopped in
+      *$'\n'"$pid"$'\n'*)
+        case $relay_rc in 137|143) relay_rc=0 ;; esac ;;
+    esac
+    [ "$relay_rc" = 0 ] || [ "$serial_relay_rc" != 0 ] || serial_relay_rc=$relay_rc
+  done
+  serial_relays=()
+}
+serial_member() { # SCRIPT STDOUT STDERR [ARGS...] (STDOUT empty unless --ci-real-dune)
+  local script=$1 out=$2 error=$3 rc=0 done_flag=$3.done
+  shift 3
+  rm -f "$done_flag"
+  : >"$error" || {
+    echo 'test-harnesses.sh: cannot create the live stderr capture file' >&2
+    exit 2
+  }
+  if [ -n "$out" ]; then
+    : >"$out" || {
+      echo 'test-harnesses.sh: cannot create the live stdout capture file' >&2
+      exit 2
+    }
+  fi
+  perl -e "$serial_relay_perl" "$error" "$done_flag" >&2 &
+  serial_relays=("$!")
+  if [ -n "$out" ]; then
+    perl -e "$serial_relay_perl" "$out" "$done_flag" &
+    serial_relays+=("$!")
+    OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" "$@" \
+      >"$out" 2>"$error" || rc=$?
+  else
+    OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" "$@" \
+      2>"$error" || rc=$?
+  fi
   case $rc in
-    # A descendant may outlive the interrupted member with stderr still open.
-    129|130|143) kill -TERM "$serial_relay" 2>/dev/null ;;
+    # A descendant may outlive the interrupted member with stderr or stdout open.
+    129|130|143)
+      stop_serial_relays
+      rm -f "$done_flag"
+      return "$rc" ;;
   esac
-  wait "$serial_relay" 2>/dev/null || relay_rc=$?
-  serial_relay=
-  case $rc in 129|130|143) return "$rc" ;; esac
-  capture_status "$script" "$rc" "$relay_rc"
+  : >"$done_flag" || :
+  drain_serial_relays
+  rm -f "$done_flag"
+  capture_status "$script" "$rc" "$serial_relay_rc"
 }
 member_ended() { # INDEX RC OUTPUT: ordinary failures count once per member
   local script=${run_scripts[$1]} rc=$2 diagnostic scan_rc=0
@@ -537,8 +696,6 @@ member_argv() { # INDEX: sets args
   [ -z "${run_selectors[$1]}" ] || args=(--only "${run_selectors[$1]}")
 }
 if [ "$jobs" = 1 ]; then
-  mkfifo "$outputs/stderr.fifo" ||
-    { echo 'test-harnesses.sh: cannot create the live stderr pipe' >&2; exit 2; }
   for ((i = 0; i < total; i++)); do
     script=${run_scripts[i]}
     member_argv "$i"
@@ -546,10 +703,9 @@ if [ "$jobs" = 1 ]; then
     member_output "$script"
     rc=0
     if [ "$ci_real_dune" = 1 ]; then
-      serial_member "$script" "$output.err" ${args[@]+"${args[@]}"} | tee "$output"
-      capture_status "$script" "${PIPESTATUS[@]}" || rc=$?
+      serial_member "$script" "$output" "$output.err" ${args[@]+"${args[@]}"} || rc=$?
     else
-      serial_member "$script" "$output.err" ${args[@]+"${args[@]}"} || rc=$?
+      serial_member "$script" '' "$output.err" ${args[@]+"${args[@]}"} || rc=$?
     fi
     member_ended "$i" "$rc" "$output.err"
   done
