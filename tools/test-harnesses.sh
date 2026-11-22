@@ -52,11 +52,12 @@
 # or a descendant holds an output descriptor open. After ordinary completion,
 # the dispatcher marks the member finished so each relay drains up to the
 # member's exit size and exits, bounding that drain to ~1 s (20 ticks of
-# 0.05 s) before stopping any still-running relay (TERM, 0.5 s grace, KILL)
-# and reaping it. An interrupted member (129, 130, 143) stops and reaps its
-# relays at once, and the EXIT trap stops and reaps any active relays (including
-# one just forked before registration) when the dispatcher exits, including on
-# a signal sent only to the dispatcher's PID.
+# 0.05 s) before stopping any still-running relay (TERM, 0.5 s grace, KILL),
+# reaping it, and noting on stderr that live output was cut while the verdict
+# read the full capture. An interrupted member (129, 130, 143) stops and reaps
+# its relays at once, and the EXIT trap stops and reaps any active relays
+# (including one just forked before registration) when the dispatcher exits,
+# including on a signal sent only to the dispatcher's PID.
 #
 # --expected-skips FILE runs every member strict (OCANNL_TOOL_HARNESS_STRICT=1)
 # except for the skips FILE lists, so a skip that newly appears on the
@@ -275,6 +276,15 @@ scratch=()
 serial_drain_ticks=20
 serial_kill_grace_ticks=10
 serial_relays=()
+serial_jobs_live() { # sets live to newline-bounded running/stopped child PIDs
+  live=$'\n'$(trap '' HUP INT TERM; jobs -pr; jobs -ps)$'\n'
+}
+in_live() { # PID
+  case $live in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 kill_serial_relays() { # PID... : TERM, bounded grace, then KILL survivors
   local ticks=0 live still pid
   [ $# -gt 0 ] || return 0
@@ -282,22 +292,18 @@ kill_serial_relays() { # PID... : TERM, bounded grace, then KILL survivors
     kill -TERM "$pid" 2>/dev/null || :
   done
   while [ "$ticks" -lt "$serial_kill_grace_ticks" ]; do
-    live=$(trap '' HUP INT TERM; jobs -pr; jobs -ps)
+    serial_jobs_live
     still=0
     for pid in "$@"; do
-      case $'\n'"$live"$'\n' in
-        *$'\n'"$pid"$'\n'*) still=1; break ;;
-      esac
+      if in_live "$pid"; then still=1; break; fi
     done
     [ "$still" = 0 ] && return 0
     ticks=$((ticks + 1))
     sleep 0.05
   done
-  live=$(trap '' HUP INT TERM; jobs -pr; jobs -ps)
+  serial_jobs_live
   for pid in "$@"; do
-    case $'\n'"$live"$'\n' in
-      *$'\n'"$pid"$'\n'*) kill -KILL "$pid" 2>/dev/null || : ;;
-    esac
+    if in_live "$pid"; then kill -KILL "$pid" 2>/dev/null || :; fi
   done
 }
 stop_serial_relays() {
@@ -305,7 +311,7 @@ stop_serial_relays() {
   [ "$jobs" = 1 ] || return 0
   # In serial mode, live background jobs are exclusively our own relays; reading
   # the job table also covers a relay forked just before serial_relays recorded it.
-  live=$(trap '' HUP INT TERM; jobs -pr; jobs -ps)
+  serial_jobs_live
   for pid in $live; do
     to_kill+=("$pid")
     all_pids+=("$pid")
@@ -586,17 +592,15 @@ serial_relay_perl='
     select undef, undef, undef, 0.02;
   }
 '
-drain_serial_relays() { # sets serial_relay_rc to first unexpected non-zero relay status
-  local ticks=0 live= still=0 pid to_kill=() stopped=$'\n' relay_rc
+drain_serial_relays() { # SCRIPT: sets serial_relay_rc to first unexpected non-zero relay status
+  local script=$1 ticks=0 live= still=0 cut=0 pid to_kill=() stopped=$'\n' relay_rc
   serial_relay_rc=0
   [ ${#serial_relays[@]} -gt 0 ] || return 0
   while :; do
-    live=$(trap '' HUP INT TERM; jobs -pr; jobs -ps)
+    serial_jobs_live
     still=0
     for pid in ${serial_relays[@]+"${serial_relays[@]}"}; do
-      case $'\n'"$live"$'\n' in
-        *$'\n'"$pid"$'\n'*) still=1; break ;;
-      esac
+      if in_live "$pid"; then still=1; break; fi
     done
     [ "$still" = 0 ] && break
     [ "$ticks" -ge "$serial_drain_ticks" ] && break
@@ -605,11 +609,10 @@ drain_serial_relays() { # sets serial_relay_rc to first unexpected non-zero rela
   done
   if [ "$still" = 1 ]; then
     for pid in ${serial_relays[@]+"${serial_relays[@]}"}; do
-      case $'\n'"$live"$'\n' in
-        *$'\n'"$pid"$'\n'*)
-          to_kill+=("$pid")
-          stopped=$stopped$pid$'\n' ;;
-      esac
+      if in_live "$pid"; then
+        to_kill+=("$pid")
+        stopped=$stopped$pid$'\n'
+      fi
     done
     [ ${#to_kill[@]} -eq 0 ] || kill_serial_relays "${to_kill[@]}"
   fi
@@ -618,10 +621,13 @@ drain_serial_relays() { # sets serial_relay_rc to first unexpected non-zero rela
     wait "$pid" 2>/dev/null || relay_rc=$?
     case $stopped in
       *$'\n'"$pid"$'\n'*)
-        case $relay_rc in 137|143) relay_rc=0 ;; esac ;;
+        case $relay_rc in 137|143) relay_rc=0; cut=1 ;; esac ;;
     esac
     [ "$relay_rc" = 0 ] || [ "$serial_relay_rc" != 0 ] || serial_relay_rc=$relay_rc
   done
+  if [ "$cut" = 1 ]; then
+    printf '\nharnesses: %s: live output cut after the drain bound; the verdict read the full capture\n' "$script" >&2
+  fi
   serial_relays=()
 }
 serial_member() { # SCRIPT STDOUT STDERR [ARGS...] (STDOUT empty unless --ci-real-dune)
@@ -657,7 +663,7 @@ serial_member() { # SCRIPT STDOUT STDERR [ARGS...] (STDOUT empty unless --ci-rea
       return "$rc" ;;
   esac
   : >"$done_flag" || :
-  drain_serial_relays
+  drain_serial_relays "$script"
   rm -f "$done_flag"
   capture_status "$script" "$rc" "$serial_relay_rc"
 }

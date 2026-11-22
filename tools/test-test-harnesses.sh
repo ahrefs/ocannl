@@ -1034,7 +1034,8 @@ sys.exit(rc)
 PY_STALL
 if [ "$stall_rc" = 1 ] &&
    grep -qxF "HARNESS $control_member exit: 1" "$TMP/stall.out" &&
-   grep -q "harnesses: $control_member: missing command: .*: ocannl_fixture_undefined_function: command not found$" "$TMP/stall.err"; then
+   grep -qxF "harnesses: $control_member: live output cut after the drain bound; the verdict read the full capture" "$TMP/stall.err" &&
+   grep -q "^harnesses: $control_member: missing command: .*: ocannl_fixture_undefined_function: command not found$" "$TMP/stall.err"; then
   report 0 'a stalled downstream stderr reader does not truncate verdict capture'
 else
   report 1 'a stalled downstream stderr reader does not truncate verdict capture' \
