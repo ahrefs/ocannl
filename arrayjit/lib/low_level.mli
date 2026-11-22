@@ -534,11 +534,12 @@ type replay_facts = {
           that stored the computation. *)
 }
 
-val replay_facts : self:Tnode.t -> t -> replay_facts
+val replay_facts : ?placements:Tnode.Placements.t -> self:Tnode.t -> t -> replay_facts
 (** gh-ocannl-777: what one replay of a stored computation of [self] reads, for
     [Context.observability]. Only the statements the inliner's instantiation keeps are visited —
     loops (a dead one replays nothing), [self]'s own setters, scope-local assignments — so the
-    sibling setters a shared-loop body carries cannot contribute a read or a symbol. *)
+    sibling setters a shared-loop body carries cannot contribute a read or a symbol. With placement
+    information, a scope cleanup retracts contributes its buffer target and original indices. *)
 
 module Canonical_render : sig
   (** gh-563: the one canonical rendering of lowered code, shared by both digest consumers —

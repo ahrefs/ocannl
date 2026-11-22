@@ -2,6 +2,7 @@ Families, derived from the constructors of `provenance` in arrayjit/lib/tnode.ml
   Visit_cap -- one tag, its case of provenance_to_string
   Inline_reduction_cap -- one tag, its case of provenance_to_string
   Inline_fanin_cap -- one tag, its case of provenance_to_string
+  Observed_reader_reads_local -- one tag, its case of provenance_to_string
   Read_before_write -- one tag, its case of provenance_to_string
   Scope_local -- one tag, its case of provenance_to_string
   Surviving_read -- one tag, its case of provenance_to_string
@@ -16,6 +17,7 @@ Constructors -- arrayjit/lib/tnode.ml, provenance_to_string:
   36:read-before-write (Read_before_write)
   39:inline-reduction-cap (Inline_reduction_cap)
   41:inline-fanin-cap (Inline_fanin_cap)
+  161:observed-reader-reads-local (Observed_reader_reads_local)
 Site -- arrayjit/lib/assignments.ml, mark_aliases:
   27:slice-alias-parent
 Site -- arrayjit/lib/assignments.ml, one:
@@ -178,7 +180,7 @@ arrayjit/lib/online_softmax.ml -- 148 483 1002
 arrayjit/lib/online_softmax.mli -- 148 483 1002
 arrayjit/lib/prefix_scan.ml -- 1758
 arrayjit/lib/schedule.ml -- 175 176 177 178 184 486 1003 1736
-arrayjit/lib/tnode.ml -- 1 13 16 17 36 39 41 49 432
+arrayjit/lib/tnode.ml -- 1 13 16 17 36 39 41 49 161 432
 arrayjit/lib/winograd.ml -- 505
 arrayjit/lib/winograd.mli -- 505
 benchmarks/report-gh612-hip.md -- 41
@@ -202,7 +204,7 @@ test/operations/scan_loop.ml -- 148
 test/operations/scope_over_materialized.ml -- 1 13 142
 test/operations/splice_semantics.ml -- 51
 test/operations/stored_template_elision.ml -- 13 142 154 155 156
-test/operations/virtual_chain_fanin.ml -- 13 41 159
+test/operations/virtual_chain_fanin.ml -- 13 41 159 177
 test/operations/virtual_diagonal.ml -- 13 52
 test/operations/virtual_guarded_setter.ml -- 142
 test/operations/virtual_inliner_oracle.ml -- 10 13 51 157 158

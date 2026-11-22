@@ -50,6 +50,9 @@ let () =
     Ir.Assignments.sequence
       [ Train.grad_update loss; Train.sgd_update ~learning_rate ~momentum:0.5 loss ]
   in
+  let grad t = (Option.value_exn ~here:[%here] t.Tensor.diff).grad in
+  (* The fixture observes the parameter and needs its gradient to replay over scratch. *)
+  (grad w).observable <- false;
   (* gh-ocannl-1724: a lineage refuses a tensor fragment compiled twice. This test's recompiles in
      one lineage exercise tuning a step its lineage already compiled and ran, which an unowned copy
      of the program ([Ll_test.unowned_copy]) still does. *)
@@ -71,9 +74,7 @@ let () =
      virtual [w.grad]'s stored template reads it, the shape a later compile of the same step must
      accept (gh-ocannl-1645; [lineage_recompile_step] pins it without a search). That is the CPU
      backends' placement: on Metal [y.grad] is not routine-local scratch at this size. *)
-  (let plc = Context.placements reference
-   and grad t = (Option.value_exn ~here:[%here] t.Tensor.diff).grad
-   and backend = Context.backend_name reference in
+  (let plc = Context.placements reference and backend = Context.backend_name reference in
    let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend) in
    gated ~when_:on_cpu ~on:backend "the warm-up commits w.grad virtual"
      (Ir.Tnode.Placements.known_virtual plc (grad w));
