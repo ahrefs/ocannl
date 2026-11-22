@@ -239,7 +239,7 @@ let () =
         lazy
           (let ctx, routine, prod, out = compile_gh2347 ~scheduled:false "wf_gh2347_ref" in
            let ran = Context.run ctx routine in
-           let values = (Context.get_values ran prod, Context.get_values ran out) in
+           let values = (Exact_sums.get_stored_values ran prod, Context.get_values ran out) in
            Context.release ctx;
            values)
       in

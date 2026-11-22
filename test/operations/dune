@@ -19222,6 +19222,7 @@
   base
   ocannl
   stdio
+  exact_sums
   unix
   fresh_process
   test_utils
