@@ -180,6 +180,12 @@ untimed-model -- they are the cache capacity, cache bandwidth, scalar issue rate
   model_transaction_rate
   model_workgroup_bytes_per_multiprocessor
 
+execution-neutral -- advisory reporting-only per-format matrix-unit peak ceilings for the benchmark report's kernel %peak column (gh-ocannl-1092): never consulted by compilation, scheduling, autotune ranking, bound pruning or the schedule cache
+  model_peak_mma_bf16
+  model_peak_mma_f16
+  model_peak_mma_fp8
+  model_peak_mma_tf32
+
 execution-neutral -- startup and configuration-sourcing chatter, which descriptor foreign C-library chatter follows, and whether its known per-event noise is collapsed into a count
   collapse_foreign_stderr_noise
   detach_c_stderr

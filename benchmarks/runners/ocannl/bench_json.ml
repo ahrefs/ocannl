@@ -292,12 +292,22 @@ type ceiling = {
   tag : string;
       (** The short name a report row carries: ["f32"] for the backend's single-precision scalar
           constant, ["f16-native"] for twice it on a target whose 16-bit arithmetic is native
-          (gh-ocannl-575). *)
+          (gh-ocannl-575), or ["mma-<fmt>"] (["mma-f16"], ["mma-bf16"], ["mma-tf32"], ["mma-fp8"],
+          ["mma-f32"]) for a GPU tensor-core kernel scored against its format's matrix-unit peak
+          (gh-ocannl-1092). *)
   ceiling_flops : float;  (** FLOP/s, FMA counted as two, as [Cost_model]'s op counts are. *)
   ceiling_bandwidth : float;  (** bytes/s. *)
   source : string;  (** Whose constants: the backend's class constants, or a config override. *)
 }
 (** The ceiling a kernel is scored against. *)
+
+(** Resolution of a GPU tensor-core kernel's matrix-unit compute ceiling (gh-ocannl-1092). *)
+type mma_ceiling =
+  | Mma_peak of { format : string; flops : float; source : string }
+      (** Advisory peak for the kernel's emitted MMA format (e.g. [format = "f16"]). *)
+  | Mma_no_peak of string
+      (** Why no MMA ceiling applies (e.g. mixed MMA formats in one kernel, or an unconfigured
+          format). *)
 
 (** The ceiling matched to the kernel, or why there is none.
 
@@ -306,38 +316,67 @@ type ceiling = {
       alone would score near zero, which reads as "far from peak" rather than "unscored". The C
       backends carry no class constant at all ([model_peak_flops] / [model_peak_memory_bandwidth]
       supply one per machine).
-    - A tensorized kernel on a GPU backend has no ceiling. [peak_flops] is a scalar single-precision
-      constant; tensor cores are a separate unit several times faster, so scoring against it reads
-      above 100% on exactly the rows this column exists for, and no class constant for the mma unit
-      exists to use instead. On the C backends the [Tile_mma] register tile runs on the SIMD units
-      [peak_flops] describes, so it keeps the scalar ceiling.
+    - A tensorized kernel on a GPU backend uses [mma_ceiling] when provided (gh-ocannl-1092): its
+      emitted format's advisory matrix-unit peak (or the scalar ceiling on Apple Silicon Metal,
+      where [simdgroup_matrix] runs on the shader ALUs), tagged ["mma-<fmt>"]. When no MMA peak
+      applies — unconfigured format, mixed MMA formats in one kernel, or no [mma_ceiling] passed —
+      it reports [no-ceiling] rather than silently scoring tensor cores against scalar f32. On the C
+      backends the [Tile_mma] register tile runs on the SIMD units [peak_flops] describes, so it
+      keeps the scalar ceiling.
     - A kernel whose arithmetic is all 16-bit on a target where that is native gets twice the scalar
       ceiling ([native_fp16_arithmetic], gh-ocannl-575). *)
-let choose_ceiling ~gpu ~tensorization ~narrow_native ~peak_flops ~peak_memory_bandwidth =
-  match (peak_flops, peak_memory_bandwidth) with
-  | None, _ | _, None ->
-      let missing =
-        String.concat ~sep:" and "
-          (List.filter_map
-             [ ("peak_flops", peak_flops); ("peak_memory_bandwidth", peak_memory_bandwidth) ]
-             ~f:(fun (name, leg) -> if Option.is_none leg then Some name else None))
-      in
-      Error
-        (Printf.sprintf
-           "no %s for this backend (the C backends carry no class constant; set model_peak_flops \
-            and model_peak_memory_bandwidth)"
-           missing)
-  | Some _, Some _ when gpu && String.equal tensorization "tensorized" ->
-      Error "tensor-core kernel: no class constant for the mma unit, and peak_flops is scalar f32"
-  | Some (flops, flops_source), Some (bandwidth, bandwidth_source) ->
-      let source =
-        if String.equal flops_source bandwidth_source then flops_source
-        else Printf.sprintf "flops: %s; bandwidth: %s" flops_source bandwidth_source
-      in
-      if narrow_native then
-        Ok
-          { tag = "f16-native"; ceiling_flops = 2. *. flops; ceiling_bandwidth = bandwidth; source }
-      else Ok { tag = "f32"; ceiling_flops = flops; ceiling_bandwidth = bandwidth; source }
+let choose_ceiling ~mma_ceiling ~gpu ~tensorization ~narrow_native ~peak_flops
+    ~peak_memory_bandwidth =
+  let combine_sources flops_source bandwidth_source =
+    if String.equal flops_source bandwidth_source then flops_source
+    else Printf.sprintf "flops: %s; bandwidth: %s" flops_source bandwidth_source
+  in
+  if gpu && String.equal tensorization "tensorized" then
+    match (mma_ceiling, peak_memory_bandwidth) with
+    | Some (Mma_peak { format; flops; source = flops_source }), Some (bandwidth, bandwidth_source)
+      ->
+        if not (Float.is_finite flops && Float.(flops > 0.)) then
+          Error (Printf.sprintf "tensor-core kernel: non-finite mma-%s peak (%g)" format flops)
+        else if not (Float.is_finite bandwidth && Float.(bandwidth > 0.)) then
+          Error
+            (Printf.sprintf "tensor-core kernel: non-finite peak_memory_bandwidth (%g)" bandwidth)
+        else
+          Ok
+            {
+              tag = "mma-" ^ format;
+              ceiling_flops = flops;
+              ceiling_bandwidth = bandwidth;
+              source = combine_sources flops_source bandwidth_source;
+            }
+    | Some (Mma_no_peak reason), Some _ -> Error reason
+    | None, Some _ ->
+        Error "tensor-core kernel: no mma peak for this format, and peak_flops is scalar f32"
+    | _, None -> Error "no peak_memory_bandwidth for this backend (set model_peak_memory_bandwidth)"
+  else
+    match (peak_flops, peak_memory_bandwidth) with
+    | None, _ | _, None ->
+        let missing =
+          String.concat ~sep:" and "
+            (List.filter_map
+               [ ("peak_flops", peak_flops); ("peak_memory_bandwidth", peak_memory_bandwidth) ]
+               ~f:(fun (name, leg) -> if Option.is_none leg then Some name else None))
+        in
+        Error
+          (Printf.sprintf
+             "no %s for this backend (the C backends carry no class constant; set model_peak_flops \
+              and model_peak_memory_bandwidth)"
+             missing)
+    | Some (flops, flops_source), Some (bandwidth, bandwidth_source) ->
+        let source = combine_sources flops_source bandwidth_source in
+        if narrow_native then
+          Ok
+            {
+              tag = "f16-native";
+              ceiling_flops = 2. *. flops;
+              ceiling_bandwidth = bandwidth;
+              source;
+            }
+        else Ok { tag = "f32"; ceiling_flops = flops; ceiling_bandwidth = bandwidth; source }
 
 type kernel = {
   segment : int;  (** Its position among the step's kernels, in launch order. *)

@@ -1289,6 +1289,17 @@
 # autotune_calibration_file).
 #model_peak_memory_bandwidth=
 
+# gh-ocannl-1092: advisory reporting-only per-format dense matrix-unit peak ceilings (FLOP/s, FMA
+# counted as two) for the benchmark report's `kernel %peak` column. Unset/empty uses the backend's
+# class constant (CUDA and HIP publish per-format datasheet peaks; Apple Silicon Metal maps
+# tensorized kernels to the scalar `model_peak_flops` ceiling because `simdgroup_matrix` runs on
+# the shader ALUs on M1-M4). Reporting-only: never feeds autotune ranking, bound pruning, or the
+# schedule cache.
+#model_peak_mma_f16=
+#model_peak_mma_bf16=
+#model_peak_mma_tf32=
+#model_peak_mma_fp8=
+
 # gh-ocannl-1253: overrides the backend's advisory cache capacity (bytes) of the analytic cost
 # model's ranking score, the score `Autotune.model_default` and the `auto` seeding gate
 # (gpu_default_sketch_min_reduction) rank candidates by. The score requests a kernel's global

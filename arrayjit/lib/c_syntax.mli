@@ -99,6 +99,19 @@ type tensorization =
 val tensorization_name : tensorization -> string
 (** The label a census line prints for a {!tensorization} state. *)
 
+type emitted_mma = {
+  mma_a_prec : Ops.prec;
+  mma_b_prec : Ops.prec;
+  mma_d_prec : Ops.prec;
+  mma_accum_prec : Ops.prec;
+  mma_tf32 : bool;
+}
+[@@deriving sexp_of, equal]
+(** Operand storage precisions, actual emitted accumulator precision (from
+    {!C_syntax_config.mma_arm}), and active [tf32_matmuls] flag of a [Tile_mma] statement that
+    rendered through the backend's intrinsic hook ({!Mma_intrinsics} / {!Mma_intrinsics_ldmatrix};
+    gh-ocannl-1092). Never recorded for {!Mma_scalar_fallback} or {!Mma_register_tiled}. *)
+
 type mma_summary = {
   renderings : (string * mma_rendering) list;
       (** The census entries of one compile, in emission order (kernel name, rendering). Fissioned
@@ -111,12 +124,20 @@ type mma_summary = {
           fragment hook rendered, the accumulator register-resident across the whole reduction. Not
           counted: a region whose hook declined (its [Tile_mma]s alias the target per statement, or
           fall back), and a pad-masked contraction's fragment, which is never marked as one. *)
+  emitted_formats : emitted_mma list;
+      (** gh-ocannl-1092: storage precision triples and [tf32_matmuls] setting of the intrinsic
+          [Tile_mma] statements that actually emitted during this compile, in emission order. *)
 }
 [@@deriving sexp_of]
 (** What a compile's {!mma_census} says about the routine it produced. *)
 
-val summarize_census : ?fragment_scopes:int -> (string * mma_rendering) List.t -> mma_summary
-(** Summarize census entries and the [fragment_scopes] count into an {!mma_summary}. *)
+val summarize_census :
+  ?fragment_scopes:int ->
+  ?emitted_formats:emitted_mma list ->
+  (string * mma_rendering) List.t ->
+  mma_summary
+(** Summarize census entries, [fragment_scopes] count and [emitted_formats] into an {!mma_summary}.
+*)
 
 val empty_mma_summary : mma_summary
 (** The summary of a compile that emitted no [Tile_mma] statement. *)

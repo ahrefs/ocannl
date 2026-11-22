@@ -7537,6 +7537,31 @@
   arrayjit.ir
   arrayjit.autotune))
 
+; gh-ocannl-1092: per-format advisory MMA peaks, provenance, Metal scalar-ALU rule, config
+; overrides, and live GPU dominant-kernel scoring for tensorized matmuls.
+
+(test
+ (name dominant_kernel_mma_ceiling)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules dominant_kernel_mma_ceiling)
+ (libraries
+  base
+  stdio
+  unix
+  yojson
+  ocannl
+  ll_test
+  bench_harness
+  bench_json
+  arrayjit.verdict
+  arrayjit.utils
+  arrayjit.ir
+  arrayjit.context
+  arrayjit.autotune))
+
 (test
  (name dropout_mask_varies)
  (package neural_nets_lib)

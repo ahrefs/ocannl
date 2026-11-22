@@ -2368,6 +2368,36 @@ val envelope_legs :
     scoring a measured kernel against the envelope reads the very constants the model ranks with,
     and can say whose they are (gh-ocannl-1006). *)
 
+(** Provenance of an advisory per-format MMA peak resolved by {!mma_peak_leg} (gh-ocannl-1092). *)
+type mma_peak_source =
+  | Mma_peak_config of string  (** Per-format config override key (e.g. ["model_peak_mma_f16"]). *)
+  | Mma_peak_backend of Ir.Backend_intf.mma_peak_provenance
+      (** Backend advisory class constant with its {!Ir.Backend_intf.mma_peak_provenance}. *)
+  | Mma_peak_scalar_alu of [ `Config | `Backend ]
+      (** Stated shader-ALU rule ({!Ir.Backend_intf.hardware_limits.mma_uses_scalar_peak}, Apple
+          Silicon Metal): tensorized kernels map to the scalar [peak_flops] ceiling, carrying
+          whether that scalar ceiling came from [`Config] or [`Backend]. *)
+[@@deriving sexp_of]
+
+(** Outcome of resolving an advisory per-format MMA peak in {!mma_peak_leg} (gh-ocannl-1092). Config
+    parse/finiteness errors and accumulator mismatches return {!Mma_peak_unavailable} rather than
+    raising, so reporting never discards a completed benchmark measurement. *)
+type mma_peak_result = Mma_peak_found of float * mma_peak_source | Mma_peak_unavailable of string
+[@@deriving sexp_of]
+
+val mma_peak_leg :
+  limits:Ir.Backend_intf.hardware_limits ->
+  accum_prec:Ir.Ops.prec ->
+  Ir.Backend_intf.mma_input_format ->
+  mma_peak_result
+(** Advisory per-format matrix-unit peak in FLOP/s with its provenance, for the benchmark report's
+    [kernel %peak] column (gh-ocannl-1092). Resolution order: explicit finite positive
+    [model_peak_mma_<fmt>] config override, then [limits]' per-format advisory constant (checked
+    against [accum_prec] when the constant is [F32_accum_only]), then — when
+    {!Ir.Backend_intf.hardware_limits.mma_uses_scalar_peak} is [true] — the scalar {!envelope_legs}
+    compute leg. Reporting-only: never consulted by {!model_score}, {!model_default},
+    {!seeded_default}, or {!tune} ([test/operations/limits_field_classes] enforces this). *)
+
 val ranking_capacity : limits:Ir.Backend_intf.hardware_limits -> int option * int option
 (** The cache capacity (bytes) and device residency (threads) the ranking score
     ({!Ir.Cost_model.ranking_seconds}, gh-ocannl-1253) uses: config [model_cache_capacity] ([none]

@@ -870,6 +870,49 @@ let capability ~cc =
       }
   else None
 
+type mma_peaks = {
+  f16 : Backend_intf.mma_peak option;
+  bf16 : Backend_intf.mma_peak option;
+  tf32 : Backend_intf.mma_peak option;
+  fp8 : Backend_intf.mma_peak option;
+}
+
+(* gh-ocannl-1092: advisory dense matrix-unit peaks for the benchmark report's kernel %peak column
+   (reporting-only; never feeds autotune ranking or bound pruning). Anchored to the same mid-range
+   GeForce RTX class baseline as [Cuda_backend]'s [peak_flops = 1.5e13] (~15 fp32 TFLOP/s, e.g. RTX
+   4060 at 15.1 TFLOP/s): per NVIDIA's Ada Lovelace (AD102/AD104) and RTX Blackwell (GB202/GB203)
+   architecture whitepapers, dense tensor-core throughput on Ampere/Ada/Blackwell consumer GeForce
+   RTX scales at 1x fp32 for TF32 (f32-accum), 2x fp32 for FP16/BF16 (f32-accum; OCANNL's default
+   [fp16_auto_wide = true]), and 4x fp32 for FP8 (f32-accum). Narrow f16-accum is 2x higher on
+   consumer GeForce; Volta (sm_70, ~8x on V100), Turing (sm_75, ~4x on GeForce RTX 20xx), and
+   datacenter parts (A100/H100) have different ratios -- Volta/Turing fail closed to [None] rather
+   than carrying an Ampere+ citation, and any box can override per format with [model_peak_mma_*].
+   Each peak is gated on at least its arm's {!arm_floor} and [min_cc]. *)
+let mma_peaks ~cc =
+  let peak ~min_cc arm flops cite =
+    Option.some_if
+      (cc >= Int.max min_cc (arm_floor arm))
+      {
+        Backend_intf.mma_peak_flops = flops;
+        mma_peak_provenance = Datasheet_class cite;
+        mma_peak_accum = F32_accum_only;
+      }
+  in
+  {
+    f16 =
+      peak ~min_cc:80 (Wmma Wmma_f16_f32) 3.0e13
+        "NVIDIA Ampere/Ada/Blackwell GeForce class, 2x f32 dense FP16 f32-accum";
+    bf16 =
+      peak ~min_cc:80 (Wmma Wmma_bf16) 3.0e13
+        "NVIDIA Ampere/Ada/Blackwell GeForce class, 2x f32 dense BF16 f32-accum";
+    tf32 =
+      peak ~min_cc:80 (Wmma Wmma_tf32) 1.5e13
+        "NVIDIA Ampere/Ada/Blackwell GeForce class, 1x f32 dense TF32 f32-accum";
+    fp8 =
+      peak ~min_cc:89 (Inline_ptx Fp8_m16n8k32) 6.0e13
+        "NVIDIA Ada/Blackwell GeForce class, 4x f32 dense FP8 f32-accum";
+  }
+
 (* The non-mma floors [gpu_arch_options] applies. Half ARITHMETIC intrinsics (unlike the
    conversions, which cuda_fp16.h/cuda_bf16.h emulate on any arch) are declared only for
    [__CUDA_ARCH__ >= 530], the bfloat16 ones for [>= 800]. CUDA 13 dropped offline compilation below

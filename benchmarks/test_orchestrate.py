@@ -2166,6 +2166,30 @@ class DominantKernelTest(unittest.TestCase):
         self.assertIn("certifies nothing about the device", text)
         self.assertIn("ranks before/after on one box", text)
 
+    def test_gpu_tensor_core_ceilings_render_with_provenance_in_cell_and_header(self):
+        # gh-ocannl-1092: GPU tensor-core rows carry mma-<fmt> ceilings with provenance.
+        emitted = self.emitted()
+        rows = [
+            self.row("ocannl", "cuda", emitted["exact mma-f16"], p50=1.0),
+            self.row("ocannl", "metal", emitted["exact mma-f32 (scalar ALU)"], p50=2.0),
+        ]
+
+        self.assertEqual(
+            orchestrate.dominant_kernel_cell({"dominant_kernel": emitted["exact mma-f16"]}),
+            "50.0% mma-f16 compute \u00b7 k3/12 4.000 ms (queued) w1.grad 'b1'",
+        )
+        self.assertEqual(
+            orchestrate.dominant_kernel_cell(
+                {"dominant_kernel": emitted["exact mma-f32 (scalar ALU)"]}
+            ),
+            "50.0% mma-f32 compute \u00b7 k3/12 8.000 ms (queued) w1.grad 'b1'",
+        )
+        text = self.rendered(rows)
+        self.assertIn("`mma-f16` = flops: fab datasheet (dense FP16 f32-accum); bandwidth: fab class constant: 3e+13 FLOP/s, 1e+12 B/s", text)
+        self.assertIn("`mma-f32` = flops: fab class constant (mma shares shader ALU); bandwidth: fab class constant: 5e+12 FLOP/s, 1e+12 B/s", text)
+        self.assertIn("`mma-<fmt>`", text)
+        self.assertIn("never feeding autotune ranking", text)
+
     def test_a_section_with_no_scored_row_says_so_rather_than_listing_nothing(self):
         text = self.rendered([self.row("ocannl", "cc", self.emitted()["no-ceiling (no constants)"])])
 

@@ -100,6 +100,11 @@ let () =
             staged_copy_rate = None;
             shared_load_rate = None;
             fill_lane_width = None;
+            mma_peak_f16 = None;
+            mma_peak_bf16 = None;
+            mma_peak_tf32 = None;
+            mma_peak_fp8 = None;
+            mma_uses_scalar_peak = false;
           }));
   p "a concrete context's identity is stable"
     (Option.equal BI.equal_timing_identity identity (timing_identity ctx));

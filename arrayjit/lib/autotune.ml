@@ -3050,6 +3050,116 @@ let envelope ~limits =
   let flops, bandwidth = envelope_legs ~limits in
   (Option.map flops ~f:fst, Option.map bandwidth ~f:fst)
 
+(* gh-ocannl-1092: advisory per-format matrix-unit peaks for the benchmark report's kernel %peak
+   column (reporting-only). These are [Execution_neutral] (not [Search_shaping], so outside
+   [Utils.config_key_defaults]) and read [Backend_intf.reporting_limits], which
+   [limits_field_classes] proves neither [tune] nor [model_default] / [seeded_default] /
+   [model_score] can reach. *)
+let parse_mma_peak_override ~key raw =
+  let raw = String.strip raw in
+  if String.is_empty raw then Ok None
+  else
+    match Float.of_string raw with
+    | v when Float.is_finite v && Float.(v > 0.) -> Ok (Some v)
+    | v -> Error (Printf.sprintf "%s is not a finite positive number (%g)" key v)
+    | exception _ ->
+        Error (Printf.sprintf "invalid %s override (%S: expected a finite positive float)" key raw)
+
+let peak_mma_f16_override =
+  lazy
+    (parse_mma_peak_override ~key:"model_peak_mma_f16"
+       (Utils.get_global_arg ~arg_name:"model_peak_mma_f16" ~default:""))
+
+let peak_mma_bf16_override =
+  lazy
+    (parse_mma_peak_override ~key:"model_peak_mma_bf16"
+       (Utils.get_global_arg ~arg_name:"model_peak_mma_bf16" ~default:""))
+
+let peak_mma_tf32_override =
+  lazy
+    (parse_mma_peak_override ~key:"model_peak_mma_tf32"
+       (Utils.get_global_arg ~arg_name:"model_peak_mma_tf32" ~default:""))
+
+let peak_mma_fp8_override =
+  lazy
+    (parse_mma_peak_override ~key:"model_peak_mma_fp8"
+       (Utils.get_global_arg ~arg_name:"model_peak_mma_fp8" ~default:""))
+
+type mma_peak_source =
+  | Mma_peak_config of string
+  | Mma_peak_backend of Ir.Backend_intf.mma_peak_provenance
+  | Mma_peak_scalar_alu of [ `Config | `Backend ]
+[@@deriving sexp_of]
+
+type mma_peak_result = Mma_peak_found of float * mma_peak_source | Mma_peak_unavailable of string
+[@@deriving sexp_of]
+
+let mma_peak_leg ~(limits : Ir.Backend_intf.hardware_limits) ~(accum_prec : Ir.Ops.prec)
+    (format : Ir.Backend_intf.mma_input_format) =
+  let rep = Ir.Backend_intf.reporting_limits limits in
+  let fmt_name = Ir.Backend_intf.mma_input_format_name format in
+  let check_finite ~label v =
+    if Float.is_finite v && Float.(v > 0.) then Ok v
+    else Error (Printf.sprintf "%s is not a finite positive number (%g)" label v)
+  in
+  let override, advisory =
+    match format with
+    | Mma_f16 -> (Some ("model_peak_mma_f16", peak_mma_f16_override), rep.rep_mma_peak_f16)
+    | Mma_bf16 -> (Some ("model_peak_mma_bf16", peak_mma_bf16_override), rep.rep_mma_peak_bf16)
+    | Mma_tf32 -> (Some ("model_peak_mma_tf32", peak_mma_tf32_override), rep.rep_mma_peak_tf32)
+    | Mma_fp8_e5m2 -> (Some ("model_peak_mma_fp8", peak_mma_fp8_override), rep.rep_mma_peak_fp8)
+    | Mma_f32 -> (None, None)
+  in
+  let from_config =
+    match override with
+    | None -> Ok None
+    | Some (key, ov) -> (
+        match Lazy.force ov with
+        | Ok None -> Ok None
+        | Ok (Some v) -> Ok (Some (v, Mma_peak_config key))
+        | Error msg -> Error msg)
+  in
+  match from_config with
+  | Error msg -> Mma_peak_unavailable msg
+  | Ok (Some (v, src)) -> Mma_peak_found (v, src)
+  | Ok None -> (
+      match advisory with
+      | Some { Ir.Backend_intf.mma_peak_flops; mma_peak_provenance; mma_peak_accum } -> (
+          let accum_matches =
+            match (mma_peak_accum, accum_prec) with
+            | Ir.Backend_intf.Any_accum, _ -> true
+            | Ir.Backend_intf.F32_accum_only, Ir.Ops.Single_prec _ -> true
+            | Ir.Backend_intf.F32_accum_only, _ -> false
+          in
+          if not accum_matches then
+            Mma_peak_unavailable
+              (Printf.sprintf
+                 "emitted %s with %s accumulator has no matching advisory peak (advisory peak \
+                  describes f32 accumulation; set model_peak_mma_%s to override)"
+                 fmt_name (Ir.Ops.prec_string accum_prec) fmt_name)
+          else
+            match check_finite ~label:("mma_peak_" ^ fmt_name) mma_peak_flops with
+            | Ok v -> Mma_peak_found (v, Mma_peak_backend mma_peak_provenance)
+            | Error msg -> Mma_peak_unavailable msg)
+      | None when rep.rep_mma_uses_scalar_peak -> (
+          match fst (envelope_legs ~limits) with
+          | None ->
+              Mma_peak_unavailable
+                (Printf.sprintf
+                   "no scalar peak_flops for mma-%s under scalar-ALU rule (set model_peak_flops)"
+                   fmt_name)
+          | Some (v, src) -> (
+              match check_finite ~label:"peak_flops" v with
+              | Ok v -> Mma_peak_found (v, Mma_peak_scalar_alu src)
+              | Error msg -> Mma_peak_unavailable msg)
+          | exception exn ->
+              Mma_peak_unavailable
+                (Printf.sprintf "invalid scalar peak_flops override (%s)" (Exn.to_string exn)))
+      | None ->
+          Mma_peak_unavailable
+            (Printf.sprintf "no mma peak for format %s (set model_peak_mma_%s or backend limits)"
+               fmt_name fmt_name))
+
 (* The roofline lower bound summed over a candidate's kernels; [None] — no model coverage — when any
    kernel is opaque (its counts may UNDER-estimate, so ranking on them could prune the true winner)
    or when no envelope constant is present. The kernels run sequentially, so the bound is per-kernel

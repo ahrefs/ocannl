@@ -7592,7 +7592,8 @@ box.
   `model_default_geometry_lattice`, `model_default_schedule`, `model_device_gather_rate`,
   `model_dram_bandwidth`, `model_fill_chains`, `model_fill_lane_width`, `model_fill_threads`,
   `model_issue_rate`, `model_mma_rate`, `model_multiprocessors`, `model_peak_flops`,
-  `model_peak_memory_bandwidth`, `model_shared_load_rate`, `model_staged_copy_rate`,
+  `model_peak_memory_bandwidth`, `model_peak_mma_bf16`, `model_peak_mma_f16`, `model_peak_mma_fp8`,
+  `model_peak_mma_tf32`, `model_shared_load_rate`, `model_staged_copy_rate`,
   `model_transaction_rate`, `model_workgroup_bytes_per_multiprocessor`.
 - `c_syntax.ml`: `cc_grid_private_bytes_cap`, `schedule_log_declines`.
 - `context.ml`: `debug_fill_fresh_outputs`.

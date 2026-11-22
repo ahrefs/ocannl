@@ -2247,6 +2247,7 @@ end = struct
          let min_over f = Array.map attrs ~f |> Array.min_elt ~compare:Int.compare in
          (* The warp: the shuffles' width and the issue group the launch fill counts lanes in. *)
          let warp = 32 in
+         let mma_peaks = Cuda_mma.mma_peaks ~cc:(min_compute_capability ()) in
          {
            Backend_intf.max_threads_per_workgroup =
              min_over (fun (a : Cu.Device.attributes) -> a.max_threads_per_block);
@@ -2400,6 +2401,14 @@ end = struct
               model_fill_lane_width. *)
            shared_load_rate = Some 2.5e12;
            fill_lane_width = Some warp;
+           (* gh-ocannl-1092: advisory per-format dense tensor-core peaks (reporting-only, never
+              feeds autotune ranking or bound pruning), gated by attached devices' minimum compute
+              capability via [Cuda_mma.mma_peaks]. *)
+           mma_peak_f16 = mma_peaks.f16;
+           mma_peak_bf16 = mma_peaks.bf16;
+           mma_peak_tf32 = mma_peaks.tf32;
+           mma_peak_fp8 = mma_peaks.fp8;
+           mma_uses_scalar_peak = false;
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities

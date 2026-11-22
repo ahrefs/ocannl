@@ -1,0 +1,23 @@
+CUDA pre-Ampere (sm_60, sm_70, sm_75) advertise no Ampere+ GeForce peaks: true
+CUDA Ampere (sm_80) advertises f16, bf16 and tf32 with datasheet provenance, not fp8: true
+CUDA Ada/Blackwell (sm_89, sm_120) advertise all four formats with datasheet provenance: true
+HIP RDNA3 advertises f16 and bf16 WMMA peaks with datasheet provenance: true
+CUDA sm_120 resolves each emitted MMA format to its datasheet peak: true
+CUDA wide f16 (f16 storage, f32 accumulator) resolves to its f32-accum datasheet peak: true
+CUDA narrow f16-accumulate arm (Wmma_f16_f16) fails closed rather than using the f32-accum peak: true
+CUDA sm_80 refuses fp8 (no peak for that architecture) while keeping f16: true
+CUDA sm_75 (Turing) fails closed rather than citing Ampere+ GeForce ratios: true
+HIP RDNA3 resolves wide and narrow f16 and bf16 WMMA to their datasheet peaks: true
+HIP without mma capability fails closed even when mma_peak_* fields are set: true
+Metal maps f32, f16 and bf16 simdgroup_matrix kernels to the scalar ceiling: true
+a kernel mixing two distinct MMA formats fails closed to no-ceiling: true
+a partially tensorized kernel with scalar fallbacks fails closed to no-ceiling: true
+a tensorized summary with no emitted formats fails closed to no-ceiling: true
+choose_ceiling still refuses a GPU tensor-core kernel when bandwidth is absent: true
+choose_ceiling refuses a non-finite MMA peak rather than scoring compute time as zero: true
+model_peak_mma_* overrides backend constants and Metal scalar-ALU follows model_peak_flops: true
+invalid or non-finite model_peak_mma_* overrides fail closed to no-ceiling without raising: true
+a live GPU f16 matmul compiles tensorized with emitted MMA format recorded: true
+Bench_harness.mma_ceiling_of resolves the live GPU f16 matmul per architecture (mma-f16 on sm_80+/HIP/Metal, no-ceiling on pre-Ampere CUDA): true
+dominant_kernel scores the live GPU f16 tensorized matmul per architecture (exact mma-f16 on sm_80+/HIP/Metal, no-ceiling on pre-Ampere CUDA): true
+Metal f32 simdgroup_matrix matmul scores as exact mma-f32 against the scalar ALU ceiling: true

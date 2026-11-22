@@ -313,6 +313,21 @@ val capability : cc:int -> Backend_intf.mma_capability option
 (** The tile-MMA descriptor of a device of compute capability [cc]; [None] below every arm's floor.
     Each entry is named by the arm it seeds and takes that arm's floor and tile. *)
 
+type mma_peaks = {
+  f16 : Backend_intf.mma_peak option;
+  bf16 : Backend_intf.mma_peak option;
+  tf32 : Backend_intf.mma_peak option;
+  fp8 : Backend_intf.mma_peak option;
+}
+(** Per-format advisory dense tensor-core peaks (gh-ocannl-1092), reporting-only. *)
+
+val mma_peaks : cc:int -> mma_peaks
+(** Per-format advisory dense tensor-core peaks for a CUDA device of compute capability [cc],
+    anchored to [Cuda_backend]'s mid-range GeForce RTX class baseline ([1.5e13] fp32 FLOP/s) for
+    Ampere/Ada/Blackwell ([sm_80+] for f16/bf16/tf32, [sm_89+] for fp8) and gated on each format's
+    {!arm_floor}. Pre-Ampere architectures (Volta/Turing) return [None] rather than carrying an
+    inapplicable GeForce ratio. *)
+
 (** {1 nvrtc architecture targets} *)
 
 type ptx_target =

@@ -1,17 +1,26 @@
 every field of the record has a toggle here: true
 every toggle here names a field of the record: true
 the Untimed fields are the ranking score's capacities, residency, seven rates and launch fill: true
-toggling a Key field changes the cache key, toggling an Untimed field leaves it unchanged: true
-the Key projection renders as the full record with its Untimed fields absent, on every preset: true
+the Reporting fields are the four per-format MMA peaks and the scalar-ALU flag: true
+toggling a Key field changes the cache key, toggling an Untimed or Reporting field leaves it unchanged: true
+the Key projection renders as the full record with its Untimed and Reporting fields absent, on every preset: true
 the read rule finds the field access and the binding pattern, not the literal or the discard: true
 the reach rule refuses a root reaching the accessor through a helper or a module only, and not through a sanctioned route: true
 the plan rule finds the definition reaching the seeded plan without naming its digest, not the one naming it: true
 the seeded transform is sanctioned only inside the local fallback every search-less branch calls, called from nowhere else but a marked path, under the flag tune forwards: true
 the scan reads backend_intf.ml: true
+untimed_limits reads exactly the Untimed fields and no Reporting field: true
+reporting_limits reads exactly the Reporting fields and no Untimed field: true
+the Key, Untimed and Reporting projections partition hardware_limits pairwise-disjointly: true
 no source but backend_intf.ml reads an Untimed field: true
+no source but backend_intf.ml reads a Reporting field: true
 only autotune.ml references the Untimed accessor: true
+only autotune.ml references the Reporting accessor: true
 the scan reads arrayjit/lib/autotune.ml: true
 autotune.ml references the Untimed accessor: true
+autotune.ml references the Reporting accessor: true
+mma_peak_leg reaches the Reporting accessor (the reach is not blind): true
+no autotune search, ranking or seeding root reaches the Reporting accessor: true
 model_default reaches the Untimed accessor (the reach is not blind): true
 tune is a top-level definition of autotune.ml: true
 tune takes the ?search flag its search-less branches test: true
@@ -25,17 +34,26 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:6dd30560f9e032ec9afc45a6fec9ce97] every field of
   [scanner-refusal:280bb27b49e792a7b0d751509c083f70] every toggle here
   [scanner-refusal:c572cbe3fb10a48b7182cf818e45bb75] score's capacities residency
-  [scanner-refusal:fdcb8ce65a493ff3ca298ab6cd096a0d] Untimed field leaves
-  [scanner-refusal:18ba6e03ce2dfd1162c3816126efe2fe] Key projection renders
+  [scanner-refusal:99e4f592f87fc2294a969d3f7910070c] the Reporting fields
+  [scanner-refusal:25c581607071ee5d7f1c6e69d9f2dfe0] Reporting field leaves
+  [scanner-refusal:19c207848ef78f880b97d63600612985] Reporting fields absent
   [scanner-refusal:0a9177a9cf5f80388c5ecb335859d27d] the binding pattern
   [scanner-refusal:129a692bf5913667539ef35c0825728a] reaching the accessor
   [scanner-refusal:321a18c08b264e43b8d54ef69e4786bf] the definition reaching
   [scanner-refusal:b4baf80e206eea100c4257a2cb0cc11d] fallback every search-less
   [scanner-refusal:5de8818597d1f7b0e33446b61b0cf363] backend_intf.ml
+  [scanner-refusal:8cb8dd2d540fbb23c426e1e40d98a1bd] untimed_limits
+  [scanner-refusal:c5b36a6c7a3ca9df76f09052570d546e] reporting_limits
+  [scanner-refusal:393f73abc235553841f56b85cc181a23] hardware_limits
   [scanner-refusal:8f9176198240323dbd1fb605e9c46ba6] backend_intf.ml
+  [scanner-refusal:afe5c720e31bee3c4413dcb920198bb4] backend_intf.ml
   [scanner-refusal:ef99980e8fef8e93f88e9ada52db5875] autotune.ml
+  [scanner-refusal:eb09835831cfa5c8bfec24cfddb4cb71] autotune.ml
   [scanner-refusal:190f5d5f9cf7b1a188c423cc9c9159e6] arrayjit/lib/autotune.ml
   [scanner-refusal:887690bba79db7186f007c0ee3bc4d55] autotune.ml
+  [scanner-refusal:0fccc4731b902ce5dbc0c1a0ff5289f7] autotune.ml
+  [scanner-refusal:cabfbf0ca35a6bd413475c234f5cbd49] mma_peak_leg
+  [scanner-refusal:00ed6f66ef1266b0be031d37ef0bbd03] autotune search ranking
   [scanner-refusal:02907ae08467c5deca8ec391bc107c00] model_default
   [scanner-refusal:fe049afe671ea46b4b4e1a97110057e0] autotune.ml
   [scanner-refusal:83edca568007fee6d08310746a95bf8c] search-less branches test
