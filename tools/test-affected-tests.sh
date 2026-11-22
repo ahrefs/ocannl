@@ -3,7 +3,15 @@
 # real Dune project of its own: which per-test aliases a change reaches, read
 # from dune. No Dune alias: the fixture owns its build, and a dune nested in
 # `dune runtest` is a poor bargain (its own lock, the outer run's DUNE_*).
-# Usage: tools/test-affected-tests.sh [--keep] [--only REGEX]
+# Usage: tools/test-affected-tests.sh [--self-check] [--keep] [--only REGEX]
+#
+# Put --self-check before the shared options. It replaces each selected control's
+# literal edits to the fixture reader with identity edits and requires the same
+# assertions to reject each no-op.
+# Fixture setup, mutation setup and reader
+# completion failures that invalidate a control remain failures. Ordinary
+# legs keep their assertions. The sweep follows calls to run_affected_mutant.
+# It does not scan shell text or mutate fixture inputs.
 #
 # The fixture mirrors the shapes the three CI catches of gh-ocannl-1235 had: a
 # library module reached from tests in other directories through a chain of
@@ -26,6 +34,8 @@ set -u
 # bytewise order: one collation, whatever the caller's locale (gh-ocannl-1431).
 export LC_ALL=C
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
+self_check=0
+if [ "${1:-}" = --self-check ]; then self_check=1; shift; fi
 harness_args "$@"
 HERE=$(cd "$(dirname "$0")" && pwd)
 command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh"
@@ -231,23 +241,142 @@ trailer() { # -> $verdict: the one `affected: verdict=` line when it is stderr's
   verdict=$(sed -n 's/^affected: verdict=//p' "$err")
   [ -n "$verdict" ] && [ "$(tail -n 1 "$err")" = "affected: verdict=$verdict" ] || verdict='<none>'
 }
-expect() { # LABEL RC ALIAS... : the exact list, in any order, and the exit status
+alias_reader_completed() {
+  # Every alias list ends with this trailer, incomplete exactly on exit 3.
+  trailer
+  case $verdict/$rc in
+    ok/0 | cross-cutting/0 | incomplete/3 | cross-cutting,incomplete/3) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+harness_reader_completed() { # QUERY: both harness queries have their own closing summary
+  [ "$rc" = 0 ] && [ ! -e "$TMP/dune-called" ] || return 1
+  local summary
+  summary=$(tail -n 1 "$err")
+  case $1 in
+    --harnesses) [[ $summary =~ ^affected:\ [0-9]+\ harness\ command\(s\)\ from\ [0-9]+\ changed\ path\(s\)$ ]] ;;
+    --harness-census) [[ $summary =~ ^affected:\ harness\ census:\ [0-9]+\ line\(s\)\ over\ [0-9]+\ member\(s\)$ ]] ;;
+    *) return 1 ;;
+  esac
+}
+reader_completed() { # EXPECTED_REFUSAL QUERY
+  if [ -n "$1" ]; then
+    [ "$rc" = 2 ] && [ ! -s "$out" ] && grep -qF -- "$1" "$err"
+  else
+    case $2 in
+      --harnesses | --harness-census) harness_reader_completed "$2" ;;
+      *) alias_reader_completed ;;
+    esac
+  fi
+}
+pending_mutant= mutants_checked=0
+run_affected_mutant() { # LABEL FROM TO [--edit FROM TO]... [--noop-refuses REASON] ARGS... -> $out, $err, $rc
+  local label=$1 mutant=$repo/tools/affected-mutant.sh edits=("$2" "$3") noop_refusal=
+  shift 3
+  while [ "${1:-}" = --edit ]; do
+    edits+=("$2" "$3")
+    shift 3
+  done
+  if [ "${1:-}" = --noop-refuses ]; then
+    noop_refusal=$2
+    shift 2
+  fi
+  if [ -n "$pending_mutant" ]; then
+    report 1 "$pending_mutant" 'no verdict was given for the mutant'
+  fi
+  pending_mutant=
+  if ! git_q check-ignore -q tools/affected-mutant.sh; then
+    report 1 "$label" 'the fixture does not ignore the scratch mutant'
+    return 1
+  fi
+  if ! perl -0777 -e '
+    my ($path, $noop) = splice @ARGV, 0, 2;
+    open my $reader, "<", $path or die "cannot open $path: $!\n";
+    my $text = <$reader>;
+    while (@ARGV) {
+      my ($from, $to) = splice @ARGV, 0, 2;
+      my $replacement = $noop ? $from : $to;
+      my $count = $text =~ s/\Q$from\E/$replacement/g;
+      die "expected one match for [$from], got ", $count || 0, "\n" unless $count == 1;
+    }
+    print $text or die "cannot write mutant: $!\n";
+    close STDOUT or die "cannot close mutant: $!\n";
+  ' "$repo/tools/affected-tests.sh" "$self_check" "${edits[@]}" >"$mutant"; then
+    report 1 "$label" 'could not construct the scratch mutant'
+    return 1
+  fi
+  rc=0
+  (cd "$TMP" && bash "$mutant" "$@") >"$out" 2>"$err" || rc=$?
+  if ! rm -- "$mutant"; then
+    report 1 "$label" 'could not remove the scratch mutant'
+    return 1
+  fi
+  if [ "$self_check" = 1 ] && ! reader_completed "$noop_refusal" "${1:-}"; then
+    report 1 "self-check: $label" "unusable no-op result, exit $rc; stderr: $(tail -n 3 "$err" | tr '\n' '|')"
+    return 1
+  fi
+  pending_mutant=$label
+}
+report_mutant() { # RC LABEL [DETAIL]: 1 means the oracle rejected the result, 2 means it could not judge
+  if [ "$2" != "$pending_mutant" ] || [ -z "$pending_mutant" ]; then
+    report 1 "$2" 'no matching mutant run for this verdict'
+    return
+  fi
+  pending_mutant=
+  mutants_checked=$((mutants_checked + 1))
+  if [ "$self_check" = 0 ] || [ "$1" = 2 ]; then
+    report "$@"
+  elif [ "$1" = 1 ]; then
+    report 0 "self-check: $2 (no-op rejected)"
+  else
+    report 1 "self-check: $2" 'the control accepted a no-op mutant'
+  fi
+}
+expect() { expect_aliases report "$@"; }
+expect_mutant() { expect_aliases report_mutant "$@"; }
+expect_aliases() { # REPORTER LABEL RC ALIAS... : the exact list, in any order, and the exit status
+  local reporter=$1
+  shift
   local label=$1 want_rc=$2
   shift 2
   printf '%s\n' "$@" | sed '/^$/d' | sort >"$TMP/want"
   # The printed order is ranked (link-only last); the 'link-only' leg pins it.
   sort "$out" >"$TMP/got"
-  # Every printed list ends its stderr with the verdict trailer (gh-ocannl-1921),
-  # `incomplete` in it exactly on exit 3; the 'verdict trailer' leg pins each one.
-  trailer
-  case $verdict/$rc in
-    ok/0 | cross-cutting/0 | incomplete/3 | cross-cutting,incomplete/3) ;;
-    *) report 1 "$label" "exit $rc with the verdict trailer $verdict; stderr: $(tr '\n' '|' <"$err")"; return ;;
-  esac
+  if ! alias_reader_completed; then
+    "$reporter" 2 "$label" "exit $rc with the verdict trailer $verdict; stderr: $(tr '\n' '|' <"$err")"
+    return
+  fi
   if [ "$rc" = "$want_rc" ] && cmp -s "$TMP/want" "$TMP/got"; then
-    report 0 "$label"
+    "$reporter" 0 "$label"
   else
-    report 1 "$label" "exit $rc (want $want_rc); got [$(tr '\n' ' ' <"$out")] want [$(tr '\n' ' ' <"$TMP/want")]; stderr: $(tr '\n' '|' <"$err")"
+    "$reporter" 1 "$label" "exit $rc (want $want_rc); got [$(tr '\n' ' ' <"$out")] want [$(tr '\n' ' ' <"$TMP/want")]; stderr: $(tr '\n' '|' <"$err")"
+  fi
+}
+control() { # [--stops REASON] LABEL FROM TO ARGS... -- WANT...: --stops, a cut whose mutant must refuse (exit 2, REASON)
+  local stops=
+  if [ "$1" = --stops ]; then stops=$2; shift 2; fi
+  local label="negative control: $1" from=$2 to=$3
+  shift 3
+  local args=()
+  while [ "$1" != -- ]; do args+=("$1"); shift; done
+  shift
+  # WANT is the shipping list: one stale here would pass a no-op mutant (gh-ocannl-2356).
+  affected "${args[@]}"
+  expect "$label (the shipping list)" 0 "$@"
+  run_affected_mutant "$label" "$from" "$to" "${args[@]}" || return
+  printf '%s\n' "$@" | sort >"$TMP/want"
+  sort "$out" >"$TMP/got"
+  # A mutant that stops before its verdict trailer (a cut that breaks the
+  # reader) is no evidence of the reach it names.
+  if [ -n "$stops" ]; then
+    if [ "$rc" = 2 ] && grep -qF -- "$stops" "$err"; then report_mutant 0 "$label"
+    else report_mutant 1 "$label" "want the mutant to refuse (exit 2) naming: $stops; exit $rc; stderr: $(tail -n 3 "$err" | tr '\n' '|')"; fi
+  elif ! alias_reader_completed; then
+    report_mutant 2 "$label" "the mutant did not run to its end: exit $rc, verdict trailer $verdict; stderr: $(tail -n 3 "$err" | tr '\n' '|')"
+  elif [ "$rc" = 0 ] && cmp -s "$TMP/want" "$TMP/got"; then
+    report_mutant 1 "$label" "the mutant printed the shipping list"
+  else
+    report_mutant 0 "$label"
   fi
 }
 reached_by_core='@t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
@@ -271,26 +400,20 @@ if harness_leg 'cold build'; then
   # shellcheck disable=SC2086
   expect 'a cold build directory: what an action prints while dune rules builds an input is not read as rules' 0 \
     @t6/runtest-dyn $opaque_all
-  mutant=$repo/tools/affected-mutant.sh
   mkdir -p "$TMP/kept" || exit 2
-  if FROM='my $text = slurp("$tmp/rules-out");' TO='my $text = slurp("$tmp/rules-log") . slurp("$tmp/rules-out");' \
-      perl -0pe '$n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-      "$repo/tools/affected-tests.sh" >"$mutant"; then
-    rm -rf "$repo/_build"
-    rc=0
-    (cd "$TMP" && TMPDIR=$TMP/kept DUNE_CACHE=disabled bash "$mutant" --files t6/dyn.expected) >"$out" 2>"$err" || rc=$?
+  rm -rf "$repo/_build"
+  cold_label='negative control: reading dune rules'"'"' streams as its answer fails on the cold build, naming the atom'
+  if TMPDIR=$TMP/kept DUNE_CACHE=disabled run_affected_mutant "$cold_label" \
+      'my $text = slurp("$tmp/rules-out");' 'my $text = slurp("$tmp/rules-log") . slurp("$tmp/rules-out");' \
+      --files t6/dyn.expected; then
     # The refusal names the atom and keeps the answer it refused (gh-ocannl-1431).
     # Which atom comes first is dune's: 3.24 prints the noise line alone, the 3.20
     # floor echoes the command first, wrapped in ANSI dim codes.
     if [ "$rc" = 2 ] && grep -Eq 'unexpected atom in dune rules output: ".+" at byte [0-9]+: ' "$err" &&
        grep -q noise-from-an-action "$TMP"/kept/affected-dune-rules.*.txt; then
-      report 0 'negative control: reading dune rules'"'"' streams as its answer fails on the cold build, naming the atom'
-    else report 1 'negative control: reading dune rules'"'"' streams as its answer fails on the cold build, naming the atom' "exit $rc; $(cat "$err")"; fi
-  else
-    report 1 'negative control: reading dune rules'"'"' streams as its answer fails on the cold build, naming the atom' \
-      "the mutation anchor does not occur exactly once"
+      report_mutant 0 "$cold_label"
+    else report_mutant 1 "$cold_label" "exit $rc; $(cat "$err")"; fi
   fi
-  rm -f "$mutant"
 fi
 
 if harness_leg 'library chain'; then
@@ -367,19 +490,15 @@ if harness_leg 'dune-project'; then
     else report 1 "$cross_label" "a narrow change: exit $rc; $(tr '\n' '|' <"$err")"; fi
     # The slow- aliases ranked link-only count too (local review): with core's helper changed, 10 of
     # the 31 rank first by a mutant threshold, slow-gen among the link-only ones.
-    mutant=$repo/tools/affected-mutant.sh
-    if FROM='return $n_all && 2 * $n_first > $n_all;' TO='return $n_all && $n_first;' \
-        perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-        "$repo/tools/affected-tests.sh" >"$mutant"; then
-      printf 'let used = 1\nlet unused = 3\n' >"$repo/lib/helper.ml"
-      rc=0
-      (cd "$TMP" && bash "$mutant" HEAD -- lib) >"$out" 2>"$err" || rc=$?
-      git_q checkout -q -- lib/helper.ml || exit 2
+    local_slow_label='negative control: the slow- aliases kept local include the link-only ones'
+    printf 'let used = 1\nlet unused = 3\n' >"$repo/lib/helper.ml"
+    if run_affected_mutant "$local_slow_label" \
+        'return $n_all && 2 * $n_first > $n_all;' 'return $n_all && $n_first;' HEAD -- lib; then
       if [ "$rc" = 0 ] && grep -qx 'affected: link-only: @t2/slow-gen' "$err" && grep -q 'but its 2 slow- alias(es)' "$err"; then
-        report 0 'the slow- aliases kept local include the link-only ones'
-      else report 1 'the slow- aliases kept local include the link-only ones' "exit $rc; $(tr '\n' '|' <"$err")"; fi
-    else report 1 'the slow- aliases kept local include the link-only ones' "the mutation anchor does not occur exactly once"; fi
-    rm -f "$mutant"
+        report_mutant 0 "$local_slow_label"
+      else report_mutant 1 "$local_slow_label" "exit $rc; $(tr '\n' '|' <"$err")"; fi
+    fi
+    git_q checkout -q -- lib/helper.ml || exit 2
   else report 1 "$cross_label" "dune-project: exit $rc; $(tr '\n' '|' <"$err")"; fi
 fi
 
@@ -605,16 +724,12 @@ if harness_leg 'verdict trailer'; then
   # One definition: a mutant threshold in `verdict` moves the trailer and the
   # CROSS-CUTTING line together, for a change the shipping script calls ok.
   vt_label='negative control: the trailer and the CROSS-CUTTING line read one definition of the verdict'
-  mutant=$repo/tools/affected-mutant.sh
-  if FROM='return $n_all && 2 * $n_first > $n_all;' TO='return $n_all && $n_first;' \
-      perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-      "$repo/tools/affected-tests.sh" >"$mutant"; then
-    rc=0
-    (cd "$TMP" && bash "$mutant" --files lib/leaf.ml) >"$out" 2>"$err" || rc=$?
+  if run_affected_mutant "$vt_label" \
+      'return $n_all && 2 * $n_first > $n_all;' 'return $n_all && $n_first;' --files lib/leaf.ml; then
     trailer
-    if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] && grep -q '^affected: CROSS-CUTTING:' "$err"; then report 0 "$vt_label"
-    else report 1 "$vt_label" "mutant exit $rc, trailer $verdict; $(tr '\n' '|' <"$err")"; fi
-  else report 1 "$vt_label" 'the mutation anchor does not occur exactly once'; fi
+    if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] && grep -q '^affected: CROSS-CUTTING:' "$err"; then report_mutant 0 "$vt_label"
+    else report_mutant 1 "$vt_label" "mutant exit $rc, trailer $verdict; $(tr '\n' '|' <"$err")"; fi
+  fi
   # A list spanning over half the per-test aliases over a narrower first tier
   # (gh-ocannl-1996): 16 of the 31 listed, 10 first, where 15 listed is ok above
   # and the first tier alone (--referenced-only) is too. Its line names the
@@ -628,16 +743,12 @@ if harness_leg 'verdict trailer'; then
   else report 1 "$vt_label" "exit $rc, trailer $verdict; $(tr '\n' '|' <"$err")"; fi
   # Without the list's threshold that change reads ok, as it did before it.
   vt_label='negative control: without the threshold on the list, the wide list reads ok'
-  if FROM='return $n_all && 2 * $n_listed > $n_all;' TO='return 0;' \
-      perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-      "$repo/tools/affected-tests.sh" >"$mutant"; then
-    rc=0
-    (cd "$TMP" && bash "$mutant" --files lib/core.ml lib/leaf.ml lib/stubbed.ml lib/myppx.ml) >"$out" 2>"$err" || rc=$?
+  if run_affected_mutant "$vt_label" \
+      'return $n_all && 2 * $n_listed > $n_all;' 'return 0;' --files lib/core.ml lib/leaf.ml lib/stubbed.ml lib/myppx.ml; then
     trailer
-    if [ "$rc" = 0 ] && [ "$verdict" = ok ] && ! grep -q 'CROSS-CUTTING' "$err"; then report 0 "$vt_label"
-    else report 1 "$vt_label" "mutant exit $rc, trailer $verdict; $(tr '\n' '|' <"$err")"; fi
-  else report 1 "$vt_label" 'the mutation anchor does not occur exactly once'; fi
-  rm -f "$mutant"
+    if [ "$rc" = 0 ] && [ "$verdict" = ok ] && ! grep -q 'CROSS-CUTTING' "$err"; then report_mutant 0 "$vt_label"
+    else report_mutant 1 "$vt_label" "mutant exit $rc, trailer $verdict; $(tr '\n' '|' <"$err")"; fi
+  fi
   # The rule itself, on the counts this repository gave when gh-ocannl-1996 was
   # decided (825 per-test aliases): the fixture is too small to hold a list
   # that is mostly link-only. Each case: first tier, printed, all, UNMAPPED.
@@ -754,16 +865,11 @@ if harness_leg 'link-only'; then
   if [ "$rc" = 0 ] && ! grep -qx @t2/runtest-gen-v1 "$out" && grep -qF 'a changed module, Helper (added), but' "$err"; then
     report 0 "$inert_label"
   else report 1 "$inert_label" "exit $rc; $(tr '\n' ' ' <"$out"); $(tr '\n' '|' <"$err")"; fi
-  mutant=$repo/tools/affected-mutant.sh
-  if FROM='        next if $inert{$which}{$n};' TO='' \
-      perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-      "$repo/tools/affected-tests.sh" >"$mutant"; then
-    rc=0
-    (cd "$TMP" && bash "$mutant" --referenced-only HEAD) >"$out" 2>"$err" || rc=$?
-    if [ "$rc" = 0 ] && grep -qx @t2/runtest-gen-v1 "$out"; then report 0 "negative control: $inert_label"
-    else report 1 "negative control: $inert_label" "exit $rc; $(cat "$out")"; fi
-  else report 1 "negative control: $inert_label" "the mutation anchor does not occur exactly once"; fi
-  rm -f "$mutant"
+  inert_mutant_label="negative control: $inert_label"
+  if run_affected_mutant "$inert_mutant_label" '        next if $inert{$which}{$n};' '' --referenced-only HEAD; then
+    if [ "$rc" = 0 ] && grep -qx @t2/runtest-gen-v1 "$out"; then report_mutant 0 "$inert_mutant_label"
+    else report_mutant 1 "$inert_mutant_label" "exit $rc; $(cat "$out")"; fi
+  fi
   printf 'let used = 1\n(* A note, "quoted". *)\nlet unused = 2\n' >"$repo/lib/helper.ml"
   affected HEAD --why @t2/runtest-gen-v1
   if [ "$rc" = 0 ] && grep -qF 'names Helper (`H`, re-exporting Helper from Core: `Core.H` at t2/gen.ml (its own source)) but no definition of it changed (only comments or blank lines did)' "$err" \
@@ -786,21 +892,14 @@ if harness_leg 'link-only'; then
     report 0 'a blank line inside a string literal changes the definition holding it'
   else report 1 'a blank line inside a string literal changes the definition holding it' "exit $rc; $(tr '\n' '|' <"$err")"; fi
   git_q reset -q --hard HEAD~2 || exit 2
-  mutant=$repo/tools/affected-mutant.sh
-  if FROM='my @d = sort grep { $tok->{$_} } keys %$defs;' TO='my @d = sort keys %$defs;' \
-      perl -0pe '$n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-      "$repo/tools/affected-tests.sh" >"$mutant"; then
-    printf 'let used = 1\nlet unused = 3\n' >"$repo/lib/helper.ml"
-    rc=0
-    (cd "$TMP" && bash "$mutant" --referenced-only HEAD) >"$out" 2>"$err" || rc=$?
+  changed_defs_label='negative control: the changed definitions are what rank a test naming only the module'
+  printf 'let used = 1\nlet unused = 3\n' >"$repo/lib/helper.ml"
+  if run_affected_mutant "$changed_defs_label" \
+      'my @d = sort grep { $tok->{$_} } keys %$defs;' 'my @d = sort keys %$defs;' --referenced-only HEAD; then
     if [ "$rc" = 0 ] && grep -qx @t2/runtest-gen-v1 "$out"; then
-      report 0 'negative control: the changed definitions are what rank a test naming only the module'
-    else report 1 'negative control: the changed definitions are what rank a test naming only the module' "exit $rc; $(cat "$out")"; fi
-  else
-    report 1 'negative control: the changed definitions are what rank a test naming only the module' \
-      "the mutation anchor does not occur exactly once"
+      report_mutant 0 "$changed_defs_label"
+    else report_mutant 1 "$changed_defs_label" "exit $rc; $(cat "$out")"; fi
   fi
-  rm -f "$mutant"
   printf 'let used = 1\nlet unused = 2\nlet ( +! ) a b = a + b\n' >"$repo/lib/helper.ml"
   affected HEAD
   ordered 'a changed operator definition counts as the whole module (tokens hold identifiers)' \
@@ -866,20 +965,18 @@ if harness_leg 'option order'; then
   # A flag takes no value: after the `--files` paths `--referenced-only=1` was read as one more
   # path, the flag silently dropped. The mutant without the refusal must answer the call.
   flag_label='--referenced-only=1 is refused by name, never read as a path'
+  flag_refusal='--referenced-only is a flag and takes no value: --referenced-only=1'
   affected --files lib/helper.ml --referenced-only=1
-  if [ "$rc" = 2 ] && [ ! -s "$out" ] && grep -qF -- '--referenced-only is a flag and takes no value: --referenced-only=1' "$err"; then
+  if reader_completed "$flag_refusal" --files; then
     report 0 "$flag_label"
   else report 1 "$flag_label" "exit $rc (want 2); got [$(tr '\n' ' ' <"$out")]; $(tr '\n' '|' <"$err")"; fi
-  mutant=$repo/tools/affected-mutant.sh
-  if FROM='    --referenced-only=*) die' TO='    --referenced-only-cut=*) die' \
-      perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-      "$repo/tools/affected-tests.sh" >"$mutant"; then
-    rc=0
-    (cd "$TMP" && bash "$mutant" --files lib/helper.ml --referenced-only=1) >"$out" 2>"$err" || rc=$?
-    if [ "$rc" != 2 ] || ! grep -qF -- '--referenced-only is a flag' "$err"; then report 0 "negative control: $flag_label"
-    else report 1 "negative control: $flag_label" "the mutant refused it too: exit $rc; $(tr '\n' '|' <"$err")"; fi
-  else report 1 "negative control: $flag_label" "the mutation anchor does not occur exactly once"; fi
-  rm -f "$mutant"
+  flag_mutant_label="negative control: $flag_label"
+  if run_affected_mutant "$flag_mutant_label" \
+      '    --referenced-only=*) die' '    --referenced-only-cut=*) die' \
+      --noop-refuses "$flag_refusal" --files lib/helper.ml --referenced-only=1; then
+    if [ "$rc" != 2 ] || ! grep -qF -- '--referenced-only is a flag' "$err"; then report_mutant 0 "$flag_mutant_label"
+    else report_mutant 1 "$flag_mutant_label" "the mutant refused it too: exit $rc; $(tr '\n' '|' <"$err")"; fi
+  fi
 fi
 
 # A private helper library and four tests linking it or core, committed as t8 (the
@@ -955,15 +1052,11 @@ if harness_leg 'helper definitions'; then
     report 0 'what names neither is ranked link-only, and named on stderr'
   else report 1 'what names neither is ranked link-only, and named on stderr' "$(cat "$err")"; fi
   hctl() { # LABEL FROM TO ALIAS: the mutant must list ALIAS under --referenced-only
-    local mutant=$repo/tools/affected-mutant.sh
-    if FROM=$2 TO=$3 perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-        "$repo/tools/affected-tests.sh" >"$mutant"; then
-      rc=0
-      (cd "$TMP" && bash "$mutant" --referenced-only --files lib/helper.ml) >"$out" 2>"$err" || rc=$?
-      if [ "$rc" = 0 ] && grep -qx "$4" "$out"; then report 0 "negative control: $1"
-      else report 1 "negative control: $1" "exit $rc; $(cat "$out")"; fi
-    else report 1 "negative control: $1" "the mutation anchor does not occur exactly once"; fi
-    rm -f "$mutant"
+    local label="negative control: $1"
+    if run_affected_mutant "$label" "$2" "$3" --referenced-only --files lib/helper.ml; then
+      if [ "$rc" = 0 ] && grep -qx "$4" "$out"; then report_mutant 0 "$label"
+      else report_mutant 1 "$label" "exit $rc; $(cat "$out")"; fi
+    fi
   }
   hctl 'the definitions named are what leave an unnamed one out' \
     'next if $done{"$f\0$k"} || ($c->{names} && !(@by = grep { $tok{$_} } @{$c->{names}}));' 'next if $done{"$f\0$k"};' @t8/runtest-t_hplain
@@ -1113,6 +1206,11 @@ if harness_leg 'git forms'; then
     report 0 '--since and a revision argument are refused together'
   else report 1 '--since and a revision argument are refused together' "exit $rc; $(cat "$err")"; fi
   git_q checkout -q "$trunk" || exit 2
+  # On trunk the merge base keeps the core edit and leaves the side's leaf edit out.
+  # shellcheck disable=SC2086
+  control 'the merge-base is what --since compares with' \
+    'revs=("$base")' 'revs=("$since")' \
+    --since side -- $reached_by_core
 fi
 
 # A dune whose answer has a form the reader does not accept stops the run: the
@@ -1199,61 +1297,13 @@ fi
 # Negative controls: each mutant drops one source of reach, and the leg that
 # pins it must see the list change. Without them a leg could pass on a
 # fixture too small to exercise the path it names.
-run_affected_mutant() { # LABEL FROM TO ARGS...: require one edit, leave the query status in rc
-  local label=$1 from=$2 to=$3 mutant=$repo/tools/affected-mutant.sh
-  shift 3
-  if ! FROM=$from TO=$to perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-      "$repo/tools/affected-tests.sh" >"$mutant"; then
-    report 1 "negative control: $label" "the mutation anchor does not occur exactly once"
-    return 1
-  fi
-  if ! git_q check-ignore -q tools/affected-mutant.sh; then
-    rm -f -- "$mutant"
-    report 1 "negative control: $label" "the fixture does not ignore the scratch mutant"
-    return 1
-  fi
-  rc=0
-  (cd "$TMP" && bash "$mutant" "$@") >"$out" 2>"$err" || rc=$?
-  rm -- "$mutant" || {
-    report 1 "negative control: $label" "could not remove the scratch mutant"
-    return 1
-  }
-}
-control() { # [--stops REASON] LABEL FROM TO ARGS... -- WANT...: --stops, a cut whose mutant must refuse (exit 2, REASON)
-  local stops=
-  if [ "$1" = --stops ]; then stops=$2; shift 2; fi
-  local label=$1 from=$2 to=$3
-  shift 3
-  local args=()
-  while [ "$1" != -- ]; do args+=("$1"); shift; done
-  shift
-  # WANT is the shipping list: one stale here would pass a no-op mutant (gh-ocannl-2356).
-  affected "${args[@]}"
-  expect "negative control: $label (the shipping list)" 0 "$@"
-  run_affected_mutant "$label" "$from" "$to" "${args[@]}" || return
-  printf '%s\n' "$@" | sort >"$TMP/want"
-  sort "$out" >"$TMP/got"
-  # A mutant that stops before its verdict trailer (a cut that breaks the
-  # reader) is no evidence of the reach it names.
-  trailer
-  if [ -n "$stops" ]; then
-    if [ "$rc" = 2 ] && grep -qF -- "$stops" "$err"; then report 0 "negative control: $label"
-    else report 1 "negative control: $label" "want the mutant to refuse (exit 2) naming: $stops; exit $rc; stderr: $(tail -n 3 "$err" | tr '\n' '|')"; fi
-  elif [ "$verdict" = '<none>' ]; then
-    report 1 "negative control: $label" "the mutant did not run to its end: exit $rc, no verdict trailer; stderr: $(tail -n 3 "$err" | tr '\n' '|')"
-  elif [ "$rc" = 0 ] && cmp -s "$TMP/want" "$TMP/got"; then
-    report 1 "negative control: $label" "the mutant printed the shipping list"
-  else
-    report 0 "negative control: $label"
-  fi
-}
 # The stronger form, for a control over a revision-relative query: the shipping
 # reader and the mutant both read the one fixture edit, and each must print its
 # exact list, the two different. "Not the shipping list" alone passes a mutant
 # that fails to run, or one whose list moved for a reason other than the rule
 # it cuts (gh-ocannl-2356: three such controls passed a no-op mutant).
 reach_control() { # LABEL FROM TO ARGS... -- SHIPPING... -- MUTANT...
-  local label=$1 from=$2 to=$3
+  local label="negative control: $1" from=$2 to=$3
   shift 3
   local args=() ship=()
   while [ "$1" != -- ]; do args+=("$1"); shift; done
@@ -1261,13 +1311,13 @@ reach_control() { # LABEL FROM TO ARGS... -- SHIPPING... -- MUTANT...
   while [ "$1" != -- ]; do ship+=("$1"); shift; done
   shift
   if [ "$(printf '%s\n' ${ship[@]+"${ship[@]}"} | sort)" = "$(printf '%s\n' "$@" | sort)" ]; then
-    report 1 "negative control: $label" "the shipping and mutant lists it names are the same: it names no reach change"
+    report 1 "$label" "the shipping and mutant lists it names are the same: it names no reach change"
     return
   fi
   affected "${args[@]}"
-  expect "negative control: $label (the shipping list)" 0 ${ship[@]+"${ship[@]}"}
+  expect "$label (the shipping list)" 0 ${ship[@]+"${ship[@]}"}
   run_affected_mutant "$label" "$from" "$to" "${args[@]}" || return
-  expect "negative control: $label" 0 "$@"
+  expect_mutant "$label" 0 "$@"
 }
 if harness_leg 'negative controls'; then
   # shellcheck disable=SC2086
@@ -1338,14 +1388,6 @@ if harness_leg 'negative controls'; then
     'skipping an off-build stanza'"'"'s unresolved edge is what lets the run finish' \
     'elsif ($st[$i]{undescribed}) {' 'elsif (0) {' \
     --files lib/helper.ml -- $reached_by_core
-  # The git-forms leg left the trunk checked out, one core edit past the fork
-  # point of its `side` branch, whose own commit edits leaf.
-  if git_q rev-parse -q --verify side >/dev/null; then
-    # shellcheck disable=SC2086
-    control 'the merge-base is what --since compares with' \
-      'revs=("$base")' 'revs=("$since")' \
-      --since side -- $reached_by_core
-  fi
   control 'an executable target is what finds a test stanza naming no library' \
     'push @st, { kind => "tests", dir => $d, names => [$x]' 'next; push @st, { kind => "tests", dir => $d, names => [$x]' \
     --files t3/t_plain.ml -- @t3/runtest-t_plain
@@ -1405,7 +1447,7 @@ cp "$hrepo/tools/test-c.sh" "$TMP/test-c.sh.orig" || exit 2
 haffected() { # ARGS... -> $out, $err, $rc, run in the fixture with the recording dune first on PATH
   rc=0
   rm -f "$TMP/dune-called"
-  (cd "$TMP" && PATH=$TMP/nodune:$PATH "${HSUBJECT:-$hrepo/tools/affected-tests.sh}" "$@") >"$out" 2>"$err" || rc=$?
+  (cd "$TMP" && PATH=$TMP/nodune:$PATH "$hrepo/tools/affected-tests.sh" "$@") >"$out" 2>"$err" || rc=$?
 }
 hexpect() { # LABEL RC LINE...: the exact stdout, in order, the exit status, and dune not called
   local label=$1 want_rc=$2
@@ -1524,23 +1566,27 @@ if harness_leg 'harness refusals'; then
   cp "$TMP/test-harnesses.sh.orig" "$hrepo/tools/test-harnesses.sh" || exit 2
 fi
 
-hcontrol() { # LABEL FROM TO ARGS... -- WANT...: the mutant must not print the shipping list
-  local label=$1 from=$2 to=$3 mutant=$hrepo/tools/affected-mutant.sh
+hcontrol() { # LABEL FROM TO ARGS... -- WANT...: the mutant runs to completion and changes the list
+  local label="negative control: $1" from=$2 to=$3 repo=$hrepo
   shift 3
   local args=()
   while [ "$1" != -- ]; do args+=("$1"); shift; done
   shift
-  if ! FROM=$from TO=$to perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-      "$hrepo/tools/affected-tests.sh" >"$mutant"; then
-    report 1 "negative control: $label" "the mutation anchor does not occur exactly once"
+  haffected "${args[@]}"
+  hexpect "$label (the shipping list)" 0 "$@"
+  if ! harness_reader_completed "${args[0]}"; then
+    report 1 "$label (the shipping reader)" "the reader did not complete the query; exit $rc; $(tail -n 3 "$err" | tr '\n' '|')"
     return
   fi
-  chmod +x "$mutant"
-  HSUBJECT=$mutant haffected "${args[@]}"
-  printf '%s\n' "$@" >"$TMP/want"
-  if [ "$rc" = 0 ] && cmp -s "$TMP/want" "$out"; then report 1 "negative control: $label" "the mutant printed the shipping list"
-  else report 0 "negative control: $label"; fi
-  rm -f "$mutant"
+  rm -f "$TMP/dune-called"
+  PATH=$TMP/nodune:$PATH run_affected_mutant "$label" "$from" "$to" "${args[@]}" || return
+  if ! harness_reader_completed "${args[0]}"; then
+    report_mutant 2 "$label" "the mutant did not complete the query; exit $rc; $(tail -n 3 "$err" | tr '\n' '|')"
+  elif cmp -s "$TMP/want" "$out"; then
+    report_mutant 1 "$label" 'the mutant printed the shipping list'
+  else
+    report_mutant 0 "$label"
+  fi
 }
 # A basename with several owners (gh-ocannl-2342): three twins, harness c
 # naming them in one form at a time, each twin asked alone.
@@ -1742,16 +1788,10 @@ STUB
     report 0 "$hs_label"
   else report 1 "$hs_label" "an .ml alone: $hs_none harness line(s), summary [$hs_plain]; with a declared stub: $(tr '\n' '|' <"$err")"; fi
   hs_label='negative control: a summary that does not count the harness commands loses the count'
-  mutant=$repo/tools/affected-mutant.sh
-  if FROM='$n_harness++ if $f eq "harness-cmds";' TO='' \
-      perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-      "$repo/tools/affected-tests.sh" >"$mutant"; then
-    rc=0
-    (cd "$TMP" && bash "$mutant" --files stubs/s.mli lib/helper.ml) >"$out" 2>"$err" || rc=$?
-    if [ "$rc" = 0 ] && [ "$(hs_summary)" = "${hs_plain/ 1 changed path(s)/ 2 changed path(s)}" ]; then report 0 "$hs_label"
-    else report 1 "$hs_label" "mutant exit $rc; $(tr '\n' '|' <"$err")"; fi
-  else report 1 "$hs_label" 'the mutation anchor does not occur exactly once'; fi
-  rm -f "$mutant"
+  if run_affected_mutant "$hs_label" '$n_harness++ if $f eq "harness-cmds";' '' --files stubs/s.mli lib/helper.ml; then
+    if [ "$rc" = 0 ] && [ "$(hs_summary)" = "${hs_plain/ 1 changed path(s)/ 2 changed path(s)}" ]; then report_mutant 0 "$hs_label"
+    else report_mutant 1 "$hs_label" "mutant exit $rc; $(tr '\n' '|' <"$err")"; fi
+  fi
   affected --harnesses --files stubs/s.mli
   if [ "$rc" = 0 ] && [ "$(cat "$out")" = "tools/test-h.sh --only '^1:'" ]; then
     report 0 '--harnesses prints the command on stdout instead of the aliases'
@@ -1803,17 +1843,11 @@ STUB
     report 0 'tools/test-run.sh affected --harnesses runs while a run holds the worktree, the alias query refusing'
   else report 1 'tools/test-run.sh affected --harnesses runs while a run holds the worktree, the alias query refusing' "exit $rc, alias query $rc2; $(tr '\n' '|' <"$err")"; fi
   # The mutant must report this stub as UNMAPPED, rather than fail for another reason.
-  if FROM='unless (!@ix && $harness_read{$p}) {' TO='unless (0) {' \
-       perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-       "$repo/tools/affected-tests.sh" >"$repo/tools/affected-mutant.sh"; then
-    rc=0
-    (cd "$TMP" && bash "$repo/tools/affected-mutant.sh" --files stubs/s.mli) >"$out" 2>"$err" || rc=$?
-    if [ "$rc" = 3 ] && grep -qF 'UNMAPPED: stubs/s.mli' "$err"; then report 0 'negative control: the harness reading it is what keeps that stub from UNMAPPED'
-    else report 1 'negative control: the harness reading it is what keeps that stub from UNMAPPED' "mutant exit $rc; $(tr '\n' '|' <"$err")"; fi
-  else
-    report 1 'negative control: the harness reading it is what keeps that stub from UNMAPPED' 'the mutation anchor does not occur exactly once'
+  stub_label='negative control: the harness reading it is what keeps that stub from UNMAPPED'
+  if run_affected_mutant "$stub_label" 'unless (!@ix && $harness_read{$p}) {' 'unless (0) {' --files stubs/s.mli; then
+    if [ "$rc" = 3 ] && grep -qF 'UNMAPPED: stubs/s.mli' "$err"; then report_mutant 0 "$stub_label"
+    else report_mutant 1 "$stub_label" "mutant exit $rc; $(tr '\n' '|' <"$err")"; fi
   fi
-  rm -f "$repo/tools/affected-mutant.sh"
   rm -rf "${repo:?}/stubs" "${repo:?}/stubs2" "${repo:?}/tools/test-harnesses.sh" "${repo:?}/tools/test-h.sh"
 fi
 
@@ -2244,18 +2278,14 @@ if harness_leg 'probe library split'; then
   affected --referenced-only HEAD
   expect '... and a flags change beside it keeps big whole' 0 @p7/t/runtest-p7a @p7/t/runtest-p7b @p7/t/runtest-p7c
   git_q checkout -q -- p7/dune || exit 2
-  mutant=$repo/tools/affected-mutant.sh
-  if FROM='if (@ix && $kind eq "library" && $membership_only->($r)) {' TO='if (0) {' \
-      perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-      "$repo/tools/affected-tests.sh" >"$mutant"; then
-    split_to ''
-    rc=0
-    (cd "$TMP" && bash "$mutant" --referenced-only HEAD) >"$out" 2>"$err" || rc=$?
-    if [ "$rc" = 0 ] && grep -qx @p7/t/runtest-p7c "$out"; then report 0 'negative control: reading the membership change is what ranks the split'
-    else report 1 'negative control: reading the membership change is what ranks the split' "exit $rc; $(cat "$out")"; fi
-    git_q checkout -q -- p7/dune || exit 2
-  else report 1 'negative control: reading the membership change is what ranks the split' "the mutation anchor does not occur exactly once"; fi
-  rm -f "$mutant"
+  membership_label='negative control: reading the membership change is what ranks the split'
+  split_to ''
+  if run_affected_mutant "$membership_label" \
+      'if (@ix && $kind eq "library" && $membership_only->($r)) {' 'if (0) {' --referenced-only HEAD; then
+    if [ "$rc" = 0 ] && grep -qx @p7/t/runtest-p7c "$out"; then report_mutant 0 "$membership_label"
+    else report_mutant 1 "$membership_label" "exit $rc; $(cat "$out")"; fi
+  fi
+  git_q checkout -q -- p7/dune || exit 2
   git_q reset -q --hard HEAD~1 && rm -rf "${repo:?}/p7" || exit 2
 fi
 # A variant with a golden of its own (`runtest-sib-alt`, `runtest-sib-low`) has
@@ -2296,18 +2326,15 @@ DUNE
   expect 'a base golden alone reaches its own alias, not the siblings, whose rules do not read it' 0 @p8/runtest-sib $probe_blind
   # Two routes reach a variant: the name it shares with the stanza, and the
   # executable its `.actual` rule runs. Cut for a variant, the siblings fall away.
-  mutant=$repo/tools/affected-mutant.sh
-  if FROM1='grep { $st[$_]{units}{$unit} } @in }, own' TO1='grep { !@variant && $st[$_]{units}{$unit} } @in }, own' \
-     FROM2='map { %{$runs{$_} // {}} } @{$a->{own}});' TO2='$a->{alias} =~ /-sib-/ ? () : map { %{$runs{$_} // {}} } @{$a->{own}});' \
-      perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM1}\E/$ENV{TO1}/g; $n += s/\Q$ENV{FROM2}\E/$ENV{TO2}/g; END { exit($n == 2 ? 0 : 1) }' \
-      "$repo/tools/affected-tests.sh" >"$mutant"; then
-    rc=0
-    (cd "$TMP" && bash "$mutant" --files p8/sl.ml) >"$out" 2>"$err" || rc=$?
+  siblings_label='negative control: the name and the executable are what list a sibling'
+  if run_affected_mutant "$siblings_label" \
+      'grep { $st[$_]{units}{$unit} } @in }, own' 'grep { !@variant && $st[$_]{units}{$unit} } @in }, own' \
+      --edit 'map { %{$runs{$_} // {}} } @{$a->{own}});' '$a->{alias} =~ /-sib-/ ? () : map { %{$runs{$_} // {}} } @{$a->{own}});' \
+      --files p8/sl.ml; then
     if [ "$rc" = 0 ] && ! grep -qx @p8/runtest-sib-alt "$out" && ! grep -qx @p8/runtest-sib-low "$out"; then
-      report 0 'negative control: the name and the executable are what list a sibling'
-    else report 1 'negative control: the name and the executable are what list a sibling' "exit $rc; $(cat "$out")"; fi
-  else report 1 'negative control: the name and the executable are what list a sibling' 'the mutation anchors did not each occur once'; fi
-  rm -f "$mutant"
+      report_mutant 0 "$siblings_label"
+    else report_mutant 1 "$siblings_label" "exit $rc; $(cat "$out")"; fi
+  fi
   git_q reset -q --hard HEAD~1 && rm -rf "${repo:?}/p8" || exit 2
 fi
 # Literal dependencies (gh-ocannl-2304): a changed script one rule of an alias names by its path,
@@ -2343,17 +2370,13 @@ DUNE
   else report 1 'a deps atom, a named group, a (file) and a %{dep:} name a script; a glob, a source tree, an (alias) stanza and a disabled rule do not' \
     "exit $rc; got: $(cat "$TMP/got-named"); stdout: $(cat "$out")"; fi
   # Dune's reading alone names the source tree's script too: the stanza is what tells them apart.
-  mutant=$repo/tools/affected-mutant.sh
-  if FROM='grep { $names_of{$_} && $names_of{$_}{$p} && $reads{$_}' TO='grep { $reads{$_}' \
-      perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-      "$repo/tools/affected-tests.sh" >"$mutant"; then
-    rc=0
-    (cd "$TMP" && bash "$mutant" --files p9/tree/t.sh) >"$out" 2>"$err" || rc=$?
+  literal_label='negative control: without the converter'"'"'s names, dune reads a source tree'"'"'s script as named'
+  if run_affected_mutant "$literal_label" \
+      'grep { $names_of{$_} && $names_of{$_}{$p} && $reads{$_}' 'grep { $reads{$_}' --files p9/tree/t.sh; then
     if [ "$rc" = 0 ] && grep -qx 'affected: p9/tree/t.sh: named as a dependency by the rule of @p9/runtest-tree' "$err"; then
-      report 0 'negative control: without the converter'"'"'s names, dune reads a source tree'"'"'s script as named'
-    else report 1 'negative control: without the converter'"'"'s names, dune reads a source tree'"'"'s script as named' "exit $rc; $(cat "$err")"; fi
-  else report 1 'negative control: without the converter'"'"'s names, dune reads a source tree'"'"'s script as named' 'the mutation anchor did not occur once'; fi
-  rm -f "$mutant"
+      report_mutant 0 "$literal_label"
+    else report_mutant 1 "$literal_label" "exit $rc; $(cat "$err")"; fi
+  fi
   git_q reset -q --hard HEAD~1 && rm -rf "${repo:?}/p9" || exit 2
 fi
 # Probes that do not answer: an input the copy lacks (an ignored directory),
@@ -2408,11 +2431,11 @@ if harness_leg 'probe controls'; then
   affected --files p1/chd.txt
   # shellcheck disable=SC2086
   expect "$twin_label (the shipping list)" 0 @p1/runtest-chdir $probe_blind
-  if run_affected_mutant "${twin_label#negative control: }" 'my @act = grep { named($_, "action") } @fl;' 'my @act;' \
+  if run_affected_mutant "$twin_label" 'my @act = grep { named($_, "action") } @fl;' 'my @act;' \
       --files p1/chd.txt; then
     if [ "$rc" = 0 ] && grep -qx @p1/runtest-chdir "$out" && grep -qx @p1/runtest-tchdir "$out" &&
-       ! grep -qE '^affected: (the probe failed|dune could not print a rule in the probe)' "$err"; then report 0 "$twin_label"
-    else report 1 "$twin_label" "exit $rc; got [$(tr '\n' ' ' <"$out")]; stderr: $(tr '\n' '|' <"$err")"; fi
+       ! grep -qE '^affected: (the probe failed|dune could not print a rule in the probe)' "$err"; then report_mutant 0 "$twin_label"
+    else report_mutant 1 "$twin_label" "exit $rc; got [$(tr '\n' ' ' <"$out")]; stderr: $(tr '\n' '|' <"$err")"; fi
   fi
   # Both (:include) rules of the fixture stop being blind, and inc.txt, which
   # dune does not print among their dependencies, then reaches neither.
@@ -2511,34 +2534,25 @@ if harness_leg 'probe controls'; then
 (rule (alias runtest-p6) (action (progn)))' '(rule (alias runtest-inc6) (action (progn)))' || exit 2
   # The shipping reader exits 0 here (the 'probe fallback' leg); without the
   # alias comparison it accepts the probe, and its listing stops the run.
-  if FROM='cmp -s "$tmp/worktree-aliases" "$tmp/probe-aliases"' TO='true' \
-       perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-       "$repo/tools/affected-tests.sh" >"$repo/tools/affected-mutant.sh"; then
-    rc=0
-    (cd "$TMP" && bash "$repo/tools/affected-mutant.sh" --files p6/p6.txt) >"$out" 2>"$err" || rc=$?
+  probe_compare_label='negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run'
+  if run_affected_mutant "$probe_compare_label" 'cmp -s "$tmp/worktree-aliases" "$tmp/probe-aliases"' 'true' --files p6/p6.txt; then
     if [ "$rc" = 2 ] && grep -qF 'p6/dune' "$err" &&
       grep -qE 'unexpected line from dune show aliases:|dune show aliases failed:' "$err"; then
-      report 0 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run'
-    else report 1 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run' "mutant exit $rc; $(tr '\n' '|' <"$err")"; fi
-  else
-    report 1 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run' 'the mutation anchor does not occur exactly once'
+      report_mutant 0 "$probe_compare_label"
+    else report_mutant 1 "$probe_compare_label" "mutant exit $rc; $(tr '\n' '|' <"$err")"; fi
   fi
-  rm -f "$repo/tools/affected-mutant.sh"
   probe_restore
 fi
 
 if harness_leg 'link_deps reach control'; then
-  link_label='without its link rule reach assignment, the link_deps consumer disappears'
+  link_label='negative control: without its link rule reach assignment, the link_deps consumer disappears'
   link_loop='for (@{$stanza_rule{$t}}) {'
   link_assignment='$hit{$_} = $whole_hit{$_} = 1;'
-  # The query should see only the rule edit: the fixture ignores the mutant.
-  if ! git_q check-ignore -q tools/affected-mutant.sh; then
-    report 1 "negative control: $link_label" "the fixture does not ignore the scratch mutant"
-  elif probe_edit 's/\(echo m\)/(echo n)/'; then
+  if probe_edit 's/\(echo m\)/(echo n)/'; then
     affected HEAD
     expect 'a rule action edit lists its direct and link_deps consumers' 0 @p3/runtest-reads3 @p3/runtest-lk "$p3_scan"
     if run_affected_mutant "$link_label" "$link_loop $link_assignment" "$link_loop" HEAD; then
-      expect "negative control: $link_label" 0 @p3/runtest-reads3 "$p3_scan"
+      expect_mutant "$link_label" 0 @p3/runtest-reads3 "$p3_scan"
     fi
   fi
   probe_restore
@@ -2610,14 +2624,21 @@ ML
   affected --gpu-gated --referenced-only HEAD -- lib/gpu_core.ml
   expect 'removing the changed function call removes that gated test from the first tier' 0 \
     @tests/runtest-cuda_leg @tests/runtest-leg @tests/runtest-marked @tests/runtest-rule @tests/runtest-shared @tests/runtest-skipped_gpu
-  # Undo only the classification mechanism: the positive oracle must now fail.
-  cp "$repo/tools/affected-tests.sh" "$TMP/gpu-reader"
-  sed 's/if ($gpu_gated) {/if (0) {/' "$TMP/gpu-reader" >"$repo/tools/affected-tests.sh"
-  affected --gpu-gated --referenced-only HEAD -- lib/gpu_core.ml
-  if [ "$rc" = 0 ] && [ ! -s "$out" ]; then
-    report 0 'negative control: disabling gate discovery loses the expected GPU aliases'
-  else report 1 'negative control: disabling gate discovery loses the expected GPU aliases' "exit $rc; $(cat "$out"); $(cat "$err")"; fi
+  gpu_label='negative control: disabling gate discovery loses the expected GPU aliases'
+  # Keep the later reporting branch intact so the cut isolates discovery.
+  gpu_discovery='
+  for my $a (grep { !$hidden{$_->{name}} && $tier{$_->{name}} } @al) {'
+  if run_affected_mutant "$gpu_label" 'if ($gpu_gated) {'"$gpu_discovery" 'if (0) {'"$gpu_discovery" \
+      --gpu-gated --referenced-only HEAD -- lib/gpu_core.ml; then
+    expect_mutant "$gpu_label" 0
+  fi
   repo=$saved_repo
 fi
 
+if [ -n "$pending_mutant" ]; then
+  report 1 "$pending_mutant" 'no verdict was given for the mutant'
+fi
+if [ "$self_check" = 1 ] && [ "$harness_list" = 0 ] && [ "$mutants_checked" = 0 ]; then
+  report 1 'self-check' 'no mutant controls were checked'
+fi
 finish
