@@ -1517,11 +1517,11 @@ files.
   gh-ocannl-2412) runs on every backend with no key and refuses any `Mod (_, K)` lane operand with
   fixed integer `K > Ops.vec_unop_lanes` of the rendered precision (pre- or post-simplification,
   naming the node, `K`, the precision and its lane count); `lane_bounds_static` pins it across
-  `Ops.scalar_precs`, scopes, projections, fissioned segments and backend `compute_prec`. Of those
-  rows only an
-  INTEGER draw into a float reader (`uint16 draw into single`) still rests on `rng_collapsible`
-  alone: with it disabled that row reads lanes 4..7 unchecked (parity false) and aborts checked,
-  while the float-draw rows stay green, kept by gh-ocannl-1788's exact-collapse rule as well.
+  `Ops.scalar_precs`, scopes, projections, fissioned segments and backend `compute_prec`. The
+  float rows are also protected by gh-ocannl-1788's exact-collapse rule. The integer scope
+  exactness check (gh-ocannl-1884) independently retains the uint16 draw across widths. The
+  isolated controls for these rows and for the render-time RNG check are in
+  `test/operations/verdict_ratchet_controls.md`.
 - **A free bottom-up node follows its consumers** (gh-ocannl-2028; `docs/precision_inference.md`,
   *Free nodes follow their consumers*). A node nothing in whose bottom-up dependencies states a
   precision (`Tn.stated_prec` is `None`: `Prec_cell`'s `stated` lazy, built by `Tensor.op` over the
