@@ -508,6 +508,16 @@ let () =
       ~on:(backend ^ " (no GPU tensor-core unit)")
       ()
   in
+  let has_f16_peak =
+    lazy
+      (match Autotune.mma_peak_leg ~limits ~accum_prec:Ir.Ops.single BI.Mma_f16 with
+      | Autotune.Mma_peak_found _ -> true
+      | Autotune.Mma_peak_unavailable _ -> false)
+  in
+  let peak_leg =
+    Verdict.sub_leg ~aggregation:`Backend leg ~when_:has_f16_peak
+      ~on:(backend ^ " (no advisory f16 MMA peak for this architecture)")
+  in
   let run_tensorized_matmul ~prec_name ~a_prec ~d_prec =
     (* 256x256x256 puts arithmetic intensity above the ridge point on Metal, CUDA and HIP so compute
        binds (flops_exact = true) even when the lower-level byte count is an upper bound. *)
@@ -579,7 +589,7 @@ let () =
         (applied
         && CS.equal_tensorization mma.CS.tensorization CS.Tensorized
         && not (List.is_empty mma.CS.emitted_formats)));
-  in_leg ~leg "Bench_harness.mma_ceiling_of resolves the live GPU f16 matmul to mma-f16"
+  in_leg ~leg:peak_leg "Bench_harness.mma_ceiling_of resolves the live GPU f16 matmul to mma-f16"
     (fun label ->
       let _, mma, _ = Lazy.force live in
       p label
@@ -587,7 +597,7 @@ let () =
         | Bench_json.Mma_peak { format = "f16"; flops; source } ->
             Float.(is_finite flops && flops > 0.) && not (String.is_empty source)
         | _ -> false));
-  in_leg ~leg "dominant_kernel scores the live GPU f16 tensorized matmul as exact mma-f16"
+  in_leg ~leg:peak_leg "dominant_kernel scores the live GPU f16 tensorized matmul as exact mma-f16"
     (fun label ->
       let _, _, dk = Lazy.force live in
       let verdict = U.member "verdict" dk in
