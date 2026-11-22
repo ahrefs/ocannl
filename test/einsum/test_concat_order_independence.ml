@@ -677,10 +677,9 @@ let () =
       in
       check_shared_bounds ~k_size:5 ~k_basis:"a" ~u_bound:(3, Row.default_basis) ~u_size:3
         ~u_basis:Row.default_basis;
-      check_shared_bounds ~k_size:3 ~k_basis:Row.default_basis ~u_bound:(2, Row.default_basis)
-        ~u_size:1 ~u_basis:Row.bcast_if_1;
-      check_shared_bounds ~k_size:3 ~k_basis:Row.default_basis ~u_bound:(2, "h") ~u_size:1
-        ~u_basis:Row.bcast_if_1;
+      List.iter tags ~f:(fun tag ->
+          check_shared_bounds ~k_size:3 ~k_basis:Row.default_basis ~u_bound:(2, tag) ~u_size:1
+            ~u_basis:Row.bcast_if_1);
       p_none ~min:1700 "bounded stores whose verdict or solution depends on the order" bounded
         ~f:order_dependent;
       p_none ~min:1000 "bounded accepted runs that size a component to 0" bounded_runs
