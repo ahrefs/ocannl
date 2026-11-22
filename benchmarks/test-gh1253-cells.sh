@@ -331,14 +331,14 @@ SERIAL
   check 'hand replay reproduces the complete agreement byte for byte' cmp \
     "$profile_out/${site}_agreement.txt" "$TMP/runs/profile/hand-complete.out"
 
-  partial="$TMP/runs/profile-partial"
+  partial="$(cd "$TMP" && pwd)/runs/profile-partial"
   mkdir -p "$partial"
   cp "$mixed" "$profile_out/${site}_time.err" "$profile_out/${site}_time_r2.err" "$partial/"
   drive "$SRC" partial-replay COMPARE_AUTO_GATE=0 "$stock_sites" TIME_REPEATS=1 \
     EXPLAIN_ONLY="$partial" STUB_MUTATION=stock-seeded-preset
-  check 'EXPLAIN_ONLY also refuses a partial archive' test "$got" = 1
-  check 'EXPLAIN_ONLY reports the missing stock input' grep -qF \
-    'stock_snapshot_missing:' "$TMP/runs/partial-replay/stdout"
+  check 'EXPLAIN_ONLY refuses a partial archive before building' early_exit partial-replay
+  check 'EXPLAIN_ONLY names the missing snapshot path' grep -qF \
+    "stock_snapshot_missing: $partial/$site.tsv.stock" "$TMP/runs/partial-replay/stdout"
 
   drive "$SRC" unused COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" STUB_MUTATION=stock-preset-unused
   check 'an untimed preset leaves a seeded agreement report usable' test "$got" = 0
