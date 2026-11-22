@@ -12,6 +12,7 @@ stride 2: the input gradient's accumulator tiles are f32: true
 stride 2: the privatized gradient equals the f32 gradient rounded once per cell: true
 the split residue with ambiguous entry provenance stays a serial accumulation: true
 the split owner's tail guard preserves once-rounded parity across both residues: true
+materializing the unrolled reduction under the tail guard preserves parity: true
 stride 6: the materialized f32 gradient equals the host sums: true
 stride 6: rounding per step differs from rounding once per cell: true
 stride 6: the bf16 gradient equals the f32 gradient rounded once per cell: true

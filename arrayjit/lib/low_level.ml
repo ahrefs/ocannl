@@ -10189,11 +10189,10 @@ let within_accum_box ~loop_ranges ~dominating_guards coords =
         ~init:(ienv_of_static_indices ~node_bounds:false []) ~f:(fun env (s, (from_, to_)) ->
           ienv_extend env s ~from_ ~to_)
     in
-    let rec gcd a b = if b = 0 then a else gcd b (a % b) in
     let primitive terms =
       if List.exists terms ~f:(fun (c, _) -> c = Int.min_value) then None
       else
-        let scale = List.fold terms ~init:0 ~f:(fun g (c, _) -> gcd g (abs c)) in
+        let scale = List.fold terms ~init:0 ~f:(fun g (c, _) -> Utils.gcd g c) in
         if scale = 0 then None else Some (List.map terms ~f:(fun (c, s) -> (c / scale, s)), scale)
     in
     let guards =
@@ -11323,19 +11322,20 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
          levels its backend serializes, which this pass cannot know, so it asks twice: accepting no
          hardware level and accepting every one. Where the two answers agree, so does code
          generation's. *)
-      let rec level ~extra ~bounds (llc : t) =
+      let rec level ~extra ~bounds ~guards (llc : t) =
         match llc with
         | For_loop { index; from_; to_; body; _ } -> (
             let bounds = Affine.Loop_ranges.bind bounds index (from_, to_) in
             match
-              peel_accum_nest ~extra_level:extra ~loop_ranges:bounds ~free_of:[ index ] body
+              peel_accum_nest ~extra_level:extra ~loop_ranges:bounds ~dominating_guards:guards
+                ~free_of:[ index ] body
             with
             | Some (tn', _, _, _, _) when Tn.equal tn tn' -> Some index
-            | _ -> level ~extra ~bounds body)
+            | _ -> level ~extra ~bounds ~guards body)
         | Scan_loop { index; from_; to_; body; _ } ->
-            level ~extra ~bounds:(Affine.Loop_ranges.bind bounds index (from_, to_)) body
-        | If { body; _ } -> level ~extra ~bounds body
-        | Seq (a, b) -> if writes_tn a then level ~extra ~bounds a else level ~extra ~bounds b
+            level ~extra ~bounds:(Affine.Loop_ranges.bind bounds index (from_, to_)) ~guards body
+        | If { cond; body } -> level ~extra ~bounds ~guards:(cond :: guards) body
+        | Seq (a, b) -> level ~extra ~bounds ~guards (if writes_tn a then a else b)
         | _ -> None
       in
       (* The localized form at the loop binding [l], as [try_localize_serial_reduce] renders it,
@@ -11343,9 +11343,9 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
          the cell's value guarded by the first iteration of the repeating loops outside it.
          [`Pinned] where code generation would keep the per-step update instead (logging, an RNG
          conversion), [`Refused] for a base this pass does not rebuild. *)
-      let rec scope_at ~l ~bounds (llc : t) =
-        let under ?(bounds = bounds) f body =
-          match scope_at ~l ~bounds body with `Scoped b -> `Scoped (f b) | r -> r
+      let rec scope_at ~l ~bounds ~guards (llc : t) =
+        let under ?(bounds = bounds) ?(guards = guards) f body =
+          match scope_at ~l ~bounds ~guards body with `Scoped b -> `Scoped (f b) | r -> r
         in
         match llc with
         | For_loop ({ index; from_; to_; body; _ } as r) -> (
@@ -11353,7 +11353,10 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
             if not (Indexing.equal_symbol index l) then
               under ~bounds (fun body -> For_loop { r with body }) body
             else
-              match peel_accum_nest ~loop_ranges:bounds ~free_of:[ index ] body with
+              match
+                peel_accum_nest ~loop_ranges:bounds ~dominating_guards:guards ~free_of:[ index ]
+                  body
+              with
               | Some (tn', idcs, `Update llsc, debug, rebuild) when Tn.equal tn tn' ->
                   if not (accum_update_widens ~tn ~idcs llsc) then `Pinned
                   else
@@ -11393,7 +11396,7 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
               ~bounds:(Affine.Loop_ranges.bind bounds index (from_, to_))
               (fun body -> Scan_loop { r with body })
               body
-        | If r -> under (fun body -> If { r with body }) r.body
+        | If r -> under ~guards:(r.cond :: guards) (fun body -> If { r with body }) r.body
         | Seq (a, b) ->
             if writes_tn a then under (fun a -> Seq (a, b)) a else under (fun b -> Seq (a, b)) b
         | _ -> `Refused
@@ -11403,14 +11406,14 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
       | _ when not (List.for_all repeated ~f:program_ordered) -> None
       | _ -> (
           match
-            ( level ~extra:(fun _ _ -> false) ~bounds:Affine.Loop_ranges.empty stmt,
-              level ~extra:(fun _ _ -> true) ~bounds:Affine.Loop_ranges.empty stmt )
+            ( level ~extra:(fun _ _ -> false) ~bounds:Affine.Loop_ranges.empty ~guards:[] stmt,
+              level ~extra:(fun _ _ -> true) ~bounds:Affine.Loop_ranges.empty ~guards:[] stmt )
           with
           | None, None -> guarded_rewrite repeated
           | Some l, Some l'
             when Indexing.equal_symbol l l'
                  && every_binder l ~f:(function Some Serial -> true | _ -> false) -> (
-              match scope_at ~l ~bounds:Affine.Loop_ranges.empty stmt with
+              match scope_at ~l ~bounds:Affine.Loop_ranges.empty ~guards:[] stmt with
               | `Scoped stmt -> Some stmt
               | `Pinned -> guarded_rewrite repeated
               | `Refused | `Unprofitable -> None)
@@ -13378,8 +13381,6 @@ let sink_narrow_reduction_loops (llc : t) : t =
       if a <> 0 && abs b > limit / abs a then raise Unsupported;
       a * b
     in
-    let floor_div n d = (n - (n % d)) / d in
-    let rec gcd a b = if b = 0 then a else gcd b (a % b) in
     let sym_eq = Indexing.equal_symbol in
     let all = List.map loops ~f:(fun (s, n, _) -> (s, n)) in
     let find loops s = List.Assoc.find loops s ~equal:sym_eq in
@@ -13420,7 +13421,7 @@ let sink_narrow_reduction_loops (llc : t) : t =
         if pi < pj then ((a, i, imax), (b, j, jmax)) else ((b, j, jmax), (a, i, imax))
       in
       let early = i and late = j in
-      let g = gcd (checked a) (checked b) in
+      let g = Utils.gcd (checked a) (checked b) in
       ignore (add (mul a imax) (mul b jmax) : int);
       ignore (checked offset : int);
       let is_write s = Array.exists di ~f:(Indexing.axis_index_mentions_symbol s) in
@@ -13458,9 +13459,9 @@ let sink_narrow_reduction_loops (llc : t) : t =
              owner loop to the physical destination before the peel moves its accumulator transfers
              outside the update guards. *)
           let phase_offset = add (mul b r) offset in
-          let lo = max 0 (-floor_div phase_offset a) in
+          let lo = max 0 (-fdiv_int phase_offset a) in
           let hi =
-            min (add imax (mul b_step qmax)) (floor_div (add (dims.(axis) - 1) (-phase_offset)) a)
+            min (add imax (mul b_step qmax)) (fdiv_int (add (dims.(axis) - 1) (-phase_offset)) a)
           in
           if lo > hi then None
           else

@@ -58,25 +58,39 @@ let gradient ~stride prec =
   Train.set_materialized (grad y);
   (Train.grad_update ~accum_steps:1 loss, dx)
 
-let run_fixture ~stride ~tag ?(privatized = false) ?(split_owner = false) prec =
+type schedule = Privatized | Split_privatized | Split_unrolled
+
+let run_fixture ~stride ~tag ?schedule prec =
   let comp, dx = gradient ~stride prec in
   let ctx = Context.auto () in
   let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
   let lowered_transform =
-    Option.some_if privatized (fun opt ->
+    Option.map schedule ~f:(fun schedule opt ->
         let preset =
-          if split_owner then
-            let phase =
-              LL.flat_lines [ opt.LL.llc ]
-              |> List.filter ~f:(fun st -> not (List.is_empty (LL.accumulating_writes ~tn:dx st)))
-              |> List.last_exn
-            in
-            let axis = Ll_test.nest_paths phase |> List.hd_exn |> List.hd_exn in
-            let op, _, _ = Sched.split ~axis ~factor:4 ~outer:LL.Serial ~inner:LL.Serial in
-            [ op ]
-          else []
+          match schedule with
+          | Privatized -> []
+          | Split_privatized | Split_unrolled -> (
+              let phase =
+                LL.flat_lines [ opt.LL.llc ]
+                |> List.filter ~f:(fun st -> not (List.is_empty (LL.accumulating_writes ~tn:dx st)))
+                |> List.last_exn
+              in
+              let owner, reduction =
+                match Ll_test.nest_paths phase with
+                | [ owner :: reduction :: _ ] -> (owner, reduction)
+                | _ -> failwith "expected a cell-first residue nest"
+              in
+              let axis = owner in
+              let op, _, _ = Sched.split ~axis ~factor:4 ~outer:LL.Serial ~inner:LL.Serial in
+              match schedule with
+              | Split_unrolled -> [ op; Sched.Unroll { axis = reduction; materialize = true } ]
+              | _ -> [ op ])
         in
-        let sched = Autotune.extend_with_privatize ~accum_prec ~static_indices:[] preset opt in
+        let sched =
+          match schedule with
+          | Split_unrolled -> preset
+          | _ -> Autotune.extend_with_privatize ~accum_prec ~static_indices:[] preset opt
+        in
         [ Sched.apply sched opt ])
   in
   let name = Printf.sprintf "ncgr_%s_%d" tag stride in
@@ -108,7 +122,7 @@ let check stride =
   let exact = modeled ~step:Fn.id ~window:Fn.id in
   let twin, _ = run_fixture ~stride ~tag:"f32" Ir.Ops.single in
   let narrow, _ = run_fixture ~stride ~tag:"bf16" bf16 in
-  let scheduled, tiles = run_fixture ~stride ~tag:"priv" ~privatized:true bf16 in
+  let scheduled, tiles = run_fixture ~stride ~tag:"priv" ~schedule:Privatized bf16 in
   let once = Array.map twin ~f:round in
   let discriminates when_ other =
     p_exists
@@ -126,10 +140,13 @@ let check stride =
   pf_all2 "%s: the privatized gradient equals the f32 gradient rounded once per cell" label
     scheduled once ~f:same;
   if stride = 2 then (
-    let split, tiles = run_fixture ~stride ~tag:"split" ~privatized:true ~split_owner:true bf16 in
+    let split, tiles = run_fixture ~stride ~tag:"split" ~schedule:Split_privatized bf16 in
     p "the split residue with ambiguous entry provenance stays a serial accumulation"
       (List.length tiles = 1);
     p_all2 "the split owner's tail guard preserves once-rounded parity across both residues" split
+      once ~f:same;
+    let unrolled, _ = run_fixture ~stride ~tag:"unrolled" ~schedule:Split_unrolled bf16 in
+    p_all2 "materializing the unrolled reduction under the tail guard preserves parity" unrolled
       once ~f:same)
 
 let () =

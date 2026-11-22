@@ -352,59 +352,63 @@ let refuse detail =
    subsequent left-to-right schedule operations ([Schedule.partition] returns the segment symbols
    precisely so callers can target them). An op that annotates such a loop with a hardware type is
    refused by the scope grammar {!apply_opt_op} checks (gh-ocannl-1467). *)
-let rewrite_loop ~what ~sym ~(f : floop -> Low_level.t) (llc : Low_level.t) : Low_level.t =
+let rewrite_loop_with_guards ~what ~sym ~(f : Low_level.scalar_arg list -> floop -> Low_level.t)
+    (llc : Low_level.t) : Low_level.t =
   let open Low_level in
   let found = ref false in
-  let rec go llc =
+  let rec go guards llc =
     match llc with
     | For_loop { index; from_; to_; body; axis } when Indexing.equal_symbol index sym ->
         found := true;
-        f { index; from_; to_; body; axis }
-    | For_loop fc -> For_loop { fc with body = go fc.body }
+        f guards { index; from_; to_; body; axis }
+    | For_loop fc -> For_loop { fc with body = go guards fc.body }
     | Seq (a, b) ->
         (* gh-ocannl-1974: last to first, spelled. [f] runs once per copy of the loop an earlier
            materializing operation left, and mints scopes or refuses there, so the order numbers the
            copies' scopes and picks the refusal; it is the one OCaml's unspecified argument
            evaluation gave in practice, kept so that no kernel moves. *)
-        let b = go b in
-        let a = go a in
+        let b = go guards b in
+        let a = go guards a in
         Seq (a, b)
-    | If { cond; body } -> If { cond; body = go body }
+    | If { cond; body } -> If { cond; body = go (cond :: guards) body }
     | Set s ->
-        let llsc' = go_scalar s.llsc in
+        let llsc' = go_scalar guards s.llsc in
         if phys_equal llsc' s.llsc then llc else Set { s with llsc = llsc' }
     | Set_dynamic ({ dyn_value = v, vp; llsc; _ } as s) ->
-        let llsc = go_scalar llsc in
-        let v = go_scalar v in
+        let llsc = go_scalar guards llsc in
+        let v = go_scalar guards v in
         Set_dynamic { s with dyn_value = (v, vp); llsc }
-    | Set_local (id, llsc) -> Set_local (id, go_scalar llsc)
-    | Set_from_vec ({ arg = a, ap; _ } as s) -> Set_from_vec { s with arg = (go_scalar a, ap) }
+    | Set_local (id, llsc) -> Set_local (id, go_scalar guards llsc)
+    | Set_from_vec ({ arg = a, ap; _ } as s) ->
+        Set_from_vec { s with arg = (go_scalar guards a, ap) }
     | other -> other
-  and go_scalar (llsc : scalar_t) : scalar_t =
+  and go_scalar guards (llsc : scalar_t) : scalar_t =
     match llsc with
-    | Local_scope ls -> Local_scope { ls with body = go ls.body }
+    | Local_scope ls -> Local_scope { ls with body = go guards ls.body }
     | Get_dynamic ({ dyn_value = v, vp; _ } as g) ->
-        Get_dynamic { g with dyn_value = (go_scalar v, vp) }
+        Get_dynamic { g with dyn_value = (go_scalar guards v, vp) }
     | Ternop (op, (a, pa), (b, pb), (c, pc)) ->
-        let c' = go_scalar c in
-        let b' = go_scalar b in
-        let a' = go_scalar a in
+        let c' = go_scalar guards c in
+        let b' = go_scalar guards b in
+        let a' = go_scalar guards a in
         if phys_equal a a' && phys_equal b b' && phys_equal c c' then llsc
         else Ternop (op, (a', pa), (b', pb), (c', pc))
     | Binop (op, (a, pa), (b, pb)) ->
-        let b' = go_scalar b in
-        let a' = go_scalar a in
+        let b' = go_scalar guards b in
+        let a' = go_scalar guards a in
         if phys_equal a a' && phys_equal b b' then llsc else Binop (op, (a', pa), (b', pb))
     | Unop (op, (a, pa)) ->
-        let a' = go_scalar a in
+        let a' = go_scalar guards a in
         if phys_equal a a' then llsc else Unop (op, (a', pa))
     | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
         llsc
   in
-  let result = go llc in
+  let result = go [] llc in
   if not !found then
     refuse (what ^ ": no For_loop with index " ^ Indexing.symbol_ident sym ^ " in this routine");
   result
+
+let rewrite_loop ~what ~sym ~f llc = rewrite_loop_with_guards ~what ~sym llc ~f:(fun _ -> f)
 
 (* Rewrites, with [f], every STATEMENT-LEVEL node holding a [For_loop] whose index is [sym]: the
    loop itself where it sits among statements, or the statement whose [Local_scope] bodies bind it
@@ -1052,7 +1056,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
       rewrite_loop ~what:"Schedule.Unroll" ~sym:axis llc ~f:(fun fc ->
           for_loop { fc with axis = Unrolled })
   | Unroll { axis; materialize = true } ->
-      rewrite_loop ~what:"Schedule.Unroll" ~sym:axis llc ~f:(fun fc ->
+      rewrite_loop_with_guards ~what:"Schedule.Unroll" ~sym:axis llc ~f:(fun guards fc ->
           (* A dead loop has no effects: do not mint an accumulator load/store for it. Compare
              bounds before subtracting, so even extreme dead ranges stay empty. *)
           if fc.to_ < fc.from_ then Noop
@@ -1097,8 +1101,8 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
                  unrolled and serial candidates still agree — both per-step. *)
               if Utils.debug_log_from_routines () then None
               else
-                Low_level.peel_accum_nest ~loop_ranges:(Lazy.force program_ranges) ~free_of:[ axis ]
-                  fc.body
+                Low_level.peel_accum_nest ~loop_ranges:(Lazy.force program_ranges)
+                  ~dominating_guards:guards ~free_of:[ axis ] fc.body
             in
             match mint with
             | Some (tn, idcs, base, debug, rebuild) ->
@@ -1214,7 +1218,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
          segment's narrowed range then lets [apply]'s trailing [simplify_llc] interval-fold the
          guards it decides — statement [If]s and scalar [Where] range guards alike — giving
          guard-free specialized segment nests without any specialization logic here. *)
-      rewrite_loop ~what:"Schedule.Partition" ~sym:axis llc ~f:(fun fc ->
+      rewrite_loop_with_guards ~what:"Schedule.Partition" ~sym:axis llc ~f:(fun guards fc ->
           if not (equal_axis_type fc.axis Serial) then
             refuse ("Schedule.Partition: loop " ^ Indexing.symbol_ident axis ^ " must be Serial");
           if List.is_empty breakpoints then
@@ -1248,8 +1252,8 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
           let mint =
             if Utils.debug_log_from_routines () then None
             else
-              Low_level.peel_accum_nest ~loop_ranges:(Lazy.force program_ranges) ~free_of:[ axis ]
-                fc.body
+              Low_level.peel_accum_nest ~loop_ranges:(Lazy.force program_ranges)
+                ~dominating_guards:guards ~free_of:[ axis ] fc.body
           in
           match mint with
           | Some (tn, idcs, base, debug, rebuild) ->
