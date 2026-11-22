@@ -113,13 +113,14 @@
 # model_default against the plain default, no anchor. A pick
 # whose configuration seeds a plan the timing cell did not time (a profile's auto gate deciding
 # otherwise) gets a timing cell of its own under that profile, appended to the same TSV. Before
-# that append the stock rows are saved as rank_<site>.tsv.stock for the incumbent join.
+# that append the stock rows are saved as rank_<site>.tsv.stock and the main TSV is marked as
+# requiring the snapshot. Keep both files for replay.
 # EXPLAIN_ONLY=<run dir> re-scores a past run's timed sites at this checkout's revision, timing
 # no candidate (a correctness batch, not a measurement): per site of SITES only the `shipped` and
 # `ceilings` listing cells run (the RANK_ONLY constants, BENCH_TUNE=0 pinned), and
 # gh1442_agreement.py joins them to <run dir>/rank_<site>.tsv -- that run's rows, read and never
 # written. Preset attribution comes from the stock _time.err and _time_rN.err censuses when
-# retained, using the .tsv.stock snapshot when the run appended profile rows.
+# retained. A marked TSV with a missing .tsv.stock fails agreement with stock_snapshot_missing.
 # BENCH_PICK=1 adds each arm's pick line, whose pick_ms/untuned_ms are the cell's own
 # in-process timing (advisory: a rerun moves them, nothing else). Running it at two revisions
 # against one run dir is the before/after agreement check of a ranking-score change, on the same
@@ -449,11 +450,11 @@ for site in $sites; do
       if [[ -f "$log" ]]; then timing_census+=(--census "$log"); fi
     done
     rows="$rows_dir/rank_${name}.tsv"
-    stock_rows="$rows"
-    if [[ -f "$rows.stock" ]]; then stock_rows="$rows.stock"; fi
+    stock_tsv=()
+    if [[ -f "$rows.stock" ]]; then stock_tsv=(--stock-tsv "$rows.stock"); fi
     python3 "$root/benchmarks/gh1442_agreement.py" "$rows" \
       "ceilings=$out/rank_${name}_ceilings.out" "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" \
-      --stock-tsv "$stock_rows" ${timing_census[@]+"${timing_census[@]}"} ${fit[@]+"${fit[@]}"} |
+      ${stock_tsv[@]+"${stock_tsv[@]}"} ${timing_census[@]+"${timing_census[@]}"} ${fit[@]+"${fit[@]}"} |
       tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))
     continue
   fi
@@ -558,6 +559,7 @@ for site in $sites; do
           if [[ $stock_rows == "$rows" ]]; then
             stock_rows="$rows.stock"
             if [[ -f "$rows" ]]; then cp "$rows" "$stock_rows"; else : > "$stock_rows"; fi
+            printf '%s\n' '# gh1253_cells: stock snapshot required' >> "$rows"
           fi
           cell "rank_${name}_time_${pname}" env BENCH_TUNE=1 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" \
             "$rank_site" "$pflag" --ocannl_autotune_keep_fraction=1 \

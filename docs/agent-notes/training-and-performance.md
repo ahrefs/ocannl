@@ -286,6 +286,12 @@ files.
   `EXPLAIN_ONLY=<run dir>` re-scores a past run's sites at the checkout's revision against that
   run's `rank_<site>.tsv` rows, timing no candidate: a ranking-score change's before/after agreement
   check is two such runs (base, head) on one run dir, a correctness batch, not a measurement.
+  When a profile needs its own timing cell, the driver saves the stock rows as
+  `rank_<site>.tsv.stock` and marks the main TSV before the profile can append. Keep both files
+  for replay. `EXPLAIN_ONLY` takes the snapshot from the archive, and direct
+  `gh1442_agreement.py` replays take it via `--stock-tsv`. A marked TSV without the separate
+  snapshot fails agreement with `stock_snapshot_missing` (gh-ocannl-2397). Older mixed TSVs
+  require the snapshot to be supplied explicitly for direct replay.
 - The ranking score divides by its own rates, never the bound's ceilings (gh-ocannl-1442):
   `issue_rate` (scalar operations, the effective rate of a register-blocktiled kernel with its
   staging) and `dram_bandwidth` (the STREAM rate), `Untimed` fields overridden by

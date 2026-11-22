@@ -19,6 +19,10 @@ Usage: gh1442_agreement.py TSV NAME=EXPLAIN [NAME=EXPLAIN ...] [--pick NAME=OUT 
            and `autotune-seeding: preset-digest` records. Plan records can recur during pick and
            tune. The recorded values must agree within a log and across the stock cells.
   --stock-tsv the stock timing cells' calibration rows if TSV also holds rows from profile cells.
+           The exact comment line `# gh1253_cells: stock snapshot required` marks a mixed TSV.
+           A marked TSV requires a separate stock snapshot; otherwise replay exits 2 with
+           `stock_snapshot_missing` on stderr and no report. Archive provenance comes solely from
+           this marker. Supply --stock-tsv explicitly for older mixed TSVs without the marker.
            A digest join needs a positive measurement in a current 12-column stock row.
 
 The explain lines and the rows join by label: model_explain labels its sketch leaves as the tuner
@@ -77,6 +81,9 @@ from typing import NamedTuple
 
 import bench_output
 from gh1253_gate_compare import CALIBRATION_COLUMNS, preset_digest, seeding_plan
+
+
+STOCK_SNAPSHOT_REQUIRED = "# gh1253_cells: stock snapshot required"
 
 
 class Timing(NamedTuple):
@@ -228,13 +235,19 @@ def stock_attribution(paths):
     return next(iter(plans), None), next(iter(digests), None)
 
 
-def measured(path, attribution):
+def measured(path, attribution, *, allow_mixed=False):
     times = {}
     preset = None
     with open(path) as f:
         for line in f:
-            cols = line.rstrip("\n").split("\t")
-            if len(cols) < 5 or line.startswith("#"):
+            line = line.rstrip("\n")
+            if line.startswith("#"):
+                if line == STOCK_SNAPSHOT_REQUIRED and not allow_mixed:
+                    raise ValueError(f"{path}: stock_snapshot_missing: supply the separate stock"
+                                     " snapshot with --stock-tsv")
+                continue
+            cols = line.split("\t")
+            if len(cols) < 5:
                 continue
             try:
                 ms = float(cols[4])
@@ -333,7 +346,7 @@ def main():
     try:
         plan, digest = stock_attribution(args.census)
         if args.stock_tsv and args.stock_tsv != args.tsv:
-            times, _ = measured(args.tsv, None)
+            times, _ = measured(args.tsv, None, allow_mixed=True)
             stock_times, preset = measured(args.stock_tsv, digest)
         else:
             times, preset = measured(args.tsv, digest)

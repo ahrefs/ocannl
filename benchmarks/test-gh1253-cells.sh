@@ -306,6 +306,40 @@ SERIAL
   check 'the replay keeps the stock timing for the seeded incumbent' \
     grep -qxF "$seeded_row" "$TMP/runs/profile-replay/out/${site}_agreement.txt"
 
+  mixed="$profile_out/$site.tsv"
+  stock="${mixed}.stock"
+  check 'the mixed TSV marks that a stock snapshot is required' grep -qxF \
+    '# gh1253_cells: stock snapshot required' "$mixed"
+  replay_args=()
+  for arm in "${serial_arms[@]}"; do
+    replay_args+=("$arm=$profile_out/${site}_$arm.out")
+  done
+  replay_args+=(--pick "reproducible=$profile_out/${site}_pick_reproducible.out"
+    --census "$profile_out/${site}_time.err" --census "$profile_out/${site}_time_r2.err")
+  reader="$tree/benchmarks/gh1442_agreement.py"
+  got=0
+  python3 "$reader" "$mixed" "${replay_args[@]}" \
+    >"$TMP/runs/profile/hand-replay.out" 2>"$TMP/runs/profile/hand-replay.err" || got=$?
+  check 'hand replay without the stock snapshot refuses' test "$got" = 2
+  check 'the refusal names the missing stock input' grep -qF \
+    'stock_snapshot_missing:' "$TMP/runs/profile/hand-replay.err"
+  check 'the refusal emits no agreement report' test ! -s "$TMP/runs/profile/hand-replay.out"
+  got=0
+  python3 "$reader" "$mixed" "${replay_args[@]}" --stock-tsv "$stock" \
+    >"$TMP/runs/profile/hand-complete.out" 2>"$TMP/runs/profile/hand-complete.err" || got=$?
+  check 'hand replay with the stock snapshot succeeds' test "$got" = 0
+  check 'hand replay reproduces the complete agreement byte for byte' cmp \
+    "$profile_out/${site}_agreement.txt" "$TMP/runs/profile/hand-complete.out"
+
+  partial="$TMP/runs/profile-partial"
+  mkdir -p "$partial"
+  cp "$mixed" "$profile_out/${site}_time.err" "$profile_out/${site}_time_r2.err" "$partial/"
+  drive "$SRC" partial-replay COMPARE_AUTO_GATE=0 "$stock_sites" TIME_REPEATS=1 \
+    EXPLAIN_ONLY="$partial" STUB_MUTATION=stock-seeded-preset
+  check 'EXPLAIN_ONLY also refuses a partial archive' test "$got" = 1
+  check 'EXPLAIN_ONLY reports the missing stock input' grep -qF \
+    'stock_snapshot_missing:' "$TMP/runs/partial-replay/stdout"
+
   drive "$SRC" unused COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" STUB_MUTATION=stock-preset-unused
   check 'an untimed preset leaves a seeded agreement report usable' test "$got" = 0
   check 'the separately timed seeded plan still joins' \
