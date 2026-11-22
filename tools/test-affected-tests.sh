@@ -1697,11 +1697,19 @@ if harness_leg 'harness fixture and heredoc literals'; then
   fx_reach 'a backslash-continued printf fixture string does not reach it' tools/test-a.sh
   twin_text 'printf '\''first line' 'tools/sub.sh' 'last line'\'''
   fx_reach 'a multiline quoted printf fixture string does not reach it' tools/test-a.sh
-  # Output redirections writing fixture/stub files.
+  # Truncating output redirections writing fixture/stub files (> / >| / &>).
   twin_text 'cat >"$TMP/tools/sub.sh" <<'\''EOF'\''' '#!/bin/sh' 'echo fake' 'EOF'
   fx_reach 'writing a stub via cat >"$TMP/..." <<EOF does not reach the real script' tools/test-a.sh
-  twin_text 'printf '\''echo fake\n'\'' >"$TMP/tools/sub.sh"' ': >>"$TMP/tools/sub.sh"'
-  fx_reach 'output redirection targets (> and >>) do not reach the real script' tools/test-a.sh
+  twin_text 'tee "$TMP/fixture.txt" <<'\''EOF'\''' 'tools/sub.sh' 'EOF'
+  fx_reach 'an unpiped tee data heredoc does not reach the script' tools/test-a.sh
+  twin_text 'printf '\''echo fake\n'\'' >"$TMP/tools/sub.sh"' ': >|"$TMP/tools/sub.sh"' 'echo fake &>"$TMP/tools/sub.sh"'
+  fx_reach 'truncating output redirection targets (>, >|, &>) do not reach the real script' tools/test-a.sh
+  twin_text ': >>"$TMP/tools/sub.sh"'
+  fx_reach 'fail-closed: append redirection >> still reaches its target' tools/test-a.sh tools/test-c.sh
+  twin_text 'echo fake &>>"$TMP/tools/sub.sh"'
+  fx_reach 'fail-closed: append redirection &>> still reaches its target' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat >>"$TMP/tools/sub.sh" <<'\''EOF'\''' 'fake' 'EOF'
+  fx_reach 'fail-closed: cat >>target <<EOF still reaches the appended target' tools/test-a.sh tools/test-c.sh
   # Data heredoc does not falsely trigger loads or clobber self-directory anchors.
   twin_text 'cat >"$TMP/fake.sh" <<'\''EOF'\''' '. tools/lib.sh' '# shellcheck source=tools/dyn.sh' 'EOF'
   haffected --harnesses --files tools/lib.sh
@@ -1782,6 +1790,31 @@ if harness_leg 'harness fixture and heredoc literals'; then
   twin_text '. tools/clib.sh' 'echo tools/sub.sh'
   fx_reach 'fail-closed: an echo function override in a sourced helper keeps echo arguments scanned' tools/test-a.sh tools/test-c.sh
   : >"$hrepo/tools/clib.sh"
+  # Round 1 review findings: closed allowlist for heredocs and pipelines,
+  # process substitutions <(...) / >(...), and cat function override.
+  twin_text 'source /dev/stdin <<'\''SH'\''' 'tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: source /dev/stdin <<SH keeps the heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text '. /dev/stdin <<'\''SH'\''' 'tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: . /dev/stdin <<SH keeps the heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'while read -r s; do bash "$s"; done <<'\''EOF'\''' 'tools/sub.sh' 'EOF'
+  fx_reach 'fail-closed: while read ... done <<EOF keeps the heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'timeout 60 python3 - <<'\''PY'\''' 'open("tools/sub.sh").read()' 'PY'
+  fx_reach 'fail-closed: timeout-wrapped python3 heredoc stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat <<'\''EOF'\'' | grep -q x' 'tools/sub.sh' 'EOF'
+  fx_reach 'fail-closed: any piped cat heredoc stays scanned (closed allowlist)' tools/test-a.sh tools/test-c.sh
+  twin_text 'printf '\''%s\n'\'' tools/sub.sh | while read -r s; do bash "$s"; done'
+  fx_reach 'fail-closed: printf piped to while read stays scanned (closed allowlist)' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat() { bash "$@"; }' 'cat <<'\''EOF'\''' 'tools/sub.sh' 'EOF'
+  fx_reach 'fail-closed: a cat function override keeps cat heredocs scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'bash <(printf '\''bash tools/sub.sh\n'\'')'
+  fx_reach 'fail-closed: bash <(printf ...) process substitution keeps nested printf scanned' tools/test-a.sh tools/test-c.sh
+  printf '%s\n' 'cat data/x.txt' >"$hrepo/tools/clib.sh"
+  twin_text 'source <(echo '\''source tools/clib.sh'\'')'
+  haffected --harnesses --files data/x.txt
+  hexpect 'fail-closed: source <(echo ...) process substitution keeps nested source followed by loads' 0 tools/test-c.sh
+  : >"$hrepo/tools/clib.sh"
+  twin_text 'echo hi >(cat tools/sub.sh)'
+  fx_reach 'fail-closed: >(cat ...) process substitution inside echo stays scanned' tools/test-a.sh tools/test-c.sh
   hc_restore
 fi
 
@@ -1864,6 +1897,12 @@ if harness_leg 'harness python __file__ placement'; then
   py_twin_reach 'fail-closed: a multiline def parameter shadowing HERE keeps every tied owner' "${twins[@]}"
   py_text 'from pathlib import Path' 'HERE = Path(__file__).parent' 'if flag: HERE = other_dir' 'p = HERE / "twin.py"'
   py_twin_reach 'fail-closed: a single-line suite reassignment (if flag: HERE = ...) keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'HERE: str = "data"' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: an annotated reassignment (HERE: str = ...) keeps every tied owner' "${twins[@]}"
+  py_text 'from pathlib import Path' 'HERE = Path(__file__).parent' 'if flag: HERE: str = other_dir' 'p = HERE / "twin.py"'
+  py_twin_reach 'fail-closed: an annotated reassignment inside a single-line suite keeps every tied owner' "${twins[@]}"
+  py_text 'from pathlib import Path' 'HERE = Path(__file__).parent' 'if d[1:2]: HERE = other_dir' 'p = HERE / "twin.py"'
+  py_twin_reach 'fail-closed: a single-line suite with a slice colon (if d[1:2]: HERE = ...) keeps every tied owner' "${twins[@]}"
   py_text 'import os' '__file__ = "data/driver.py"' 'p = os.path.join(os.path.dirname(__file__), "twin.py")'
   py_twin_reach 'fail-closed: a rebound __file__ keeps every tied owner' "${twins[@]}"
   py_harness_teardown

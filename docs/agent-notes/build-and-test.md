@@ -4375,14 +4375,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     (`MEMBER PATH STEP FILE:LINE TOKEN OWNERS`), sorted: diff it before and after a reader change,
     and read an OWNERS above 1 as a tie the rule kept.
     Shell fixture and heredoc literals no longer count as reaches (gh-ocannl-2380; closed allowlist
-    in `tools/affected-tests.sh`'s header): non-interpreter heredoc bodies (`<<'EOF'`, `<<EOF`,
-    `<<-`; never `<<<` here-strings), literal arguments of top-level `echo` and `printf` (excluding
-    `printf -v`, pipelines into interpreters/`xargs`, `eval`, and `$(...)`), and output redirection
-    targets (`>`, `>>`, `>|`, `&>`, `&>>`; never `<` or `<>`), while command substitutions inside
-    non-single-quoted strings or unquoted heredocs and direct interpreter heredocs (`python3`,
-    `perl`, `sh`, `bash`, `awk`, ...) stay scanned fail-closed. A harness that stages a real helper
-    script through a data heredoc (such as `test/operations/ci_matrix.sh`'s `cat >"$TMP/contracts.py"
-    <<'PY'`) declares its repository inputs with `# affected-reads:`.
+    in `tools/affected-tests.sh`'s header): unpiped `cat`/`tee` data heredoc bodies (`<<'EOF'`,
+    `<<EOF`, `<<-`; never `<<<` here-strings), literal arguments of unpiped top-level `echo` and
+    `printf` (excluding `printf -v`, any pipeline downstream, `eval`, and `$(...)`/`<(...)`/
+    `>(...)`), and truncating output redirection targets (`>`, `>|`, `&>`; never `<`, `<>`, `>>`,
+    `&>>`, or `>(...)`), while command/process substitutions, append redirections, non-`cat`/`tee`
+    or piped heredocs, and function/alias overrides stay scanned fail-closed. A harness that stages
+    a real helper script through a data heredoc (such as `test/operations/ci_matrix.sh`'s
+    `cat >"$TMP/contracts.py" <<'PY'`) declares its repository inputs with `# affected-reads:`.
     Fake diagnostics and variable-assigned fixture paths should still use fixture-only names
     (gh-ocannl-2231, gh-ocannl-2292), since variable assignments (`VAR=...`) and non-printing
     commands (`cat`, `grep`, `cp`, function calls) stay scanned fail-closed: synthetic locations sit
