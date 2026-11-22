@@ -22,7 +22,9 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
     an observability pessimization, which it must not. *)
 let is_cap_provenance : Tn.provenance -> bool = function
   | Visit_cap | Inline_reduction_cap | Inline_fanin_cap -> true
-  | Read_before_write | Scope_local | Surviving_read | Site _ | Refined _ -> false
+  | Observed_reader_reads_local | Read_before_write | Scope_local | Surviving_read | Site _
+  | Refined _ ->
+      false
 
 (** The configuration key whose cap forced this decision, when a cap did. Raising it is the
     alternative remedy to materializing the node: it can leave the node virtual and pay recompute
@@ -36,7 +38,9 @@ let cap_provenance_setting : Tn.provenance -> string option = function
   | Visit_cap -> Some "virtualize_max_visits"
   | Inline_reduction_cap -> Some "virtualize_max_inline_reduction"
   | Inline_fanin_cap -> Some "virtualize_max_inline_fanin"
-  | Read_before_write | Scope_local | Surviving_read | Site _ | Refined _ -> None
+  | Observed_reader_reads_local | Read_before_write | Scope_local | Surviving_read | Site _
+  | Refined _ ->
+      None
 
 module Scope_id = struct
   type t = { tn : Tn.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
@@ -3186,11 +3190,9 @@ type replay_facts = {
   replay_free_symbols : Set.M(Indexing.Symbol).t;
 }
 
-let observed_reader_reads_local = Tn.Site "161:observed-reader-reads-local"
-
 let keeps_observable_scope plc tn =
   Option.exists (Tn.Placements.get plc tn) ~f:(fun (_, provenance) ->
-      Tn.equal_provenance (Tn.leading_provenance provenance) observed_reader_reads_local)
+      Tn.equal_provenance (Tn.leading_provenance provenance) Tn.Observed_reader_reads_local)
 
 let scope_retracts_to_buffer plc tn =
   Tn.Placements.known_non_virtual plc tn && not (keeps_observable_scope plc tn)
@@ -3321,7 +3323,9 @@ let materialize_observable_readers ~stores (optim_ctx : optimize_ctx) traced_sto
              ~f:(observable_replay_reads_local plc computations tn)
       then tn :: readers
       else readers)
-  |> List.iter ~f:(fun tn -> Tn.Placements.update plc tn Never_virtual observed_reader_reads_local)
+  (* An observable output owns a device buffer. Commit it now so fission does not promote an
+     unresolved placement and replace the verdict that preserves its earlier captures. *)
+  |> List.iter ~f:(fun tn -> Tn.Placements.update plc tn On_device Tn.Observed_reader_reads_local)
 
 (* gh-466: conservative "mentions [tn]" scan over a scalar, descending into [Local_scope] bodies and
    [Get_dynamic] index values. [merge]: whether a merge-buffer read counts, which is not a read of
@@ -13737,7 +13741,7 @@ let%diagn2_sexp specialize_proc ?(blends_value_selects = false) (input_ctx : opt
           | Some computations
             when observable_replay_reads_local walked_placements input_ctx.computations tn
                    computations ->
-              Error (`Store (Tn.provenance_to_string observed_reader_reads_local))
+              Error (`Store (Tn.provenance_to_string Tn.Observed_reader_reads_local))
           | Some computations ->
               computations_at_reads
                 ~placements:(Tn.Placements.copy walked_placements)

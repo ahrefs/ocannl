@@ -2843,7 +2843,7 @@ let phase12 () =
       p
         (what ^ ": the reader materializes for host observation")
         (Option.equal Tn.equal_provenance (rejection_code o c_)
-           (Some (Tn.Site "161:observed-reader-reads-local"))));
+           (Some Tn.Observed_reader_reads_local)));
     if transitive then
       p (what ^ ": the unobserved intermediate reader stays virtual") (known_virtual o b);
     p
@@ -2874,7 +2874,7 @@ let phase12 () =
      value of [c_] for observation must also preserve the earlier value [early] captured. *)
   (let a = cmk "ma_late" and c_ = cmk "mc_late" and out = cmk "mo_late" in
    let early = cmk "me_late" and sink = cmk "msink_late" in
-   Tn.set_observable c_;
+   List.iter [ c_; early ] ~f:Tn.set_observable;
    List.iter [ out; sink ] ~f:materialize;
    let i = sym () in
    let producer =
@@ -2888,6 +2888,10 @@ let phase12 () =
    let opt_ctx = LL.empty_optimize_ctx () in
    Hash_set.add opt_ctx.LL.inline_preferences a;
    let o = optimize_in opt_ctx ~name llc in
+   (* Segment fission sees the reader as a crossing value. Its device placement must preserve the
+      provenance that lets a later host replay keep the earlier capture. *)
+   Tn.Placements.promote_local_to_device opt_ctx.LL.placements c_
+     (Tn.Site "177:fission-multi-segment");
    let seed = (sink, blank dim) :: seed out in
    let ctx = run ~name o ~seed in
    let mat_name = name ^ "_mat" in
@@ -2904,6 +2908,10 @@ let phase12 () =
    p "late gather: the stored reader and downstream outputs match the materialized reference"
      (match Context.observability ctx c_ with
      | Stored -> same (List.map [ c_; out; sink ] ~f:(Context.get_values ctx)) got_mat
+     | _ -> false);
+   p "late gather: the earlier capture still replays its original value after fission"
+     (match Context.observability ctx early with
+     | Recomputable -> same [ Context.get_values ctx early ] [ Array.init dim ~f:(v x) ]
      | _ -> false));
   (* The outer gather leaves a persistent buffer. Its discarded scope body used to load [a]. *)
   (let a = cmk "ma_late_shield" and bridge = cmk "mb_late_shield" and c_ = cmk "mc_late_shield" in

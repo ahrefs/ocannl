@@ -1146,7 +1146,8 @@ files.
   because an earlier capture can require a value the reader's last write overwrote.
   `Placements.is_local_peek` includes `Never_virtual` buffers that will settle `Local` in
   finalization. The verdict applies to open placements, including a specialization that prices
-  an `Inline` flip, and keeps the reader `On_device`. The early footprint verdict lets the usual
+  an `Inline` flip, and commits the reader `On_device` so fission preserves the lexical-scope
+  verdict. The early footprint verdict lets the usual
   footprint prologue survive. Phase 12 also pins exact-size concat and late-refused producer
   readback against materialized runs. The training-benchmark evidence is recorded in
   [staging#2271](https://github.com/lukstafi/ocannl-staging/pull/2271).

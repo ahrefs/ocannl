@@ -62,6 +62,9 @@ type provenance =
           search may flip back to inlining, unlike a legality or observability verdict. *)
   | Inline_reduction_cap  (** Reduction extent above [virtualize_max_inline_reduction]. *)
   | Inline_fanin_cap  (** Transitive fan-in above [virtualize_max_inline_fanin]. *)
+  | Observed_reader_reads_local
+      (** The reader owns an observable buffer and its already-captured lexical scopes still compute
+          the values they captured. *)
   | Read_before_write
       (** An uncovered read within the routine: the node is an input, so it owns a device buffer
           whose prior contents are preserved. Minted from two sites -- the lenient verdict of
@@ -85,6 +88,7 @@ let rec provenance_to_string = function
   | Visit_cap -> "1:visit-cap"
   | Inline_reduction_cap -> "39:inline-reduction-cap"
   | Inline_fanin_cap -> "41:inline-fanin-cap"
+  | Observed_reader_reads_local -> "161:observed-reader-reads-local"
   | Read_before_write -> "36:read-before-write"
   | Scope_local -> "16:scope-local"
   | Surviving_read -> "17:surviving-read"
@@ -96,8 +100,8 @@ let rec provenance_to_string = function
     {!Placements.default_to_most_local} builds left-nested. *)
 let rec leading_provenance = function
   | Refined (prior, _) -> leading_provenance prior
-  | ( Visit_cap | Inline_reduction_cap | Inline_fanin_cap | Read_before_write | Scope_local
-    | Surviving_read | Site _ ) as p ->
+  | ( Visit_cap | Inline_reduction_cap | Inline_fanin_cap | Observed_reader_reads_local
+    | Read_before_write | Scope_local | Surviving_read | Site _ ) as p ->
       p
 
 type delayed_prec = Default of Ops.prec | Inferred of Ops.prec Lazy.t | Specified of Ops.prec

@@ -332,6 +332,7 @@ late gather: the gather forces the producer to routine-local scratch: true
 late gather: the reader that captured the earlier value stays virtual: true
 late gather: the materialized reference matches the expected values: true
 late gather: the stored reader and downstream outputs match the materialized reference: true
+late gather: the earlier capture still replays its original value after fission: true
 late gathers: the outer buffer shields the routine-local scratch: true
 late gathers: the reader replays the persistent buffer and matches the materialized reading: true
 a visit-capped footprint concat and w cost two loads, so the reduction stays virtual: true
