@@ -368,6 +368,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-test_where_precision-unoptimized
   test/operations/dune                     @runtest-tf32_reference_rounding-tf32
   test/operations/dune                     @runtest-thread_private_gate-outlined
+  test/operations/dune                     @runtest-tile_mma_forced_decline-tf32
   test/operations/dune                     @runtest-top_down_prec-extension
   test/operations/dune                     @runtest-top_down_prec-unoptimized
   test/operations/dune                     @runtest-transformer_test-origins_cap_0

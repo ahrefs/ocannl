@@ -18,7 +18,7 @@ forced-decline sort of gh2402_cuda.txt:
       "every tensorized folded f16-operand qkv sketch renders tensorized and matches the materialized run"
       "every tensorized folded routine-local product with its tail sketch renders tensorized and matches the materialized run"
   schedule_coalesce: 4 census claim(s) failed (test/operations/schedule_coalesce.ml)
-  schedule_mma_matmul: 27 census claim(s) failed (test/operations/schedule_mma_matmul.ml)
+  schedule_mma_matmul: 28 census claim(s) failed (test/operations/schedule_mma_matmul.ml)
     expected value failure(s), since its reference is the persistent fragment's once-per-tile narrowing, which the declined scope's per-block narrowing misses by construction:
       "staged+tensorized Fp16_wide matmul equals the once-narrowed wide reference bitwise"
       "on CUDA and HIP the default policy's staged+tensorized uniform-f16 matmul equals the once-narrowed wide reference bitwise"
@@ -26,8 +26,6 @@ forced-decline sort of gh2402_cuda.txt:
       "staged+tensorized default-policy uniform-bf16 matmul narrows between blocks exactly where the backend keeps bf16 storage residency"
       "staged+tensorized Bf16_narrow uniform-bf16 matmul narrows between blocks exactly where that mode keeps bf16 storage residency"
       "swizzled staged twin under Bf16_wide and the default policy equals the once-narrowed wide reference bitwise"
-    expected value failure(s), since it is a census comparison whose label uses "agree" and requires ldmatrix on the swizzled twin, which the forced decline suppresses:
-      "staged twins per advertised swizzled layout: the censuses agree apart from ldmatrix, which only the swizzled twin uses"
   schedule_conv_gemm-tf32: 4 census claim(s) failed (test/operations/schedule_conv_gemm.ml)
   held: online_softmax_block_mma reduction_forms schedule_conv_gemm schedule_pack_mma_matmul schedule_pad schedule_pad-contract_off schedule_swizzle_matmul tf32_reference_rounding tile_mma_forced_decline tile_mma_narrow vec_signed_zero
   7 stanza(s) red, 11 held, 0 anomaly(ies): every failure is one the forced decline predicts

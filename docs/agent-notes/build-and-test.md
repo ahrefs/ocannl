@@ -3331,9 +3331,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   one asserting a decline or no `Tile_mma` (`all_declined`, `none_emitted`, a `Scalar_fallback`
   comparison), and one in a leg the backend closes. A value claim whose reference IS one rendering's
   numerics fails, and is no parity regression: `schedule_mma_matmul`'s once-narrowed staged
-  wide-policy and bf16 references on Metal, CUDA and HIP (plus CUDA's swizzled bf16 twin and
-  default-policy uniform-f16 leg, and `tf32_reference_rounding-tf32`'s hardware tf32 controls),
-  which the declined scope's per-block or scalar-fallback numerics miss.
+  wide-policy (`Fp16_wide`, `Bf16_wide`) and default-policy uniform-bf16 references on Metal, CUDA
+  and HIP, the default-policy uniform-f16 leg on CUDA and HIP, CUDA's `Bf16_narrow` uniform-bf16 and
+  swizzled bf16 twin claims, and `tf32_reference_rounding-tf32`'s hardware tf32 controls, which the
+  declined scope's per-block or scalar-fallback numerics miss.
   Every stanza running a census-judging file declares the variable, variant rules included, or the
   leg would read its cached result as a survivor; `tensorized_census_ratchet` derives that set and
   refuses an undeclared stanza. Only the declaring stanzas form the leg: an undeclared alias
@@ -6172,10 +6173,12 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `--test-cap N` for a tighter bound and use `plan` to see the selected caps. Sweep keeps the
   watcher on the regular leg of GPU units even with `--slow`. It classifies by the unit's backend,
   so its cc unit is exempt and its tuf HIP unit keeps the watcher. On `tuf-amd-linux` (HIP,
-  discrete gfx1102, at `172cc2753`, gh-ocannl-2402), a full `@runtest @train` run completed every
-  training action below the 5th slowest action (220.42 s; slowest overall `padded_conv_cache.exe` at
-  702.75 s), and standalone `--force @test/training/train-transformer_names` ran in 124.07 s, so the
-  1500 s watcher stays on tuf's HIP unit with no `@train` exemption.
+  discrete gfx1102, at `172cc2753`, gh-ocannl-2402), measured via `tools/test-run.sh run` batches
+  rather than a `sweep` unit: a combined `build -j 8 @runtest @train` run peaked at
+  `padded_conv_cache.exe` (702.75 s; 5th slowest 220.42 s, with all `@train` actions below the
+  top-5 cutoff), and `build -j 8 --force @train` ran all six `@train` actions cleanly with
+  `fsm_transformer.exe` slowest at 171.18 s and `transformer_names.exe` at 151.98 s (124.07 s
+  standalone), so the 1500 s watcher stays on tuf's HIP unit with no `@train` exemption.
 - **A Metal `slow-mnist_conv` or `slow-cifar_conv` in a shared-event wait is usually running
   slowly, not hung; judge by its progress lines (gh-ocannl-2302).** With the library at
   `9023239da` (a step bench beside it), a Metal training step took 1.32 s for `mnist_conv` on

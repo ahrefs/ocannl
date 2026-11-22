@@ -25,9 +25,10 @@
       ({!Tensorized_census_scan.judged_paths}): the caller hands them in, never a list of its own.
     - "Asserts parity" is {!asserts_parity}: the census scan's own vocabulary
       ({!Tensorized_census_scan.asserts_parity}) widened by the agreement words a tolerance claim
-      uses ([agree], [equal], [identical], [within], [same as]), applied to the label as the [FAIL:]
-      line renders it. Wider than the scan, which decides what needs a census, because here a word
-      missed is a value regression read as an expected census failure.
+      uses ([agree] -- excluding the census-comparison phrase [censuses agree] --, [equal],
+      [identical], [within], [same as]), applied to the label as the [FAIL:] line renders it. Wider
+      than the scan, which decides what needs a census, because here a word missed is a value
+      regression read as an expected census failure.
     - Lines are read with their ANSI SGR escapes removed, so a colorized dune log
       ([CLICOLOR_FORCE=1]) sorts as a plain one.
     - A failing action is a dune header, [File "<dir>/dune", line(s) ...], with the excerpt dune
@@ -108,15 +109,6 @@ let decline_sensitive =
       reason =
         "its reference is the persistent fragment's once-per-tile narrowing, which the declined \
          scope's per-block narrowing misses by construction";
-    };
-    {
-      source = "test/operations/schedule_mma_matmul.ml";
-      label =
-        "staged twins per advertised swizzled layout: the censuses agree apart from ldmatrix, \
-         which only the swizzled twin uses";
-      reason =
-        "it is a census comparison whose label uses \"agree\" and requires ldmatrix on the \
-         swizzled twin, which the forced decline suppresses";
     };
     {
       source = "test/operations/qkv_zero_init.ml";
@@ -200,7 +192,9 @@ let asserts_parity label =
   Tensorized_census_scan.asserts_parity label
   ||
   let text = String.lowercase label in
-  List.exists [ "agree"; "equal"; "identical" ] ~f:(Tensorized_census_scan.has_stem text)
+  Tensorized_census_scan.has_stem text "agree"
+  && not (String.is_substring text ~substring:"censuses agree")
+  || List.exists [ "equal"; "identical" ] ~f:(Tensorized_census_scan.has_stem text)
   || Tensorized_census_scan.has_word text "within"
   || String.is_substring text ~substring:"same as"
 
