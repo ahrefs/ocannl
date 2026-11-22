@@ -3444,6 +3444,18 @@ files.
   form: its candidate was compiled in the search lineage, which a `timing_ctx` makes another
   context. A backend-level code cache (the HIP code-object cache of gh-ocannl-1314) composes:
   the relink is the backend's own `link`.
+- **Digest-free replay fixtures from saved winners** (gh-ocannl-2394): a saved cache entry's keys,
+  versions, and per-segment digests go stale across lowering changes, blocking direct cache replay
+  when reducing a timing-dependent regression. Extract the transforms alone with
+  `dune exec tools/extract_winner_fixture.exe -- <saved-winner.sexp> -o <fixture.sexp>`
+  (`test/support/winner_fixture.ml`): it accepts only `Schedule_cache`'s stored-entry format
+  (refusing `placements-` and `abandonment-` entries) and drops all digests, versions, and timings.
+  `Winner_fixture.validate` / `Winner_fixture.replay` validate segmentation coverage, `Zeros`
+  segment kind coherence, every axis (`Base`, `Static`, `Minted`) and tensor-node anchor, and live
+  op preconditions on a hermetic copy before applying to a fresh lowering, refusing stale anchors
+  by name rather than silently skipping. `test/operations/fixtures/gh2347_tf32_fissioned_epilogue.sexp`
+  and `test/operations/winner_fixture_replay.ml` pin gh-ocannl-2347's saved winner and every
+  stale-anchor refusal class.
 ## Scan-loop scheduling
 
 - **A `Scan_loop` is opaque to the schedule ops in both directions and transparent to the

@@ -40,6 +40,7 @@ test/operations/split_reduce_pair.ml: 2 uncovered, 0 covered
 test/operations/tf32_fissioned_epilogue.ml: 0 uncovered, 1 covered
 test/operations/tile_mma_narrow.ml: 2 uncovered, 0 covered
 test/operations/tune_arm_a_replay.ml: 1 uncovered, 0 covered
+test/operations/winner_fixture_replay.ml: 0 uncovered, 1 covered
 test/operations/workgroup_memory_accounting.ml: 1 uncovered, 0 covered
 test/support/exact_sums.ml: 0 uncovered, 1 covered
 premise debt has not grown and every row is current: true

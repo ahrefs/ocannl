@@ -1,0 +1,31 @@
+CLI extracts gh-2347 saved winner to file matching the committed fixture: true
+CLI stdout mode matches the committed fixture byte-for-byte: true
+extracted fixture carries no cache digests, versions, or timings: true
+CLI refuses placements- cache entries by namespace: true
+CLI refuses abandonment- cache entries by namespace: true
+CLI refuses malformed sexp files: true
+CLI refuses saved entries with an empty segment list: true
+gh-2347 extracted fixture validates against a fresh lowering: true
+gh-2347 extracted fixture replays to two kernels sharing the on-device accumulator: true
+gh-2347 fixture operands fit TF32's significand: true
+gh-2347 fixture products have exact partial sums at f32: true
+gh-2347 unscheduled product matches the host reduction: true
+gh-2347 fixture replay renders CUDA TF32 MMA intrinsics: true
+gh-2347 fixture replay matches the unscheduled reference cell-for-cell: true
+whole-routine winner extracts with prelude ops and no segments: true
+whole-routine extracted fixture replays on a fresh lowering with matching values: true
+split-reduce fissioned winner extracts both prelude and a multi-kernel segmentation: true
+split-reduce extracted fixture replay preserves the multi-kernel fission boundary: true
+split-reduce extracted fixture replays on a fresh lowering with matching values: true
+stale out-of-range base loop anchor is refused by name: true
+ambiguous shadowed base loop anchor is refused by name: true
+stale static axis anchor is refused by name: true
+stale out-of-rank minted Expand_axis anchor is refused by name: true
+stale forward minted axis anchor is refused by name: true
+stale out-of-range tensor-node anchor is refused by name: true
+stale segmentation unit count is refused by name: true
+stale Zeros segment kind on non-zero statements is refused by name: true
+consumed loop anchor referenced after Split is refused by name: true
+stale Expand_zero anchor with no Zero_out in segment is refused by name: true
+refused replay after segment 0 live precondition leaves placements and traced_store untouched: true
+refused replay after a mutating Split_reduce prelude leaves the caller's traced_store untouched: true

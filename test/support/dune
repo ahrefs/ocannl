@@ -333,3 +333,13 @@
  (package neural_nets_lib)
  (modules op_table_cases)
  (libraries base arrayjit.ir ll_test))
+
+; gh-ocannl-2394: test-only digest-free replay fixtures extracted from saved autotune winners.
+
+(library
+ (name winner_fixture)
+ (package neural_nets_lib)
+ (modules winner_fixture)
+ (libraries base stdio sexplib arrayjit.ir arrayjit.autotune)
+ (preprocess
+  (pps ppx_sexp_conv ppx_compare)))

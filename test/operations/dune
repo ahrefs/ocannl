@@ -335,7 +335,8 @@
   (alias runtest-sketch_family_tree)
   (alias runtest-tf32_fissioned_epilogue)
   (alias runtest-tile_mma_forced_decline)
-  (alias runtest-tile_mma_narrow)))
+  (alias runtest-tile_mma_narrow)
+  (alias runtest-winner_fixture_replay)))
 
 ; The one member dune builds only under a condition: listed above, it would leave the whole family
 ; undefined wherever the condition is false (`No rule found for alias`), so it sits behind its own
@@ -19197,6 +19198,36 @@
   (env_var OCANNL_BACKEND))
  (action
   (run %{dep:where_scope_generator.exe} --widen)))
+
+; gh-ocannl-2394: turn a saved autotune winner into a digest-free replay fixture, validate anchors
+; against a fresh lowering, and replay gh-ocannl-2347's saved winner.
+
+(test
+ (name winner_fixture_replay)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules winner_fixture_replay)
+ (action
+  (run
+   %{test}
+   %{dep:../../tools/extract_winner_fixture.exe}
+   %{dep:fixtures/gh2347_tf32_fissioned_epilogue.sexp}))
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  fresh_process
+  test_utils
+  ll_test
+  winner_fixture
+  arrayjit.verdict
+  arrayjit.utils
+  arrayjit.context)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
 
 ; The Winograd F(2x2, 3x3) conv rewrite (gh-ocannl-505): exact and tolerance parity against the
 ; direct form, structure, declines. Picks its backend from the environment.
