@@ -1148,10 +1148,8 @@ files.
   finalization. The verdict applies to open placements, including a specialization that prices
   an `Inline` flip, and keeps the reader `On_device`. The early footprint verdict lets the usual
   footprint prologue survive. Phase 12 also pins exact-size concat and late-refused producer
-  readback against materialized runs. On the M4 Max, six paired untuned GPT-2 mini batch-1
-  training runs gave candidate/base step-time ratios of 0.993 on cc and 1.015 on Metal. Both
-  ranges straddled 1 and parity losses and emitted sources matched. This fixture supplied a
-  timing control. Phase 12 exercised the placement change.
+  readback against materialized runs. The training-benchmark evidence is recorded in
+  [staging#2271](https://github.com/lukstafi/ocannl-staging/pull/2271).
 - **The shift-the-uids check reads what a compile ships, not only the decision surface**
   (gh-ocannl-1877): `flip_order_minting` part 1 compares, across builds minted at different uid
   offsets, the emitted source up to minted identifiers (`Generated.normalize_minted`) and every

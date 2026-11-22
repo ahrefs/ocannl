@@ -3303,6 +3303,11 @@ let replay_reads_local plc computations ~self components =
   Hash_set.add seen self;
   components_read_local ~self components
 
+let observable_replay_reads_local plc computations self components =
+  Tn.is_observable self
+  && (not (Tn.Placements.known_virtual plc self))
+  && replay_reads_local plc computations ~self components
+
 let materialize_observable_readers ~stores (optim_ctx : optimize_ctx) traced_store =
   let { placements = plc; computations; _ } = optim_ctx in
   (* A later use site can refuse a producer whose scope an earlier reader already captured. Classify
@@ -3311,9 +3316,9 @@ let materialize_observable_readers ~stores (optim_ctx : optimize_ctx) traced_sto
       if
         Tn.is_observable tn && stores tn
         && (traced.has_assignment || traced.zeroed_out)
-        && (not (Tn.Placements.known_virtual plc tn || Tn.Placements.known_non_virtual plc tn))
+        && (not (Tn.Placements.known_non_virtual plc tn))
         && Option.exists (Hashtbl.find computations tn)
-             ~f:(replay_reads_local plc computations ~self:tn)
+             ~f:(observable_replay_reads_local plc computations tn)
       then tn :: readers
       else readers)
   |> List.iter ~f:(fun tn -> Tn.Placements.update plc tn Never_virtual observed_reader_reads_local)
@@ -13730,10 +13735,8 @@ let%diagn2_sexp specialize_proc ?(blends_value_selects = false) (input_ctx : opt
       Hashtbl.find_or_add worlds tn ~default:(fun () ->
           match Hashtbl.find input_ctx.computations tn with
           | Some computations
-            when Tn.is_observable tn
-                 && (not (Tn.Placements.known_virtual walked_placements tn))
-                 && replay_reads_local walked_placements input_ctx.computations ~self:tn
-                      computations ->
+            when observable_replay_reads_local walked_placements input_ctx.computations tn
+                   computations ->
               Error (`Store (Tn.provenance_to_string observed_reader_reads_local))
           | Some computations ->
               computations_at_reads
