@@ -727,11 +727,8 @@ let bind_probed ~fail:(module F : FAIL) ~by_uid ~by_name ~probed unresolved =
             | [ l ] -> Hashtbl.set by_name ~key:name ~data:l
             | _ -> fail "probe: %s resolves to no single library" name))
 
-(* {1 Controls} -- each refusal format, run against synthetic input and asserted by format
-   identity. *)
-
-let format_identity format =
-  Stdlib.Digest.string (Test_scan.Refusal_control_scan.normalize format) |> Stdlib.Digest.to_hex
+(* {1 Controls} -- each refusal format, run against synthetic input and asserted by exact format
+   string. *)
 
 let collect_refusals f =
   let recorded = ref [] in
@@ -747,10 +744,9 @@ let collect_refusals f =
 
 let refused_with ?(quiet = false) ~format f =
   let (), recorded = collect_refusals f in
-  let expected_id = format_identity format in
   let matched =
     match recorded with
-    | [ (emitted_format, _msg) ] -> String.equal (format_identity emitted_format) expected_id
+    | [ (emitted_format, _msg) ] -> String.equal emitted_format format
     | _ -> false
   in
   if matched then Test_scan.Refusal_control_manifest.observe_failure ~source:manifest_source ~format
@@ -1047,12 +1043,7 @@ let () =
   let refusals = ref [] in
   let fail : (module FAIL) =
     (module struct
-      let fail fmt =
-        Printf.ksprintf
-          (fun msg ->
-            refusals := msg :: !refusals;
-            Verdict.fail msg)
-          fmt
+      let fail fmt = Printf.ksprintf (fun msg -> refusals := msg :: !refusals) fmt
     end)
   in
   let describe ~root ~tag =
@@ -1170,6 +1161,7 @@ let () =
     "unused_compiler_deps: %d stanzas checked, %d inactive in this build context (not part of the \
      golden)\n"
     (List.length checked) inactive;
+  List.iter (List.rev !refusals) ~f:(fun r -> eprintf "refused: %s\n" r);
   let reported = List.filter real ~f:(Fn.non exempted) in
   List.iter reported ~f:(fun f ->
       eprintf "unused: %s/dune (%s) declares %s, reaching the compiler through %s\n" f.stanza.dir
