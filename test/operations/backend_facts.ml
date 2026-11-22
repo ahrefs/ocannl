@@ -44,6 +44,8 @@ let () =
           | (Ir.Ops.Single_prec _ | Ir.Ops.Double_prec _), _ -> false
           | _, None -> true
           | _, Some _ -> false));
+  (* Has teeth on backends that blend by default (cc, HIP); trivially true where [select_blend] is
+     already [None], kept unconditional so the golden stays backend-uniform. *)
   p_all "under with_select_blend ~blend:false, codegen_capabilities.select_blend answers None"
     Ir.Ops.all_precs ~f:(fun prec ->
       BI.with_select_blend ~facts ~blend:false (fun () ->

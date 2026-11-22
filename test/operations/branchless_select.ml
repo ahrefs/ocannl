@@ -109,8 +109,9 @@ let blends = blends_at single
    shape, which the realistic pool leg keeps). Serial elsewhere. *)
 let census_axis = if Option.is_some gpu_dialect then LL.Grid else LL.Serial
 
-(* The kernel-text claims each leg makes where the backend blends, skipped by name elsewhere:
-   written once (gh-ocannl-1703). *)
+(* The kernel-text claims each leg makes where the backend blends, skipped where [select_blend]
+   answers [None] at the leg's precision (and [on_cc] restricts [cpu_only] legs, whose expected
+   values are C-typed): written once (gh-ocannl-1703, gh-ocannl-2386). *)
 let blend_leg ~cpu_only ~prec =
   Verdict.leg ~when_:(((not cpu_only) || on_cc) && blends_at prec) ~on:backend_name ()
 

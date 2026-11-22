@@ -202,14 +202,7 @@ let () =
     | Some (Cs.Blend_truth _) -> Some `Blend_truth
     | Some (Cs.Blend_over_locals _) -> Some `Blend_over_locals
   in
-  let same_blend a b =
-    match (a, b) with
-    | None, None
-    | Some `Blend_truth, Some `Blend_truth
-    | Some `Blend_over_locals, Some `Blend_over_locals ->
-        true
-    | _ -> false
-  in
+  let same_blend = Option.equal Poly.equal in
   p_all
     "codegen_capabilities.select_blend derives HIP's over-locals blend and drops it under override"
     Ops.all_precs ~f:(fun prec ->
