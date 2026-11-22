@@ -1503,8 +1503,15 @@ files.
   per process on stderr instead (`Backends.warn_unchecked_lane_bounds`, gh-ocannl-1990, pinned by
   `lane_bounds_notice`) -- read that line before taking a quiet GPU run as checked. It costs nothing
   off (the kernel text is unchanged) and is in cc's codegen tag when on, in no GPU tag;
-  `lane_bounds_check` pins the abort on a hand-built kernel, and
-  `runtest-test_uniform_virtual_lane-lane_checked` reruns the rows under it. Of those rows only an
+  `lane_bounds_check` pins the abort on a hand-built kernel (reading the lane from a materialized
+  index buffer so the static rule cannot judge it), and
+  `runtest-test_uniform_virtual_lane-lane_checked` reruns the rows under it. Its static twin
+  (`Low_level.validate_lane_bounds`, called at `Raise_backend.compile` before rendering,
+  gh-ocannl-2412) runs on every backend with no key and refuses any `Mod (_, K)` lane operand with
+  fixed integer `K > Ops.vec_unop_lanes` of the rendered precision (pre- or post-simplification,
+  naming the node, `K`, the precision and its lane count); `lane_bounds_static` pins it across
+  `Ops.scalar_precs`, scopes, projections, fissioned segments and backend `compute_prec`. Of those
+  rows only an
   INTEGER draw into a float reader (`uint16 draw into single`) still rests on `rng_collapsible`
   alone: with it disabled that row reads lanes 4..7 unchecked (parity false) and aborts checked,
   while the float-draw rows stay green, kept by gh-ocannl-1788's exact-collapse rule as well.

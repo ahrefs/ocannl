@@ -13178,6 +13178,159 @@ let describe_operand_precisions (llc : t) : t = walk_operand_precisions ~mode:`D
 let validate_operand_precisions ?(site = "Low_level.validate_operand_precisions") (llc : t) : unit =
   Option.iter (operand_precision_violation llc) ~f:(fun msg -> invalid_arg (site ^ ": " ^ msg))
 
+(* gh-ocannl-2412: static twin of [debug_check_lane_bounds]. Refuses any
+   [Uint4x32_to_prec_uniform_lane] whose lane operand has the form [Mod (_, K)] with fixed integer
+   [K > Ops.vec_unop_lanes prec] at the precision the call renders at. Deliberately narrow: dynamic
+   lanes (buffer reads, variable moduli, non-[Mod] expressions, negative lanes) stay for the
+   run-time [debug_check_lane_bounds] check. *)
+let lane_bounds_violation ?(comp_prec = Fn.id) (llc : t) : string option =
+  let exception Lane_bounds_malformed of string in
+  let tn_prec (tn : Tn.t) =
+    ignore (Lazy.force tn.Tn.dims);
+    Lazy.force tn.Tn.storage_prec
+  in
+  let where_str ~tn ~scope =
+    match (tn, scope) with
+    | Some tn, None -> "tensor node " ^ Tn.debug_name tn
+    | Some tn, Some scope ->
+        "tensor node " ^ Tn.debug_name scope ^ " (inlined into " ^ Tn.debug_name tn ^ ")"
+    | None, Some scope -> "tensor node " ^ Tn.debug_name scope ^ " (in a guard condition)"
+    | None, None -> "a guard condition"
+  in
+  let rec unwrap_transparent = function
+    | Unop (Ops.Identity, (v, _)) | Binop (Ops.Arg1, (v, _), _) | Binop (Ops.Arg2, _, (v, _)) ->
+        unwrap_transparent v
+    | sc -> sc
+  in
+  let convert_int64_above ~lanes ~lane_prec (k64 : int64) : string option =
+    match lane_prec with
+    | Ops.Byte_prec _ ->
+        let v = Int64.to_int_exn (Int64.bit_and k64 0xFFL) in
+        Option.some_if (v > lanes) (Int.to_string v)
+    | Ops.Uint16_prec _ ->
+        let v = Int64.to_int_exn (Int64.bit_and k64 0xFFFFL) in
+        Option.some_if (v > lanes) (Int.to_string v)
+    | Ops.Int32_prec _ ->
+        let v = Int32.to_int64 (Int64.to_int32_trunc k64) in
+        Option.some_if Int64.(v > Int64.of_int lanes) (Int64.to_string v)
+    | Ops.Uint32_prec _ ->
+        let v = Int64.bit_and k64 0xFFFF_FFFFL in
+        Option.some_if Int64.(v > Int64.of_int lanes) (Int64.to_string v)
+    | Ops.Int64_prec _ -> Option.some_if Int64.(k64 > Int64.of_int lanes) (Int64.to_string k64)
+    | Ops.Uint64_prec _ ->
+        if Int64.(k64 < 0L) then Some (Printf.sprintf "%Lu" k64)
+        else Option.some_if Int64.(k64 > Int64.of_int lanes) (Int64.to_string k64)
+    | _ -> Option.some_if Int64.(k64 > Int64.of_int lanes) (Int64.to_string k64)
+  in
+  let fixed_modulus_above ~lanes ~lane_prec = function
+    | Embed_index (Indexing.Fixed_idx k) ->
+        let k64 =
+          match Ops.index_prec () with
+          | Ops.Int32_prec _ -> Int32.to_int64 (Int32.of_int_trunc k)
+          | _ -> Int64.of_int k
+        in
+        convert_int64_above ~lanes ~lane_prec k64
+    | Constant c
+      when Float.is_finite c && Float.is_integer c
+           && ((not (Ops.is_integer lane_prec)) || Ops.integer_constant_converts lane_prec c)
+           && Float.(c > Float.of_int lanes) ->
+        Some (Printf.sprintf "%.0f" c)
+    | Constant_bits k -> convert_int64_above ~lanes ~lane_prec k
+    | _ -> None
+  in
+  let check_lane ~tn ~scope ~prec ~lane_prec lane =
+    match prec with
+    | Ops.Void_prec | Ops.Uint4x32_prec _ -> ()
+    | _ -> (
+        let lanes = Ops.vec_unop_lanes prec in
+        match unwrap_transparent lane with
+        | Binop (Ops.Mod, _, (m, _)) -> (
+            match fixed_modulus_above ~lanes ~lane_prec (unwrap_transparent m) with
+            | Some k_str ->
+                raise
+                  (Lane_bounds_malformed
+                     (Printf.sprintf
+                        "Uint4x32_to_prec_uniform_lane in %s renders at %s (%d lanes), but its \
+                         lane operand has fixed modulus %s > %d"
+                        (where_str ~tn ~scope) (Ops.prec_string prec) lanes k_str lanes))
+            | None -> ())
+        | _ -> ())
+  in
+  let rec stmt ~within (c : t) : unit =
+    match c with
+    | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _ ->
+        ()
+    | Seq (a, b) ->
+        stmt ~within a;
+        stmt ~within b
+    | For_loop { body; _ } -> stmt ~within body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun cr ->
+            scalar ~tn:(Some cr.prev.tn) ~scope:None ~prec:(tn_prec cr.prev.tn) cr.init);
+        stmt ~within body
+    | Set { tn; llsc; _ } ->
+        let store_prec = tn_prec tn in
+        let prec = if mentions_rng_conversion llsc then store_prec else comp_prec store_prec in
+        scalar ~tn:(Some tn) ~scope:None ~prec llsc
+    | Set_dynamic { tn; dyn_value = v, vp; llsc; _ } ->
+        scalar ~tn:(Some tn) ~scope:None ~prec:vp v;
+        let store_prec = tn_prec tn in
+        let prec = if mentions_rng_conversion llsc then store_prec else comp_prec store_prec in
+        scalar ~tn:(Some tn) ~scope:None ~prec llsc
+    | Set_from_vec { tn; vec_unop; arg = a, ap; _ } ->
+        let prec = if Ops.is_homogeneous_prec_vec_unop vec_unop then tn_prec tn else ap in
+        scalar ~tn:(Some tn) ~scope:None ~prec a
+    | Set_local (id, v) ->
+        let prec = tn_prec id.tn in
+        let tn, scope =
+          match within with Some outer -> (outer, Some id.tn) | None -> (Some id.tn, None)
+        in
+        scalar ~tn ~scope ~prec v
+    | If { cond = c, cp; body } ->
+        let tn = Option.join within in
+        scalar ~tn ~scope:None ~prec:(comp_prec cp) c;
+        stmt ~within body
+    | Tile_mma { fallback; _ } -> stmt ~within fallback
+  and scalar ~tn ~scope ~prec (sc : scalar_t) : unit =
+    match sc with
+    | Constant _ | Constant_bits _ | Embed_index _ | Get _ | Get_local _ | Get_merge_buffer _ -> ()
+    | Get_dynamic { dyn_value = v, vp; _ } -> scalar ~tn ~scope ~prec:vp v
+    | Local_scope { body; _ } ->
+        let outer = match tn with Some _ -> tn | None -> scope in
+        stmt ~within:(Some outer) body
+    | Ternop (op, (v1, p1), (v2, p2), (v3, p3)) ->
+        let ps =
+          operand_eval_precisions ~eval:prec (Ops.Ternop op)
+            [| comp_prec p1; comp_prec p2; comp_prec p3 |]
+        in
+        scalar ~tn ~scope ~prec:ps.(0) v1;
+        scalar ~tn ~scope ~prec:ps.(1) v2;
+        scalar ~tn ~scope ~prec:ps.(2) v3
+    | Binop (Ops.Uint4x32_to_prec_uniform_lane, (v1, p1), (v2, p2)) ->
+        let lane_prec = comp_prec p2 in
+        check_lane ~tn ~scope ~prec ~lane_prec v2;
+        scalar ~tn ~scope ~prec:(comp_prec p1) v1;
+        scalar ~tn ~scope ~prec:lane_prec v2
+    | Binop (op, (v1, p1), (v2, p2)) -> (
+        match Ops.binop_conditionality op with
+        | Ops.Only_first -> scalar ~tn ~scope ~prec v1
+        | Ops.Only_second -> scalar ~tn ~scope ~prec v2
+        | Ops.Both_operands | Ops.Gated_second ->
+            let ps =
+              operand_eval_precisions ~eval:prec (Ops.Binop op) [| comp_prec p1; comp_prec p2 |]
+            in
+            scalar ~tn ~scope ~prec:ps.(0) v1;
+            scalar ~tn ~scope ~prec:ps.(1) v2)
+    | Unop (Ops.Round_prec, (v, t)) -> scalar ~tn ~scope ~prec:t v
+    | Unop (op, (v, vp)) ->
+        let ps = operand_eval_precisions ~eval:prec (Ops.Unop op) [| comp_prec vp |] in
+        scalar ~tn ~scope ~prec:ps.(0) v
+  in
+  match stmt ~within:None llc with () -> None | exception Lane_bounds_malformed msg -> Some msg
+
+let validate_lane_bounds ?(site = "Low_level.validate_lane_bounds") ?comp_prec (llc : t) : unit =
+  Option.iter (lane_bounds_violation ?comp_prec llc) ~f:(fun msg -> invalid_arg (site ^ ": " ^ msg))
+
 (* gh-ocannl-2362: the reduction sink for narrow-float accumulation targets. Backprop lowers a
    gradient over its FORWARD op's product space, the result's axes first, so a weight gradient
    [dw[i,j] += x[b,s,i] * dy[b,s,j]] runs [for b, s, j, i] -- its reduction loops OUTSIDE the loops

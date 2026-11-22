@@ -1365,6 +1365,30 @@ val describe_operand_precisions : t -> t
     and [Schedule.apply] to a schedule's result when the program the schedule started from passes
     the check -- a [?prelowered] routine carrying a request is left for the exit gate to refuse. *)
 
+val lane_bounds_violation : ?comp_prec:(Ops.prec -> Ops.prec) -> t -> string option
+(** gh-ocannl-2412: the predicate form of {!validate_lane_bounds} — [None] when no
+    [Uint4x32_to_prec_uniform_lane] carries a statically out-of-range fixed modulus, else a
+    description of the first one, naming the node, the modulus, the rendered precision and its lane
+    count. *)
+
+val validate_lane_bounds : ?site:string -> ?comp_prec:(Ops.prec -> Ops.prec) -> t -> unit
+(** gh-ocannl-2412: static twin of [debug_check_lane_bounds]. Refuses any
+    [Uint4x32_to_prec_uniform_lane] whose lane operand (after peeling transparent [Identity] /
+    [Arg1] / [Arg2] wrappers) has the form [Mod (_, K)] where [K] is a fixed integer
+    ([Embed_index (Fixed_idx K)], an integral finite [Constant] representable at the lane operand's
+    evaluation precision, or [Constant_bits]) whose value after conversion to the lane operand's
+    evaluation precision is strictly greater than {!Ops.vec_unop_lanes} of the precision the call
+    renders at. [comp_prec] is the backend's [compute_prec] (used for heterogeneous guard and
+    [Where]-condition slots; store and scope-local slots carrying an RNG conversion always render at
+    storage precision).
+
+    Boundary: this check judges only a fixed-modulus [Mod] operand. Dynamic lane operands (such as
+    buffer reads, variable moduli, non-[Mod] expressions, or negative lanes) are left to the cc-only
+    run-time [debug_check_lane_bounds] check. Void and [Uint4x32] target precisions are skipped here
+    and left to [C_syntax.rng_binop_syntax]. Raises [Invalid_argument], prefixed with [site], naming
+    the node, the modulus, the rendered precision and its lane count. Applied at the shared
+    [Raise_backend.compile] site before rendering, on every backend and with no config key. *)
+
 val validate_parallel :
   ?warp_size:int ->
   ?reassociable:(Tnode.t -> bool) ->

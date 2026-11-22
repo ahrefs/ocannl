@@ -1333,6 +1333,12 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
     let alias_spans : (Tn.t, int * int) Base.Hashtbl.t option =
       plan_alias_spans ~name ~limits ~lowered ~segments:lowereds
     in
+    (* gh-ocannl-2412: static twin of [debug_check_lane_bounds] -- refuse any fixed [Mod (_, K)]
+       lane operand wider than the rendered precision's lanes before rendering, on every backend and
+       with no config key. *)
+    List.iter lowereds ~f:(fun seg ->
+        Low_level.validate_lane_bounds ~site:"Raise_backend.compile"
+          ~comp_prec:capabilities.compute_prec seg.Low_level.llc);
     let (proc : (Device.code, fissioned) Either.t), (lowered : Low_level.optimized) =
       match lowereds with
       | [] -> assert false
