@@ -232,6 +232,7 @@ type environment = {
   row_env : row_env;
   discardable_vars : dim_var_set;
   emptiable_vars : dim_var_set;
+  non_zero_vars : dim_var_set;
 }
 
 type constraint_ =

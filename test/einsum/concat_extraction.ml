@@ -184,6 +184,11 @@ let () =
   both ~label:"replace prefix, zero-width suffix, a => a^b" ~spec:"a => a^b"
     ~captures:(fun () -> [ capture "b" 0 ])
     ~layout:Trailing ~rows:1 ~src:3 ~dst:3 ~offset:0 Replace;
+  (* gh-ocannl-2418: differentiable [einmax1] forces [Shape.product_space_shape], whose fresh
+     re-elaboration must also receive [emptiable_vars] so forced [b = 0] solves on the proxy too. *)
+  run_case ~label:"differentiable einmax1 forced zero-width suffix, a => a^b" ~layout:Trailing
+    ~rows:1 ~src:3 ~dst:3 ~offset:0 ~mode:Replace (fun x ->
+      TDSL.einmax1 "a => a^b" x ~output_dims:[ 3 ] ());
   both ~label:"replace suffix, b => a^b" ~spec:"b => a^b"
     ~captures:(fun () -> [ capture "a" 2 ])
     ~layout:Trailing ~rows:1 ~src:3 ~dst:5 ~offset:2 Replace;
@@ -354,6 +359,27 @@ let () =
   refused ~label:"component also a standalone operand axis, a^b; b => a, b = 0"
     ~needle:"spec lets be empty" (fun () ->
       NTDSL.einsum ~capture_dims:[ capture "b" 0 ] "a^b; b => a" (x 5) (open_x ()) ());
+  (* gh-ocannl-2418: sharing a capture between an emptiable component ([b] in [a => a^b] forced to
+     0) and a required standalone axis ([b] in [p^b => b]) refuses in every order (the forced zero
+     residual cannot bind a required axis, so closure refuses the undetermined component) and across
+     a closure (the carried 0 is refused as a stated 0 on the required axis). *)
+  refused ~label:"shared capture: forced empty a => a^b then required p^b => b"
+    ~needle:"Shape.set_dim" (fun () ->
+      let r = Shape.get_variable_ref "b" in
+      let _ = NTDSL.einsum1 ~capture_dims:[ r ] ~output_dims:[ 3 ] "a => a^b" (x 3) () in
+      NTDSL.einsum1 ~capture_dims:[ r ] "p^b => b" (x 5) ());
+  refused ~label:"shared capture: required p^b => b then forced empty a => a^b"
+    ~needle:"Shape.set_dim" (fun () ->
+      let r = Shape.get_variable_ref "b" in
+      let t = NTDSL.einsum1 ~capture_dims:[ r ] "p^b => b" (x 5) () in
+      let _ = NTDSL.einsum1 ~capture_dims:[ r ] ~output_dims:[ 3 ] "a => a^b" (x 3) () in
+      t);
+  refused ~label:"shared capture across closure: closed 0 from a => a^b into required p^b => b"
+    ~needle:"spec lets be empty" (fun () ->
+      let r = Shape.get_variable_ref "b" in
+      let t1 = NTDSL.einsum1 ~capture_dims:[ r ] ~output_dims:[ 3 ] "a => a^b" (x 3) () in
+      ignore (Lazy.force t1.Tensor.value.dims : int array);
+      NTDSL.einsum1 ~capture_dims:[ r ] "p^b => b" (x 5) ());
   refused ~label:"margins wider than the operand, p^o => o with p = 6" ~needle:"exceed" (fun () ->
       NTDSL.einsum1 ~capture_dims:[ capture "p" 6 ] "p^o => o" (x 5) ());
   refused ~label:"empty integer component, 0^o => o" ~needle:"is empty" (fun () ->

@@ -76,6 +76,12 @@ Zero components: only a discardable one is sized 0, in every order
   u = 0, w = u, w emptiable: the alias licenses u (other orientation): u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
   u a component and emptiable, unconstrained: closure refuses: refused in every order, and batched: true
   u emptiable only, unconstrained: closure guesses 1, not 0: u = 1 of bcast_if_1, k = 1 of bcast_if_1 in every order, and batched: true
+  [4 rgb; u] = 4 rgb, u = 0 default, u emptiable: basis-free zero: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
+  [4 rgb; u] = 4 rgb, u = 0 rgb, u emptiable: keeps explicit basis: u = 0 of rgb, k = 1 of bcast_if_1 in every order, and batched: true
+  [4 rgb; u] = 4 rgb, u emptiable: forced zero takes default basis: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
+  [4 hsv; u] = 4 rgb, u emptiable: conflicting bases still refused: refused in every order, and batched: true
+  u emptiable, w non-zero, u = w, u = 0 stated: refused in every order: refused in every order, and batched: true
+  u emptiable, w non-zero, u = w, [u; 4] = [k; 2], k = 2: forced 0 refused: refused in every order, and batched: true
   [k; u; 2] = [k; 2], u discardable: sized 0: u = 0 of default, k = 1 of bcast_if_1 in every order, and batched: true
 Closure guesses an alias of a discardable component to 0
   u = w, u discardable: both 0 in either orientation, nothing pending: true
@@ -83,6 +89,7 @@ Closure guesses an alias of a discardable component to 0
   a bounded closing component aliased to a discardable one: u = 3 of a, k = 5 of default in either orientation: true
 Closure refuses an aliased concatenation component in both orientations
   u = w, w a concatenation component (with or without emptiable): refused in all orientations and closing rows: true
+  w = u; u = v, w a concatenation component: transitive alias refused: true
   matching plain concat bounds settle to both GLBs in either orientation: true
   a plain concat bound at the minimum leaves a positive residual in either orientation: true
   a waiting bound carrying the shared claim keeps the closing GLB plain in either orientation: true

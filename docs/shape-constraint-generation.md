@@ -342,16 +342,18 @@ equality so that labels and row variables are inferred bidirectionally. This is
 the implementation fact behind Remark 2.15 and Appendix A.8.
 
 Einsum-family specs and `Block` add one more generation product: zero
-permissions (`discardable_vars` and `emptiable_vars`). For concat axes,
-`compute_emptiable_vars` (via `emptiable_of_bios`) identifies component variables
-that may take size `0` because the complementary components cover the other side
-and the variable appears in no non-`Concat` axis. `Permute`, `Einsum`, and
-`Einsum_tern` populate `emptiable_vars` only (stated or forced `0`, no closure
-guess); `Block` additionally promotes the set to `discardable_vars` (allowing
-closure to guess `0`). This is outside the broadcast order: `0` is the additive
-unit for concatenation, not the broadcast top and not the contradiction bottom.
-The formal core's Conjecture 8.3 is precisely the soundness obligation for this
-generation-side set.
+permissions (`discardable_vars`, `emptiable_vars`, and `non_zero_vars`). For
+concat axes, `compute_emptiable_vars` (via `emptiable_and_required_of_bios`)
+identifies component variables that may take size `0` because the complementary
+components cover the other side and the variable appears in no non-`Concat`
+axis; variables appearing in any non-`Concat` axis go into `non_zero_vars`,
+which overrides zero permissions across shared captures. `Permute`, `Einsum`,
+and `Einsum_tern` populate `emptiable_vars` and `non_zero_vars` (stated or
+forced `0`, no closure guess); `Block` additionally promotes `emptiable_vars`
+to `discardable_vars` (allowing closure to guess `0`). This is outside the
+broadcast order: `0` is the additive unit for concatenation, not the broadcast
+top and not the contradiction bottom. The formal core's Conjecture 8.3 is
+precisely the soundness obligation for this generation-side set.
 
 ### 3.5 Logic Defined Elsewhere
 
@@ -694,8 +696,8 @@ The main code correspondences are:
   plus fixed-index and affine side constraints.
 - `einsum_n_constraints`: n-ary exact spec matching for binary/ternary einsum
   and block operations.
-- `compute_emptiable_vars` / `emptiable_of_bios`: generation-side additive-zero
-  policy for concat specs.
+- `compute_emptiable_vars` / `emptiable_and_required_of_bios`: generation-side
+  additive-zero and required-axis policy for concat specs.
 - `propagate_shapes`: online Stage 1 generation and solving.
 - `finish_inference`: global staged solving, `Shape_row` injection, and
   projection derivation.

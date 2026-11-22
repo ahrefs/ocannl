@@ -1621,7 +1621,8 @@ let compute_emptiable_vars ~(this_side_rows : Row.t list) ~(other_side_shapes : 
               if complement_covers_all_shapes then Set.union acc2 component_vars else acc2)
       | _ -> acc)
 
-let emptiable_of_bios ~bio_lhs:(b_lhs, i_lhs, o_lhs) ~bio_rhs_list : Row.dim_var_set =
+let emptiable_and_required_of_bios ~bio_lhs:(b_lhs, i_lhs, o_lhs) ~bio_rhs_list :
+    Row.dim_var_set * Row.dim_var_set =
   let rhs_shapes : Row.t list list = List.map bio_rhs_list ~f:(fun (b, inp, o) -> [ b; inp; o ]) in
   let lhs_rows = [ b_lhs; i_lhs; o_lhs ] in
   let from_rhs =
@@ -1637,7 +1638,7 @@ let emptiable_of_bios ~bio_lhs:(b_lhs, i_lhs, o_lhs) ~bio_rhs_list : Row.dim_var
           | Row.Concat _ -> acc
           | dim -> Set.union acc (Row.vars_of_dim dim)))
   in
-  Set.diff (Set.union from_rhs from_lhs) non_concat_vars
+  (Set.diff (Set.union from_rhs from_lhs) non_concat_vars, non_concat_vars)
 
 (** Shared n-ary einsum constraint builder used by [Broadcast (Einsum ...)],
     [Broadcast_tern (Einsum_tern ...)], and [Block]. Handles per-shape
@@ -1649,7 +1650,7 @@ let emptiable_of_bios ~bio_lhs:(b_lhs, i_lhs, o_lhs) ~bio_rhs_list : Row.dim_var
     [arg_label_prefix] is the prefix for RHS [Row_eq] origins; the index (1-based) is appended,
     yielding e.g. ["Broadcast ARGUMENT 1"]. [error_shapes] is the shape list for error context.
 
-    Returns [(proj_env, emptiable_vars, inequalities)]. *)
+    Returns [(proj_env, emptiable_vars, non_zero_vars, inequalities)]. *)
 let einsum_n_constraints ?projection_sizing ~(spec : einsum_spec)
     ~(rhs_slots : (parsed_axis_labels * t) list) ~(cur_sh : t) ~ls_lhs ~dim_refs ~result_label
     ~arg_label_prefix ~(error_shapes : t list) ?(lhs_constraints_first = false) () =
@@ -1781,12 +1782,12 @@ let einsum_n_constraints ?projection_sizing ~(spec : einsum_spec)
     ]
   in
   let bio_rhs_list = List.map rhs_results ~f:(fun (_, _, _, _, bio) -> bio) in
-  let emptiable_vars = emptiable_of_bios ~bio_lhs ~bio_rhs_list in
+  let emptiable_vars, non_zero_vars = emptiable_and_required_of_bios ~bio_lhs ~bio_rhs_list in
   let ordered_constraints =
     if lhs_constraints_first then lhs_constraints @ rhs_constraints
     else rhs_constraints @ lhs_constraints
   in
-  (proj_env, emptiable_vars, extras_dim_refs @ extras_lhs @ ordered_constraints)
+  (proj_env, emptiable_vars, non_zero_vars, extras_dim_refs @ extras_lhs @ ordered_constraints)
 
 let unused_shapes = ref (Set.empty (module Int))
 
@@ -1802,11 +1803,19 @@ let mark_unused id =
     Row.note_mutation ();
     unused_shapes := Set.add !unused_shapes id)
 
-type zero_permissions = { discardable_vars : Row.dim_var_set; emptiable_vars : Row.dim_var_set }
+type zero_permissions = {
+  discardable_vars : Row.dim_var_set;
+  emptiable_vars : Row.dim_var_set;
+  non_zero_vars : Row.dim_var_set;
+}
 [@@deriving sexp_of]
 
 let no_empties =
-  { discardable_vars = Row.dim_var_set_empty; emptiable_vars = Row.dim_var_set_empty }
+  {
+    discardable_vars = Row.dim_var_set_empty;
+    emptiable_vars = Row.dim_var_set_empty;
+    non_zero_vars = Row.dim_var_set_empty;
+  }
 
 (* [projection_sizing]: given by {!derive_projections} only, the one way to ask for its constraints;
    the step's capture sizes are added there and are absent from the result
@@ -2356,11 +2365,12 @@ let%debug4_sexp get_inequalities ?projection_sizing
         let combine ~key:_ _ _ = assert false in
         Map.merge_skewed ~combine proj_env_rhs proj_env_lhs
       in
-      let emptiable_vars =
-        emptiable_of_bios ~bio_lhs:(b_lhs, i_lhs, o_lhs) ~bio_rhs_list:[ (b_rhs, i_rhs, o_rhs) ]
+      let emptiable_vars, non_zero_vars =
+        emptiable_and_required_of_bios ~bio_lhs:(b_lhs, i_lhs, o_lhs)
+          ~bio_rhs_list:[ (b_rhs, i_rhs, o_rhs) ]
       in
       ( proj_env,
-        { discardable_vars = dim_var_set_empty; emptiable_vars },
+        { discardable_vars = dim_var_set_empty; emptiable_vars; non_zero_vars },
         extras_dim_refs @ extras_rhs @ extras_lhs
         @ [
             Row_eq
@@ -2529,14 +2539,16 @@ let%debug4_sexp get_inequalities ?projection_sizing
                  ( "Invalid einsum spec (expected two arguments): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )
       in
-      let proj_env, emptiable_vars, inequalities =
+      let proj_env, emptiable_vars, non_zero_vars, inequalities =
         einsum_n_constraints ?projection_sizing ~spec:einsum_spec
           ~rhs_slots:[ (ls_rhs1, sh1); (ls_rhs2, sh2) ]
           ~cur_sh ~ls_lhs ~dim_refs ~result_label:"Broadcast RESULT"
           ~arg_label_prefix:"Broadcast ARGUMENT" ~error_shapes:[ cur_sh; sh1; sh2 ]
           ~lhs_constraints_first:true ()
       in
-      (proj_env, { discardable_vars = dim_var_set_empty; emptiable_vars }, inequalities)
+      ( proj_env,
+        { discardable_vars = dim_var_set_empty; emptiable_vars; non_zero_vars },
+        inequalities )
   | Block { spec = einsum_spec; delayed_vars; rhses } ->
       let spec = spec_text einsum_spec in
       List.iter rhses ~f:(fun sh -> unmark_unused sh.id);
@@ -2552,13 +2564,13 @@ let%debug4_sexp get_inequalities ?projection_sizing
                      (List.length rhses) spec,
                    [ Shape_mismatch (cur_sh :: rhses) ] )
       in
-      let proj_env, emptiable_vars, inequalities =
+      let proj_env, emptiable_vars, non_zero_vars, inequalities =
         einsum_n_constraints ?projection_sizing ~spec:einsum_spec
           ~rhs_slots:(List.zip_exn ls_rhses rhses) ~cur_sh ~ls_lhs ~dim_refs:delayed_vars
           ~result_label:"Block RESULT" ~arg_label_prefix:"Block ARGUMENT"
           ~error_shapes:(cur_sh :: rhses) ()
       in
-      (proj_env, { discardable_vars = emptiable_vars; emptiable_vars }, inequalities)
+      (proj_env, { discardable_vars = emptiable_vars; emptiable_vars; non_zero_vars }, inequalities)
   | Broadcast_tern (Einsum_tern (einsum_spec, dim_refs), sh1, sh2, sh3) ->
       let spec = spec_text einsum_spec in
       unmark_unused sh1.id;
@@ -2577,13 +2589,15 @@ let%debug4_sexp get_inequalities ?projection_sizing
                  ( "Invalid einsum spec (expected three arguments): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh1; sh2; sh3 ] ] )
       in
-      let proj_env, emptiable_vars, inequalities =
+      let proj_env, emptiable_vars, non_zero_vars, inequalities =
         einsum_n_constraints ?projection_sizing ~spec:einsum_spec
           ~rhs_slots:[ (ls_rhs1, sh1); (ls_rhs2, sh2); (ls_rhs3, sh3) ]
           ~cur_sh ~ls_lhs ~dim_refs ~result_label:"Broadcast RESULT"
           ~arg_label_prefix:"Broadcast ARGUMENT" ~error_shapes:[ cur_sh; sh1; sh2; sh3 ] ()
       in
-      (proj_env, { discardable_vars = dim_var_set_empty; emptiable_vars }, inequalities)
+      ( proj_env,
+        { discardable_vars = dim_var_set_empty; emptiable_vars; non_zero_vars },
+        inequalities )
 
 let state = ref Row.empty_env [@@mutation_serial.fingerprinted]
 
@@ -3201,11 +3215,19 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
       @ !constraints;
     bio
   in
-  List.iteri (List.zip_exn ls_rhs_list rhs_shapes) ~f:(fun idx (ls, sh) ->
-      ignore (elaborate ~label:(Printf.sprintf "Product-space ARGUMENT %d" (idx + 1)) ls sh));
-  ignore (elaborate ~label:"Product-space RESULT" ls_lhs cur_sh);
+  let bio_rhs_list =
+    List.mapi (List.zip_exn ls_rhs_list rhs_shapes) ~f:(fun idx (ls, sh) ->
+        elaborate ~label:(Printf.sprintf "Product-space ARGUMENT %d" (idx + 1)) ls sh)
+  in
+  let bio_lhs = elaborate ~label:"Product-space RESULT" ls_lhs cur_sh in
+  let emptiable_vars, non_zero_vars = emptiable_and_required_of_bios ~bio_lhs ~bio_rhs_list in
   constraints := capture_ties_for_proxy ~spec ~dim_var_env ~row_var_env dim_refs @ !constraints;
   active_constraints := !constraints @ !active_constraints;
+  (if not (Set.is_empty emptiable_vars && Set.is_empty non_zero_vars) then
+     let _, env =
+       Row.solve_inequalities ~stage:Row.Stage1 ~emptiable_vars ~non_zero_vars [] !state
+     in
+     state := env);
   (* The proxy's result rows: a SEPARATE, constraint-free elaboration (shared variable environments,
      so named variables coincide with the constrained ones) in which fixed-index axes are pinned to
      dimension 1 ([`Unit_dim]) — their projections are pinned, so they are never product axes
@@ -4082,9 +4104,11 @@ let projected_operands = function
    axes already fix the variable at that size it is dropped, so the tag they carry stands -- the
    broadcast top a free capture closed to, a named tag an operand gave it. A different size still
    meets them, and is refused there. *)
-let solve_with_sizing ~zero_perms:{ discardable_vars; emptiable_vars } ~sizing ineqs =
+let solve_with_sizing ~zero_perms:{ discardable_vars; emptiable_vars; non_zero_vars } ~sizing ineqs
+    =
   let unsolved, env =
-    Row.solve_inequalities ~stage:Stage1 ~discardable_vars ~emptiable_vars ineqs Row.empty_env
+    Row.solve_inequalities ~stage:Stage1 ~discardable_vars ~emptiable_vars ~non_zero_vars ineqs
+      Row.empty_env
   in
   let open_sizing =
     List.filter sizing ~f:(function
@@ -4677,14 +4701,17 @@ let propagate_inline (update_step : update_step) : unit =
       (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice
          does). *)
       iter_shapes update_step ~f:(apply_env_t !state);
-      let _, { discardable_vars; emptiable_vars }, ineqs = get_inequalities update_step in
+      let _, { discardable_vars; emptiable_vars; non_zero_vars }, ineqs =
+        get_inequalities update_step
+      in
       active_update_steps := update_step :: !active_update_steps;
       active_constraints := ineqs @ !active_constraints;
       if not (tracing_in_progress ()) then
         counts :=
           { !counts with inline_constraints = !counts.inline_constraints + List.length ineqs };
       let ineqs', env =
-        Row.solve_inequalities ~stage:Row.Stage1 ~discardable_vars ~emptiable_vars ineqs !state
+        Row.solve_inequalities ~stage:Row.Stage1 ~discardable_vars ~emptiable_vars ~non_zero_vars
+          ineqs !state
       in
       let _debug_remaining_constraints : Row.constraint_ list = ineqs' in
       apply_env_step ~closure:false env update_step;
@@ -5650,6 +5677,7 @@ module Scheme = struct
     marks : Row.marks;
     discardable : Row.dim_var list;
     emptiable : Row.dim_var list;
+    non_zero : Row.dim_var list;
     unmarked_unused : int list;
     closure_bound : string option;
         (** Fixed variables no anchor covers: the scheme cannot be instantiated after a closure. *)
@@ -6179,6 +6207,7 @@ module Scheme = struct
           Set.to_list (Set.diff (Row.discardable_vars env_end) (Row.discardable_vars env_start));
         emptiable =
           Set.to_list (Set.diff (Row.emptiable_vars env_end) (Row.emptiable_vars env_start));
+        non_zero = Set.to_list (Set.diff (Row.non_zero_vars env_end) (Row.non_zero_vars env_start));
         unmarked_unused = Set.to_list (Set.diff unused_start unused_end);
         closure_bound;
         closure_at_trace = !closure_count;
@@ -6336,6 +6365,9 @@ module Scheme = struct
     let emptiable_vars =
       List.fold s.emptiable ~init:Row.dim_var_set_empty ~f:(fun acc v -> Set.add acc (rn.rn_dim v))
     in
+    let non_zero_vars =
+      List.fold s.non_zero ~init:Row.dim_var_set_empty ~f:(fun acc v -> Set.add acc (rn.rn_dim v))
+    in
     let ref_inputs = if sabotaged No_ref_inputs then [] else s.ref_inputs in
     let rename_binding : ref_binding -> ref_binding = function
       | `Dim v -> `Dim (rn.rn_dim v)
@@ -6389,7 +6421,8 @@ module Scheme = struct
           if instance then
             active_instances := { inst_shapes; inst_rows; inst_refs } :: !active_instances;
           let _, env =
-            Row.solve_inequalities ~stage:Row.Stage1 ~discardable_vars ~emptiable_vars all !state
+            Row.solve_inequalities ~stage:Row.Stage1 ~discardable_vars ~emptiable_vars
+              ~non_zero_vars all !state
           in
           state := env;
           List.iter inst_shapes ~f:(apply_env_t env);

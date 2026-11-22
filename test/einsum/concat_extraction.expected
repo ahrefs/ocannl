@@ -82,6 +82,9 @@ replace prefix, zero-width suffix, a => a^b (++): the operand's gradient is the 
 replace prefix, zero-width suffix, a => a^b (++^): the result has the expected dims: true
 replace prefix, zero-width suffix, a => a^b (++^): the forward is the operand's segment, every other result cell zero: true
 replace prefix, zero-width suffix, a => a^b (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+differentiable einmax1 forced zero-width suffix, a => a^b: the result has the expected dims: true
+differentiable einmax1 forced zero-width suffix, a => a^b: the forward is the operand's segment, every other result cell zero: true
+differentiable einmax1 forced zero-width suffix, a => a^b: the operand's gradient is the segment's weights, zero elsewhere: true
 replace suffix, b => a^b (++): the result has the expected dims: true
 replace suffix, b => a^b (++): the forward is the operand's segment, every other result cell zero: true
 replace suffix, b => a^b (++): the operand's gradient is the segment's weights, zero elsewhere: true
@@ -131,6 +134,9 @@ needed output component set to 0, p^o => o (++), o = 0: refused with a shape err
 needed output component set to 0, p^o => o (++^), o = 0: refused with a shape error naming the fix: true
 needed source component set to 0, a => a^b (++), a = 0: refused with a shape error naming the fix: true
 component also a standalone operand axis, a^b; b => a, b = 0: refused with a shape error naming the fix: true
+shared capture: forced empty a => a^b then required p^b => b: refused with a shape error naming the fix: true
+shared capture: required p^b => b then forced empty a => a^b: refused with a shape error naming the fix: true
+shared capture across closure: closed 0 from a => a^b into required p^b => b: refused with a shape error naming the fix: true
 margins wider than the operand, p^o => o with p = 6: refused with a shape error naming the fix: true
 empty integer component, 0^o => o: refused with a shape error naming the fix: true
 instantiated scheme solves forced zero-width suffix (p^o^q => o, p=2, o=3, src=5): true

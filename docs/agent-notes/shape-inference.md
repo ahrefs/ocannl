@@ -147,15 +147,19 @@ files.
   runs from agreeing on a prefix. The exporter test injects a batch exception after an ordered
   row and checks that the fresh destination is absent.
 - No path sizes a non-emptiable concatenation component to 0 (gh-ocannl-2316, gh-ocannl-2368,
-  gh-ocannl-2418). Zero permission is split into two environment sets (with `discardable_vars ⊆
-  emptiable_vars` held at `solve_inequalities` entry), both read through aliases by the shared
-  `marked` helper (as is `concat_component_vars` in `is_concat_component`), so no verdict depends
-  on which variable of an alias class substitution presents:
+  gh-ocannl-2418). Zero permission is split into environment sets (with `discardable_vars ⊆
+  emptiable_vars` held at `solve_inequalities` entry, and `non_zero_vars` recording required
+  standalone/affine spec axes that override zero permissions across shared captures even against an
+  already-solved 0), all read through aliases by the shared `marked` helper via `dims_mentioning`
+  (as is `concat_component_vars` in `is_concat_component`), so unrelated closure guesses avoid
+  scanning the component set and no verdict depends on which variable of an alias class
+  substitution presents:
   - Structural emptiability (`emptiable_vars`, read via `may_be_empty`): computed by
-    `Shape.compute_emptiable_vars` (the four-quantifier complement test in both directions minus
-    variables appearing in any non-`Concat` axis of any slot) for `Block`, `Permute`, `Einsum` and
-    `Einsum_tern`, carried through `derive_projections` and `Shape.Scheme`. It lets a stated or
-    forced 0 bind a component without licensing closure to guess one.
+    `Shape.compute_emptiable_vars` / `emptiable_and_required_of_bios` (the four-quantifier
+    complement test in both directions minus variables appearing in any non-`Concat` axis of any
+    slot, which go into `non_zero_vars`) for `Block`, `Permute`, `Einsum` and `Einsum_tern`,
+    carried through `derive_projections`, `product_space_shape`, and `Shape.Scheme`. It lets a
+    stated or forced 0 bind a component without licensing closure to guess one.
   - Closure's guess-to-0 permission (`discardable_vars`, read via `closure_guesses_empty`): set by
     `Block` (`++^`) only. Closure's four guess-to-0 sites, `refuse_concat_component_guess`'s
     exemption (which now reads `is_concat_component` through aliases too, fixing aliased
@@ -167,10 +171,12 @@ files.
     waits once its basis is decided (a conflict still refuses, so a GLB merge of `4` and `[u; 4_a]`
     still demotes to the broadcast top), and closure then sizes the component (here, refused by the
     sum); a single-component zero residual (`[k; u; 2] = [k; 2]`) waits before erasing to its
-    component too. A zero residual also carries no claim, since substitution erases a 0-sized
-    component, so a claim with nowhere else to land is refused there, emptiable or not. Out of
-    scope: a hand-built non-variable component (an affine `2v`) left alone with a zero residual,
-    whose `v = 0` the affine arms construct.
+    component too. When the variable may be empty, both zero-residual arms emit a basis-free
+    `Dim_size 0` rather than binding `0` with the surviving axis's basis, so `[4_rgb; u] = 4_rgb`
+    with `u = 0_default` or `u = 0_rgb` agrees in every order. A zero residual also carries no
+    claim, since substitution erases a 0-sized component, so a claim with nowhere else to land is
+    refused there, emptiable or not. Out of scope: a hand-built non-variable component (an affine
+    `2v`) left alone with a zero residual, whose `v = 0` the affine arms construct.
   - Pairing: only the equal-arity, variables-only, no-solved-component case pairs (the first
     `Row.Concat` bullet). A stage-4+ generalization paired the rest too and left the leftover to
     arithmetic: `[a; b; c] = [d; e]` gave `c = 0`, `[a; b] = [4; e]` chose `b = 4`, and `[a; b;
