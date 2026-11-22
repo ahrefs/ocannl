@@ -156,7 +156,7 @@ let () =
           | _ -> false)
       and checked events pattern =
         List.exists events ~f:(function
-          | Tensor.Scheme.Checked l -> String.equal l (label pattern)
+          | Tensor.Scheme.Checked s -> String.equal (Tensor.Scheme.label s) (label pattern)
           | _ -> false)
       in
       let evaluated, y_eval = session `Check (fun () -> model ~grid_state:(img ()) None) in

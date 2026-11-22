@@ -7,7 +7,7 @@ the scheme has the function's argument and its result: true
 it prints as the explicit trace of the closure does: true
 y: 2|4; at x' the scheme predicts 5,7|4, the body builds 5,7|4
 instantiated at an argument, the scheme predicts the shape the body's result gets: true
-a later application is checked against the scheme exposed, tracing none: true
+a later application checks the very scheme exposed, tracing none: true
 pair : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,4, ..'g..|..'h..->..'i..,4
   ..'d.. ⊑ ..'a..
   ..'e.. ⊑ ..'b..
@@ -28,4 +28,4 @@ doubled : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..
   ..'e.. ⊑ ..'b..
   ..'f.. ⊑ ..'c..
 its first application traces its scheme: true
-the next one is checked against it, tracing none: true
+the next one checks the very scheme exposed, tracing none: true

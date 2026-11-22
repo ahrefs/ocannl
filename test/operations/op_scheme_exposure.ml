@@ -35,14 +35,10 @@ let fresh name = Tensor.term ~grad_spec:Prohibit_grad ~label:[ name ] ()
 let shape (t : Tensor.t) = Shape.to_string_hum t.shape
 let labels = List.map ~f:Tensor.Scheme.label
 
-(* How many of the events while [f] runs were checks, and how many traces. *)
-let checks_and_traces f =
-  let checks = ref 0 and traces = ref 0 in
-  Tensor.For_testing.observe_schemes f ~on_event:(function
-    | Tensor.Scheme.Checked _ -> Int.incr checks
-    | Traced _ -> Int.incr traces
-    | Unschemed _ -> ());
-  (!checks, !traces)
+let checked_without_retracing scheme f =
+  let events = ref [] in
+  Tensor.For_testing.observe_schemes f ~on_event:(fun event -> events := event :: !events);
+  match !events with [ Tensor.Scheme.Checked checked ] -> phys_equal checked scheme | _ -> false
 
 (* The schemes [build] traced, printed for the golden. *)
 let traced build =
@@ -74,11 +70,9 @@ let () =
         (shape y');
       p "instantiated at an argument, the scheme predicts the shape the body's result gets"
         (String.equal (shape r) (shape y'));
-      let checks, traces =
-        checks_and_traces (fun () -> ignore (l (input ~batch:[ 3 ] "x''" [ 3 ]) : Tensor.t))
-      in
-      p "a later application is checked against the scheme exposed, tracing none"
-        (checks = 1 && traces = 0));
+      p "a later application checks the very scheme exposed, tracing none"
+        (checked_without_retracing s (fun () ->
+             ignore (l (input ~batch:[ 3 ] "x''" [ 3 ]) : Tensor.t))));
   Verdict.case "results: a tuple, an argument, other values" (fun () ->
       Tensor.unsafe_reinitialize ();
       let f, schemes = traced (fun () -> pair ~hid:4 ()) in
@@ -110,7 +104,6 @@ let () =
       let _, schemes = traced (fun () -> ignore (doubled (input "x" [ 3 ]) : Tensor.t)) in
       p "its first application traces its scheme"
         (List.equal String.equal (labels schemes) [ "doubled" ]);
-      let checks, traces =
-        checks_and_traces (fun () -> ignore (doubled (input "x2" [ 5 ]) : Tensor.t))
-      in
-      p "the next one is checked against it, tracing none" (checks = 1 && traces = 0))
+      p "the next one checks the very scheme exposed, tracing none"
+        (checked_without_retracing (List.hd_exn schemes) (fun () ->
+             ignore (doubled (input "x2" [ 5 ]) : Tensor.t))))

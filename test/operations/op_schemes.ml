@@ -37,11 +37,13 @@ let traced name = function
   | Tensor.Scheme.Traced s -> String.equal (Tensor.Scheme.label s) name
   | _ -> false
 
-let checked name = function Tensor.Scheme.Checked n -> String.equal n name | _ -> false
+let checked name = function
+  | Tensor.Scheme.Checked s -> String.equal (Tensor.Scheme.label s) name
+  | _ -> false
 
 let about name = function
-  | Tensor.Scheme.Traced s -> String.equal (Tensor.Scheme.label s) name
-  | Checked n | Unschemed (n, _) -> String.equal n name
+  | Tensor.Scheme.Traced s | Checked s -> String.equal (Tensor.Scheme.label s) name
+  | Unschemed (n, _) -> String.equal n name
 
 (* This test is about checking mode. *)
 let check_mode = Some `Check
