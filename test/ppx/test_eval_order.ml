@@ -51,6 +51,27 @@ let () =
       [%op [ x; mk "a"; y; mk "b" ]]);
   in_source_order "variables only" [] (fun () -> [%op [ x; y ]])
 
+type cell = { mutable current : Tensor.t }
+
+(* A host field read can observe a later component's mutation if the ppx leaves it inside the
+   right-to-left array construction. *)
+let () =
+  let before = mk "before" and after = mk "after" in
+  let cell = { current = before } in
+  let stacked =
+    [%op
+      [
+        [%oc cell.current];
+        [%oc
+          cell.current <- after;
+          after];
+      ]]
+  in
+  let rec reads_before (t : Tensor.t) =
+    t == before || List.exists (fun child -> reads_before child.Tensor.subtensor) t.children
+  in
+  p "a field read sees the tensor held before the next component mutates it" (reads_before stacked)
+
 (* A binding scopes over the components after it, so it takes a name none of them mentions: here the
    user's own [__op_component1] is still the second component. *)
 let () =

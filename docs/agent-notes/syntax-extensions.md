@@ -167,7 +167,10 @@ files.
   the members in source order (`Ppx_shared.in_source_order` let-binds each one that is not a
   variable or a constant, but the last; `collect_capture_labels` keeps the written order), so
   ids and capture uids ascend left to right (`test/ppx/test_eval_order.ml`, both compiled and
-  run). Where it keeps OCaml's meaning the order is OCaml's, right to left: the operands of an
+  run). A `%oc` escape around a variable is unwrapped before this decision. A field read needs the
+  binding because a later component can mutate that field before the array or tuple reads it.
+  `test_eval_order` checks the earlier read is still part of the resulting graph. Where the ppx
+  keeps OCaml's meaning, evaluation runs right to left: the operands of an
   operator or function application (`f x + g y` creates `g y` first, as `TDSL.O.(f x + g y)`
   does outside the ppx) and an argument tuple `f (a, b)`. That is the maintainer's decision
   (gh-ocannl-1986), not a gap to close: no value depends on it, and wrapping the operator and

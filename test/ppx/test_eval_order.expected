@@ -14,6 +14,7 @@ variables among effectful components: evaluated a b
 variables among effectful components: components are evaluated in source order: true
 variables only: evaluated 
 variables only: components are evaluated in source order: true
+a field read sees the tensor held before the next component mutates it: true
 a variable named like a binding is not captured: true
 list block: component ids ascend in source order: true
 capture list: reference uids ascend in source order: true
