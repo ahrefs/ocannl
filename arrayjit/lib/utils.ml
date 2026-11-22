@@ -835,10 +835,6 @@ let config_key_defaults : (string * (config_value_kind * string)) list =
     ("autotune_calibration_file", (Text, ""));
     ("model_peak_flops", (Positive_float_or_unset, ""));
     ("model_peak_memory_bandwidth", (Positive_float_or_unset, ""));
-    ("model_peak_mma_f16", (Positive_float_or_unset, ""));
-    ("model_peak_mma_bf16", (Positive_float_or_unset, ""));
-    ("model_peak_mma_tf32", (Positive_float_or_unset, ""));
-    ("model_peak_mma_fp8", (Positive_float_or_unset, ""));
     ("strict_failure_classification", (Flag, "true"));
   ]
 

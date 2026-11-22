@@ -3051,19 +3051,39 @@ let envelope ~limits =
   (Option.map flops ~f:fst, Option.map bandwidth ~f:fst)
 
 (* gh-ocannl-1092: advisory per-format matrix-unit peaks for the benchmark report's kernel %peak
-   column (reporting-only). These read [Backend_intf.reporting_limits], which [limits_field_classes]
-   proves neither [tune] nor [model_default] / [seeded_default] / [model_score] can reach. *)
+   column (reporting-only). These are [Execution_neutral] (not [Search_shaping], so outside
+   [Utils.config_key_defaults]) and read [Backend_intf.reporting_limits], which
+   [limits_field_classes] proves neither [tune] nor [model_default] / [seeded_default] /
+   [model_score] can reach. *)
+let parse_mma_peak_override ~key raw =
+  let raw = String.strip raw in
+  if String.is_empty raw then Ok None
+  else
+    match Float.of_string raw with
+    | v when Float.is_finite v && Float.(v > 0.) -> Ok (Some v)
+    | v -> Error (Printf.sprintf "%s is not a finite positive number (%g)" key v)
+    | exception _ ->
+        Error (Printf.sprintf "invalid %s override (%S: expected a finite positive float)" key raw)
+
 let peak_mma_f16_override =
-  lazy (Utils.registered_positive_float_or_unset ~arg_name:"model_peak_mma_f16")
+  lazy
+    (parse_mma_peak_override ~key:"model_peak_mma_f16"
+       (Utils.get_global_arg ~arg_name:"model_peak_mma_f16" ~default:""))
 
 let peak_mma_bf16_override =
-  lazy (Utils.registered_positive_float_or_unset ~arg_name:"model_peak_mma_bf16")
+  lazy
+    (parse_mma_peak_override ~key:"model_peak_mma_bf16"
+       (Utils.get_global_arg ~arg_name:"model_peak_mma_bf16" ~default:""))
 
 let peak_mma_tf32_override =
-  lazy (Utils.registered_positive_float_or_unset ~arg_name:"model_peak_mma_tf32")
+  lazy
+    (parse_mma_peak_override ~key:"model_peak_mma_tf32"
+       (Utils.get_global_arg ~arg_name:"model_peak_mma_tf32" ~default:""))
 
 let peak_mma_fp8_override =
-  lazy (Utils.registered_positive_float_or_unset ~arg_name:"model_peak_mma_fp8")
+  lazy
+    (parse_mma_peak_override ~key:"model_peak_mma_fp8"
+       (Utils.get_global_arg ~arg_name:"model_peak_mma_fp8" ~default:""))
 
 type mma_peak_source =
   | Mma_peak_config of string
@@ -3095,13 +3115,9 @@ let mma_peak_leg ~(limits : Ir.Backend_intf.hardware_limits) ~(accum_prec : Ir.O
     | None -> Ok None
     | Some (key, ov) -> (
         match Lazy.force ov with
-        | None -> Ok None
-        | Some v -> (
-            match check_finite ~label:key v with
-            | Ok v -> Ok (Some (v, Mma_peak_config key))
-            | Error msg -> Error msg)
-        | exception exn -> Error (Printf.sprintf "invalid %s override (%s)" key (Exn.to_string exn))
-        )
+        | Ok None -> Ok None
+        | Ok (Some v) -> Ok (Some (v, Mma_peak_config key))
+        | Error msg -> Error msg)
   in
   match from_config with
   | Error msg -> Mma_peak_unavailable msg
