@@ -1580,9 +1580,9 @@ let state_config ~key ~data =
   if Set.mem eager_config_keys key then
     invalid_arg
       (Printf.sprintf
-         "OCANNL: Utils.state_config ~key:%S: this key is resolved while the library initializes, \
-          before any statement can be made, so stating it would change nothing; set it on the \
-          commandline, in the environment or in ocannl_config instead"
+         "OCANNL: Utils.state_config ~key:%S: this key is a startup setting and cannot be stated \
+          in process. Set it on the command line, in the environment, or in ocannl_config where \
+          supported. To change a field of Utils.settings in process, assign the field directly."
          key);
   Option.iter (read_cmdline_var key) ~f:(fun (value, arg) ->
       if not (String.equal value data) then

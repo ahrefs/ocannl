@@ -141,10 +141,16 @@ let () =
         Stdlib.Printf.eprintf "statement accepted: lookup=%b, snapshot still %d (before %d)\n"
           (Option.equal String.equal (Utils.stated_config key) (Some data))
           Utils.settings.print_decimals_precision before;
+        Utils.restore_settings ();
+        Stdlib.Printf.eprintf "snapshot after restore_settings: %d (stated %s)\n"
+          Utils.settings.print_decimals_precision data;
         Utils.unstate_config key;
+        Utils.restore_settings ();
         false
     | exception Invalid_argument message ->
-        String.is_substring message ~substring:(Printf.sprintf "~key:%S" key))
+        String.is_substring message ~substring:(Printf.sprintf "~key:%S" key)
+        && String.is_substring message ~substring:"assign the field directly"
+        && Option.is_none (Utils.stated_config key))
 
 let () =
   p_all ~min:3 "a startup-only input or compatibility spelling is refused, naming the key"
@@ -156,5 +162,5 @@ let () =
           false
       | exception Invalid_argument message ->
           String.is_substring message ~substring:(Printf.sprintf "~key:%S" key)
-          && String.is_substring message ~substring:"resolved while the library initializes"
+          && String.is_substring message ~substring:"startup setting"
           && Option.is_none (Utils.stated_config key))

@@ -7508,6 +7508,8 @@ box.
   and `detach_c_stderr`, gh-ocannl-2395). The build derives the snapshot inputs from the
   assignments to `Utils.settings` and requires a recognized initializer for every field. Use a
   startup source to test resolution, or vary the mutable field directly to test its consumers.
+  Before gh-ocannl-2395 a statement could change a snapshot when followed by
+  `Utils.restore_settings`. The setter now rejects those keys before the restore can read them.
   Never write `Utils.config_file_args`. The config file's table ranks below the environment. A
   write there runs under the caller's value whenever one is exported, which is the
   `OCANNL_<KEY>=… dune build @…` recipe AGENTS.md gives, and nothing says so:

@@ -268,7 +268,9 @@ val state_config : key:String.t -> data:String.t -> unit
     for the bootstrap keys, [profile], the keys initializing {!settings}, and [detach_c_stderr], and
     for unregistered keys or spellings other than lowercase letters, digits and underscores without
     the [ocannl_] prefix. Supply initialization keys on the command line, in the environment, or in
-    the config file where supported. State a key read by a lazy before its first force. *)
+    the config file where supported. To change a field of {!settings} in process, assign it
+    directly. Since gh-ocannl-2395, a statement of a snapshot input is refused before
+    {!restore_settings} can read it. State a key read by a lazy before its first force. *)
 
 val unstate_config : String.t -> unit
 (** Withdraws [key]'s in-process statement, if any; the other sources answer for it again. *)
@@ -452,7 +454,9 @@ val routine_log_level_notice : string
     too low to enable it. *)
 
 val restore_settings : unit -> unit
-(** Resets {!settings} to the values the configuration gives. *)
+(** Reapplies the startup log level and rereads the other {!settings} inputs from the command line,
+    environment, config file and profiles. These keys cannot carry in-process statements because
+    {!state_config} refuses them. *)
 
 val with_runtime_debug : unit -> bool
 (** Whether compilation keeps debug information: debug files on and [log_level > 1]. *)
