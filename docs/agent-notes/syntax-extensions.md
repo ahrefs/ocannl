@@ -120,9 +120,13 @@ files.
   The compiled `test_initializer_heads` pins both. An object's declared instance variables
   bind in subsequent methods and initializer clauses (gh-ocannl-2377). The compiled fixture
   checks both reads after an instance field shadows the enclosing name.
+  An explicit `inherit ... as parent` also binds its alias in subsequent methods and
+  initializer clauses (gh-ocannl-2421). The compiled fixture checks that the alias calls the
+  parent's implementation even when the object overrides that method.
   Earlier methods and initializer clauses can read the enclosing name. The object's `val`
-  right-hand sides and expressions outside the object keep the enclosing scope. Inherited
-  variables remain unresolved by the PPX, so a use matching a late name is still refused.
+  right-hand sides, inherited class expressions and expressions outside the object keep the
+  enclosing scope. Inherited variables remain unresolved by the PPX, so a use matching a late
+  name is still refused.
   The `test_param_errors` golden pins these refusals, optional defaults that see preceding
   parameters, and case guards that see their case pattern.
   An open or include does not establish that an unqualified identifier is local.

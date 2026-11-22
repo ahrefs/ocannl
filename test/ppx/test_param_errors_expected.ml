@@ -737,6 +737,45 @@ let number_in_inherited_method =
       fun x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x)
+class alias_parent = object method value = 7 end
+let number_without_inherited_alias =
+  let open! TDSL.O in
+    fun () ->
+      let w =
+        (TDSL.param ?more_label:None
+           ?value:(Some
+                     ([%ocaml.error
+                        "ppx_ocannl %op: the inline declaration { w } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds parent. Bind parent before the unit parameter -- fun ~parent () ... -- or outside %op"]))
+           ?values:None ?param_init:None "w") () in
+      let __ocannl_body x =
+        let parent = object method value = 41 end in
+        (+) ?label:(Some ["number_without_inherited_alias"])
+          (( * ) ?label:None w x) (TDSL.O.(!..) parent#value) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"number_without_inherited_alias"
+          ~arity:1 (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let number_before_inherited_alias =
+  let open! TDSL.O in
+    fun () ->
+      let w =
+        (TDSL.param ?more_label:None
+           ?value:(Some
+                     ([%ocaml.error
+                        "ppx_ocannl %op: the inline declaration { w } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds parent. Bind parent before the unit parameter -- fun ~parent () ... -- or outside %op"]))
+           ?values:None ?param_init:None "w") () in
+      let __ocannl_body x =
+        let parent = object method value = 41 end in
+        (+) ?label:(Some ["number_before_inherited_alias"])
+          (( * ) ?label:None w x) (TDSL.O.(!..) parent#value) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"number_before_inherited_alias"
+          ~arity:1 (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
 let number_default_earlier_param =
   let open! TDSL.O in
     fun () ->

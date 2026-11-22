@@ -124,8 +124,8 @@ let guard_late ~late ~decl (e : expression) =
 
       method! class_structure { pcstr_self; pcstr_fields } =
         self#pattern pcstr_self;
-        (* Methods and initializer clauses see self and preceding instance variable declarations.
-           Inherited variables stay unresolved because their bindings depend on the parent class. *)
+        (* Methods and initializer clauses see self, preceding instance variables and explicit
+           ancestor aliases. Inherited variables depend on the parent class. *)
         ignore
           (List.fold pcstr_fields ~init:(bind_pattern bound pcstr_self)
              ~f:(fun object_bound field ->
@@ -133,7 +133,7 @@ let guard_late ~late ~decl (e : expression) =
                | Pcf_method _ | Pcf_initializer _ ->
                    {<bound = object_bound>}#class_field field;
                    object_bound
-               | Pcf_val ({ txt = name; _ }, _, _) ->
+               | Pcf_val ({ txt = name; _ }, _, _) | Pcf_inherit (_, _, Some { txt = name; _ }) ->
                    self#class_field field;
                    Set.add object_bound name
                | _ ->

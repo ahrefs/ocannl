@@ -174,6 +174,37 @@ let () =
       (Float.of_int (Int.succ enclosing)) in
   Verdict.p "object initializer reads the preceding field value 3"
     (Float.equal selected 3.0)
+class alias_parent = object method value = 7 end
+let number_inherited_alias =
+  let open! TDSL.O in
+    fun () ->
+      let w =
+        ((TDSL.param ?more_label:None
+            ?value:(Some
+                      (Float.of_int
+                         (object
+                            inherit  alias_parent as parent
+                            method! value = 97
+                            method selected = parent#value
+                          end)#selected)) ?values:None ?param_init:None "w")
+           ~output_dims:[1]) () in
+      let __ocannl_body x =
+        let parent = object method value = 41 end in
+        (+) ?label:(Some ["number_inherited_alias"]) (( *. ) ?label:None w x)
+          (TDSL.O.(!..) parent#value) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"number_inherited_alias" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let () =
+  let input = NTDSL.ndarray [|1.0|] ~output_dims:[1] () in
+  let output = number_inherited_alias () input in
+  let ctx = Train.forward_once (Context.cpu ()) output in
+  Verdict.p "inherit alias selects the parent method value 7"
+    (Float.equal (Context.get_value ctx output.Tensor.value [|0|])
+       (7.0 +. 41.0))
 let named_binary source other =
   let open! TDSL.O in
     let w =

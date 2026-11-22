@@ -1,2 +1,3 @@
 object method reads the preceding field value 3: true
 object initializer reads the preceding field value 3: true
+inherit alias selects the parent method value 7: true
