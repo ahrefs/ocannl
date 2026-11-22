@@ -1,6 +1,6 @@
-; The controls of `unused_compiler_deps` (gh-ocannl-2118). Each library below is one case: a
-; `ucd_flag_*` stanza plants a compiler-reaching declaration its modules never reference, a
-; `ucd_pass_*` stanza references one in a way a source-text reading would miss. The check pins each
+; The controls of `unused_compiler_deps` (gh-ocannl-2118, gh-ocannl-2387). Each library below is
+; one case: a `ucd_flag_*` stanza plants a compiler-reaching or test-support declaration its modules
+; never reference, and a `ucd_pass_*` stanza exercises an accepted form. The check pins each
 ; stanza's expected finding in its own `fixture_expectations` table, which must name exactly the
 ; stanzas of this file. Nothing links these libraries: `@check` compiles them, and only their
 ; `.cmt` files are read.
@@ -132,3 +132,15 @@
  (package neural_nets_lib)
  (modules ucd_flag_interface_unit_toplevel)
  (libraries compiler-libs.toplevel))
+
+(library
+ (name ucd_flag_unused_test_support)
+ (package neural_nets_lib)
+ (modules ucd_flag_unused_test_support)
+ (libraries arrayjit.verdict ll_test))
+
+(library
+ (name ucd_pass_used_test_support)
+ (package neural_nets_lib)
+ (modules ucd_pass_used_test_support)
+ (libraries arrayjit.verdict ll_test))

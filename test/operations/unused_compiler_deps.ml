@@ -1,11 +1,13 @@
-(* gh-ocannl-2118: no stanza declares a compiler-reaching library it never uses.
+(* gh-ocannl-2118, gh-ocannl-2387: no stanza declares a compiler-reaching or test-support library it
+   never uses.
 
    A library whose dependency closure holds [compiler-libs.common] forces the compiler archive's
    units into every executable that declares it, used or not (gh-ocannl-2010 found 1.4 GiB of build
    per checkout that nobody had asked for). [test_utils_linkage] guards one direction: the cheap
    runtime helpers it names never reach the compiler. This guards the other: a stanza that declares
    [test_scan], [ppxlib], [compiler-libs.*], [einsum_parser], ... must reference it from its own
-   compiled modules.
+   compiled modules. The same check covers libraries defined under [test/support], including
+   non-compiler-reaching ones such as [ll_test] and [arrayjit.verdict].
 
    {1 Sources of truth}
 
@@ -21,14 +23,15 @@
    [(test)] stanza declares is absent there, and is resolved the same way through a throwaway probe
    project. A library is COMPILER-REACHING when its [requires] closure holds [compiler-libs.common],
    the library that owns [ocamlcommon] -- the definition of the property, not a list: every scanner
-   library falls out of the walk.
+   library falls out of the walk. TEST-SUPPORT membership comes from the local library stanzas under
+   [test/support], resolved to the same library identities as the declarations.
 
-   OWNERSHIP: a library with its own include directory owns its [.cmi] units. For compiler-reaching
-   libraries sharing an include directory, dune-resolved [ocamlfind query -predicates byte] supplies
-   their own absolute archive paths and dune-resolved [ocamlobjinfo] supplies [Unit name:]
-   definitions. Archive definitions take precedence over imports, including definitions from an
-   importer's co-located dependencies outside the scan's reporting scope. For an interface-only unit
-   (a shared-directory [.cmi] with no archive definition), the candidates are archives whose
+   OWNERSHIP: a library with its own include directory owns its [.cmi] units. For libraries in scope
+   sharing an include directory, dune-resolved [ocamlfind query -predicates byte] supplies their own
+   absolute archive paths and dune-resolved [ocamlobjinfo] supplies [Unit name:] definitions.
+   Archive definitions take precedence over imports, including definitions from an importer's
+   co-located dependencies outside the scan's reporting scope. For an interface-only unit (a
+   shared-directory [.cmi] with no archive definition), the candidates are archives whose
    [Interfaces imported:] sections name it. There must be one dependency-minimal importer, and no
    archive-bearing library in its [requires] closure may share a directory containing the [.cmi].
    Such a dependency could define the interface without importing it. If the importer sees the
@@ -41,7 +44,7 @@
    metadata and Dune's resolved dependency graph. No module inventory is inferred from [META] or
    [dune-package]. A failed query, unreadable archive or output without definitions refuses without
    directory fallback. Shared local libraries refuse: findlib cannot resolve their archives and
-   [@check] does not build them. Non-compiler-reaching declarations stay outside this check's scope.
+   [@check] does not build them.
 
    USE: the typed tree of every [.cmt]/[.cmti] in the stanza's byte object directory
    ([Cmt_references]): post-preprocessing, so generated modules, a [select]-chosen source and a
@@ -67,12 +70,11 @@
    entry or field outside [build_context], [root], [library], [executables] and the library fields
    read here.
 
-   It does not judge libraries that are not compiler-reaching (an unused [stdio] is outside its
-   scope), or stanzas inactive in this build context (another backend's, an optional library's). A
-   compiler-reaching library declared only for a side effect -- a deriver linked so it registers --
-   takes an exact row in [exemptions], held earned on every run; a local [(kind ppx_rewriter)] or
-   [(kind ppx_deriver)] library is exempt by form, since a rewriter in [libraries] is there to
-   register with the driver.
+   The reporting scope is limited to compiler-reaching and test-support libraries and active stanzas
+   in this build context. A library declared only for a side effect -- a deriver linked so it
+   registers -- takes an exact row in [exemptions], held earned on every run. A local [(kind
+   ppx_rewriter)] or [(kind ppx_deriver)] library is exempt by form, since a rewriter in [libraries]
+   is there to register with the driver.
 
    Every refusal path calls [fail] with a literal format (so the refusal catalogue extracts it) and
    runs in [controls] below against synthetic input, asserting that its own format -- and no other
@@ -90,7 +92,7 @@ let manifest_source = "test/operations/" ^ source
 let fixture_dir = "test/operations/unused_compiler_deps_fixtures"
 
 (* Each fixture stanza and the libraries the check must report for it, by declared spelling. *)
-let fixture_expectations =
+let compiler_fixture_expectations =
   [
     ("ucd_flag_unused_test_scan", [ "test_scan" ]);
     ("ucd_flag_ppxlib_beside_test_scan", [ "ppxlib" ]);
@@ -110,6 +112,13 @@ let fixture_expectations =
     ("ucd_gap_shared_directory", [ "compiler-libs.toplevel" ]);
   ]
 
+let fixture_expectations =
+  compiler_fixture_expectations
+  @ [
+      ("ucd_flag_unused_test_support", [ "arrayjit.verdict"; "ll_test" ]);
+      ("ucd_pass_used_test_support", []);
+    ]
+
 let compiler_root = "compiler-libs.common"
 
 (* Declarations linked for a side effect nothing names: (directory, stanza, library, reason). Each
@@ -123,6 +132,13 @@ let exemptions =
       "an external deriver linked so its archive registers the [@@deriving hash] expander the \
        fixture corpus is expanded with" );
   ]
+  @ List.map
+      [ "fresh_process"; "bounded_run"; "stderr_capture"; "gc_witness"; "integer_power_cases" ]
+      ~f:(fun library ->
+        ( "test/operations",
+          "test_utils_linkage",
+          library,
+          "the linkage probe checks whether declaring this library forces in compiler units" ))
 
 (* Refusal sink carrying the compile-time format string alongside the rendered message so synthetic
    controls pin the originating refusal format itself, never text echoed in another refusal's
@@ -456,7 +472,7 @@ let reach_path by_uid uid =
   in
   bfs (Set.singleton (module String) uid) [ (uid, [ name uid ]) ]
 
-let library_owners ~fail ~cmi_units ~archive_of by_uid =
+let library_owners ~fail ~cmi_units ~archive_of ~tracked by_uid =
   let directories = Hashtbl.create (module String) in
   Hashtbl.iter by_uid ~f:(fun l ->
       List.iter l.include_dirs ~f:(fun d -> Hashtbl.add_multi directories ~key:d ~data:l.uid));
@@ -473,7 +489,7 @@ let library_owners ~fail ~cmi_units ~archive_of by_uid =
   let interface_candidates = Hashtbl.create (module String) in
   let shared_cmis = ref (Set.empty (module String)) in
   Hashtbl.iter by_uid ~f:(fun l ->
-      if Option.is_some (reach_path by_uid l.uid) then
+      if tracked l.uid then
         let shared =
           List.exists l.include_dirs ~f:(fun d ->
               List.exists (Hashtbl.find_multi directories d) ~f:(fun uid ->
@@ -652,7 +668,8 @@ let referenced_units dir =
         | Ok units -> Units units
         | Error e -> Unreadable_typed_tree e)
 
-type finding = { stanza : stanza; library : string; path : string list }
+type population = Compiler_reaching of string list | Test_support
+type finding = { stanza : stanza; library : string; population : population }
 
 (* An exemption row is earned while the check would report its declaration without it. *)
 let earned findings (dir, name, library, _reason) =
@@ -665,7 +682,7 @@ type world = {
   workspace_root : string;
   resolve : string -> library option;
   available : string -> bool;
-  reach_of : string -> string list option;
+  population_of : string -> population option;
   owners : string -> string list option;
   rewriters : Set.M(String).t;
 }
@@ -677,7 +694,7 @@ let judge ~fail:sink ?(read_references = referenced_units) w s =
   let (module F : FAIL) = sink in
   let open F in
   let objdir = object_dir ~workspace_root:w.workspace_root s in
-  let reaching =
+  let candidates =
     declarations ~fail:sink ~available:w.available s
     |> List.filter_map ~f:(function
       | Re_exported _ -> None
@@ -688,7 +705,8 @@ let judge ~fail:sink ?(read_references = referenced_units) w s =
               if not (conditional s) then
                 fail "%s/dune (%s): the declared library %s resolves to nothing" s.dir s.name name;
               None
-          | Some l -> Option.map (w.reach_of l.uid) ~f:(fun path -> (name, l.uid, path))))
+          | Some l ->
+              Option.map (w.population_of l.uid) ~f:(fun population -> (name, l.uid, population))))
   in
   match read_references objdir with
   | Missing_dir ->
@@ -703,16 +721,16 @@ let judge ~fail:sink ?(read_references = referenced_units) w s =
       fail "%s/dune (%s): unreadable typed tree: %s" s.dir s.name e;
       Refused
   | Units units -> (
-      if List.is_empty reaching then Checked []
+      if List.is_empty candidates then Checked []
       else
         match List.map (Set.to_list units) ~f:w.owners |> Option.all with
         | None -> Refused
         | Some owners ->
             let referenced_owners = Set.of_list (module String) (List.concat owners) in
             Checked
-              (List.filter_map reaching ~f:(fun (name, uid, path) ->
+              (List.filter_map candidates ~f:(fun (name, uid, population) ->
                    if Set.mem referenced_owners uid then None
-                   else Some { stanza = s; library = name; path })))
+                   else Some { stanza = s; library = name; population })))
 
 (* A findlib name dune resolves to a library of another name ([ctypes.foreign] is [ctypes-foreign])
    is bound to what its probe library requires. *)
@@ -825,7 +843,7 @@ let controls ~dune ~objinfo ~tool_stderr =
       workspace_root = temp "ucd-control-root";
       resolve = (fun _ -> None);
       available = (fun _ -> false);
-      reach_of = (fun _ -> None);
+      population_of = (fun _ -> None);
       owners = (fun _ -> Some []);
       rewriters = Set.empty (module String);
     }
@@ -849,11 +867,17 @@ let controls ~dune ~objinfo ~tool_stderr =
        if String.equal l.uid owner.uid then { definitions = owner_definitions; interfaces = [] }
        else { definitions = [ "Consumer" ]; interfaces = [ unit ] }
      in
+     let population_of uid =
+       Option.map (reach_path by_uid uid) ~f:(fun path -> Compiler_reaching path)
+     in
      {
        w with
        resolve = Hashtbl.find by_uid;
-       reach_of = reach_path by_uid;
-       owners = library_owners ~fail ~cmi_units ~archive_of by_uid;
+       population_of;
+       owners =
+         library_owners ~fail ~cmi_units ~archive_of
+           ~tracked:(fun uid -> Option.is_some (population_of uid))
+           by_uid;
      }
    in
    let read_references _ = Units (Set.singleton (module String) unit) in
@@ -959,7 +983,7 @@ let controls ~dune ~objinfo ~tool_stderr =
              : stanza list)));
   (let stanza = stanza_of "(library (name a) (libraries b))" in
    let row = ("synthetic", "a", "b", "a control row") in
-   let finding library = { stanza; library; path = [ library ] } in
+   let finding library = { stanza; library; population = Compiler_reaching [ library ] } in
    p "an exemption row is earned while its declaration would be reported"
      (earned [ finding "b" ] row);
    p_none "an exemption row whose declaration is used, or gone, is no longer earned"
@@ -1110,10 +1134,26 @@ let () =
     | Some l -> Some l
     | None -> Option.bind (Map.find public_of name) ~f:(Hashtbl.find by_name)
   in
-  let owners =
-    library_owners ~fail ~cmi_units ~archive_of:(shared_units ~fail ~findlib ~objinfo) by_uid
+  let support_uids =
+    List.filter_map local_libraries ~f:(fun s ->
+        if String.equal s.dir "test/support" || String.is_prefix s.dir ~prefix:"test/support/" then
+          let name = Option.value (List.hd (public_names s)) ~default:s.name in
+          match resolve name with Some l when l.local -> Some l.uid | _ -> None
+        else None)
+    |> Set.of_list (module String)
   in
   let reach = Hashtbl.create (module String) in
+  let reach_of uid = Hashtbl.find_or_add reach uid ~default:(fun () -> reach_path by_uid uid) in
+  let population_of uid =
+    match reach_of uid with
+    | Some path -> Some (Compiler_reaching path)
+    | None -> if Set.mem support_uids uid then Some Test_support else None
+  in
+  let owners =
+    library_owners ~fail ~cmi_units ~archive_of:(shared_units ~fail ~findlib ~objinfo)
+      ~tracked:(fun uid -> Option.is_some (population_of uid))
+      by_uid
+  in
   let w =
     {
       workspace_root;
@@ -1123,8 +1163,7 @@ let () =
           match resolve name with
           | None -> false
           | Some l -> (not l.local) || List.exists l.include_dirs ~f:Stdlib.Sys.file_exists);
-      reach_of =
-        (fun uid -> Hashtbl.find_or_add reach uid ~default:(fun () -> reach_path by_uid uid));
+      population_of;
       owners;
       (* A rewriter in [libraries] is linked for its registration with the driver -- nothing names
          it, by design -- so a declared local one is exempt by form. *)
@@ -1164,14 +1203,19 @@ let () =
   List.iter (List.rev !refusals) ~f:(fun r -> eprintf "refused: %s\n" r);
   let reported = List.filter real ~f:(Fn.non exempted) in
   List.iter reported ~f:(fun f ->
-      eprintf "unused: %s/dune (%s) declares %s, reaching the compiler through %s\n" f.stanza.dir
-        f.stanza.name f.library
-        (String.concat ~sep:" -> " f.path));
+      let reason =
+        match f.population with
+        | Compiler_reaching path ->
+            ", reaching the compiler through " ^ String.concat ~sep:" -> " path
+        | Test_support -> ", a test-support library"
+      in
+      eprintf "unused: %s/dune (%s) declares %s%s\n" f.stanza.dir f.stanza.name f.library reason);
   p_empty "every dune file and the workspace description lie within the recognised forms"
     ~over:stanzas (List.rev !refusals);
   p_all "every exemption row is still earned: its stanza declares the library and uses none of it"
     exemptions ~f:(earned real);
-  p_empty "no stanza declares a compiler-reaching library its modules never reference"
+  p_empty
+    "no stanza declares a compiler-reaching or test-support library its modules never reference"
     ~over:real_checked reported;
   (* The compiled controls. *)
   let fixture_stanzas =
@@ -1183,8 +1227,9 @@ let () =
     (List.equal String.equal fixture_stanzas
        (List.map fixture_expectations ~f:fst |> List.sort ~compare:String.compare));
   p_all "every fixture library the check must report is derived as compiler-reaching"
-    (List.concat_map fixture_expectations ~f:snd |> List.dedup_and_sort ~compare:String.compare)
-    ~f:(fun name -> Option.is_some (Option.bind (resolve name) ~f:(fun l -> w.reach_of l.uid)));
+    (List.concat_map compiler_fixture_expectations ~f:snd
+    |> List.dedup_and_sort ~compare:String.compare)
+    ~f:(fun name -> Option.is_some (Option.bind (resolve name) ~f:(fun l -> reach_of l.uid)));
   p_all "every fixture stanza is read and reported for exactly its expected libraries"
     fixture_expectations ~f:(fun (name, expected) ->
       let got =

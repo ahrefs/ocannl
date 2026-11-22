@@ -105,7 +105,7 @@ let raw_entries =
         "[scanner-refusal:22c08112ff7b660af6dab49542313b14] compiler-libs.common";
         "[scanner-refusal:5c6002f7f040eddc8696d03b9a9bb9e2] the workspace description";
         "[scanner-refusal:448291c7f6134ac8fadedd8e1a4f787a] declares the library";
-        "[scanner-refusal:65e4156ccb9f193200c80820a12c6408] compiler-reaching library its";
+        "[scanner-refusal:348bd3c284e68555c5d779b004a5cb5f] compiler-reaching or test-support";
         "[scanner-refusal:76d536378a6e503a67ce436cfd76938d] fixture directory's stanzas";
         "[scanner-refusal:67a884b3a6347974dc0b1b43122c4c21] derived as compiler-reaching";
         "[scanner-refusal:4a372cdf7b39da35fd50d7a96957b75f] its expected libraries";
