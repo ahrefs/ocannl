@@ -6163,8 +6163,8 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
 
 ### GPU boxes: job caps and runtime refusals
 
-- `tools/device-memory-load.sh -- CMD` adds torch memory churn on the default visible CUDA or
-  HIP device (gh-ocannl-1825). Put the wrapper and CMD together inside the caller's GPU slot.
+- `tools/device-memory-load.sh -- CMD` adds memory churn on the default visible device through
+  torch's `cuda` API (gh-ocannl-1825). On fleet hosts, put the wrapper and CMD inside the caller's GPU slot.
   The benchmark venv worker reports readiness after filling its four-buffer window, then replaces
   one randomly sized buffer (16–256 MiB by default) per iteration and empties the torch cache.
   Startup has a deadline, an early worker exit fails the run, and cleanup covers the worker and

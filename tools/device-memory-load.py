@@ -17,37 +17,38 @@ import cell_group
 NAME = "device-memory-load.sh"
 READY = b"ready\n"
 HOG = """
+import os
 import random
 import sys
 import time
 from collections import deque
-from contextlib import redirect_stdout
 
 minimum, maximum, keep = map(int, sys.argv[1:])
 buffers = deque()
-ready = sys.stdout.buffer
-with redirect_stdout(sys.stderr):
-    try:
-        import torch
-    except ImportError as exc:
-        sys.exit(f"device-memory-load.sh: torch unavailable: {exc}")
-    if not torch.cuda.is_available():
-        sys.exit("device-memory-load.sh: torch found no CUDA or HIP device")
+# Keep native library writes off the readiness pipe as well as Python output.
+ready = os.fdopen(os.dup(1), "wb")
+os.dup2(2, 1)
+try:
+    import torch
+except ImportError as exc:
+    sys.exit(f"device-memory-load.sh: torch unavailable: {exc}")
+if not torch.cuda.is_available():
+    sys.exit("device-memory-load.sh: torch found no CUDA or HIP device")
 
-    def allocate():
-        size = random.randint(minimum, maximum) * 1024 * 1024
-        return torch.empty(size, dtype=torch.uint8, device="cuda")
+def allocate():
+    size = random.randint(minimum, maximum) * 1024 * 1024
+    return torch.empty(size, dtype=torch.uint8, device="cuda")
 
-    for _ in range(keep):
-        buffers.append(allocate())
+for _ in range(keep):
+    buffers.append(allocate())
 
+with ready:
     ready.write(%s)
-    ready.flush()
-    while True:
-        buffers.popleft()
-        buffers.append(allocate())
-        torch.cuda.empty_cache()
-        time.sleep(0.05)
+while True:
+    buffers.popleft()
+    buffers.append(allocate())
+    torch.cuda.empty_cache()
+    time.sleep(0.05)
 """ % repr(READY)
 
 

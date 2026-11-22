@@ -11,7 +11,7 @@ harness_scratch test-device-memory-load
 
 subject=$here/device-memory-load.sh
 export BENCH_VENV_PY="$TMP/stub python" PIDS="$TMP/pids" HOG_ARGS="$TMP/args"
-export CMD_PIDS="$TMP/cmd-pids"
+export CMD_PIDS="$TMP/cmd-pids" ROTATED="$TMP/rotated"
 unset FLEET_SLOT_HELD
 cat >"$BENCH_VENV_PY" <<'PY'
 #!/usr/bin/env python3
@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def record_group(path):
@@ -46,16 +47,31 @@ if sys.argv[1] == "--cmd":
 mode = os.environ["HOG_MODE"]
 assert sys.argv[1] == "-c"
 Path(os.environ["HOG_ARGS"]).write_text(" ".join(sys.argv[3:]))
-if mode in ("missing-torch", "no-device"):
+if mode in ("missing-torch", "no-device", "native"):
+    def available():
+        if mode == "native":
+            os.write(1, b"native startup diagnostic\n")
+            return True
+        return False
+
+    def empty_cache():
+        rotated = Path(os.environ["ROTATED"])
+        if not rotated.stat().st_size:
+            os.write(1, b"native rotation diagnostic\n")
+            rotated.write_text("ok")
+
     if mode == "missing-torch":
         sys.modules["torch"] = None
     else:
-        from types import SimpleNamespace
-
-        sys.modules["torch"] = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+        sys.modules["torch"] = SimpleNamespace(
+            cuda=SimpleNamespace(is_available=available, empty_cache=empty_cache),
+            empty=lambda *args, **kwargs: object(),
+            uint8=object(),
+        )
+    signal.alarm(8)
     sys.argv = sys.argv[2:]
     exec(sys.argv[0])
-    raise AssertionError("the worker accepted unavailable hardware")
+    raise AssertionError("the worker returned")
 
 record_group(os.environ["PIDS"])
 if mode == "ready":
@@ -79,6 +95,7 @@ run() {
   : >"$PIDS"
   : >"$HOG_ARGS"
   : >"$CMD_PIDS"
+  : >"$ROTATED"
   rc=0
   HOG_MODE=$mode python3 -c '
 import subprocess
@@ -199,6 +216,29 @@ fi
 
 if harness_leg '8: TERM directed at the wrapper reaps both groups'; then
   check_interrupted_command cancel 'terminated by signal 15'
+fi
+
+if harness_leg '9: native diagnostics bypass the readiness pipe'; then
+  run native -- python3 -c '
+import os
+import time
+from pathlib import Path
+
+rotated = Path(os.environ["ROTATED"])
+deadline = time.monotonic() + 2
+while not rotated.stat().st_size:
+    if time.monotonic() >= deadline:
+        raise SystemExit("the worker did not finish its first rotation")
+    time.sleep(0.02)
+print("CMD ran")
+'
+  if [ "$rc" = 0 ] && [ "$(cat "$TMP/out")" = 'CMD ran' ] &&
+     grep -qxF 'native startup diagnostic' "$TMP/err" &&
+     grep -qxF 'native rotation diagnostic' "$TMP/err"; then
+    report 0 'native diagnostics go to stderr through startup and rotation'
+  else
+    report 1 'native diagnostics go to stderr through startup and rotation' "$(details)"
+  fi
 fi
 
 finish
