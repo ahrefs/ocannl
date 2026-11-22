@@ -108,6 +108,7 @@ let raw_entries =
         "[scanner-refusal:348bd3c284e68555c5d779b004a5cb5f] compiler-reaching or test-support";
         "[scanner-refusal:76d536378a6e503a67ce436cfd76938d] fixture directory's stanzas";
         "[scanner-refusal:67a884b3a6347974dc0b1b43122c4c21] derived as compiler-reaching";
+        "[scanner-refusal:a0a5de6bdc283aef59519729356595e4] test-support fixture finding";
         "[scanner-refusal:4a372cdf7b39da35fd50d7a96957b75f] its expected libraries";
       ] );
     ( "markdown_links.ml",

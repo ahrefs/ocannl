@@ -112,13 +112,13 @@ let compiler_fixture_expectations =
     ("ucd_gap_shared_directory", [ "compiler-libs.toplevel" ]);
   ]
 
-let fixture_expectations =
-  compiler_fixture_expectations
-  @ [
-      ("ucd_flag_unused_test_support", [ "arrayjit.verdict"; "ll_test" ]);
-      ("ucd_pass_used_test_support", []);
-    ]
+let test_support_fixture_expectations =
+  [
+    ("ucd_flag_unused_test_support", [ "arrayjit.verdict"; "ll_test" ]);
+    ("ucd_pass_used_test_support", []);
+  ]
 
+let fixture_expectations = compiler_fixture_expectations @ test_support_fixture_expectations
 let compiler_root = "compiler-libs.common"
 
 (* Declarations linked for a side effect nothing names: (directory, stanza, library, reason). Each
@@ -1150,7 +1150,8 @@ let () =
     | None -> if Set.mem support_uids uid then Some Test_support else None
   in
   let owners =
-    library_owners ~fail ~cmi_units ~archive_of:(shared_units ~fail ~findlib ~objinfo)
+    library_owners ~fail ~cmi_units
+      ~archive_of:(shared_units ~fail ~findlib ~objinfo)
       ~tracked:(fun uid -> Option.is_some (population_of uid))
       by_uid
   in
@@ -1230,6 +1231,11 @@ let () =
     (List.concat_map compiler_fixture_expectations ~f:snd
     |> List.dedup_and_sort ~compare:String.compare)
     ~f:(fun name -> Option.is_some (Option.bind (resolve name) ~f:(fun l -> reach_of l.uid)));
+  p_all "every test-support fixture finding exercises the test-support population"
+    (List.concat_map test_support_fixture_expectations ~f:snd) ~f:(fun name ->
+      match Option.bind (resolve name) ~f:(fun l -> population_of l.uid) with
+      | Some Test_support -> true
+      | Some (Compiler_reaching _) | None -> false);
   p_all "every fixture stanza is read and reported for exactly its expected libraries"
     fixture_expectations ~f:(fun (name, expected) ->
       let got =

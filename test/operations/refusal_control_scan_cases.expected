@@ -905,6 +905,7 @@ unused_compiler_deps.ml: [scanner-refusal:448291c7f6134ac8fadedd8e1a4f787a] decl
 unused_compiler_deps.ml: [scanner-refusal:348bd3c284e68555c5d779b004a5cb5f] compiler-reaching or test-support (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:76d536378a6e503a67ce436cfd76938d] fixture directory's stanzas (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:67a884b3a6347974dc0b1b43122c4c21] derived as compiler-reaching (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:a0a5de6bdc283aef59519729356595e4] test-support fixture finding (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:4a372cdf7b39da35fd50d7a96957b75f] its expected libraries (claim) is catalogued beside unused_compiler_deps.expected: true
 verdict_ratchet.ml has exactly the explicitly assigned refusal controls: true
 verdict_ratchet.ml: [scanner-refusal:977473ba169d481e2b57377845e9a8b8] exempted quantified bindings (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
