@@ -408,8 +408,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   An alias's probe rule inherits its deps, enablement and package. Its credit stays with
   the declaring alias when another alias expands it. The private target supplies dependency
   credit only, so a glob matching it does not add to ordinary alias reach. A glob or a
-  `source_tree` never names one: `dune rules` prints a source tree's files as File dependencies too, so the repository scans
-  reading `(source_tree ../..)` would otherwise cover every script. The rule reads no further than
+  `source_tree` never names one. `dune rules` prints a source tree's files as File dependencies too,
+  so the repository scans reading `(source_tree ../..)` would otherwise cover every script.
+  The rule reads no further than
   the dune file: a script a rule lists in its `(deps)` only so a text scan can read it counts as
   covered too, so naming a `.sh` in a scan rule's deps takes that script out of the harness
   fallback. The tests tier runs `runtest-sweep_leg_scripts` for an edit to

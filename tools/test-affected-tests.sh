@@ -2401,6 +2401,15 @@ DUNE
       report_mutant 0 "$literal_label"
     else report_mutant 1 "$literal_label" "exit $rc; $(cat "$err")"; fi
   fi
+  owner_label='negative control: dropping the owner guard also credits the alias that includes the declaring alias'
+  if run_affected_mutant "$owner_label" 'next unless $alias eq $a->{name};' '' --files p9/plain.sh; then
+    if ! alias_reader_completed; then
+      report_mutant 2 "$owner_label" "exit $rc; $(cat "$err")"
+    elif [ "$rc" = 0 ] && grep -qxF 'affected: p9/plain.sh: named as a dependency by the rule of @p9/runtest-plain' "$err" &&
+       grep -qxF 'affected: p9/plain.sh: named as a dependency by the rule of @p9/runtest-via-plain' "$err"; then
+      report_mutant 0 "$owner_label"
+    else report_mutant 1 "$owner_label" "exit $rc; $(cat "$err")"; fi
+  fi
   mkdir -p "$repo/p9/repeated" "$repo/p9/inc-first" "$repo/p9/inc-second" || exit 2
   cat >>"$repo/p9/dune" <<'DUNE'
 (subdir repeated (alias (name runtest-pair) (deps first.sh)))
