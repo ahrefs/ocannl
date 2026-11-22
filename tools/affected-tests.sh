@@ -266,6 +266,35 @@
 #     `.`), or for an OCaml `X.ml` the basename `X.exe`. Lines whose first
 #     non-blank character is `#` are comments, and name nothing. A changed
 #     path is named whether or not the worktree still has it.
+#   - Fixture and heredoc literals in `.sh` files do not count as reaches
+#     (gh-ocannl-2380). Closed allowlist of excluded shell forms (everything
+#     outside it stays scanned, fail-closed):
+#       * Non-interpreter heredoc bodies (`<<DELIM` / `<<-DELIM`, never `<<<`
+#         here-strings): a quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`)
+#         skips the whole body; an unquoted delimiter (`<<EOF`) skips literal
+#         body text while still scanning `$(...)` and `` `...` `` command
+#         substitutions inside it. A heredoc whose opener command or a later
+#         pipeline stage on the opener line runs an interpreter (`sh`, `bash`,
+#         `dash`, `zsh`, `ksh`, `ash`, `python`, `python3`, `perl`, `awk`,
+#         `gawk`, `mawk`, `nawk`, `ruby`, `node`, `eval`, or `xargs` in a
+#         downstream pipe stage, or `$BASH`/`$SH`/`$PYTHON`/`$PERL`) is
+#         executed code and stays scanned; an unclosed heredoc fails closed and
+#         stays scanned. A harness that writes a real helper script through a
+#         data heredoc (e.g. `cat >"$TMP/helper.py" <<'PY'`) declares its
+#         repository inputs with `# affected-reads:`.
+#       * Literal arguments of top-level `echo` and `printf` commands (not
+#         `printf -v`, not piped to an interpreter or `xargs`, not inside
+#         `eval` or a `$(...)` / variable-assignment command substitution),
+#         spanning explicit trailing-`\` continuations or a multiline quoted
+#         argument: command substitutions (`$(...)`, `` `...` ``) inside
+#         non-single-quoted arguments and input redirections (`<`, `<>`) stay
+#         scanned.
+#       * Output redirection targets (`>`, `>>`, `>|`, `&>`, `&>>`; never `<`
+#         or `<>`): the destination path is being written, not read or run;
+#         command substitutions inside the target stay scanned.
+#     Variable assignments (`VAR=...`), non-printing commands (`cat FILE`,
+#     `grep`, `cp`, script invocations), and Python string literals are never
+#     excluded.
 #   - When a run names several paths that way (a basename with several owners,
 #     gh-ocannl-2342), it names those sharing the most trailing path parts with
 #     it (`X.exe` matching `X.ml`); ties keep every owner, so a bare basename
@@ -284,9 +313,23 @@
 #     other file of that program, and a `$(dirname "$0")/R` there, name the one
 #     owner at R from the harness's directory (`$0` is the harness in each of
 #     its program's files) or from the file's own (`BASH_SOURCE`), when R
-#     there is one of the owners; otherwise the rule above applies. A Python
-#     `__file__` directory, a reassigned or inherited variable and every other
-#     spelling are not read, so they keep every tied owner.
+#     there is one of the owners; otherwise the rule above applies.
+#     In a `.py` file of a harness's program (gh-ocannl-2380), a `__file__`-
+#     relative path join names the one owner at the joined relative path from
+#     that `.py` file's own directory when that owner is among the tied owners
+#     (otherwise falling back to the rule above). Closed allowlist of Python
+#     forms: `os.path.join(BASE, LIT1 [, LIT2 ...])` and `BASE / LIT1 [/ LIT2
+#     ...]` (not followed by another `/`) where each `LIT` is a plain single-
+#     or double-quoted relative path literal (`[A-Za-z0-9_./-]+`, no leading
+#     `/`) and `BASE` is `os.path.dirname(...)` (nested allowed) around
+#     `__file__`, `os.path.abspath(__file__)` or `os.path.realpath(__file__)`,
+#     or `(pathlib.)?Path(__file__)(.resolve())?` with `.parent` (repeated) or
+#     `.parents[N]` (optional `str(...)` wrapper), or a variable V written once
+#     in that `.py` file to one of those forms (no reassignment, parameter
+#     shadowing, or rebound `os`/`pathlib`/`Path`). Another module's
+#     `mod.__file__`, non-literal join segments, aliased `from os.path import`
+#     helpers, a reassigned or inherited variable and every other spelling are
+#     not read, so they keep every tied owner.
 #   - A harness reaches every path its program's text names, and the program
 #     of every script among them (a script it runs, with what that loads); what
 #     such a script names in turn is not followed, so a harness that drives a
@@ -647,7 +690,7 @@ sub runs {
   }
   return @r;
 }
-my (%raw, %names, %loads, %assigns, %selfdirs);
+my (%raw, %names, %loads, %assigns, %selfdirs, %sh_parsed, %py_info);
 sub raw {
   my ($f) = @_;
   return $raw{$f} if exists $raw{$f};
@@ -655,11 +698,536 @@ sub raw {
   if (-f $f && open my $h, "<", $f) { local $/; $s = <$h> // ""; close $h }
   return $raw{$f} = $s;
 }
+# Replace non-newline characters with spaces, preserving physical line numbers.
+sub blank_keep_nl { my ($s) = @_; $s =~ s/[^\n]/ /g; return $s }
+# Extract only executed command substitutions ($(...) and `...`) from an
+# excluded shell literal region, replacing everything else (except `\n`) with
+# spaces. When $respect_sq is true (shell words, not unquoted heredoc bodies),
+# single-quoted spans suppress substitution. Unbalanced delimiters fail closed.
+sub extract_cmdsubs {
+  my ($s, $respect_sq) = @_;
+  my $len = length $s;
+  my $out = blank_keep_nl($s);
+  my ($sq, $dq, $esc, $i) = (0, 0, 0, 0);
+  while ($i < $len) {
+    my $ch = substr($s, $i, 1);
+    if ($esc) { $esc = 0; $i++; next }
+    if ($ch eq "\\" && !$sq) { $esc = 1; $i++; next }
+    if ($respect_sq && $ch eq "'" && !$dq) { $sq = !$sq; $i++; next }
+    if ($respect_sq && $ch eq '"' && !$sq) { $dq = !$dq; $i++; next }
+    if (!$sq && substr($s, $i, 2) eq '$(') {
+      my ($j, $depth, $isq, $idq, $iesc) = ($i + 2, 1, 0, 0, 0);
+      while ($j < $len && $depth > 0) {
+        my $c = substr($s, $j, 1);
+        if ($iesc) { $iesc = 0; $j++; next }
+        if ($c eq "\\" && !$isq) { $iesc = 1; $j++; next }
+        if ($c eq "'" && !$idq) { $isq = !$isq; $j++; next }
+        if ($c eq '"' && !$isq) { $idq = !$idq; $j++; next }
+        if (!$isq && !$idq) {
+          if ($c eq "(") { $depth++ }
+          elsif ($c eq ")") { $depth-- }
+        }
+        $j++;
+      }
+      if ($depth == 0) {
+        my $inner = substr($s, $i + 2, $j - $i - 3);
+        substr($out, $i + 2, length($inner)) = $inner;
+        $i = $j;
+        next;
+      }
+      # Unbalanced $( : fail closed on the remainder.
+      substr($out, $i) = substr($s, $i);
+      last;
+    }
+    if (!$sq && $ch eq '`') {
+      my ($j, $iesc) = ($i + 1, 0);
+      my $found = -1;
+      while ($j < $len) {
+        my $c = substr($s, $j, 1);
+        if ($iesc) { $iesc = 0; $j++; next }
+        if ($c eq "\\") { $iesc = 1; $j++; next }
+        if ($c eq '`') { $found = $j; last }
+        $j++;
+      }
+      if ($found >= 0) {
+        my $inner = substr($s, $i + 1, $found - $i - 1);
+        substr($out, $i + 1, length($inner)) = $inner;
+        $i = $found + 1;
+        next;
+      }
+      substr($out, $i) = substr($s, $i);
+      last;
+    }
+    $i++;
+  }
+  return $out;
+}
+# Unquote a simple shell word (stripping '...', "...", \c).
+sub sh_unquote {
+  my ($w) = @_;
+  my ($out, $sq, $dq, $esc, $i) = ("", 0, 0, 0, 0);
+  my $len = length $w;
+  while ($i < $len) {
+    my $c = substr($w, $i, 1);
+    if ($esc) { $out .= $c; $esc = 0; $i++; next }
+    if ($c eq "\\" && !$sq) { $esc = 1; $i++; next }
+    if ($c eq "'" && !$dq) { $sq = !$sq; $i++; next }
+    if ($c eq '"' && !$sq) { $dq = !$dq; $i++; next }
+    $out .= $c;
+    $i++;
+  }
+  return $out;
+}
+my %sh_kw = map { $_ => 1 } qw(if elif then else fi do done while until for case in esac ! time);
+my $sh_interp_re = qr/\A(?:sh|bash|dash|zsh|ksh|ash|python|python3|python3\.\d+|perl|awk|gawk|mawk|nawk|ruby|node|eval)\z/;
+my $sh_interp_var_re = qr/\A"?(?:\$(?:BASH|SH|PYTHON|PYTHON3|PERL)|\$\{(?:BASH|SH|PYTHON|PYTHON3|PERL)(?:[:?-][^}]*)?\})"?\z/;
+sub is_interp_word {
+  my ($raw, $allow_xargs) = @_;
+  return 1 if $raw =~ $sh_interp_var_re;
+  my $u = sh_unquote($raw);
+  $u =~ s{.*/}{};
+  return 1 if $u =~ $sh_interp_re;
+  return 1 if $allow_xargs && $u eq "xargs";
+  return 0;
+}
+sub is_py_interp_word {
+  my ($raw) = @_;
+  return 1 if $raw =~ /\A"?(?:\$(?:PYTHON|PYTHON3)|\$\{(?:PYTHON|PYTHON3)(?:[:?-][^}]*)?\})"?\z/;
+  my $u = sh_unquote($raw);
+  $u =~ s{.*/}{};
+  return $u =~ /\Apython(?:3(?:\.\d+)?)?\z/ ? 1 : 0;
+}
+# Tokenize a shell string into [type, start, end, text], preserving offsets.
+# Returns (undef) if quotes or command substitutions are unbalanced (fail closed).
+sub sh_tokenize {
+  my ($s) = @_;
+  my @toks;
+  my ($i, $len) = (0, length $s);
+  while ($i < $len) {
+    my $c = substr($s, $i, 1);
+    if ($c =~ /[ \t\r\n]/) { $i++; next }
+    if ($c eq "#") {
+      # Inline comment to end of physical line.
+      my $e = index($s, "\n", $i);
+      $e = $len if $e < 0;
+      push @toks, ["comment", $i, $e, substr($s, $i, $e - $i)];
+      $i = $e;
+      next;
+    }
+    my $rest = substr($s, $i);
+    if ($rest =~ /\A(&&|\|\||;;&|;&|;;|\|&|[;&|()])/) {
+      my $op = $1;
+      my $tp = ($op eq "|" || $op eq "|&") ? "pipe" : "sep";
+      push @toks, [$tp, $i, $i + length($op), $op];
+      $i += length($op);
+      next;
+    }
+    if ($rest =~ /\A((?:\d+)?(?:<&|>&)[0-9-]+)/) {
+      push @toks, ["redir_fd", $i, $i + length($1), $1];
+      $i += length($1);
+      next;
+    }
+    if ($rest =~ /\A((?:\d+)?<<<)/) {
+      push @toks, ["redir_herestr", $i, $i + length($1), $1];
+      $i += length($1);
+      next;
+    }
+    if ($rest =~ /\A((?:\d+)?<<-?)/) {
+      push @toks, ["redir_hd", $i, $i + length($1), $1];
+      $i += length($1);
+      next;
+    }
+    if ($rest =~ /\A((?:\d+)?<>)/) {
+      push @toks, ["redir_in", $i, $i + length($1), $1];
+      $i += length($1);
+      next;
+    }
+    if ($rest =~ /\A((?:\d+)?>>|(?:\d+)?>\||(?:\d+)?>|&>>|&>)/) {
+      push @toks, ["redir_out", $i, $i + length($1), $1];
+      $i += length($1);
+      next;
+    }
+    if ($rest =~ /\A((?:\d+)?<)/) {
+      push @toks, ["redir_in", $i, $i + length($1), $1];
+      $i += length($1);
+      next;
+    }
+    # Normal shell word.
+    my $st = $i;
+    my ($sq, $dq, $esc) = (0, 0, 0);
+    while ($i < $len) {
+      my $ch = substr($s, $i, 1);
+      if ($esc) { $esc = 0; $i++; next }
+      if ($ch eq "\\" && !$sq) { $esc = 1; $i++; next }
+      if ($ch eq "'" && !$dq) { $sq = !$sq; $i++; next }
+      if ($ch eq '"' && !$sq) { $dq = !$dq; $i++; next }
+      if (!$sq && substr($s, $i, 2) eq '${') {
+        my ($j, $depth, $isq, $idq, $iesc) = ($i + 2, 1, 0, 0, 0);
+        while ($j < $len && $depth > 0) {
+          my $cc = substr($s, $j, 1);
+          if ($iesc) { $iesc = 0; $j++; next }
+          if ($cc eq "\\" && !$isq) { $iesc = 1; $j++; next }
+          if ($cc eq "'" && !$idq) { $isq = !$isq; $j++; next }
+          if ($cc eq '"' && !$isq) { $idq = !$idq; $j++; next }
+          if (!$isq && !$idq) {
+            if ($cc eq "{") { $depth++ } elsif ($cc eq "}") { $depth-- }
+          }
+          $j++;
+        }
+        return undef if $depth != 0;
+        $i = $j;
+        next;
+      }
+      if (!$sq && substr($s, $i, 2) eq '$(') {
+        my ($j, $depth, $isq, $idq, $iesc) = ($i + 2, 1, 0, 0, 0);
+        while ($j < $len && $depth > 0) {
+          my $cc = substr($s, $j, 1);
+          if ($iesc) { $iesc = 0; $j++; next }
+          if ($cc eq "\\" && !$isq) { $iesc = 1; $j++; next }
+          if ($cc eq "'" && !$idq) { $isq = !$isq; $j++; next }
+          if ($cc eq '"' && !$isq) { $idq = !$idq; $j++; next }
+          if (!$isq && !$idq) {
+            if ($cc eq "(") { $depth++ } elsif ($cc eq ")") { $depth-- }
+          }
+          $j++;
+        }
+        return undef if $depth != 0;
+        $i = $j;
+        next;
+      }
+      if (!$sq && $ch eq '`') {
+        my ($j, $iesc) = ($i + 1, 0);
+        my $found = -1;
+        while ($j < $len) {
+          my $cc = substr($s, $j, 1);
+          if ($iesc) { $iesc = 0; $j++; next }
+          if ($cc eq "\\") { $iesc = 1; $j++; next }
+          if ($cc eq '`') { $found = $j; last }
+          $j++;
+        }
+        return undef if $found < 0;
+        $i = $found + 1;
+        next;
+      }
+      last if !$sq && !$dq && $ch =~ /[ \t\r\n;&|()<>]/;
+      $i++;
+    }
+    return undef if $sq || $dq;
+    my $w = substr($s, $st, $i - $st);
+    my $tp = ($w eq "{" || $w eq "}") ? "sep" : "word";
+    push @toks, [$tp, $st, $i, $w];
+  }
+  return \@toks;
+}
+# Split a token list into pipelines -> stages -> [tokens] (redirections bound to
+# their target word as [redir_type, op_tok, target_tok]).
+sub sh_pipelines {
+  my ($toks) = @_;
+  my (@pipes, @cur_pipe, @cur_stage);
+  my $flush_stage = sub {
+    if (@cur_stage) { push @cur_pipe, [@cur_stage]; @cur_stage = () }
+  };
+  my $flush_pipe = sub {
+    $flush_stage->();
+    if (@cur_pipe) { push @pipes, [@cur_pipe]; @cur_pipe = () }
+  };
+  my $i = 0;
+  while ($i < @$toks) {
+    my $t = $toks->[$i];
+    if ($t->[0] eq "comment") { $i++; next }
+    if ($t->[0] eq "sep") { $flush_pipe->(); $i++; next }
+    if ($t->[0] eq "pipe") { $flush_stage->(); $i++; next }
+    if ($t->[0] =~ /\Aredir_(?:out|in|hd|herestr)\z/) {
+      my $target = ($i + 1 < @$toks && $toks->[$i + 1][0] eq "word") ? $toks->[++$i] : undef;
+      push @cur_stage, [$t->[0], $t, $target];
+      $i++;
+      next;
+    }
+    if ($t->[0] eq "redir_fd") { $i++; next }
+    # Leading shell keywords start a new command segment.
+    if (!@cur_stage && $t->[0] eq "word" && $sh_kw{$t->[3]}) { $i++; next }
+    push @cur_stage, $t;
+    $i++;
+  }
+  $flush_pipe->();
+  return \@pipes;
+}
+# Return ($head_idx, $head_raw) of the command word in a stage's items,
+# skipping redirections, leading VAR=val assignments, and simple wrappers.
+sub stage_command_head {
+  my ($stage) = @_;
+  my $i = 0;
+  while ($i < @$stage) {
+    my $it = $stage->[$i];
+    if ($it->[0] =~ /\Aredir_/) { $i++; next }
+    my $w = $it->[3];
+    if ($sh_kw{$w}) { $i++; next }
+    if ($w =~ /\A[A-Za-z_]\w*\+?=/) { $i++; next }
+    my $u = sh_unquote($w);
+    if ($u eq "builtin" || $u eq "exec" || $u eq "nohup") { $i++; next }
+    if ($u eq "command") {
+      $i++;
+      while ($i < @$stage && $stage->[$i][0] eq "word" && $stage->[$i][3] =~ /\A-(?:p|-)\z/) {
+        my $fl = $stage->[$i][3]; $i++; last if $fl eq "--";
+      }
+      next;
+    }
+    if ($u eq "env") {
+      $i++;
+      while ($i < @$stage && $stage->[$i][0] eq "word") {
+        my $nw = $stage->[$i][3];
+        if ($nw eq "-u") { $i += 2; next }
+        if ($nw =~ /\A-/ || $nw =~ /\A[A-Za-z_]\w*=/) { $i++; next }
+        last;
+      }
+      next;
+    }
+    if ($u eq "nice") {
+      $i++;
+      while ($i < @$stage && $stage->[$i][0] eq "word") {
+        my $nw = $stage->[$i][3];
+        if ($nw eq "-n") { $i += 2; next }
+        if ($nw =~ /\A-/) { $i++; next }
+        last;
+      }
+      next;
+    }
+    return ($i, $w);
+  }
+  return (undef, undef);
+}
+# Determine whether a heredoc at byte offset $hd_pos on opener line $line is
+# executed by an interpreter (0 = data heredoc, 'interp_py', or 'interp_other').
+sub heredoc_interp_kind {
+  my ($line, $hd_pos) = @_;
+  my $sub_line = $line;
+  my $rel_pos = $hd_pos;
+  my $toks = sh_tokenize($sub_line);
+  if (!$toks) {
+    # e.g. `runner=$(python3 -I - ... <<'PY'` where `)` closes on a later line:
+    # find the innermost unclosed `$(` before $hd_pos and tokenize from there.
+    my $pre = substr($line, 0, $hd_pos);
+    my (@stack, $sq, $dq, $esc) = ((), 0, 0, 0);
+    my ($p, $plen) = (0, length $pre);
+    while ($p < $plen) {
+      my $c = substr($pre, $p, 1);
+      if ($esc) { $esc = 0; $p++; next }
+      if ($c eq "\\" && !$sq) { $esc = 1; $p++; next }
+      if ($c eq "'" && !$dq) { $sq = !$sq; $p++; next }
+      if ($c eq '"' && !$sq) { $dq = !$dq; $p++; next }
+      if (!$sq && substr($pre, $p, 2) eq '$(') { push @stack, $p + 2; $p += 2; next }
+      if (!$sq && !$dq && $c eq ")" && @stack) { pop @stack }
+      $p++;
+    }
+    if (@stack) {
+      my $off = $stack[-1];
+      $sub_line = substr($line, $off);
+      $rel_pos = $hd_pos - $off;
+      $toks = sh_tokenize($sub_line);
+    }
+  }
+  return "interp_other" unless $toks;   # fail closed if opener line is unparseable
+  my $pipes = sh_pipelines($toks);
+  for my $pipe (@$pipes) {
+    my $owner = -1;
+    for my $k (0 .. $#$pipe) {
+      for my $it (@{$pipe->[$k]}) {
+        if ($it->[0] eq "redir_hd" && $it->[1][1] <= $rel_pos && $rel_pos < $it->[1][2]) {
+          $owner = $k;
+          last;
+        }
+      }
+      last if $owner >= 0;
+    }
+    next if $owner < 0;
+    for my $k ($owner .. $#$pipe) {
+      my (undef, $head) = stage_command_head($pipe->[$k]);
+      next unless defined $head;
+      return "interp_py" if $k == $owner && is_py_interp_word($head);
+      return "interp_other" if is_interp_word($head, $k > $owner ? 1 : 0);
+    }
+    return 0;
+  }
+  return 0;
+}
+# Filter one logical shell line (possibly spanning multiple lines via `\` or a
+# multiline quoted string, preserving `\n`): blank output redirection targets,
+# heredoc delimiters, and literal arguments of non-piped top-level echo/printf.
+sub filter_sh_logical {
+  my ($s) = @_;
+  my $toks = sh_tokenize($s);
+  return $s unless $toks;   # unbalanced -> fail closed
+  my $out = $s;
+  my $pipes = sh_pipelines($toks);
+  for my $pipe (@$pipes) {
+    my @heads = map { [stage_command_head($_)] } @$pipe;
+    my @is_interp = map {
+      my $h = $heads[$_][1];
+      defined($h) && is_interp_word($h, 1) ? 1 : 0;
+    } 0 .. $#$pipe;
+    for my $k (0 .. $#$pipe) {
+      my $stage = $pipe->[$k];
+      # 1. Blank heredoc delimiters and output redirection targets (> / >>).
+      for my $it (@$stage) {
+        if ($it->[0] eq "redir_hd" && defined $it->[2]) {
+          my ($st, $en) = ($it->[2][1], $it->[2][2]);
+          substr($out, $st, $en - $st) = blank_keep_nl(substr($s, $st, $en - $st));
+        } elsif ($it->[0] eq "redir_out" && defined $it->[2]) {
+          my ($st, $en, $w) = ($it->[2][1], $it->[2][2], $it->[2][3]);
+          substr($out, $st, $en - $st) = extract_cmdsubs($w, 1);
+        }
+      }
+      # 2. Blank literal arguments of echo / printf (except printf -v, or when
+      #    piped to an interpreter or xargs).
+      my ($hidx, $hraw) = @{$heads[$k]};
+      next unless defined $hidx;
+      my $hu = sh_unquote($hraw);
+      next unless $hu eq "echo" || $hu eq "printf";
+      next if grep { $is_interp[$_] } ($k + 1) .. $#$pipe;
+      if ($hu eq "printf") {
+        my $has_v = 0;
+        for my $j ($hidx + 1 .. $#$stage) {
+          my $it = $stage->[$j];
+          next if $it->[0] =~ /\Aredir_/;
+          my $au = sh_unquote($it->[3]);
+          last if $au eq "--" || $au !~ /\A-/;
+          if ($au =~ /\A-v/) { $has_v = 1; last }
+        }
+        next if $has_v;
+      }
+      for my $j ($hidx + 1 .. $#$stage) {
+        my $it = $stage->[$j];
+        next if $it->[0] =~ /\Aredir_/;
+        my ($st, $en, $w) = ($it->[1], $it->[2], $it->[3]);
+        substr($out, $st, $en - $st) = extract_cmdsubs($w, 1);
+      }
+    }
+  }
+  return $out;
+}
+# Classify and filter a `.sh` file's lines once: returns { kinds => \@kind, scan => \@scan }.
+# Physical line indices are preserved 1-to-1 with split /\n/, raw($f).
+sub sh_parse {
+  my ($f) = @_;
+  return $sh_parsed{$f} if $sh_parsed{$f};
+  my @l = split /\n/, raw($f), -1;
+  my @kind = ("code") x scalar(@l);
+  my @queue;
+  for my $i (0 .. $#l) {
+    my $line = $l[$i];
+    if (@queue) {
+      my $hd = $queue[0];
+      my $chk = $line;
+      $chk =~ s/^\t+// if $hd->{strip};
+      if ($chk eq $hd->{delim}) {
+        if ($hd->{interp}) {
+          $kind[$_] = $hd->{interp} for @{$hd->{body}};
+        } else {
+          my $bk = $hd->{quoted} ? "hd_quoted" : "hd_unquoted";
+          $kind[$_] = $bk for @{$hd->{body}};
+        }
+        $kind[$i] = "hd_delim";
+        shift @queue;
+      } else {
+        push @{$hd->{body}}, $i;
+      }
+      next;
+    }
+    next if $line =~ /^\s*#/;
+    my ($sq, $dq, $esc, $pos, $len) = (0, 0, 0, 0, length $line);
+    while ($pos < $len) {
+      my $ch = substr($line, $pos, 1);
+      if ($esc) { $esc = 0; $pos++; next }
+      if ($ch eq "\\" && !$sq) { $esc = 1; $pos++; next }
+      if ($ch eq "'" && !$dq) { $sq = !$sq; $pos++; next }
+      if ($ch eq '"' && !$sq) { $dq = !$dq; $pos++; next }
+      if (!$sq && !$dq && $ch eq "#" && ($pos == 0 || substr($line, $pos - 1, 1) =~ /[\s;|&(]/)) { last }
+      if (!$sq && !$dq && substr($line, $pos, 2) eq "<<") {
+        if (substr($line, $pos, 3) eq "<<<") {
+          $pos++ while $pos < $len && substr($line, $pos, 1) eq "<";
+          next;
+        }
+        my $hd_pos = $pos;
+        $pos += 2;
+        my $strip = 0;
+        if ($pos < $len && substr($line, $pos, 1) eq "-") { $strip = 1; $pos++ }
+        $pos++ while $pos < $len && substr($line, $pos, 1) =~ /[ \t]/;
+        my ($delim, $quoted, $dsq, $ddq, $desc) = ("", 0, 0, 0, 0);
+        while ($pos < $len) {
+          my $dc = substr($line, $pos, 1);
+          if ($desc) { $delim .= $dc; $desc = 0; $pos++; next }
+          if ($dc eq "\\" && !$dsq) { $quoted = 1; $desc = 1; $pos++; next }
+          if ($dc eq "'" && !$ddq) { $quoted = 1; $dsq = !$dsq; $pos++; next }
+          if ($dc eq '"' && !$dsq) { $quoted = 1; $ddq = !$ddq; $pos++; next }
+          last if !$dsq && !$ddq && $dc =~ /[\s;&|()<>#]/;
+          $delim .= $dc;
+          $pos++;
+        }
+        if ($delim ne "" && !$dsq && !$ddq && !$desc) {
+          push @queue, { delim => $delim, strip => $strip, quoted => $quoted,
+                         interp => heredoc_interp_kind($line, $hd_pos), body => [] };
+        }
+        next;
+      }
+      $pos++;
+    }
+  }
+  # Unclosed heredocs remain in @queue and stay marked 'code' (fail closed).
+  my @scan = @l;
+  my $i = 0;
+  while ($i <= $#l) {
+    if ($kind[$i] eq "hd_quoted" || $kind[$i] eq "hd_delim") { $scan[$i] = ""; $i++; next }
+    if ($kind[$i] eq "hd_unquoted") { $scan[$i] = extract_cmdsubs($l[$i], 0); $i++; next }
+    if ($kind[$i] ne "code") { $i++; next }
+    if ($l[$i] =~ /^\s*#/) { $i++; next }
+    # Gather a logical shell line across trailing `\` continuations or an open
+    # multiline quote in O(line length), failing closed if quotes never close.
+    my $j = $i;
+    my @parts = ($l[$i]);
+    my ($lsq, $ldq) = (0, 0);
+    my $scan_q = sub {
+      my ($str) = @_;
+      my ($esc, $p, $len) = (0, 0, length $str);
+      while ($p < $len) {
+        my $c = substr($str, $p, 1);
+        if ($esc) { $esc = 0; $p++; next }
+        if ($c eq "\\" && !$lsq) { $esc = 1; $p++; next }
+        if ($c eq "'" && !$ldq) { $lsq = !$lsq; $p++; next }
+        if ($c eq '"' && !$lsq) { $ldq = !$ldq; $p++; next }
+        if (!$lsq && !$ldq && $c eq "#" && ($p == 0 || substr($str, $p - 1, 1) =~ /[\s;|&(]/)) { last }
+        $p++;
+      }
+      return $esc;
+    };
+    my $trail_esc = $scan_q->($parts[0]);
+    while ($j < $#l && $kind[$j + 1] eq "code" && ($lsq || $ldq || $trail_esc)) {
+      if ($trail_esc && !$lsq && !$ldq) { $parts[-1] =~ s/\\\z/ / }
+      $j++;
+      push @parts, $l[$j];
+      $trail_esc = $scan_q->($parts[-1]);
+    }
+    if (!$lsq && !$ldq) {
+      my $joined = join "\n", @parts;
+      my @fl = split /\n/, filter_sh_logical($joined), -1;
+      for my $k (0 .. $#fl) { $scan[$i + $k] = $fl[$k] }
+      $i = $j + 1;
+    } else {
+      # Unclosed quote across the rest of the code block: leave line $i raw (fail closed).
+      $i++;
+    }
+  }
+  return $sh_parsed{$f} = { kinds => \@kind, scan => \@scan };
+}
 sub assigns {   # FILE -> {V => how many writes of V it may hold}
   my ($f) = @_;
   return $assigns{$f} if $assigns{$f};
   my %n;
-  for my $line (grep { !/^\s*#/ } split /\n/, raw($f)) {
+  my @l = split /\n/, raw($f);
+  my $kinds = $f =~ /\.sh\z/ ? sh_parse($f)->{kinds} : undef;
+  for my $i (0 .. $#l) {
+    next if $kinds && $kinds->[$i] ne "code";
+    my $line = $l[$i];
+    next if $line =~ /^\s*#/;
     $n{$_}++ for $line =~ /(?:\A|[\s;&|(`])(?:(?:local|export|readonly|declare|typeset)(?:\s+-\w+)*\s+)?([A-Za-z_]\w*)\+?=/g;
     $n{$_}++ for $line =~ /\bfor\s+([A-Za-z_]\w*)\s/g;
     if ($line =~ /\b(?:read|readarray|mapfile|getopts|unset|printf\s+-v)\b/) { my %v = map { $_ => 1 } $line =~ /([A-Za-z_]\w*)/g; $n{$_}++ for keys %v }
@@ -674,7 +1242,12 @@ sub selfdirs {
   return $selfdirs{$f} if $selfdirs{$f};
   my %r;
   if ($f =~ /\.sh\z/) {
-    for my $line (grep { !/^\s*#/ } split /\n/, raw($f)) {
+    my @l = split /\n/, raw($f);
+    my $kinds = sh_parse($f)->{kinds};
+    for my $i (0 .. $#l) {
+      next if $kinds->[$i] ne "code";
+      my $line = $l[$i];
+      next if $line =~ /^\s*#/;
       next unless $line =~ /\A\s*(?:(?:local|export|readonly)\s+)?([A-Za-z_]\w*)=("?)$self_dir\2\s*(?:\|\|.*)?\z/;
       my ($v, $arg, $ups) = ($1, $3, length($4) / 3);
       $r{$v} = [$arg =~ /BASH_SOURCE/ ? "S" : "0", $ups] if assigns($f)->{$v} == 1;
@@ -682,17 +1255,275 @@ sub selfdirs {
   }
   return $selfdirs{$f} = \%r;
 }
+# Python __file__-relative path helpers (gh-ocannl-2380).
+sub py_strip_comment {
+  my ($s) = @_;
+  my ($sq, $dq, $esc, $i, $len) = (0, 0, 0, 0, length $s);
+  while ($i < $len) {
+    my $c = substr($s, $i, 1);
+    if ($esc) { $esc = 0; $i++; next }
+    if ($c eq "\\" && ($sq || $dq)) { $esc = 1; $i++; next }
+    if ($c eq "'" && !$dq) { $sq = !$sq; $i++; next }
+    if ($c eq '"' && !$sq) { $dq = !$dq; $i++; next }
+    return substr($s, 0, $i) if !$sq && !$dq && $c eq "#";
+    $i++;
+  }
+  return $s;
+}
+sub py_strip_strings {
+  my ($s) = @_;
+  my ($out, $sq, $dq, $esc, $i, $len) = ("", 0, 0, 0, 0, length $s);
+  while ($i < $len) {
+    my $c = substr($s, $i, 1);
+    if ($esc) { $esc = 0; $out .= " "; $i++; next }
+    if ($c eq "\\" && ($sq || $dq)) { $esc = 1; $out .= " "; $i++; next }
+    if ($c eq "'" && !$dq) { $sq = !$sq; $out .= " "; $i++; next }
+    if ($c eq '"' && !$sq) { $dq = !$dq; $out .= " "; $i++; next }
+    $out .= ($sq || $dq) ? " " : $c;
+    $i++;
+  }
+  return $out;
+}
+# Parse a Python self-directory expression -> UPS (>= 0) or undef.
+sub py_self_dir_ups {
+  my ($expr, $rebound) = @_;
+  $expr =~ s/\A\s+//; $expr =~ s/\s+\z//;
+  $expr = $1 if $expr =~ /\Astr\s*\(\s*(.+?)\s*\)\z/;
+  # Nested os.path.dirname(...) around __file__, os.path.abspath(__file__), or os.path.realpath(__file__).
+  if ($expr =~ /\Aos\.path\.dirname\s*\(/) {
+    return undef if $rebound->{os};
+    my ($cur, $depth) = ($expr, 0);
+    while ($cur =~ /\Aos\.path\.dirname\s*\(\s*(.+?)\s*\)\z/) { $cur = $1; $depth++ }
+    return $depth - 1 if $depth >= 1 && $cur =~ /\A(?:__file__|os\.path\.(?:abspath|realpath)\s*\(\s*__file__\s*\))\z/;
+    return undef;
+  }
+  # (pathlib.)?Path(__file__)(.resolve())?(.parent+ | .parents[N])
+  if ($expr =~ /\A(pathlib\.)?Path\s*\(\s*__file__\s*\)(?:\s*\.\s*resolve\s*\(\s*\))?\s*((?:\.\s*parent\b)+|\.\s*parents\s*\[\s*(\d+)\s*\])\z/) {
+    my ($mod, $tail, $idx) = ($1, $2, $3);
+    return undef if defined $mod ? $rebound->{pathlib} : $rebound->{Path};
+    return $idx + 0 if defined $idx;
+    my @p = $tail =~ /\.\s*parent\b/g;
+    return @p ? scalar(@p) - 1 : undef;
+  }
+  return undef;
+}
+# Analyze a `.py` file once: { sd => {V => UPS}, rebound => {os/pathlib/Path => 1} }.
+sub py_analyze {
+  my ($f) = @_;
+  return $py_info{$f} if $py_info{$f};
+  my (%writes, %rebound, %sd);
+  my @l = split /\n/, raw($f);
+  for my $raw_line (@l) {
+    next if $raw_line =~ /^\s*#/;
+    my $code = py_strip_strings(py_strip_comment($raw_line));
+    # Track non-standard bindings of os, pathlib, Path.
+    if ($code =~ /\A\s*import\s+(.+)/) {
+      for my $part (split /,/, $1) {
+        if ($part =~ /\b([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+as\s+([A-Za-z_]\w*)/) {
+          $writes{$2}++;
+          $rebound{$2} = 1 if $2 eq "os" || $2 eq "pathlib" || $2 eq "Path";
+        } elsif ($part =~ /\A\s*([A-Za-z_]\w*)/) {
+          $writes{$1}++ unless $1 eq "os" || $1 eq "pathlib";
+        }
+      }
+      next;
+    }
+    if ($code =~ /\A\s*from\s+(\S+)\s+import\s+(.+)/) {
+      my ($mod, $rest) = ($1, $2);
+      $rest =~ s/[()]//g;
+      for my $part (split /,/, $rest) {
+        if ($part =~ /\b([A-Za-z_]\w*)\s+as\s+([A-Za-z_]\w*)/) {
+          $writes{$2}++;
+          $rebound{$2} = 1 if ($2 eq "os" || $2 eq "pathlib" || $2 eq "Path");
+        } elsif ($part =~ /\A\s*([A-Za-z_]\w*)/) {
+          my $name = $1;
+          unless ($mod eq "pathlib" && $name eq "Path") {
+            $writes{$name}++;
+            $rebound{$name} = 1 if $name eq "os" || $name eq "pathlib" || $name eq "Path";
+          }
+        }
+      }
+      next;
+    }
+    # Assignment targets (statement-level, chained, unpacking, augmented, annotated, walrus).
+    $rebound{os} = 1 if $code =~ /\bos\.path\s*=(?!=)/;
+    my $stmt = $code;
+    while ($stmt =~ s/\A\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*(?::[^=]+)?(?:\+|-|\*|\/|%|&|\||\^|<<|>>|\*\*|\/\/)?=(?!=)//) {
+      for my $v ($1 =~ /([A-Za-z_]\w*)/g) { $writes{$v}++; $rebound{$v} = 1 if $v eq "os" || $v eq "pathlib" || $v eq "Path" }
+    }
+    for my $v ($code =~ /;\s*([A-Za-z_]\w*)\s*(?::[^=]+)?(?:\+|-|\*|\/|%|&|\||\^|<<|>>|\*\*|\/\/)?=(?!=)/g) {
+      $writes{$v}++; $rebound{$v} = 1 if $v eq "os" || $v eq "pathlib" || $v eq "Path";
+    }
+    for my $v ($code =~ /([A-Za-z_]\w*)\s*:=/g) {
+      $writes{$v}++; $rebound{$v} = 1 if $v eq "os" || $v eq "pathlib" || $v eq "Path";
+    }
+    for my $for_vars ($code =~ /\bfor\s+\(?\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*\)?\s+in\b/g) {
+      for my $v ($for_vars =~ /([A-Za-z_]\w*)/g) { $writes{$v}++; $rebound{$v} = 1 if $v eq "os" || $v eq "pathlib" || $v eq "Path" }
+    }
+    for my $v ($code =~ /\bas\s+([A-Za-z_]\w*)/g) {
+      $writes{$v}++; $rebound{$v} = 1 if $v eq "os" || $v eq "pathlib" || $v eq "Path";
+    }
+    for my $v ($code =~ /\b(?:def|class)\s+([A-Za-z_]\w*)/g) {
+      $writes{$v}++; $rebound{$v} = 1 if $v eq "os" || $v eq "pathlib" || $v eq "Path";
+    }
+    # Function and lambda parameters shadow module-level variables.
+    for my $plist ($code =~ /\bdef\s+\w+\s*\(([^)]*)\)/g, $code =~ /\blambda\s+([^:]+):/g) {
+      for my $param (split /,/, $plist) {
+        $param =~ s/=.*//; $param =~ s/:.*//;
+        if ($param =~ /\b([A-Za-z_]\w*)\b/) {
+          $writes{$1}++; $rebound{$1} = 1 if $1 eq "os" || $1 eq "pathlib" || $1 eq "Path";
+        }
+      }
+    }
+  }
+  for my $raw_line (@l) {
+    next if $raw_line =~ /^\s*#/;
+    my $line = py_strip_comment($raw_line);
+    next unless $line =~ /\A\s*([A-Za-z_]\w*)\s*(?::[^=]+)?=\s*(.+?)\s*\z/;
+    my ($v, $rhs) = ($1, $2);
+    next unless ($writes{$v} // 0) == 1;
+    my $ups = py_self_dir_ups($rhs, \%rebound);
+    $sd{$v} = $ups if defined $ups;
+  }
+  return $py_info{$f} = { sd => \%sd, rebound => \%rebound };
+}
+# Split top-level comma-separated Python arguments, respecting quotes & parens.
+sub py_split_args {
+  my ($s) = @_;
+  my (@args, $cur);
+  $cur = "";
+  my ($sq, $dq, $esc, $depth, $i, $len) = (0, 0, 0, 0, 0, length $s);
+  while ($i < $len) {
+    my $c = substr($s, $i, 1);
+    if ($esc) { $cur .= $c; $esc = 0; $i++; next }
+    if ($c eq "\\" && ($sq || $dq)) { $cur .= $c; $esc = 1; $i++; next }
+    if ($c eq "'" && !$dq) { $sq = !$sq; $cur .= $c; $i++; next }
+    if ($c eq '"' && !$sq) { $dq = !$dq; $cur .= $c; $i++; next }
+    if (!$sq && !$dq) {
+      if ($c =~ /[\(\[\{]/) { $depth++ }
+      elsif ($c =~ /[\)\]\}]/) { $depth-- }
+      elsif ($c eq "," && $depth == 0) { push @args, $cur; $cur = ""; $i++; next }
+    }
+    $cur .= $c;
+    $i++;
+  }
+  push @args, $cur if $cur =~ /\S/;
+  return @args;
+}
+# Extract placed __file__-relative path joins from a `.py` line.
+# Returns ($remaining_line, @placed) where each placed entry is [$rel, $at].
+sub py_placed_runs {
+  my ($raw_line, $f) = @_;
+  my $info = py_analyze($f);
+  my ($sd, $rebound) = ($info->{sd}, $info->{rebound});
+  my $line = py_strip_comment($raw_line);
+  my $rem = $line;
+  my @placed;
+  my ($sq, $dq, $esc, $i, $len) = (0, 0, 0, 0, length $line);
+  while ($i < $len) {
+    my $c = substr($line, $i, 1);
+    if ($esc) { $esc = 0; $i++; next }
+    if ($c eq "\\" && ($sq || $dq)) { $esc = 1; $i++; next }
+    if ($c eq "'" && !$dq) { $sq = !$sq; $i++; next }
+    if ($c eq '"' && !$sq) { $dq = !$dq; $i++; next }
+    if ($sq || $dq) { $i++; next }
+    my $pre_ok = ($i == 0 || substr($line, $i - 1, 1) !~ /[.\w]/);
+    my $rest = substr($line, $i);
+    # Form 1: os.path.join(BASE, LIT1 [, LIT2 ...])
+    if ($pre_ok && !$rebound->{os} && $rest =~ /\A(os\.path\.join\s*\()/) {
+      my $open_end = $i + length($1);
+      my ($j, $depth, $isq, $idq, $iesc) = ($open_end, 1, 0, 0, 0);
+      while ($j < $len && $depth > 0) {
+        my $cc = substr($line, $j, 1);
+        if ($iesc) { $iesc = 0; $j++; next }
+        if ($cc eq "\\" && ($isq || $idq)) { $iesc = 1; $j++; next }
+        if ($cc eq "'" && !$idq) { $isq = !$isq; $j++; next }
+        if ($cc eq '"' && !$isq) { $idq = !$idq; $j++; next }
+        if (!$isq && !$idq) {
+          if ($cc eq "(") { $depth++ } elsif ($cc eq ")") { $depth-- }
+        }
+        $j++;
+      }
+      if ($depth == 0) {
+        my @args = py_split_args(substr($line, $open_end, $j - $open_end - 1));
+        if (@args >= 2) {
+          my $base = shift @args;
+          $base =~ s/\A\s+//; $base =~ s/\s+\z//;
+          my $ups = py_self_dir_ups($base, $rebound);
+          $ups = $sd->{$base} if !defined($ups) && $base =~ /\A[A-Za-z_]\w*\z/ && exists $sd->{$base};
+          if (defined $ups) {
+            my @parts;
+            my $all_lit = 1;
+            for my $a (@args) {
+              $a =~ s/\A\s+//; $a =~ s/\s+\z//;
+              if ($a =~ m{\A(['"])([A-Za-z0-9_.-][A-Za-z0-9_./-]*)\1\z}) { push @parts, $2 }
+              else { $all_lit = 0; last }
+            }
+            if ($all_lit && @parts) {
+              my $at = norm(join "/", dir_of($f), ("..") x $ups);
+              push @placed, [join("/", @parts), $at];
+              substr($rem, $i, $j - $i) = " " x ($j - $i);
+              $i = $j;
+              next;
+            }
+          }
+        }
+      }
+    }
+    # Form 2: BASE / LIT1 [/ LIT2 ...] (not preceded by `/` or `.`, not followed by `/`).
+    my $slash_pre_ok = ($i == 0 || substr($line, $i - 1, 1) !~ /[\/.\w]/);
+    if ($slash_pre_ok) {
+      my ($base_len, $ups);
+      if ($rest =~ /\A((?:pathlib\.)?Path\s*\(\s*__file__\s*\)(?:\s*\.\s*resolve\s*\(\s*\))?\s*(?:(?:\.\s*parent\b)+|\.\s*parents\s*\[\s*\d+\s*\]))/) {
+        $base_len = length($1);
+        $ups = py_self_dir_ups($1, $rebound);
+      } elsif ($rest =~ /\A([A-Za-z_]\w*)(?!\w)/ && exists $sd->{$1}) {
+        $base_len = length($1);
+        $ups = $sd->{$1};
+      }
+      if (defined $ups) {
+        my $after = substr($rest, $base_len);
+        my ($consumed, @parts) = (0);
+        while ($after =~ m{\G(\s*/\s*(['"])([A-Za-z0-9_.-][A-Za-z0-9_./-]*)\2)}gc) {
+          push @parts, $3;
+          $consumed = pos($after);
+        }
+        if (@parts && substr($after, $consumed) !~ /\A\s*\//) {
+          my $at = norm(join "/", dir_of($f), ("..") x $ups);
+          my $span = $base_len + $consumed;
+          push @placed, [join("/", @parts), $at];
+          substr($rem, $i, $span) = " " x $span;
+          $i += $span;
+          next;
+        }
+      }
+    }
+    $i++;
+  }
+  return ($rem, @placed);
+}
 # FILE in harness H's program PROG -> {PATH => [LINE, RUN, OWNERS]}: the
 # first run naming each path, and how many paths that run named.
 sub names_of {
   my ($f, $h, $prog) = @_;
   return $names{"$f\0$h"} if $names{"$f\0$h"};
   my $sd = selfdirs($f);
+  my $sh_scan = $f =~ /\.sh\z/ ? sh_parse($f)->{scan} : undef;
   my %r;
   my @l = split /\n/, raw($f);
   for my $i (0 .. $#l) {
     next if $l[$i] =~ /^\s*#/;
-    for my $run (runs($l[$i])) {
+    my $line = $sh_scan ? $sh_scan->[$i] : $l[$i];
+    if ($f =~ /\.py\z/) {
+      my ($rem, @placed) = py_placed_runs($line, $f);
+      for my $pl (@placed) {
+        my ($t, $at) = @$pl;
+        my @p = resolve($t, 0, $at);
+        $r{$_} //= [$i + 1, $t, scalar @p] for @p;
+      }
+      $line = $rem;
+    }
+    for my $run (runs($line)) {
       my ($t, $frag, $a) = @$run;
       my $at;
       if (defined $a && $f =~ /\.sh\z/) {
@@ -711,14 +1542,18 @@ sub loads_of {   # FILE -> {SCRIPT => [LINE, RUN, OWNERS]}, as names_of, for wha
   return $loads{$f} if $loads{$f};
   my %r;
   my @l = split /\n/, raw($f);
+  my $sh_p = $f =~ /\.sh\z/ ? sh_parse($f) : undef;
   for my $i (0 .. $#l) {
     my $line = $l[$i];
     my @words;
     if ($f =~ /\.sh\z/) {
+      my $k = $sh_p->{kinds}[$i];
+      next if $k eq "hd_quoted" || $k eq "hd_unquoted" || $k eq "hd_delim" || $k eq "interp_py";
       if ($line =~ /^\s*#\s*shellcheck\s.*\bsource=(\S+)/) { push @words, $1 }
       elsif ($line !~ /^\s*#/) {
+        my $scan = $sh_p->{scan}[$i];
         # A `.` or `source` command: the rest of its line names what it loads.
-        push @words, $1 if $line =~ /(?:^|[;&|({]|\bthen|\belse|\bdo)\s*(?:\.|source)\s+(.*)/;
+        push @words, $1 if $scan =~ /(?:^|[;&|({]|\bthen|\belse|\bdo)\s*(?:\.|source)\s+(.*)/;
       }
     } elsif ($line =~ /^\s*import\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)/) {
       push @words, map { (s/\s.*//sr =~ tr{.}{/}r) . ".py" } split /\s*,\s*/, $1;

@@ -19,6 +19,9 @@
 # The renamed-gate fixture reads only top-level literal `harness_leg_run 'name'
 # run_contract` lines with lowercase, digit and hyphen names, and replaces one
 # such gate and (in its control only) the literal Python refusal in a private copy.
+# affected-reads: .github/workflows/ci-env.yml
+# affected-reads: .github/workflows/gh-pages-api.yml --only '^depexts$'
+# affected-reads: docs/agent-notes/build-and-test.md --only '^dispatch-guard$'
 # ocannl-harness: standalone
 # Usage: test/operations/ci_matrix.sh [--only REGEX|--list-legs|--keep|--help]
 set -eu

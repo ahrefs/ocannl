@@ -1661,6 +1661,182 @@ if harness_leg 'harness shared basenames'; then
   twin_teardown
 fi
 
+if harness_leg 'harness fixture and heredoc literals'; then
+  # gh-ocannl-2380: a harness whose only mention of a real script is inside a
+  # fixture string, data heredoc, or output redirection target does not reach
+  # it, while running/reading the script (and fail-closed interpreter heredocs,
+  # command substitutions, pipelines to interpreters, printf -v, eval, < redirs,
+  # and unclosed heredocs) still reaches it.
+  fx_reach() { # LABEL WANT... : tools/sub.sh reaches exactly WANT...
+    local label=$1
+    shift
+    haffected --harnesses --files tools/sub.sh
+    hexpect "$label" 0 "$@"
+  }
+  # Data heredocs (quoted, double-quoted, backslash, tab-stripped, unquoted, multiple).
+  twin_text 'cat >"$TMP/fixture.txt" <<'\''EOF'\''' 'affected: tools/sub.sh: named by @x/runtest-y' 'EOF'
+  fx_reach 'a quoted data heredoc mentioning a script does not reach it' tools/test-a.sh
+  twin_text 'cat >"$TMP/fixture.txt" <<"EOF"' 'tools/sub.sh' 'EOF'
+  fx_reach 'a double-quoted data heredoc does not reach it' tools/test-a.sh
+  twin_text 'cat >"$TMP/fixture.txt" <<\EOF' 'tools/sub.sh' 'EOF'
+  fx_reach 'a backslash-quoted data heredoc does not reach it' tools/test-a.sh
+  twin_text 'cat >"$TMP/fixture.txt" <<-'\''EOF'\''' $'\ttools/sub.sh' $'\tEOF'
+  fx_reach 'a tab-indented <<- data heredoc does not reach it' tools/test-a.sh
+  twin_text 'cat >"$TMP/fixture.txt" <<EOF' 'literal tools/sub.sh line' 'EOF'
+  fx_reach 'an unquoted data heredoc with literal text does not reach it' tools/test-a.sh
+  twin_text 'cat <<'\''A'\'' >/dev/null; cat <<'\''B'\'' >/dev/null' 'tools/sub.sh' 'A' 'tools/sub.sh' 'B'
+  fx_reach 'multiple data heredocs on one line do not reach it' tools/test-a.sh
+  # echo / printf fixture strings (including continuations and multiline quotes).
+  twin_text "printf 'affected: tools/sub.sh: named by @x/runtest-y\\n'"
+  fx_reach 'a printf fixture string mentioning a script does not reach it' tools/test-a.sh
+  twin_text 'echo "tools/sub.sh"'
+  fx_reach 'an echo fixture string mentioning a script does not reach it' tools/test-a.sh
+  twin_text 'builtin echo tools/sub.sh; LC_ALL=C command printf -- '\''-v %s\n'\'' tools/sub.sh'
+  fx_reach 'wrapped echo and printf -- fixture strings do not reach it' tools/test-a.sh
+  twin_text 'printf '\''%s\n'\'' \' '  '\''tools/sub.sh'\'''
+  fx_reach 'a backslash-continued printf fixture string does not reach it' tools/test-a.sh
+  twin_text 'printf '\''first line' 'tools/sub.sh' 'last line'\'''
+  fx_reach 'a multiline quoted printf fixture string does not reach it' tools/test-a.sh
+  # Output redirections writing fixture/stub files.
+  twin_text 'cat >"$TMP/tools/sub.sh" <<'\''EOF'\''' '#!/bin/sh' 'echo fake' 'EOF'
+  fx_reach 'writing a stub via cat >"$TMP/..." <<EOF does not reach the real script' tools/test-a.sh
+  twin_text 'printf '\''echo fake\n'\'' >"$TMP/tools/sub.sh"' ': >>"$TMP/tools/sub.sh"'
+  fx_reach 'output redirection targets (> and >>) do not reach the real script' tools/test-a.sh
+  # Data heredoc does not falsely trigger loads or clobber self-directory anchors.
+  twin_text 'cat >"$TMP/fake.sh" <<'\''EOF'\''' '. tools/lib.sh' '# shellcheck source=tools/dyn.sh' 'EOF'
+  haffected --harnesses --files tools/lib.sh
+  hexpect 'a source line inside a data heredoc does not trigger loads' 0 tools/test-a.sh
+  haffected --harnesses --files tools/dyn.sh
+  hexpect 'a shellcheck source directive inside a data heredoc does not trigger loads' 0 tools/test-a.sh
+  twin_setup
+  twin_text "$self0" 'cat >"$TMP/fake.sh" <<'\''EOF'\''' 'here=/tmp' 'EOF' 'python3 "$here/twin.py"'
+  twin_reach 'an assignment inside a data heredoc does not clobber outer $here' tools/twin.py
+  twin_teardown
+  # Control: running or reading the script (alone or beside a fixture) STILL reaches it.
+  twin_text 'cat >"$TMP/fixture.txt" <<'\''EOF'\''' 'tools/sub.sh' 'EOF' 'bash tools/sub.sh'
+  fx_reach 'control: running the script beside a fixture heredoc still reaches it' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat >"$TMP/f" <<'\''EOF'\'' && bash tools/sub.sh' 'plain' 'EOF'
+  fx_reach 'control: a command chained after && on a heredoc opener line still reaches it' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat tools/sub.sh'
+  fx_reach 'control: reading a script with cat still reaches it' tools/test-a.sh tools/test-c.sh
+  # Fail-closed controls: executed heredocs, command substitutions, pipelines, printf -v, eval, < redirs.
+  twin_text 'python3 - <<'\''PY'\''' 'open("tools/sub.sh").read()' 'PY'
+  fx_reach 'fail-closed: a python3 interpreter heredoc still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'out=$(python3 - "$(pwd)" <<'\''PY'\''' 'open("tools/sub.sh").read()' 'PY' ')'
+  fx_reach 'fail-closed: a python3 heredoc inside $(...) with an earlier $(pwd) still reaches it' tools/test-a.sh tools/test-c.sh
+  twin_text 'bash <<'\''SH'\''' 'tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: a bash interpreter heredoc still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat <<'\''EOF'\'' | bash' 'tools/sub.sh' 'EOF'
+  fx_reach 'fail-closed: a heredoc piped to bash still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat <<'\''EOF'\'' | xargs cat' 'tools/sub.sh' 'EOF'
+  fx_reach 'fail-closed: a heredoc piped to xargs still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat <<EOF' 'res=$(tools/sub.sh)' 'EOF'
+  fx_reach 'fail-closed: $(...) inside an unquoted data heredoc still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat <<EOF' 'res=`tools/sub.sh`' 'EOF'
+  fx_reach 'fail-closed: backticks inside an unquoted data heredoc still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'printf '\''%s\n'\'' "$(tools/sub.sh)"'
+  fx_reach 'fail-closed: $(...) inside printf double quotes still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'echo '\''tools/sub.sh'\'' | bash'
+  fx_reach 'fail-closed: echo piped to bash still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'printf '\''%s\n'\'' tools/sub.sh | xargs cat'
+  fx_reach 'fail-closed: printf piped to xargs still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'printf -v cmd '\''%s'\'' tools/sub.sh'
+  fx_reach 'fail-closed: printf -v still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'eval "$(printf '\''%s'\'' tools/sub.sh)"'
+  fx_reach 'fail-closed: eval over printf still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'p=$(printf '\''%s'\'' tools/sub.sh)'
+  fx_reach 'fail-closed: variable assignment from $(printf ...) still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'echo hi < tools/sub.sh'
+  fx_reach 'fail-closed: input redirection on echo still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'echo hi >"$(tools/sub.sh)"'
+  fx_reach 'fail-closed: $(...) inside an output redirection target still reaches the script' tools/test-a.sh tools/test-c.sh
+  twin_text 'grep -q x <<<"$out"' 'bash tools/sub.sh'
+  fx_reach 'fail-closed: a <<< here-string does not open a heredoc' tools/test-a.sh tools/test-c.sh
+  twin_text 'msg="cat <<'\''EOF'\''"' 'bash tools/sub.sh'
+  fx_reach 'fail-closed: << inside quotes does not open a heredoc' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat <<'\''NEVER_CLOSED'\''' 'bash tools/sub.sh'
+  fx_reach 'fail-closed: an unclosed heredoc leaves its lines scanned' tools/test-a.sh tools/test-c.sh
+  hc_restore
+fi
+
+py_harness_setup() {
+  twin_setup
+  cp "$hrepo/tools/test-harnesses.sh" "$TMP/test-harnesses.sh.pyorig" || exit 2
+  cat >"$hrepo/tools/test-harnesses.sh" <<'STUB'
+#!/usr/bin/env bash
+[ "$*" = --list ] || exit 2
+printf '%s\n' tools/test-a.sh tools/test-b.sh tools/test-c.sh tools/test_p.py
+STUB
+}
+py_harness_teardown() {
+  cp "$TMP/test-harnesses.sh.pyorig" "$hrepo/tools/test-harnesses.sh" || exit 2
+  rm -f "$hrepo/tools/test_p.py" "$hrepo/data/py_helper.py"
+  twin_teardown
+}
+py_text() { printf '%s\n' "$@" >"$hrepo/tools/test_p.py"; }
+py_twin_reach() { # LABEL TWIN...: of the twins, exactly these reach tools/test_p.py
+  local label=$1 t r want miss=
+  shift
+  for t in "${twins[@]}"; do
+    haffected --harnesses --files "$t"
+    want=
+    for r in "$@"; do [ "$r" != "$t" ] || want=tools/test_p.py; done
+    [ "$rc" = 0 ] && [ "$(cat "$out")" = "$want" ] || miss="$miss $t: exit $rc [$(tr '\n' '|' <"$out")];"
+  done
+  if [ -z "$miss" ]; then report 0 "$label"; else report 1 "$label" "want only [$*]:$miss"; fi
+}
+if harness_leg 'harness python __file__ placement'; then
+  # gh-ocannl-2380: a Python __file__-relative join in a harness program places
+  # the path at that .py file's own directory, resolving shared basenames to
+  # one owner and failing closed to every tied owner outside the allowlist.
+  py_harness_setup
+  py_text 'import os' 'p = os.path.join(os.path.dirname(__file__), "twin.py")'
+  py_twin_reach 'os.path.join(os.path.dirname(__file__), "twin.py") resolves to one owner' tools/twin.py
+  haffected --harness-census tools/test_p.py
+  hexpect 'and the census records OWNERS=1 for it' 0 \
+    "$(printf 'tools/test_p.py\ttools/test_p.py\tself\t-\t-\t-')" \
+    "$(printf 'tools/test_p.py\ttools/twin.py\tnames\ttools/test_p.py:2\ttwin.py\t1')"
+  py_text 'import os' 'p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "twin.py")'
+  py_twin_reach 'os.path.dirname(os.path.abspath(__file__)) resolves to one owner' tools/twin.py
+  py_text 'import os' 'p = os.path.join(os.path.dirname(os.path.realpath(__file__)), "twin.py")'
+  py_twin_reach 'os.path.dirname(os.path.realpath(__file__)) resolves to one owner' tools/twin.py
+  py_text 'import os' 'p = os.path.join(os.path.dirname(__file__), "..", "data", "twin.py")'
+  py_twin_reach 'os.path.join with ".." segments resolves relative to __file__'"'"'s directory' data/twin.py
+  py_text 'import os' 'p = os.path.join(os.path.dirname(os.path.dirname(__file__)), "a", "one", "twin.py")'
+  py_twin_reach 'nested os.path.dirname(os.path.dirname(__file__)) resolves one directory up' a/one/twin.py
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'a single-assigned HERE = os.path.dirname(__file__) places os.path.join(HERE, ...)' tools/twin.py
+  py_text 'from pathlib import Path' 'p = Path(__file__).resolve().parent / "twin.py"'
+  py_twin_reach 'Path(__file__).resolve().parent / "twin.py" resolves to one owner' tools/twin.py
+  py_text 'from pathlib import Path' 'HERE = Path(__file__).resolve().parent' 'p = HERE / "twin.py"'
+  py_twin_reach 'a single-assigned HERE = Path(__file__).resolve().parent places HERE / ...' tools/twin.py
+  py_text 'from pathlib import Path' 'p = Path(__file__).resolve().parents[1] / "data" / "twin.py"'
+  py_twin_reach 'Path(__file__).resolve().parents[1] / "data" / "twin.py" resolves to one owner' data/twin.py
+  py_text 'import pathlib' 'p = pathlib.Path(__file__).parent.parent / "a" / "one" / "twin.py"'
+  py_twin_reach 'pathlib.Path(__file__).parent.parent / ... resolves to one owner' a/one/twin.py
+  # Imported module's __file__ is its own directory (data/), not the harness's (tools/).
+  printf '%s\n' 'import os' 'p = os.path.join(os.path.dirname(__file__), "twin.py")' >"$hrepo/data/py_helper.py"
+  py_text 'from data import py_helper'
+  py_twin_reach 'in an imported Python module, __file__ places relative to that module'"'"'s directory' data/twin.py
+  rm -f "$hrepo/data/py_helper.py"
+  # Fail-closed cases: keep every tied owner.
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'HERE = "/tmp"' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: a reassigned HERE keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'def f(HERE):' '    return os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: a parameter shadowing HERE keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'p = os.path.join(os.path.dirname(__file__), "/twin.py")'
+  py_twin_reach 'fail-closed: a leading slash in os.path.join keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'p = os.path.join(os.path.dirname(__file__), sub, "twin.py")'
+  py_twin_reach 'fail-closed: a non-literal join argument keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'p = os.path.join(os.path.dirname(other.__file__), "twin.py")'
+  py_twin_reach 'fail-closed: another module'"'"'s __file__ keeps every tied owner' "${twins[@]}"
+  py_text 'import fake as os' 'p = os.path.join(os.path.dirname(__file__), "twin.py")'
+  py_twin_reach 'fail-closed: a rebound os keeps every tied owner' "${twins[@]}"
+  py_text 'class Path: pass' 'p = Path(__file__).parent / "twin.py"'
+  py_twin_reach 'fail-closed: a rebound Path keeps every tied owner' "${twins[@]}"
+  py_harness_teardown
+fi
+
 if harness_leg 'harness census'; then
   haffected --harness-census
   hexpect 'the census lists every member reach, the step, the line and the token naming it, sorted' 0 \
@@ -1750,6 +1926,26 @@ if harness_leg 'harness negative controls'; then
     "$(printf 'tools/test-c.sh\ttools/test-c.sh\tself\t-\t-\t-')" \
     "$(printf 'tools/test-c.sh\ttools/twin.py\tnames\ttools/test-c.sh:2\tone/twin.py\t3')"
   twin_teardown
+  # Fixture/heredoc literal exclusion and Python __file__ placement controls (gh-ocannl-2380).
+  twin_text 'cat >"$TMP/fixture.txt" <<'\''EOF'\''' 'tools/sub.sh' 'EOF'
+  hcontrol 'a data heredoc body is excluded from reaches' \
+    'if ($kind[$i] eq "hd_quoted" || $kind[$i] eq "hd_delim") { $scan[$i] = ""; $i++; next }' \
+    'if (0) { $scan[$i] = ""; $i++; next }' --harnesses --files tools/sub.sh -- tools/test-a.sh
+  twin_text "printf 'affected: tools/sub.sh: named\\n'"
+  hcontrol 'echo and printf literal arguments are excluded from reaches' \
+    'next unless $hu eq "echo" || $hu eq "printf";' 'next;' --harnesses --files tools/sub.sh -- tools/test-a.sh
+  twin_text 'cat >"$TMP/tools/sub.sh" <<'\''EOF'\''' 'fake' 'EOF'
+  hcontrol 'an output redirection target is excluded from reaches' \
+    '} elsif ($it->[0] eq "redir_out" && defined $it->[2]) {' '} elsif (0) {' --harnesses --files tools/sub.sh -- tools/test-a.sh
+  hc_restore
+  py_harness_setup
+  py_text 'import os' 'p = os.path.join(os.path.dirname(__file__), "twin.py")'
+  hcontrol 'Python __file__ placement narrows os.path.join(os.path.dirname(__file__), ...) to one owner' \
+    'my ($rem, @placed) = py_placed_runs($line, $f);' 'my ($rem, @placed) = ($line);' \
+    --harness-census tools/test_p.py -- \
+    "$(printf 'tools/test_p.py\ttools/test_p.py\tself\t-\t-\t-')" \
+    "$(printf 'tools/test_p.py\ttools/twin.py\tnames\ttools/test_p.py:2\ttwin.py\t1')"
+  py_harness_teardown
 fi
 
 # The full run, on the dune fixture: a module source no stanza lists that a
@@ -1877,7 +2073,7 @@ if harness_leg 'isolated test addition'; then
     # are judgment exceptions, not a copy of the reader's computed reach;
     # a newly added suite defaults to no harnesses.
     case $suite in
-      test/config) printf '%s\n' tools/test-machine-verify.sh tools/test-test-run-devices.sh >"$TMP/want" ;;
+      test/config) printf '%s\n' tools/test-test-run-devices.sh >"$TMP/want" ;;
       arrayjit/test) printf '%s\n' tools/test-machine-verify.sh >"$TMP/want" ;;
       *) : >"$TMP/want" ;;
     esac
@@ -1888,15 +2084,15 @@ if harness_leg 'isolated test addition'; then
   done <"$TMP/suite-dunes"
   [ "$n" -gt 0 ] || report 1 'tracked test-suite stanzas were queried' 'no stanzas found'
   operations=test/operations
-  # A real read still reaches its harness. Text the reader cannot distinguish
-  # from a read (even a diagnostic printed by a fixture) stays conservative.
+  # A real read still reaches its harness; a printf fixture string does not (gh-ocannl-2380).
   mkdir -p "$hrepo/$operations" || exit 2
   : >"$hrepo/$operations/dune"
-  for command in cat printf; do
-    printf '%s\n' '#!/usr/bin/env bash' "$command '$operations/dune'" >"$hrepo/tools/test-c.sh"
-    haffected --harnesses --files "$operations/dune" "$operations/$addition.ml"
-    hexpect "$command mentioning the stanza file still reaches its harness" 0 tools/test-c.sh
-  done
+  printf '%s\n' '#!/usr/bin/env bash' "cat '$operations/dune'" >"$hrepo/tools/test-c.sh"
+  haffected --harnesses --files "$operations/dune" "$operations/$addition.ml"
+  hexpect 'cat reading the stanza file still reaches its harness' 0 tools/test-c.sh
+  printf '%s\n' '#!/usr/bin/env bash' "printf '$operations/dune'" >"$hrepo/tools/test-c.sh"
+  haffected --harnesses --files "$operations/dune" "$operations/$addition.ml"
+  hexpect 'printf printing the stanza path as fixture text does not reach its harness' 0
   hc_restore
   unlink "$hrepo/$operations/dune" && rmdir "$hrepo/$operations" "$hrepo/test" || exit 2
 fi
@@ -1930,9 +2126,9 @@ if harness_leg 'source-only reach'; then
     if [ "$rc" = 0 ] && cmp -s "$TMP/want" "$out"; then report 0 "$path alone selects only the harnesses reading it"
     else report 1 "$path alone selects only the harnesses reading it" "exit $rc; got [$(tr '\n' '|' <"$out")]"; fi
   done <"$TMP/source-only"
-  # The reader is unchanged: each spelling the fixtures moved away from still
-  # reaches a harness carrying it, a read or a mention the reader cannot tell
-  # from one (the conservative fallback the cat and printf controls above pin).
+  # gh-ocannl-2380: printf fixture strings and output-redirected fixture/stub
+  # writers stop reaching the named source paths, while a non-fixture call
+  # naming an executable keeps its conservative reach.
   stem=${sj##*/} stem=${stem%.ml}
   mkdir -p "$hrepo/${ld%/*}" "$hrepo/${bd%/*}" "$hrepo/${rw%/*}" "$hrepo/${sj%/*}" || exit 2
   for f in "$ld" "$bd" "$rw" "$sj"; do : >"$hrepo/$f" || exit 2; done
@@ -1941,13 +2137,15 @@ if harness_leg 'source-only reach'; then
     "$ld|a fixture repository's file under a variable prefix|cat >\"\$repo/$ld\" <<'DUNE'" \
     "$rw|a trace location|printf 'debug solve_row_ineq begin \"$rw\":4164:31:\\n'" \
     "$sj|a bare basename|printf '(diff? $stem.ml $stem.ml.corrected)\\n'" \
-    "$sj|the module's executable|finish('./$stem.exe', b + 'test', 6, [])" \
     "$bd|a PATH stub|cat >\"\$TMP/$bd\" <<'SH'"; do
     IFS='|' read -r path what text <<<"$form"
     printf '%s\n' '#!/usr/bin/env bash' "$text" >"$hrepo/tools/test-c.sh"
     haffected --harnesses --files "$path"
-    hexpect "$what still reaches its harness ($path)" 0 tools/test-c.sh
+    hexpect "$what no longer reaches its harness ($path)" 0
   done
+  printf '%s\n' '#!/usr/bin/env bash' "finish('./$stem.exe', b + 'test', 6, [])" >"$hrepo/tools/test-c.sh"
+  haffected --harnesses --files "$sj"
+  hexpect "the module's executable in a non-fixture call still reaches its harness ($sj)" 0 tools/test-c.sh
   hc_restore
   for f in "$ld" "$bd" "$rw" "$sj"; do unlink "$hrepo/$f" || exit 2; done
   rmdir "$hrepo/${ld%/*}" "$hrepo/${bd%/*}" "$hrepo/${rw%/*}" "$hrepo/${sj%/*}" "$hrepo/test" || exit 2

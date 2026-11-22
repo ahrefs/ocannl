@@ -4364,26 +4364,36 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `$(cd "$(dirname "$0")" && pwd)`, written once there and in no other file of the program,
     reaches the owner beside the harness
     (gh-ocannl-2342: `benchmarks/test-gh1133-cells.sh` no longer reaches
-    `test/operations/gh1133_summary.py`). To audit what each harness reaches, and through which
+    `test/operations/gh1133_summary.py`). In a `.py` file of a harness's program, a
+    `__file__`-relative join (`os.path.join(os.path.dirname(__file__), ...)`,
+    `Path(__file__).resolve().parent / ...`, `.parents[N]`, or a single-assigned variable of one
+    of those forms; gh-ocannl-2380) likewise places the path at that `.py` file's own directory,
+    failing closed to every tied owner on reassigned/shadowed variables, leading-slash segments,
+    non-literal join arguments, another module's `__file__`, or rebound `os`/`pathlib`/`Path`.
+    To audit what each harness reaches, and through which
     token, `affected --harness-census [MEMBER]` prints one tab-separated line per reached path
     (`MEMBER PATH STEP FILE:LINE TOKEN OWNERS`), sorted: diff it before and after a reader change,
     and read an OWNERS above 1 as a tie the rule kept.
-    Fake diagnostics should use synthetic locations, and all fixture text fixture-only names: the
-    reader cannot tell a fixture's `File "lib/dune"`, `"$repo/lib/dune"`, `$TMP/bin/dune` PATH stub,
-    trace location or fake `online_softmax.exe` from a read of the real file, so each selected its
-    harness on every edit of that source (gh-ocannl-2231, gh-ocannl-2292). A fixture path must have
-    no part after a slash that is a tracked path, no tracked basename, and no `X.exe` of a tracked
-    `X.ml`: synthetic locations sit under a `fixture/` directory with fixture-only basenames
-    (`fixture/surjection/surjection.ml`, `fixture/row_solver.ml`), stubs go in a `stubs/` directory,
-    fixture repositories use their own directory and executable names, or write a `dune` file from
-    inside its directory (bare `dune` is not indexed). A fixture that must carry a real name (a
-    `.gitignore`, `.gitattributes`, an opam file, a path the tool under test fixes, such as
-    `bin/device_props.exe`) keeps its reach. The isolated-addition leg in
+    Shell fixture and heredoc literals no longer count as reaches (gh-ocannl-2380; closed allowlist
+    in `tools/affected-tests.sh`'s header): non-interpreter heredoc bodies (`<<'EOF'`, `<<EOF`,
+    `<<-`; never `<<<` here-strings), literal arguments of top-level `echo` and `printf` (excluding
+    `printf -v`, pipelines into interpreters/`xargs`, `eval`, and `$(...)`), and output redirection
+    targets (`>`, `>>`, `>|`, `&>`, `&>>`; never `<` or `<>`), while command substitutions inside
+    non-single-quoted strings or unquoted heredocs and direct interpreter heredocs (`python3`,
+    `perl`, `sh`, `bash`, `awk`, ...) stay scanned fail-closed. A harness that stages a real helper
+    script through a data heredoc (such as `test/operations/ci_matrix.sh`'s `cat >"$TMP/contracts.py"
+    <<'PY'`) declares its repository inputs with `# affected-reads:`.
+    Fake diagnostics and variable-assigned fixture paths should still use fixture-only names
+    (gh-ocannl-2231, gh-ocannl-2292), since variable assignments (`VAR=...`) and non-printing
+    commands (`cat`, `grep`, `cp`, function calls) stay scanned fail-closed: synthetic locations sit
+    under a `fixture/` directory with fixture-only basenames (`fixture/surjection/surjection.ml`,
+    `fixture/row_solver.ml`), stubs go in a `stubs/` directory, and fixture repositories use their
+    own directory and executable names. The isolated-addition leg in
     `tools/test-affected-tests.sh` queries every tracked test-suite stanza, with independent
     exceptions for intentional source and fixture inputs, and its source-only reach leg pins that
     `test/einsum/surjectivity.ml`, `tensor/row.ml`, `lib/dune` and `bin/dune` alone select no
-    harness; cat and printf controls, and one per spelling the fixtures left, retain the
-    conservative fallback for real reads and indistinguishable text mentions.
+    harness, while the fixture/heredoc and Python `__file__` legs pin the excluded forms and their
+    fail-closed controls.
   - A module of a library this build does not compile (`cuda_backend.ml` on a Mac) stays UNMAPPED,
     exit 3, but an OFF-BUILD line on stderr counts what a build compiling it reaches -- read from
     the dune files' `libraries` (a `(select)` condition included), since dune describes none of
