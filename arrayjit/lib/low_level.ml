@@ -12362,7 +12362,7 @@ let rec replay_exceeds_reduction_cap budget = function
    in a captured consumer, so leave multiple writes to the ordinary placement policy. A dummy setter
    gives the real binder the same write map and loop box without making a template or depending on
    which operands the placement walk will inline. *)
-let affine_replay_cap_query ~static_indices ~live_reads (accesses : Tn.t Affine.access list) =
+let affine_replay_cap_query ~static_indices ~live_accesses (accesses : Tn.t Affine.access list) =
   let ordinary_scatter (a : _ Affine.access) =
     a.a_write && (not a.a_whole) && (not a.a_vec_last) && Option.is_none a.a_dyn_axis
     && (not a.a_guarded)
@@ -12375,7 +12375,7 @@ let affine_replay_cap_query ~static_indices ~live_reads (accesses : Tn.t Affine.
   List.iter accesses ~f:(fun a -> if ordinary_scatter a then Hash_set.add candidates a.a_tn);
   let sites =
     lazy
-      (List.fold (Lazy.force live_reads)
+      (List.fold (Lazy.force live_accesses)
          ~init:(Hashtbl.create (module Tnode))
          ~f:(fun sites (a : _ Affine.access) ->
            if Hash_set.mem candidates a.a_tn then Hashtbl.add_multi sites ~key:a.a_tn ~data:a;
@@ -12503,7 +12503,9 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
     (traced.prefers_virtual_one_hot && not traced.has_non_one_hot_setter)
     || Hash_set.mem optim_ctx.inline_preferences traced.tn
   in
-  (* A committed observable reader has no placement fallback. Keep its existing replay policy. *)
+  (* A committed observable writer has no placement fallback if its replay reaches a newly local
+     buffer. Keep the whole routine on its existing policy when any such writer is present, since
+     the replay cap runs before the transitive load analysis. *)
   let replay_cap_allowed =
     lazy
       (not
@@ -13042,7 +13044,7 @@ let%diagn2_sexp analyze_proc (static_indices : Indexing.static_symbol list) (llc
     an_reads_covered = lazy (reads_covered_query static_indices (Lazy.force accs));
     an_read_multiplicity = lazy (read_multiplicity_query static_indices (Lazy.force accs));
     an_affine_replay_cap =
-      lazy (affine_replay_cap_query ~static_indices ~live_reads:live_accs (Lazy.force accs));
+      lazy (affine_replay_cap_query ~static_indices ~live_accesses:live_accs (Lazy.force accs));
     an_live_reads = lazy (live_read_query (Lazy.force live));
     an_live_coverage =
       lazy

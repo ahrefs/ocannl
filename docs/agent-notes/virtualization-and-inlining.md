@@ -397,6 +397,8 @@ files.
   affine scatter with at most one preceding whole-node clear. A later overwrite can change a
   captured reader's value if its inline replay becomes a buffer read, so it stays outside this
   check. Use the usual cap, footprint, fan-in and observable-reader placement machinery.
+  Skip this new replay check throughout a routine with an observable writer already committed
+  `Virtual`: the check precedes transitive load analysis and the writer has no buffer fallback.
   `virtual_affine` pins the guarded replay, cheap binding, stable readback and materialized parity.
   A symbol-free index map instead captures at the
   outermost enclosing loop when its statements are only that node's assignment nests

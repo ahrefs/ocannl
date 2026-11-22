@@ -382,14 +382,14 @@ let case_scatter_replay ~name ~height ~reading ~policy ~capped () =
     let i = sym () and j = sym () and u = sym () and v = sym () in
     loop_n i height (loop_n j width (loop_n u 2 (loop_n v 2 (f i j u v))))
   in
-  let prod =
+  let scatter_into tn =
     scatter_nest (fun i j u v ->
-        let value = add (mul (c 100.) (tag i j)) (tag u v) in
-        set tgt (scatter_indices i j u v) value)
+        set tn (scatter_indices i j u v) (add (mul (c 100.) (tag i j)) (tag u v)))
   in
+  let prod = scatter_into tgt in
   let matched = mk ~dims (name ^ "_matched") and reduced = mk ~dims:[| cols |] (name ^ "_sum") in
   (match reading with
-  | `Observed -> Tn.set_observable matched
+  | `Observed | `Committed_observer -> Tn.set_observable matched
   | `Overwritten | `Plain -> ()
   | `Matching | `Both -> materialize matched);
   materialize reduced;
@@ -417,10 +417,13 @@ let case_scatter_replay ~name ~height ~reading ~policy ~capped () =
     | `Both -> seq matching_read (reduce tgt)
     | `Overwritten -> seq copy (seq (zero tgt) (reduce matched))
     | `Observed -> copy
+    | `Committed_observer -> seq (scatter_into matched) (reduce tgt)
   in
   let llc = seq prod consumer in
   let ctx = LL.empty_optimize_ctx () in
   if Poly.equal policy `Prefer_inline then Hash_set.add ctx.LL.inline_preferences tgt;
+  if Poly.equal reading `Committed_observer then
+    Tn.Placements.update ctx.placements matched Virtual (Site "99:test-setup");
   let settings = LL.virtualize_settings in
   let saved_cap = settings.LL.max_inline_reduction in
   let opt =
@@ -450,6 +453,8 @@ let case_scatter_replay ~name ~height ~reading ~policy ~capped () =
              ~f:(Tn.equal_provenance Tn.Observed_reader_reads_local))
   | `Overwritten ->
       assert_case "the copy keeps the value captured before the clear" (known_virtual opt matched)
+  | `Committed_observer ->
+      assert_case "the independent observable writer stays virtual" (known_virtual opt matched)
   | _ -> ());
   let value h w = (100 * (1 + (10 * (h / 2)) + (w / 2))) + 1 + (10 * (h % 2)) + (w % 2) in
   let expected_match =
@@ -463,7 +468,7 @@ let case_scatter_replay ~name ~height ~reading ~policy ~capped () =
     match reading with
     | `Plain | `Overwritten -> ([ reduced ], [ expected_sum ])
     | `Matching | `Observed -> ([ matched ], [ expected_match ])
-    | `Both -> ([ matched; reduced ], [ expected_match; expected_sum ])
+    | `Both | `Committed_observer -> ([ matched; reduced ], [ expected_match; expected_sum ])
   in
   let seed =
     List.filter_map read ~f:(fun tn ->
@@ -617,6 +622,9 @@ let () =
   case "scatter-observed"
     (case_scatter_replay ~name:"scatter_observed" ~height:5 ~reading:`Observed ~policy:`Default
        ~capped:true);
+  case "scatter-committed-observer"
+    (case_scatter_replay ~name:"scatter_committed_observer" ~height:5 ~reading:`Committed_observer
+       ~policy:`Default ~capped:false);
   case "scatter-no-cap"
     (case_scatter_replay ~name:"scatter_no_cap" ~height:5 ~reading:`Plain ~policy:`No_cap
        ~capped:false);

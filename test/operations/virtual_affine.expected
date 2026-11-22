@@ -124,6 +124,11 @@ scatter_observed: no guarded replay survives: true
 scatter_observed: the observable copy retains a buffer for readback: true
 scatter_observed: the executed outputs match the scatter and its reduction: true
 scatter_observed: the outputs agree with explicit materialization: true
+scatter_committed_observer: the scatter remains virtual: true
+scatter_committed_observer: only plain reads need a guard: true
+scatter_committed_observer: the independent observable writer stays virtual: true
+scatter_committed_observer: the executed outputs match the scatter and its reduction: true
+scatter_committed_observer: the outputs agree with explicit materialization: true
 scatter_no_cap: the scatter remains virtual: true
 scatter_no_cap: only plain reads need a guard: true
 scatter_no_cap: the executed outputs match the scatter and its reduction: true
