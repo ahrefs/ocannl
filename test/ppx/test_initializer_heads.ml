@@ -95,6 +95,38 @@ let () =
   in
   Verdict.p "object initializer reads the preceding field value 3" (Float.equal selected 3.0)
 
+class alias_parent =
+  object
+    method value = 7
+  end
+
+let%op number_inherited_alias () x =
+  let parent =
+    [%oc
+      object
+        method value = 41
+      end]
+  in
+  {
+    w =
+      !..(object
+            inherit alias_parent as parent
+            method! value = 97
+            method selected = parent#value
+          end
+           #selected);
+    o = [ 1 ];
+  }
+  *. x
+  + !..(parent#value)
+
+let () =
+  let input = NTDSL.ndarray [| 1.0 |] ~output_dims:[ 1 ] () in
+  let output = number_inherited_alias () input in
+  let ctx = Train.forward_once (Context.cpu ()) output in
+  Verdict.p "inherit alias selects the parent method value 7"
+    (Float.equal (Context.get_value ctx output.Tensor.value [| 0 |]) (7.0 +. 41.0))
+
 let named_binary source other = [%op { w = add source other }]
 let named_unary source = [%op { w = relu source }]
 let named_ternary source = [%op { w = fma source 2.0 3.0 }]

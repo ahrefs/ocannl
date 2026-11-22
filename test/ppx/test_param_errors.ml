@@ -228,6 +228,47 @@ let%op number_in_inherited_method () x =
   * x
   + !..n
 
+class alias_parent =
+  object
+    method value = 7
+  end
+
+let%op number_without_inherited_alias () x =
+  let parent =
+    [%oc
+      object
+        method value = 41
+      end]
+  in
+  {
+    w =
+      !..(object
+            inherit alias_parent
+            method selected = parent#value
+          end
+           #selected);
+  }
+  * x
+  + !..(parent#value)
+
+let%op number_before_inherited_alias () x =
+  let parent =
+    [%oc
+      object
+        method value = 41
+      end]
+  in
+  {
+    w =
+      !..(object
+            method selected = parent#value
+            inherit alias_parent as parent
+          end
+           #selected);
+  }
+  * x
+  + !..(parent#value)
+
 (* An optional default can read preceding parameters. Its own pattern binds in the body. *)
 let%op number_default_earlier_param () x =
   let n = [%oc 3] in
