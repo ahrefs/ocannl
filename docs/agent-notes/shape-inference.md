@@ -946,6 +946,10 @@ files.
   available. Nothing but `get_projections` compares a step's projections with the shapes they index
   (a closure derives none for a step that has them), so it refuses disagreeing ones on the way out
   of every path (gh-ocannl-1970).
+  The carried-row control installs `Shape.For_testing.with_closure_publication_hook`
+  and throws after reading the captured axes, before the closure commits. A normal rewind clears
+  those axes, and skipping reference restoration leaves them behind. The earlier `closed_kind`
+  field was retired when projection derivation stopped rewriting the binding (gh-ocannl-1969).
 - What a rewind discarded is recorded where it lasts only as long as someone can present it
   (gh-ocannl-1789): a shape's, a capture reference's and an update step's own `discarded_by` field,
   and a node's entry in `Tensor`'s weak `discarded_nodes` (an ephemeron table). A schemed closure's

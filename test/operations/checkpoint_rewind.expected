@@ -34,6 +34,9 @@ steps: the failed closure had published projections of a step older than the che
 steps, a failed closure rewound: the step's projections iterate the control's dims: true
 steps, a failed closure rewound: a reduction's projections iterate the control's dims: true
 steps, a failed closure rewound: its shape closes to the control's dims: true
+carried row: the failed closure published both axes: true
+carried row: rewinding the failed closure removes those axes: true
+carried row: omitting reference restore leaves the failed closure's axes: true
 nested: the window's tensor is discarded by the outer rewind: true
 nested: the inner checkpoint is abandoned by the outer rewind: true
 repeated: the outer checkpoint can be rewound to again: true

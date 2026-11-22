@@ -5014,6 +5014,16 @@ let with_construction_window f =
   Int.incr construction_depth;
   Exn.protect ~f ~finally:(fun () -> Int.decr construction_depth)
 
+module For_testing = struct
+  let after_closure_publication = ref None
+  [@@mutation_serial.exempt "a scoped fault hook, installed by tests only"]
+
+  let with_closure_publication_hook hook f =
+    let previous = !after_closure_publication in
+    after_closure_publication := Some hook;
+    Exn.protect ~f ~finally:(fun () -> after_closure_publication := previous)
+end
+
 let%debug4_sexp finish_inference_body (() : unit) : unit =
   counts :=
     {
@@ -5052,6 +5062,7 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
   List.iter !active_instances ~f:(fun inst ->
       List.iter inst.inst_shapes ~f:(apply_env_t env);
       publish_ref_solutions ~closure:true env inst.inst_refs);
+  Option.iter !For_testing.after_closure_publication ~f:(fun hook -> hook ());
   let _applied_update_steps : update_step list = !active_update_steps in
   (* Derive projections for all active update_steps, setting their unsafe_projections field. This
      must happen before clearing active_update_steps. *)

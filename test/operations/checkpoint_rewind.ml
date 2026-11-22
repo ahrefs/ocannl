@@ -360,6 +360,38 @@ let steps_negative_control ~omit =
        omit)
     (refused_over ~what:"operand 0" l.operand_proj_dims)
 
+let carried_row_leg rewind =
+  Tensor.unsafe_reinitialize ();
+  let r = Shape.get_variable_ref "r" in
+  let checkpoint = Tensor.checkpoint ~label:"ck_carried_row" () in
+  let x = Tensor.term ~grad_spec:Prohibit_grad ~label:[ "ck_matrix" ] ~output_dims:[ 2; 3 ] () in
+  let y = NTDSL.einsum1 ~capture_dims:[ r ] "..r.. => ..r.." x () in
+  let published = ref false in
+  let fail () =
+    (published :=
+       match r.carried_row with
+       | Some [ Row.Dim { d = 2; _ }; Row.Dim { d = 3; _ } ] -> true
+       | _ -> false);
+    failwith "ck_carried_row: failed after publication"
+  in
+  let failed =
+    match
+      Shape.For_testing.with_closure_publication_hook fail (fun () -> Shape.to_dims y.shape)
+    with
+    | _ -> false
+    | exception Failure msg -> String.equal msg "ck_carried_row: failed after publication"
+  in
+  rewind checkpoint;
+  (failed && !published, Option.is_none r.carried_row)
+
+let carried_row () =
+  let reached, restored = carried_row_leg Tensor.rewind in
+  p "carried row: the failed closure published both axes" reached;
+  p "carried row: rewinding the failed closure removes those axes" restored;
+  let reached, restored = carried_row_leg (Tensor.For_testing.rewind_omitting ~omit:"refs") in
+  p "carried row: omitting reference restore leaves the failed closure's axes"
+    (reached && not restored)
+
 let soak () =
   let seeds = List.init 24 ~f:(fun i -> i + 1) in
   let controls = List.map seeds ~f:(fun seed -> (seed, control_dims ~seed)) in
@@ -675,6 +707,7 @@ let () =
   | _ ->
       soak ();
       steps ();
+      carried_row ();
       lifecycle ();
       wrappers ();
       handouts ();
