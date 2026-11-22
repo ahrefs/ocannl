@@ -2337,13 +2337,11 @@ DUNE
   fi
   git_q reset -q --hard HEAD~1 && rm -rf "${repo:?}/p8" || exit 2
 fi
-# Literal dependencies (gh-ocannl-2304): a changed script one rule of an alias names by its path,
-# in its deps or as a %{dep:}, and dune reads for that rule; never one a glob or a source tree
-# reads with the rest, which `dune rules` prints as File dependencies too, one an (alias) stanza
-# names, or one a rule dune does not build names while another reads it with a whole tree.
+# Literal dependencies (gh-ocannl-2304, gh-ocannl-2379): one stanza both names the script and
+# makes dune read it. A glob or source tree can also reach the script without naming it.
 if harness_leg 'literal dependencies'; then
   probe_restore
-  mkdir -p "$repo/p9/tree" || exit 2
+  mkdir -p "$repo/p9/tree" "$repo/p9/alias-tree" "$repo/p9/wild" || exit 2
   cat >"$repo/p9/dune" <<'DUNE'
 (rule
  (alias runtest-named)
@@ -2354,21 +2352,47 @@ if harness_leg 'literal dependencies'; then
 (rule (alias runtest-split) (enabled_if false) (deps tree/t.sh) (action (progn)))
 (rule (alias runtest-split) (deps (source_tree tree)) (action (progn)))
 (alias (name runtest-plain) (deps plain.sh))
+(alias (name runtest-via-plain) (deps (alias runtest-plain)))
+(alias (name runtest-alias-tree) (enabled_if false) (deps alias-tree/t.sh))
+(alias (name runtest-alias-tree) (deps (source_tree alias-tree)))
 DUNE
-  for f in lit drv grp filed act tree/t globa plain; do printf '#!/bin/sh\n' >"$repo/p9/$f.sh"; done
+  cat >"$repo/p9/wild/dune" <<'DUNE'
+(alias (name runtest-parent) (deps ../from-parent.sh))
+(alias (name runtest-globbing) (deps (glob_files *)))
+DUNE
+  for f in lit drv grp filed act tree/t globa plain alias-tree/t from-parent; do printf '#!/bin/sh\n' >"$repo/p9/$f.sh"; done
   git_q add -A p9 && git_q commit -qm literal-fixture || exit 2
-  affected --files p9/lit.sh p9/drv.sh p9/grp.sh p9/filed.sh p9/act.sh p9/tree/t.sh p9/globa.sh p9/plain.sh
+  affected --files p9/lit.sh p9/drv.sh p9/grp.sh p9/filed.sh p9/act.sh p9/tree/t.sh p9/globa.sh
   for f in act drv filed grp lit; do
     printf 'affected: p9/%s.sh: named as a dependency by the rule of @p9/runtest-named\n' "$f"
   done >"$TMP/want-named"
   grep '^affected: p9/.*: named as a dependency by the rule of ' "$err" | LC_ALL=C sort >"$TMP/got-named"
   # Each of the reached aliases is listed, so what keeps a line away is the rule, not the reach.
   if [ "$rc" = 0 ] && grep -qx '@p9/runtest-tree' "$out" && grep -qx '@p9/runtest-globbed' "$out" &&
-     grep -qx '@p9/runtest-split' "$out" && grep -qx '@p9/runtest-plain' "$out" &&
+     grep -qx '@p9/runtest-split' "$out" &&
      cmp -s "$TMP/want-named" "$TMP/got-named"; then
-    report 0 'a deps atom, a named group, a (file) and a %{dep:} name a script; a glob, a source tree, an (alias) stanza and a disabled rule do not'
-  else report 1 'a deps atom, a named group, a (file) and a %{dep:} name a script; a glob, a source tree, an (alias) stanza and a disabled rule do not' \
+    report 0 'a deps atom, a named group, a (file) and a %{dep:} name a script; a glob, a source tree and a disabled rule do not'
+  else report 1 'a deps atom, a named group, a (file) and a %{dep:} name a script; a glob, a source tree and a disabled rule do not' \
     "exit $rc; got: $(cat "$TMP/got-named"); stdout: $(cat "$out")"; fi
+  affected --files p9/plain.sh
+  if [ "$rc" = 0 ] && grep -qxF '@p9/runtest-plain' "$out" && grep -qxF '@p9/runtest-via-plain' "$out" &&
+     [ "$(grep -F 'named as a dependency by the rule of ' "$err")" = \
+       'affected: p9/plain.sh: named as a dependency by the rule of @p9/runtest-plain' ]; then
+    report 0 'an alias stanza naming the changed script covers it, including it through another alias gives no credit to that alias'
+  else report 1 'an alias stanza naming the changed script covers it, including it through another alias gives no credit to that alias' \
+    "exit $rc; stdout: $(cat "$out"); stderr: $(cat "$err")"; fi
+  affected --files p9/alias-tree/t.sh
+  if [ "$rc" = 0 ] && grep -qxF '@p9/runtest-alias-tree' "$out" &&
+     ! grep -qF 'named as a dependency by the rule of ' "$err"; then
+    report 0 'a source tree still reaches the alias but gives no script coverage, even with a disabled stanza naming it'
+  else report 1 'a source tree still reaches the alias but gives no script coverage, even with a disabled stanza naming it' \
+    "exit $rc; stdout: $(cat "$out"); stderr: $(cat "$err")"; fi
+  affected --files p9/from-parent.sh
+  if [ "$rc" = 0 ] && [ "$(grep '^@p9/wild/' "$out")" = '@p9/wild/runtest-parent' ] &&
+     grep -qxF 'affected: p9/from-parent.sh: named as a dependency by the rule of @p9/wild/runtest-parent' "$err"; then
+    report 0 'a neighboring wildcard cannot select an alias through the private probe target'
+  else report 1 'a neighboring wildcard cannot select an alias through the private probe target' \
+    "exit $rc; stdout: $(cat "$out"); stderr: $(cat "$err")"; fi
   # Dune's reading alone names the source tree's script too: the stanza is what tells them apart.
   literal_label='negative control: without the converter'"'"'s names, dune reads a source tree'"'"'s script as named'
   if run_affected_mutant "$literal_label" \
@@ -2377,7 +2401,34 @@ DUNE
       report_mutant 0 "$literal_label"
     else report_mutant 1 "$literal_label" "exit $rc; $(cat "$err")"; fi
   fi
-  git_q reset -q --hard HEAD~1 && rm -rf "${repo:?}/p9" || exit 2
+  mkdir -p "$repo/p9/repeated" "$repo/p9/inc-first" "$repo/p9/inc-second" || exit 2
+  cat >>"$repo/p9/dune" <<'DUNE'
+(subdir repeated (alias (name runtest-pair) (deps first.sh)))
+(subdir repeated (alias (name runtest-pair) (deps second.sh)))
+DUNE
+  printf '; The two subdir stanzas contribute to this directory.\n' >"$repo/p9/repeated/dune"
+  for f in first second; do printf '#!/bin/sh\n' >"$repo/p9/repeated/$f.sh"; done
+  printf '(alias (name runtest-include) (deps shared.sh))\n' >"$repo/p9/shared.inc"
+  for d in inc-first inc-second; do
+    printf '(include ../shared.inc)\n' >"$repo/p9/$d/dune"
+    printf '#!/bin/sh\n' >"$repo/p9/$d/shared.sh"
+  done
+  git_q add -A p9 && git_q commit -qm repeated-subdir-fixture || exit 2
+  affected --files p9/repeated/first.sh p9/repeated/second.sh
+  if [ "$rc" = 0 ] && grep -qxF '@p9/repeated/runtest-pair' "$out" &&
+     grep -qxF 'affected: p9/repeated/first.sh: named as a dependency by the rule of @p9/repeated/runtest-pair' "$err" &&
+     grep -qxF 'affected: p9/repeated/second.sh: named as a dependency by the rule of @p9/repeated/runtest-pair' "$err"; then
+    report 0 'both subdir blocks can give the same alias its own literal dependencies'
+  else report 1 'both subdir blocks can give the same alias its own literal dependencies' \
+    "exit $rc; stdout: $(cat "$out"); stderr: $(cat "$err")"; fi
+  affected --files p9/inc-first/shared.sh p9/inc-second/shared.sh
+  for d in inc-first inc-second; do
+    if [ "$rc" = 0 ] && grep -qxF "@p9/$d/runtest-include" "$out" &&
+       grep -qxF "affected: p9/$d/shared.sh: named as a dependency by the rule of @p9/$d/runtest-include" "$err"; then
+      report 0 "a shared include gives credit in $d"
+    else report 1 "a shared include gives credit in $d" "exit $rc; stdout: $(cat "$out"); stderr: $(cat "$err")"; fi
+  done
+  git_q reset -q --hard HEAD~2 && rm -rf "${repo:?}/p9" || exit 2
 fi
 # Probes that do not answer: an input the copy lacks (an ignored directory),
 # and a dune file including one. Each reads the change without the probe.

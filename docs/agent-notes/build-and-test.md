@@ -401,10 +401,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   reaches, each asked alone so one reached path cannot hide another, all run the whole tier --
   unless the tests tier covers that script (gh-ocannl-2304): an alias of the list the tests tier
   runs in this build names it as a dependency, as `affected` says on an exact `affected: SCRIPT:
-  named as a dependency by the rule of ALIAS` line of the same ask (one `rule` stanza of the alias
-  names the path in its `(deps)` or as a `%{dep:}`, and `dune rules` of that rule's probe twin reads
-  it; `tools/affected-tests.sh`'s "Literal dependencies"). A glob or a `source_tree` never names
-  one: `dune rules` prints a source tree's files as File dependencies too, so the repository scans
+  named as a dependency by the rule of ALIAS` line of the same ask. A targetless `rule` or a
+  dependency-only `alias` stanza of that alias names the path, and Dune reads it for the same
+  stanza's probe rule (gh-ocannl-2379). The "Literal dependencies" section of
+  `tools/affected-tests.sh` lists the supported forms.
+  An alias's probe rule inherits its deps, enablement and package. Its credit stays with
+  the declaring alias when another alias expands it. The private target supplies dependency
+  credit only, so a glob matching it does not add to ordinary alias reach. A glob or a
+  `source_tree` never names one: `dune rules` prints a source tree's files as File dependencies too, so the repository scans
   reading `(source_tree ../..)` would otherwise cover every script. The rule reads no further than
   the dune file: a script a rule lists in its `(deps)` only so a text scan can read it counts as
   covered too, so naming a `.sh` in a scan rule's deps takes that script out of the harness
