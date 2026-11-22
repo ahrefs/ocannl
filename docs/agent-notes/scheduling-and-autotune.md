@@ -1750,12 +1750,16 @@ files.
   arm gap stayed at 57–95% (gh-ocannl-546, benchmarks/report-gh546-metal.md). Conclusions of the
   form "family X wins/never wins here" need repeats; the arm-level verdict does not.
   `Autotune.report` says what a call did about searching in ONE field, `outcome` (gh-ocannl-677):
-  `Searched` | `Searched_untimed` | `Searched_budget_fallback` |
+  `Searched` | `Searched_untimed` | `Searched_budget_fallback` | `Searched_replay_fallback` |
   `Search_died of terminal_failure` | `Cache_replay` | `Search_disabled` |
   `Pre_search_failure of terminal_failure`, plus the abandonment and lineage-refusal states.
   Match it. A search that completed with zero admitted timings reports `Searched_untimed`
   (gh-ocannl-2310). A budget cut that admitted timings and then shipped the unmeasured untuned
-  default reports `Searched_budget_fallback` (gh-ocannl-2365). Both benchmark consumers
+  default reports `Searched_budget_fallback` (gh-ocannl-2365). A direct `Autotune.tune` search
+  whose crowned winner failed to replay (or degenerated) and shipped the unmeasured untuned default
+  reports `Searched_replay_fallback` with its crown fields cleared (gh-ocannl-2416,
+  `test/operations/autotune_replay_fallback`; `tune_deferred` reports before `compile_deferred`
+  runs and still exposes a later replay substitution via `shipped_substitute`). Both benchmark consumers
   (`projection_shape_bench`, `companion_flavor_bench`) use the outcome to admit a crown. In particular **"this
   process searched" is not `not cache_hit`** — under `autotune_search=false` (the `reproducible`
   profile) and on every pre-search failure a call reports neither having searched nor having

@@ -30,7 +30,9 @@ let accum_prec = Ll_test.backend_accum_prec
    exists to stop, and the states section below pins the distinction. *)
 let completed (r : Autotune.report) =
   match r.Autotune.outcome with
-  | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback -> true
+  | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback
+  | Autotune.Searched_replay_fallback ->
+      true
   | Autotune.Search_died _ | Autotune.Cache_replay | Autotune.Abandonment_replay _
   | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandoned _
   | Autotune.Lineage_refused _ ->
@@ -528,7 +530,8 @@ let () =
   p_all "a report that neither searched nor replayed timed nothing" named_states ~f:(fun (_, r) ->
       match r.Autotune.outcome with
       | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback
-      | Autotune.Search_died _ | Autotune.Abandoned _ | Autotune.Cache_replay ->
+      | Autotune.Searched_replay_fallback | Autotune.Search_died _ | Autotune.Abandoned _
+      | Autotune.Cache_replay ->
           true
       | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandonment_replay _
       | Autotune.Lineage_refused _ ->

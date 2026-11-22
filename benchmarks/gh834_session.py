@@ -67,6 +67,9 @@ def problems(path):
         if state == "searched-budget-fallback":
             out.append("INCOMPLETE SESSION: arm %s fell back to the unmeasured default after a budget cut" % name)
             continue
+        if state == "searched-replay-fallback":
+            out.append("INCOMPLETE SESSION: arm %s fell back to the unmeasured default after winner replay failed" % name)
+            continue
         if state not in ("searched", "searched-untimed"):
             # Absent, ambiguous, or did not search: "searched":true at the top covers a died search.
             detail = "" if len(found) <= 1 else " (it appears %d times)" % len(found)

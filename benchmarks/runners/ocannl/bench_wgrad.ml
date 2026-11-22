@@ -194,8 +194,9 @@ let () =
     | None -> ""
     | Some r ->
         Printf.sprintf
-          " crowned=%s best_ms=%.4f baseline_ms=%.4f sketch_candidates=%d \
+          " outcome=%s crowned=%s best_ms=%.4f baseline_ms=%.4f sketch_candidates=%d \
            fiss_sketch_candidates=%d timed=%d"
+          (Autotune.outcome_name r.Autotune.outcome)
           r.Autotune.best_label r.Autotune.best_ms r.Autotune.baseline_ms
           r.Autotune.sketch_candidates r.Autotune.fiss_sketch_candidates r.Autotune.candidates_timed
   in

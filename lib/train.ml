@@ -1002,6 +1002,8 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                  | Autotune.Searched | Autotune.Cache_replay -> r.Autotune.best_label
                  | Autotune.Searched_budget_fallback ->
                      "budget cut before timing the untuned default"
+                 | Autotune.Searched_replay_fallback ->
+                     "winner replay failed; shipped the untuned default"
                  | Autotune.Searched_untimed -> "nothing timed"
                  | ( Autotune.Search_disabled | Autotune.Lineage_refused _ | Autotune.Search_died _
                    | Autotune.Pre_search_failure _ | Autotune.Abandoned _

@@ -929,8 +929,8 @@ let () =
      used. And a completed search is not automatically a measurement: when every
      candidate declines, the outcome is [Searched_untimed] (gh-ocannl-2310) and the returned
      routine is the untuned default; a budget cut before the untuned default was measured ships it
-     too under [Searched], with [best_ms] infinite, so a finite time and a non-empty winner are
-     still required before the arm is admitted. *)
+     under [Searched_budget_fallback] (gh-ocannl-2365), and a winner replay that fails or
+     degenerates ships it under [Searched_replay_fallback] (gh-ocannl-2416). *)
   (* Beam width and rounds are the EFFECTIVE configuration's -- the reference defaults 2/2, or a
      profile's (the [approximate] payload's 4/4) -- read with [Autotune.tune]'s own defaults and
      passed explicitly, so the search a leg runs is the one a caller under the same configuration
@@ -1001,7 +1001,8 @@ let () =
                 if Option.is_some lv then fail "%s: the tune cell reported nothing" s.tag;
                 false
             | Some
-                (Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback)
+                ( Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback
+                | Autotune.Searched_replay_fallback )
               when !contended > 0 ->
                 (* A refused timing window leaves the search's measurement set incomplete: its crown
                    was chosen from a truncated comparison, so it is not the tuner's selection. *)
@@ -1023,6 +1024,12 @@ let () =
                 false
             | Some Autotune.Searched_budget_fallback ->
                 fail "%s: the budget cut the search before it measured the untuned default" s.tag;
+                false
+            | Some Autotune.Searched_replay_fallback ->
+                fail
+                  "%s: the crowned winner failed to replay -- the routine it returned is the \
+                   untuned default, not a tuned measurement"
+                  s.tag;
                 false
             | Some
                 (( Autotune.Search_died _ | Autotune.Cache_replay | Autotune.Abandonment_replay _

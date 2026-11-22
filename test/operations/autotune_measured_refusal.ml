@@ -141,7 +141,8 @@ let () =
            (gh-ocannl-2310). *)
         p "the search completed"
           (match r.outcome with
-          | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback ->
+          | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback
+          | Autotune.Searched_replay_fallback ->
               true
           | Autotune.Search_died _ | Autotune.Cache_replay | Autotune.Abandonment_replay _
           | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandoned _

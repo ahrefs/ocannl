@@ -33,6 +33,9 @@ type outcome =
   | Searched_budget_fallback
       (** The budget cut a search that admitted a timing before it measured the untuned floor. The
           untuned default ships unmeasured. *)
+  | Searched_replay_fallback
+      (** A search crowned a timed winner, then its replay compile failed classified or degenerated
+          and the untuned default shipped unmeasured in its place (gh-ocannl-2416). *)
   | Search_died of terminal_failure
       (** A search ran and terminated on a fatal failure. The counters hold what it had reached. *)
   | Cache_replay  (** A cached winner replayed; nothing was searched in this process. *)
@@ -632,6 +635,7 @@ let outcome_name = function
   | Searched -> "searched"
   | Searched_untimed -> "searched-untimed"
   | Searched_budget_fallback -> "searched-budget-fallback"
+  | Searched_replay_fallback -> "searched-replay-fallback"
   | Search_died _ -> "search-died"
   | Cache_replay -> "cache-replay"
   | Search_disabled -> "search-disabled"
@@ -646,8 +650,8 @@ let outcome_name = function
 let terminal_failure (r : report) =
   match r.outcome with
   | Search_died tf | Pre_search_failure tf -> Some tf
-  | Searched | Searched_untimed | Searched_budget_fallback | Cache_replay | Abandonment_replay _
-  | Search_disabled | Abandoned _ | Lineage_refused _ ->
+  | Searched | Searched_untimed | Searched_budget_fallback | Searched_replay_fallback | Cache_replay
+  | Abandonment_replay _ | Search_disabled | Abandoned _ | Lineage_refused _ ->
       None
 
 (* gh-ocannl-1718 (moved from the test-support [Tune_crown], gh-ocannl-1498): what a call crowned
@@ -12708,8 +12712,9 @@ module Make (D : Driver) = struct
                         (Outcome.detail_of_cause classified.cause);
                       (* gh-ocannl-1480: unconditional, not [logf]. The saved form of a candidate
                          this very search timed must replay; when it does not, the search's work is
-                         discarded and the untuned default ships, which a caller otherwise learns
-                         only from [Train.shipped.ship_substituted] or an [autotune_log] trace. *)
+                         discarded and the untuned default ships. Direct [tune] callers also see
+                         [Searched_replay_fallback] in the report (gh-ocannl-2416), and deferred
+                         callers see [shipped_substitute] / [Train.shipped.ship_substituted]. *)
                       Stdio.eprintf
                         "autotune: WARNING: routine %S: the searched winner %s did not replay \
                          (%s); shipping the untuned default in its place\n\
@@ -12721,25 +12726,32 @@ module Make (D : Driver) = struct
                   | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
             in
             let result = if defer then ship else Fn.const (ship ()) in
-            (* The budget fallback discarded its timed candidates. Keep their census without
-               crediting the untuned default with a crown or its measurement (gh-ocannl-2365). *)
+            (* Both fallbacks discarded the search's timed candidates and shipped the untuned
+               default unmeasured. Keep the search census without crediting the default with a crown
+               or its measurement (gh-ocannl-2365, gh-ocannl-2416). For [tune_deferred] ([defer]),
+               [ship] has not run yet, so a later replay substitution is reported through
+               [shipped_substitute] instead. *)
+            let clear_crown r outcome =
+              {
+                r with
+                outcome;
+                best_ms = Float.infinity;
+                best_spread = None;
+                best_label = "";
+                best_tensorized = false;
+                best_tensorization = None;
+                best_mma_statements = 0;
+                best_mma_scalar_fallbacks = 0;
+                best_grid = None;
+                best_schedule = [];
+                fissioned = false;
+                best_steps = [];
+              }
+            in
             let completed_report =
-              if budget_fallback then
-                {
-                  completed_report with
-                  outcome = Searched_budget_fallback;
-                  best_ms = Float.infinity;
-                  best_spread = None;
-                  best_label = "";
-                  best_tensorized = false;
-                  best_tensorization = None;
-                  best_mma_statements = 0;
-                  best_mma_scalar_fallbacks = 0;
-                  best_grid = None;
-                  best_schedule = [];
-                  fissioned = false;
-                  best_steps = [];
-                }
+              if budget_fallback then clear_crown completed_report Searched_budget_fallback
+              else if (not defer) && !substituted then
+                clear_crown completed_report Searched_replay_fallback
               else completed_report
             in
             (result, completed_report)

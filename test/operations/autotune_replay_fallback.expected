@@ -1,0 +1,18 @@
+forced replay refusal: the simulated refusal fired once on winner replay: true
+forced replay refusal: the search timed at least one candidate before replay: true
+forced replay refusal: outcome is Searched_replay_fallback: true
+forced replay refusal: outcome_name is searched-replay-fallback: true
+forced replay refusal: crown_fields spells searched-replay-fallback with no crown: true
+forced replay refusal: the report credits no timed crown: true
+forced replay refusal: the report credits no spread, tensorization, grid or fissioned flag: true
+forced replay refusal: the report carries no saved schedule: true
+forced replay refusal: the report keeps no best-so-far record of the discarded crown: true
+forced replay refusal: stderr warns that the winner did not replay: true
+forced replay refusal: the shipped untuned default computes the reference bit for bit: true
+control: nothing was refused: true
+control: outcome stays Searched: true
+control: the report carries the timed crown and its metadata: true
+control: the shipped routine computes the reference bit for bit: true
+deferred: before compile_deferred, outcome is Searched and shipped_substitute is false: true
+deferred: compile_deferred hit the refusal and sets shipped_substitute: true
+deferred: the substituted routine computes the reference bit for bit: true

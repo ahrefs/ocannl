@@ -1509,7 +1509,9 @@ both `cifar_resnet` and `cifar_resnet_b1` absent from the store (gh-ocannl-1825)
   successful cell discards. Each arm also names its `Autotune.outcome` in `state` (gh-ocannl-677),
   so a *mixed* cell can show which arm replayed and which searched. An arm reporting
   `searched-budget-fallback` admitted timings before its budget cut and shipped the untuned
-  default unmeasured. An arm reporting `searched-untimed` admitted zero timings. Read `mma_best_ms` against `best_ms` for the margin: tensorization
+  default unmeasured; one reporting `searched-replay-fallback` crowned a timed winner whose replay
+  compile failed or degenerated and shipped the untuned default unmeasured. An arm reporting
+  `searched-untimed` admitted zero timings. Read `mma_best_ms` against `best_ms` for the margin: tensorization
   losing by 1% and by 40% are different findings.
 - **A warm pass reports one arm unless the placement store is bypassed** (gh-ocannl-786,
   gh-ocannl-1020). The search pass records which placement shipped beside the schedule entries,

@@ -202,6 +202,8 @@ let () =
     match !report with
     | None -> Stdio.printf "rank-site: tune site=%s no report\n" site
     | Some r ->
-        Stdio.printf "rank-site: tune site=%s crowned=%S best_ms=%.6f timed=%d %s\n%!" site
+        Stdio.printf "rank-site: tune site=%s outcome=%s crowned=%S best_ms=%.6f timed=%d %s\n%!"
+          site
+          (Autotune.outcome_name r.Autotune.outcome)
           r.Autotune.best_label r.Autotune.best_ms r.Autotune.candidates_timed
           (Autotune.finals_fields r)

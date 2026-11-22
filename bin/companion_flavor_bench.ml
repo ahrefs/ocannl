@@ -23,8 +23,9 @@
    [Autotune.tune] search with the disk cache disabled, its winner's label printed as a [crown]
    line, then checked and timed like every seed. Admission requires a timed crown and an uncontended
    search. [bin_cells.py --arm-exe] pairs the variants of two prebuilt executables by label. For a
-   same-source comparison across gh-ocannl-2365, build the base's benchmark source against both
-   revisions. The newer source requires [Searched_budget_fallback].
+   same-source comparison across gh-ocannl-2365 / gh-ocannl-2416, build the base's benchmark source
+   against both revisions. The newer source requires [Searched_budget_fallback] and
+   [Searched_replay_fallback].
 
    Usage: companion_flavor_bench diag [N K] [repeats] | companion_flavor_bench tail [M N K]
    [repeats] | companion_flavor_bench conv [B] [repeats] (repeats default 16). Measure through
@@ -329,7 +330,8 @@ let () =
           let admitted =
             match !outcome with
             | Some
-                (Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback)
+                ( Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback
+                | Autotune.Searched_replay_fallback )
               when !contended > 0 ->
                 (* A truncated comparison crowns nothing; like a refused timing, host contention. *)
                 Error
@@ -338,6 +340,8 @@ let () =
             | Some Autotune.Searched_untimed -> Error "the search timed no candidate"
             | Some Autotune.Searched_budget_fallback ->
                 Error "the budget cut the search before it measured the untuned default"
+            | Some Autotune.Searched_replay_fallback ->
+                Error "the crowned winner failed to replay; shipped the untuned default"
             | Some
                 (( Autotune.Search_died _ | Autotune.Cache_replay | Autotune.Abandonment_replay _
                  | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandoned _
