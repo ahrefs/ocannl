@@ -6703,7 +6703,10 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   counted in naps: on that loaded VM 200 "10 ms" naps took 10 s (`taskpolicy -b`, or the test's
   in-process throttle, reproduces it on a bare-metal Mac; `taskpolicy -b` reaches every descendant,
   so `taskpolicy -b tools/test-run.sh fresh @test/operations/runtest-device_init_deadline` reruns
-  the whole test that way, and passes). Each arm is a generation, and a region's exit disarms only its
+  the whole test that way, and passes). The throttled full-pipe case is judged off the child's
+  own nap record, so a run starved past reading (a valid backstop death with fewer than five naps
+  after the stall, or no stall at all before the 60 s cap: m4-max at load ~63, gh-ocannl-2003)
+  takes that claim's `starved host` hatch rather than failing; the unthrottled case has none. Each arm is a generation, and a region's exit disarms only its
   own: a region a `fork` child inherited would otherwise cancel a deadline a new domain of the child
   armed (gh-ocannl-1446, the `fork-disarm` case). The disposition is read at arm time, so a handler
   installed mid-region is overridden only at the death (a recorded boundary). HIP's `hipInit` takes

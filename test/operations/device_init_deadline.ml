@@ -132,6 +132,9 @@ let within lo hi = Option.value_map ~default:false ~f:(fun s -> Float.(lo <= s &
    counting 200 naps of 10 ms oversleeping to [unscheduled_gap] or less still shows all of them. *)
 let unscheduled_gap = 0.25
 
+(* The fewest probe naps after the stall began that a full-stderr record must hold to be read. *)
+let min_probe_naps = 5
+
 let probe_naps o ~after =
   List.filter_map o.stdout_lines ~f:(fun l ->
       Option.bind (String.chop_prefix l ~prefix:"nap ") ~f:Float.of_string_opt)
@@ -296,7 +299,7 @@ let () =
     (not capped) && by_sigalrm o
     && (not (says o "survived"))
     && within 1.5 Float.infinity (since o "stall-began")
-    && probed_naps o "stall-began" >= 5
+    && probed_naps o "stall-began" >= min_probe_naps
     && within 0.0 within_s (scheduled_since o "stall-began")
   in
   let full_stderr = full_stderr_case [ "full-stderr"; "cuda" ] in
@@ -305,7 +308,30 @@ let () =
      backstop alarm firing while the diagnostic's write is blocked"
     (Option.value_map full_stderr ~default:false ~f:(backstop_death ~within_s:6.0));
   let full_stderr_throttled = full_stderr_case [ "full-stderr"; "cuda"; "throttled" ] in
+  (* The throttled case's timing rests on its record, so a run that left the record too thin to read
+     is bypassed, not false: under PRIO_DARWIN_BG a host loaded far past its cores may not run the
+     child at all (m4-max's 2026-11-22 sweep, load ~63, gh-ocannl-2003). The hatch is taken for the
+     two shapes seen there, and nothing else: a child SIGKILLed at the cap before its stall began
+     (no line at all on one unit), and an otherwise valid backstop death -- SIGALRM, not survived,
+     at least 1.5 s into the stall -- whose record holds fewer than [min_probe_naps] naps after it
+     (one, on another). A crash, an exit, a survival or an early death still evaluates, and fails. A
+     backstop counting naps keeps the process alive longer and so leaves MORE naps, not fewer, and a
+     child hanging for good with its probe running fills the cap with them, so both still evaluate.
+     A regression that froze the probe too would be read as starved here, but the unthrottled case
+     above, which has no hatch, catches it. Load is no capability of the box, so this is a run-time
+     hatch beside the platform gate, never a skip (gh-ocannl-996). *)
+  let starved =
+    Option.value_map full_stderr_throttled ~default:false ~f:(fun (o, capped) ->
+        if capped then not (stalled o)
+        else
+          by_sigalrm o
+          && (not (says o "survived"))
+          && stalled o
+          && within 1.5 Float.infinity (since o "stall-began")
+          && probed_naps o "stall-began" < min_probe_naps)
+  in
   gated ~when_ ~on ~aggregation:`Environment
+    ~unless:[ ("a starved host (the throttled child's nap record too thin to read)", starved) ]
     "the backstop's 2 s are measured, not counted in naps: with the process's timers throttled so \
      every nap oversleeps by far (as on a loaded macOS VM), the full-pipe case still dies by \
      SIGALRM within 6 s of the stall's start, less what the process's own nap record shows it went \
