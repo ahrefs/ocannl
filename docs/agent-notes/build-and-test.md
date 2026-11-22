@@ -3306,6 +3306,25 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   makes). The second half of that test is the one that makes a wide sweep safe: it runs `p` and
   `p_all` in two children and requires their stdout to be equal, which is the property "converting
   a site does not move its golden" stated as a check rather than as a hope.
+- **Opt-in population counts for passing quantified claims** (gh-ocannl-2390): a passing quantified
+  claim's stdout row is identical whether it checked 125 triples or 216, so a control whose point is
+  "the population grew" sets `OCANNL_TOOL_VERDICT_POPULATION` instead of instrumenting
+  `test/support/verdict.ml`. The variable's grammar is closed: unset, empty, or blank-only disables
+  it; otherwise lines split on `\n` (trailing `\r` stripped, empty lines ignored) form an exact-match
+  set against each claim's rendered `one_line` label, or `*` on any line selects every passing
+  quantified claim (no substring matching, globbing, regex, or comma/colon splitting, since claim
+  labels carry commas and colons). Each selected passing quantified claim prints
+  `<label>: population <N>, floor <M> (not part of the golden)` on stderr (adding `(<what_ran>)` on
+  `p_close`/`pass_fail_close` when supplied), and `p_exists`/`gated_exists` prints
+  `<label>: population <N>, witnesses <W>, witness floor <M> (not part of the golden)` so its
+  witness floor is not confused with a population floor. Failing, skipped, bypassed, and
+  non-quantified claims print nothing; unmatched selectors do not fail the run; stdout goldens and
+  exit statuses are unchanged. Because `verdict.ml` is a library and the variable changes neither
+  verdict nor stdout, `env_var_deps` exempts it alongside `OCANNL_TOOL_VERDICT_RECORDS` — a source
+  control invalidates the test rule automatically, and an unchanged tree observes counts via
+  `tools/test-run.sh fresh` (or by invoking the built executable directly). `verdict_quantified` pins
+  the selection grammar, every quantified combinator, non-quantified/skipped/bypassed/failing
+  exclusions, and golden-neutrality.
 - Executed parity needs a NON-DEGENERATE operating point (gh-ocannl-1135): the raw `0..223`
   ramp in `test/operations/online_softmax.ml` saturated attention into a one-hot softmax, leaving
   score-path parameter gradients of order `1e-19`; agreement then said little about the backward.

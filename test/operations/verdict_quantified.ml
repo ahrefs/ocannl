@@ -41,6 +41,17 @@ open Verdict.Claims
 
 let run_child mode = Fresh_process.run [ mode ]
 
+let env_with_population selection =
+  let prefix = "OCANNL_TOOL_VERDICT_POPULATION=" in
+  let kept =
+    Unix.environment () |> Array.to_list
+    |> List.filter ~f:(fun entry -> not (String.is_prefix entry ~prefix))
+  in
+  Array.of_list (match selection with None -> kept | Some v -> (prefix ^ v) :: kept)
+
+let run_child_with_population selection mode =
+  Fresh_process.run ~env:(env_with_population selection) [ mode ]
+
 (* Refusal needs both the status and the causal stdout line. *)
 let refused claim ~line child =
   let ok = Fresh_process.matches ~stream:`Stdout ~exit:1 ~contains:[ line ] child in
@@ -135,6 +146,13 @@ let () =
   | "shape_pass_fail" -> Verdict.pass_fail "the claim" true
   | "shape_pass_fail_all2" -> Verdict.pass_fail_all2 "the claim" got want ~f:Float.equal
   | "shape_p_close" -> p_close "the claim" got want ~tol:(fun _ -> 0.)
+  | "shape_p_close_what_ran" ->
+      p_close ~min:2 ~what_ran:"seed 3" "the claim" got want ~tol:(fun _ -> 0.)
+  | "shape_within_only" -> p "the claim" (Verdict.within "the block" got want ~tol:(fun _ -> 0.))
+  | "gated_all_bypassed" ->
+      gated_all ~when_:true ~on:"a fixture backend"
+        ~unless:[ ("contended", true) ]
+        "the gated claim" seeds ~f:even
   | "shape_pf_close" -> pf_close "%s" "the claim" got want ~tol:(fun _ -> 0.)
   | "shape_pass_fail_close" -> pass_fail_close "the claim" got want ~tol:(fun _ -> 0.)
   (* gh-ocannl-1224: two of four cells differ beyond 0.25; the second-differing one, at index 3, is
@@ -620,5 +638,171 @@ let () =
       let _, plain_none, _ = run_child "exists_none" in
       let _, exists_none, _ = run_child "exists_none_combinator" in
       Verdict.p "an unwitnessed existential at the default floor prints what `Verdict.p` prints"
-        (String.equal plain_none exists_none && String.equal plain_none "the claim: false\n")
+        (String.equal plain_none exists_none && String.equal plain_none "the claim: false\n");
+      (* gh-ocannl-2390: opt-in stderr population counts for passing quantified claims, selected by
+         [OCANNL_TOOL_VERDICT_POPULATION], with stdout goldens and exit status unchanged. *)
+      let holds_unset_status, holds_unset_out, holds_unset_err =
+        run_child_with_population None "holds"
+      in
+      p_all
+        "unset, empty, and blank-only population selectors print nothing on stderr and preserve \
+         stdout" [ None; Some ""; Some "\n"; Some "\r\n\n" ] ~f:(fun sel ->
+          let status, out, err = run_child_with_population sel "holds" in
+          Poly.equal status (Unix.WEXITED 0)
+          && String.equal out holds_unset_out && String.is_empty err);
+      let single_status, single_out, single_err =
+        run_child_with_population (Some "every seed is even") "holds"
+      in
+      Verdict.p
+        "selecting one passing quantified claim by exact label prints only its population and \
+         floor on stderr without changing stdout"
+        (Poly.equal holds_unset_status (Unix.WEXITED 0)
+        && String.is_empty holds_unset_err
+        && Poly.equal single_status (Unix.WEXITED 0)
+        && String.equal single_out holds_unset_out
+        && String.equal single_err
+             "every seed is even: population 3, floor 1 (not part of the golden)\n");
+      let comma_label = "a zero tolerance admits exactly the equal cells, infinities included" in
+      let comma_status, comma_out, comma_err =
+        run_child_with_population (Some comma_label) "holds"
+      in
+      Verdict.p "a label containing a comma is matched verbatim rather than split"
+        (Poly.equal comma_status (Unix.WEXITED 0)
+        && String.equal comma_out holds_unset_out
+        && String.equal comma_err
+             (comma_label ^ ": population 3, floor 1 (not part of the golden)\n"));
+      let multi_sel =
+        "every one of the three seeds is even\r\nno seed is odd\r\nat least two seeds exceed two\n"
+      in
+      let multi_status, multi_out, multi_err = run_child_with_population (Some multi_sel) "holds" in
+      let expected_multi_err =
+        "every one of the three seeds is even: population 3, floor 3 (not part of the golden)\n\
+         no seed is odd: population 3, floor 1 (not part of the golden)\n\
+         at least two seeds exceed two: population 3, witnesses 2, witness floor 2 (not part of \
+         the golden)\n"
+      in
+      Verdict.p
+        "newline-separated exact labels (CRLF and trailing newline tolerated) select each matching \
+         claim, reporting witnesses and witness floor for existentials"
+        (Poly.equal multi_status (Unix.WEXITED 0)
+        && String.equal multi_out holds_unset_out
+        && String.equal multi_err expected_multi_err);
+      let all_status, all_out, all_err = run_child_with_population (Some "*") "holds" in
+      let expected_all_err =
+        String.concat ~sep:"\n"
+          [
+            "every seed is even: population 3, floor 1 (not part of the golden)";
+            "every seed exceeds its index: population 3, floor 1 (not part of the golden)";
+            "every one of the three seeds is even: population 3, floor 3 (not part of the golden)";
+            "no seed is odd: population 3, floor 1 (not part of the golden)";
+            "some seed exceeds four: population 3, witnesses 1, witness floor 1 (not part of the \
+             golden)";
+            "at least two seeds exceed two: population 3, witnesses 2, witness floor 2 (not part \
+             of the golden)";
+            "every seed validates: population 3, floor 1 (not part of the golden)";
+            "every sampled value is finite: population 2, floor 1 (not part of the golden)";
+            "the readback matches the reference cell for cell: population 3, floor 1 (not part of \
+             the golden)";
+            "all three cells match the reference: population 3, floor 3 (not part of the golden)";
+            "computed readback matches the reference cell for cell: population 3, floor 1 (not \
+             part of the golden)";
+            "the PASS/FAIL readback matches the reference: population 3, floor 1 (not part of the \
+             golden)";
+            "the readback is within an absolute tolerance of the reference: population 3, floor 1 \
+             (not part of the golden)";
+            "the readback is within a relative tolerance of the reference: population 2, floor 1 \
+             (not part of the golden)";
+            "a zero tolerance admits exactly the equal cells, infinities included: population 3, \
+             floor 1 (not part of the golden)";
+            "computed readback is within tolerance of the reference: population 3, floor 1 (not \
+             part of the golden)";
+            "the PASS/FAIL readback is within tolerance of the reference: population 3, floor 1 \
+             (not part of the golden)";
+            "the three source values are pairwise distinct: population 3, floor 2 (not part of the \
+             golden)";
+          ]
+        ^ "\n"
+      in
+      Verdict.p
+        "the `*` selector reports every passing quantified combinator on stderr with stdout \
+         unchanged"
+        (Poly.equal all_status (Unix.WEXITED 0)
+        && String.equal all_out holds_unset_out
+        && String.equal all_err expected_all_err);
+      p_all "a substring or absent label selects nothing and does not change exit status or stdout"
+        [ "every seed"; "no such claim"; "every seed is even " ] ~f:(fun sel ->
+          let status, out, err = run_child_with_population (Some sel) "holds" in
+          Poly.equal status (Unix.WEXITED 0)
+          && String.equal out holds_unset_out && String.is_empty err);
+      let what_ran_status, what_ran_out, what_ran_err =
+        run_child_with_population (Some "the claim") "shape_p_close_what_ran"
+      in
+      Verdict.p
+        "a passing `p_close ~what_ran` selected by its bare label includes `what_ran` in its \
+         stderr count"
+        (Poly.equal what_ran_status (Unix.WEXITED 0)
+        && String.equal what_ran_out "the claim: true\n"
+        && String.equal what_ran_err
+             "the claim (seed 3): population 3, floor 2 (not part of the golden)\n");
+      p_all "non-quantified claims and `Verdict.within` emit no population line under `*`"
+        [ "shape_p"; "shape_within_only" ] ~f:(fun mode ->
+          let status, _, err = run_child_with_population (Some "*") mode in
+          Poly.equal status (Unix.WEXITED 0) && String.is_empty err);
+      p_all
+        "open gated quantified claims report population and floor under `*`, while closed or \
+         bypassed ones emit none"
+        [
+          ("gated_all_open", Some "the gated claim: population 3, floor 1 (not part of the golden)");
+          ("gated_alli_open", Some "the gated claim: population 3, floor 1 (not part of the golden)");
+          ( "gated_exists_open",
+            Some
+              "the gated claim: population 3, witnesses 1, witness floor 1 (not part of the golden)"
+          );
+          ("gated_all_closed", None);
+          ("gated_alli_closed", None);
+          ("gated_exists_closed", None);
+          ("gated_all_bypassed", None);
+        ]
+        ~f:(fun (mode, expected_line) ->
+          let status, _, err = run_child_with_population (Some "*") mode in
+          let pop_lines =
+            String.split_lines err
+            |> List.filter ~f:(fun line -> String.is_substring line ~substring:": population ")
+          in
+          Poly.equal status (Unix.WEXITED 0)
+          &&
+          match expected_line with
+          | None -> List.is_empty pop_lines
+          | Some line -> List.equal String.equal pop_lines [ line ]);
+      let leg_open_status, leg_open_out, leg_open_err =
+        run_child_with_population (Some "*") "leg_open"
+      in
+      let leg_closed_status, leg_closed_out, leg_closed_err =
+        run_child_with_population (Some "*") "leg_closed"
+      in
+      Verdict.p
+        "an open leg reports population only for its passing quantified claims, and a closed leg \
+         reports none, both preserving stdout"
+        (Poly.equal leg_open_status (Unix.WEXITED 0)
+        && Poly.equal leg_closed_status (Unix.WEXITED 0)
+        && String.equal leg_open_out leg_rows
+        && String.equal leg_closed_out leg_rows
+        && List.equal String.equal
+             (String.split_lines leg_open_err
+             |> List.filter ~f:(fun line -> String.is_substring line ~substring:": population "))
+             [ "every leg seed is even: population 3, floor 1 (not part of the golden)" ]
+        && not (String.is_substring leg_closed_err ~substring:": population "));
+      p_all "failing quantified claims emit no passing population line under `*`"
+        [
+          "shape_p_all_false";
+          "shape_p_all2_false";
+          "shape_p_close_false";
+          "all_empty";
+          "all_short";
+          "exists_none_combinator";
+          "exists_short";
+        ] ~f:(fun mode ->
+          let status, _, err = run_child_with_population (Some "*") mode in
+          Poly.equal status (Unix.WEXITED 1)
+          && not (String.is_substring err ~substring:": population "))
   | other -> failwith ("verdict_quantified: unknown mode " ^ other)
