@@ -12711,7 +12711,11 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
        routine sets the node too — a read replays the stored definition AND the local updates, and
        the local update's excluded self-read must not hide the prefix — so the inherited maximum
        unions with the local one. Only prior routines' components exist here: this routine's are
-       stored later, by the virtualizer this pass feeds. *)
+       stored later, by the virtualizer this pass feeds. In the scalar three-routine probe (store a
+       virtual producer, store a select reading it, then copy the select), the consumer charges the
+       select's stored replay: the storage walk has already expanded the producer inside its arm.
+       The two-routine phase 1d fixture in [virtual_chain_fanin] reaches the inherited fold with the
+       expanded reads. *)
     let inherited_memo = Hashtbl.create (module Tnode) in
     let inherited_groups tn =
       Hashtbl.find_or_add inherited_memo tn ~default:(fun () ->
