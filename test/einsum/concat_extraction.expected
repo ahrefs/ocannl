@@ -28,6 +28,12 @@ middle, zero-width suffix (++): the operand's gradient is the segment's weights,
 middle, zero-width suffix (++^): the result has the expected dims: true
 middle, zero-width suffix (++^): the forward is the operand's segment, every other result cell zero: true
 middle, zero-width suffix (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+middle, forced zero-width suffix (q uncaptured) (++): the result has the expected dims: true
+middle, forced zero-width suffix (q uncaptured) (++): the forward is the operand's segment, every other result cell zero: true
+middle, forced zero-width suffix (q uncaptured) (++): the operand's gradient is the segment's weights, zero elsewhere: true
+middle, forced zero-width suffix (q uncaptured) (++^): the result has the expected dims: true
+middle, forced zero-width suffix (q uncaptured) (++^): the forward is the operand's segment, every other result cell zero: true
+middle, forced zero-width suffix (q uncaptured) (++^): the operand's gradient is the segment's weights, zero elsewhere: true
 batched rows, s, p^o => s, o (++): the result has the expected dims: true
 batched rows, s, p^o => s, o (++): the forward is the operand's segment, every other result cell zero: true
 batched rows, s, p^o => s, o (++): the operand's gradient is the segment's weights, zero elsewhere: true
@@ -70,6 +76,12 @@ replace prefix, a => a^b (++): the operand's gradient is the segment's weights, 
 replace prefix, a => a^b (++^): the result has the expected dims: true
 replace prefix, a => a^b (++^): the forward is the operand's segment, every other result cell zero: true
 replace prefix, a => a^b (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+replace prefix, zero-width suffix, a => a^b (++): the result has the expected dims: true
+replace prefix, zero-width suffix, a => a^b (++): the forward is the operand's segment, every other result cell zero: true
+replace prefix, zero-width suffix, a => a^b (++): the operand's gradient is the segment's weights, zero elsewhere: true
+replace prefix, zero-width suffix, a => a^b (++^): the result has the expected dims: true
+replace prefix, zero-width suffix, a => a^b (++^): the forward is the operand's segment, every other result cell zero: true
+replace prefix, zero-width suffix, a => a^b (++^): the operand's gradient is the segment's weights, zero elsewhere: true
 replace suffix, b => a^b (++): the result has the expected dims: true
 replace suffix, b => a^b (++): the forward is the operand's segment, every other result cell zero: true
 replace suffix, b => a^b (++): the operand's gradient is the segment's weights, zero elsewhere: true
@@ -113,5 +125,13 @@ uncaptured prefix, p^o => o: refused with a shape error naming the fix: true
 uncaptured prefix through ++^, p^o => o: refused with a shape error naming the fix: true
 uncaptured replacement, a => a^b: refused with a shape error naming the fix: true
 uncaptured middle, p^o^q => o: refused with a shape error naming the fix: true
+aliased replacement component, non-concat bound first, a => a^b: refused with a shape error naming the fix: true
+aliased replacement component, concat bound first, a => a^b: refused with a shape error naming the fix: true
+needed output component set to 0, p^o => o (++), o = 0: refused with a shape error naming the fix: true
+needed output component set to 0, p^o => o (++^), o = 0: refused with a shape error naming the fix: true
+needed source component set to 0, a => a^b (++), a = 0: refused with a shape error naming the fix: true
+component also a standalone operand axis, a^b; b => a, b = 0: refused with a shape error naming the fix: true
 margins wider than the operand, p^o => o with p = 6: refused with a shape error naming the fix: true
 empty integer component, 0^o => o: refused with a shape error naming the fix: true
+instantiated scheme solves forced zero-width suffix (p^o^q => o, p=2, o=3, src=5): true
+instantiated scheme still refuses uncaptured a => a^b: true

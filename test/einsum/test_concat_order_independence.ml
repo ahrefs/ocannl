@@ -682,10 +682,10 @@ let () =
         ~f:order_dependent;
       p_none ~min:1000 "bounded accepted runs that size a component to 0" bounded_runs
         ~f:zero_component;
-      (* gh-ocannl-2368: a 0 stated outright binds only a discardable component or a registered
-         concatenation component (a zero-width segment), and none of these is either, so stating [u
-         = 0] beside a concatenation is refused in every order and batched. On the base, [[v; u] =
-         4_t] took it, giving [v = 4]. *)
+      (* gh-ocannl-2368, gh-ocannl-2418: a 0 stated outright binds only an emptiable component
+         (whose spec lets it be empty), and none of these is marked emptiable, so stating [u = 0]
+         beside a concatenation is refused in every order and batched. On the base, [[v; u] = 4_t]
+         took it, giving [v = 4]. *)
       let zero_stated_runs =
         List.concat_map tags ~f:(fun t ->
             List.concat_map

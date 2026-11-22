@@ -146,30 +146,37 @@ files.
   coverage relative to its two inputs. Atomic publication prevents two identically interrupted
   runs from agreeing on a prefix. The exporter test injects a batch exception after an ordered
   row and checks that the fresh destination is absent.
-- No path sizes a non-discardable concatenation component to 0, the size only a block spec's
-  discardable component may take (gh-ocannl-2316, gh-ocannl-2368). The permission is read through
-  substitution everywhere (`may_be_empty`): a variable equated with a discardable one may be empty
-  too, whichever of the two represents the class. The rules, by producer:
-  - Arithmetic: in `unify_dim`'s `Concat`/`Dim` arm a zero residual on a single non-discardable
-    `Var` waits once its basis is decided (a conflict still refuses, so a GLB merge of `4` and
-    `[u; 4_a]` still demotes to the broadcast top), and closure then sizes the component (here,
-    refused by the sum). A zero residual also carries no claim, since substitution erases a 0-sized
-    component, so a claim with nowhere else to land is refused there, discardable or not.
+- No path sizes a non-emptiable concatenation component to 0 (gh-ocannl-2316, gh-ocannl-2368,
+  gh-ocannl-2418). Zero permission is split into two environment sets (with `discardable_vars ⊆
+  emptiable_vars` held at `solve_inequalities` entry), both read through aliases by the shared
+  `marked` helper (as is `concat_component_vars` in `is_concat_component`), so no verdict depends
+  on which variable of an alias class substitution presents:
+  - Structural emptiability (`emptiable_vars`, read via `may_be_empty`): computed by
+    `Shape.compute_emptiable_vars` (the four-quantifier complement test in both directions minus
+    variables appearing in any non-`Concat` axis of any slot) for `Block`, `Permute`, `Einsum` and
+    `Einsum_tern`, carried through `derive_projections` and `Shape.Scheme`. It lets a stated or
+    forced 0 bind a component without licensing closure to guess one.
+  - Closure's guess-to-0 permission (`discardable_vars`, read via `closure_guesses_empty`): set by
+    `Block` (`++^`) only. Closure's four guess-to-0 sites, `refuse_concat_component_guess`'s
+    exemption (which now reads `is_concat_component` through aliases too, fixing aliased
+    representatives escaping gh-ocannl-1656), and `concat_bounded_waiting`'s new-choice guard read
+    `closure_guesses_empty`. `concat_bounded_waiting`'s usual close (the waiting side takes its GLB)
+    applies to a closing component that closure would guess empty too: an empty one would size the
+    waiting side to the difference under the shared claim, which its GLB refutes.
+  - Arithmetic: in `unify_dim`'s `Concat`/`Dim` arm a zero residual on a single non-emptiable `Var`
+    waits once its basis is decided (a conflict still refuses, so a GLB merge of `4` and `[u; 4_a]`
+    still demotes to the broadcast top), and closure then sizes the component (here, refused by the
+    sum); a single-component zero residual (`[k; u; 2] = [k; 2]`) waits before erasing to its
+    component too. A zero residual also carries no claim, since substitution erases a 0-sized
+    component, so a claim with nowhere else to land is refused there, emptiable or not. Out of
+    scope: a hand-built non-variable component (an affine `2v`) left alone with a zero residual,
+    whose `v = 0` the affine arms construct.
   - Pairing: only the equal-arity, variables-only, no-solved-component case pairs (the first
     `Row.Concat` bullet). A stage-4+ generalization paired the rest too and left the leftover to
     arithmetic: `[a; b; c] = [d; e]` gave `c = 0`, `[a; b] = [4; e]` chose `b = 4`, and `[a; b;
     2] = [d; e]` was refused. The equation now waits; arithmetic sizes the last component once
     the others are known, and closure closes it at stage 7 (an einsum component is refused,
     gh-ocannl-1656).
-  - Closure: the guesses to 0 and `refuse_concat_component_guess`'s exemption read
-    `may_be_empty`. Plain membership guessed an alias of a discardable component to 1, or refused
-    it as a concatenation component, depending on which variable represented the two.
-    `concat_bounded_waiting`'s usual close (the waiting side takes its GLB) applies to a closing
-    component that may be empty too: an empty one would size the waiting side to the difference
-    under the shared claim, which its GLB refutes. Its plain-membership skip refused `[u; 4_a] =
-    [k; 2_a] ; k >= 5` with `u` aliased to a discardable `w` when `w` represented the two, and gave
-    `u = 3_a` otherwise; gh-ocannl-2317's new choices still require a closing component that
-    cannot be empty.
   - Statement: a constraint stating a concrete 0 (`0`, `Concat []`) for a variable that may not be
     empty waits while constraints register and is refused from stage 5 (`stated_zero`, read where
     `solve_inequalities` dispatches a `Dim_eq` or a `Dim_size`: a setter's number is a `Dim_size`
@@ -177,27 +184,23 @@ files.
     otherwise is). A published solution re-delivered through the same arm is judged as a statement
     too, which is conservative. Out of scope: a literal 0 written as a row's axis (a 0-extent
     tensor axis), which `unify_row` passes to `unify_dim` axis by axis; such a row is a shape,
-    not a size statement. Waiting keeps one verdict when the alias or the
-    discardable mark arrives after the 0 (`u = 0; u = w` with `w` discardable is accepted in both
-    orders). A 0 that reaches a variable through a variable already sized 0 is no statement: `u =
-    w` after `w = 0`, or a row equation substituting `w`, gives `u = 0` in either order, since
-    every 0 binding passed the rule. Equal values are no alias: `w = 0; u = 0` refuses `u`.
-  - A concatenation component (`concat_component_vars`, through an alias too) takes a 0 stated
-    for it: a zero-width segment. Only `Block` specs mark discardable components, so an einsum
-    extraction `p^o^q => o` with `q` captured at 0 (`test/einsum/concat_extraction.ml`, through
-    `++`) names none, while the same spec through `++^` does. Marking an einsum's projected-away
-    components discardable instead was tried and refused: closure then guesses them to 0, and the
-    uncaptured `a => a^b` through `++` is accepted with `b = 0`, which gh-ocannl-1656 refuses. The
-    arithmetic's own zeros for a component still wait: the `Concat`/`Dim` residual, and a
-    single-component residual, which used to erase to its component first (`[k; u; 2] = [k; 2]`
-    gave `u = 0`). Out of scope: a hand-built non-variable component (an affine `2v`) left alone
-    with a zero residual, whose `v = 0` the affine arms construct.
+    not a size statement. Waiting keeps one verdict when the alias or the emptiable mark arrives
+    after the 0 (`u = 0; u = w` with `w` emptiable is accepted in both orders). A 0 that reaches a
+    variable through a variable already sized 0 is no statement: `u = w` after `w = 0`, or a row
+    equation substituting `w`, gives `u = 0` in either order, since every 0 binding passed the rule.
+    Equal values are no alias: `w = 0; u = 0` refuses `u`. Because `stated_zero` reads only
+    `may_be_empty` (no blanket `is_concat_component` exemption), `p^o => o` with stated `o = 0` is
+    refused on both `++` and `++^`, while `p^o^q => o` with `q = 0` (stated or forced) still solves
+    and uncaptured `a => a^b` stays refused.
   - History and pins: before gh-ocannl-2316, `[u; 2v]=[k; 2 T]` with `k = 2_default` first gave
     `u = 0_T` (eighteen bounded runs, now refused in every order); before gh-ocannl-2368 a stated
-    `u = 0` was accepted in every order. `solve_dim_ineq`'s discardable count, which keeps a
-    broadcast inequality rather than an equation, still reads plain membership: it is not a zero
-    rule. Pins: `test_zero_component`, `test_alias_guesses_empty`, `test_unequal_arity_waits` in
-    `test/operations/test_concat_dim_solver.ml`, and the stated-zero runs of
+    `u = 0` was accepted in every order; before gh-ocannl-2418 `stated_zero` exempted any
+    registered concat component and `refuse_concat_component_guess` checked plain membership.
+    `solve_dim_ineq`'s discardable count, which keeps a broadcast inequality rather than an
+    equation, still reads plain membership: it is not a zero rule. Pins: `test_zero_component`,
+    `test_alias_guesses_empty`, `test_aliased_concat_component_refused`,
+    `test_unequal_arity_waits` in `test/operations/test_concat_dim_solver.ml`,
+    `test/einsum/concat_extraction.ml`, and the stated-zero runs of
     `test/einsum/test_concat_order_independence.ml`. The refusals among them also pin
     `zero_waits`' invariant that no settling arm binds a held stated 0: each holds its 0 through
     the stage 2-4 fixpoints where `settle_window` probes it, so a mutant settling arm firing on a
@@ -590,8 +593,9 @@ files.
   is `Iterated`. A middle form's split is not carried by the closed shapes, so captured dims reach
   `derive_projections`' local re-solve as size-only constraints, filtered out of
   `get_proj_equations` (a dimension-1 size there would pin the axis at 0). Closure refuses to guess
-  a concat component to 1 (`Row.add_concat_component`); `++^`'s discardable components still
-  guess 0. Executed: `test/einsum/concat_extraction`.
+  a concat component (or an alias of one) to 1 (`Row.add_concat_component`); `++^`'s discardable
+  components still guess 0, while einsum's structural `emptiable_vars` allow only stated or forced
+  0s. Executed: `test/einsum/concat_extraction`.
 - No route through `Shape` chains windows in one step: a tensor axis has one role per step (plain
   label, window, concat or fixed index), operands that alias are de-aliased, and a window ranges
   over a label, so a target is never what a window ranges over. `solve_proj_equations` still goes

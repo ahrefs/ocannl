@@ -116,21 +116,23 @@ The name records what the variable licenses — its concatenation component may 
 
 Note that this size-0 unit is the coproduct (concatenation) unit: it is the bottom of the *additive* order that concatenation induces, sits **off** the broadcast order entirely, and must not be conflated with the broadcast error bottom `⊥` (the contradiction state). The claim-free unit `1_(bcast_if_1)` is the **top** of the broadcast order, a distinct thing from both.
 
-A variable `v` is in `discardable_vars` if:
+A variable `v` is structurally emptiable (`emptiable_vars`) if:
 1. `v` appears in a component of a `Concat` dimension on one side (RHS or LHS of the spec)
-2. For ALL shapes on the other side, there EXISTS an axis such that for ALL components of that axis, the "complement" of `v`'s component (union of variables from other components of the same `Concat`) has non-empty intersection with that component
+2. `v` does not appear in any non-`Concat` dimension (standalone or affine axis) of any slot in the spec
+3. For ALL shapes on the other side, there EXISTS an axis such that for ALL components of that axis, the "complement" of `v`'s component (union of variables from other components of the same `Concat`) has non-empty intersection with that component
 
-This is a four-quantifier condition: ∀shapes ∃axis ∀components: complement ∩ component ≠ ∅
+This is a four-quantifier condition: ∀shapes ∃axis ∀components: complement ∩ component ≠ ∅ (excluding variables appearing outside `Concat` axes).
 
 Examples:
-- `a^b => a`: `b` is discardable because the complement `{a}` intersects with `{a}` (the single component of the LHS axis)
-- `a^b => b`: `a` is discardable because the complement `{b}` intersects with `{b}`
-- `a^b => a^b`: neither is discardable (each complement only covers one component of the other side's axis, not all)
-- `b^c => a`: no discardable vars because complements `{c}` and `{b}` don't intersect with `{a}`
-- `a; b => a^b`: neither is discardable (two RHS shapes; complement `{a}` covers first shape but not second since `{a} ∩ {b} = ∅`)
-- `a; b => a^c`: `c` is NOT discardable because complement `{a}` doesn't cover the second RHS shape (axis `b`)
+- `a^b => a`: `b` is emptiable because the complement `{a}` intersects with `{a}` (the single component of the LHS axis)
+- `a^b => b`: `a` is emptiable because the complement `{b}` intersects with `{b}`
+- `a^b => a^b`: neither is emptiable (each complement only covers one component of the other side's axis, not all)
+- `b^c => a`: no emptiable vars because complements `{c}` and `{b}` don't intersect with `{a}`
+- `a; b => a^b`: neither is emptiable (two RHS shapes; complement `{a}` covers first shape but not second since `{a} ∩ {b} = ∅`)
+- `a; b => a^c`: `c` is NOT emptiable because complement `{a}` doesn't cover the second RHS shape (axis `b`)
+- `a^b; b => a`: `b` is NOT emptiable because `b` appears as a standalone axis of the second RHS shape
 
-No other variable is sized 0 (gh-ocannl-2316, gh-ocannl-2368). Concatenation arithmetic leaves a zero residual for a single non-discardable variable waiting for closure to size it; a concatenation of unequal arity whose components are all unsized waits until they are sized rather than pairing them positionally; and a 0 stated for a non-discardable variable waits while constraints register, then is refused at closing, unless the variable is a component of a concatenated axis, where a stated 0 is a zero-width segment (an einsum spec marks no discardable component, so `p^o^q => o` with `q` captured at 0 relies on this). A zero residual carries no basis claim either, since an empty segment is erased from the axis. The permission is the component's: a variable equated with a discardable one may be sized 0 too.
+No other variable is sized 0 (gh-ocannl-2316, gh-ocannl-2368, gh-ocannl-2418). Every einsum-family spec (`Permute`, `Einsum`, `Einsum_tern`) populates `emptiable_vars`, letting a stated or forced 0 bind an emptiable component (such as `q = 0` in `p^o^q => o`) without licensing closure to guess an unsized component to 0 (so uncaptured `a => a^b` stays refused, while `p^o => o` with stated `o = 0` is refused). `Block` (`++^`) additionally promotes its emptiable variables into `discardable_vars` (`discardable_vars ⊆ emptiable_vars`), which licenses closure to guess them to 0. Concatenation arithmetic leaves a zero residual for a single non-emptiable variable waiting for closure to size it; a concatenation of unequal arity whose components are all unsized waits until they are sized rather than pairing them positionally; and a 0 stated for a non-emptiable variable waits while constraints register, then is refused at closing. A zero residual carries no basis claim either, since an empty segment is erased from the axis. Both permissions travel with the component's equivalence class: a variable equated with a discardable or emptiable one inherits the same permission regardless of alias orientation.
 
 When guessing dimension variables to minimal values (at Stage 5 and Stage 7), variables in `discardable_vars`, and variables equated with them, are guessed to 0 instead of 1. This allows Block specs to express partial assignments and extractions where some concatenation components may be empty.
 
@@ -225,7 +227,12 @@ type row_entry =
 type dim_env = dim_entry Map.M(Dim_var).t
 type row_env = row_entry Map.M(Row_var).t
 
-type environment = { dim_env : dim_env; row_env : row_env; discardable_vars : dim_var_set }
+type environment = {
+  dim_env : dim_env;
+  row_env : row_env;
+  discardable_vars : dim_var_set;
+  emptiable_vars : dim_var_set;
+}
 
 type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim }

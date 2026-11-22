@@ -630,6 +630,7 @@ type environment = {
   dim_env : dim_env;
   row_env : row_env;
   discardable_vars : dim_var_set;
+  emptiable_vars : dim_var_set; [@sexp_drop_if Set.is_empty]
   dims_mentioning : dim_var_set Map.M(Dim_var).t; [@sexp_drop_if fun _ -> true]
   rows_mentioning_dim : row_var_set Map.M(Dim_var).t; [@sexp_drop_if fun _ -> true]
   rows_mentioning_row : row_var_set Map.M(Row_var).t; [@sexp_drop_if fun _ -> true]
@@ -641,7 +642,9 @@ type environment = {
     appear elsewhere in the environment. In particular, per-dim and per-row constraints might not
     have been applied.
 
-    [discardable_vars] are here for convenience -- see {!get_inequalities}.
+    [discardable_vars] (closure may guess 0) and [emptiable_vars] (stated or forced 0 may bind, with
+    [discardable_vars ⊆ emptiable_vars] held by construction) are here for convenience -- see
+    {!get_inequalities}.
 
     The remaining fields index the entries a solution must visit (gh-ocannl-1904), so that a
     solution need not map over the whole environment: [dims_mentioning] / [rows_mentioning_dim] take
@@ -2828,17 +2831,32 @@ type settling = {
   checkpoint : unit -> unit -> unit;
 }
 
-(* A component that may be empty: a discardable variable, or one a discardable variable was equated
-   with, since the permission is the component's (gh-ocannl-2316). Every rule that lets a component
-   be 0 reads the permission here, never [env.discardable_vars] directly, so it does not depend on
-   which variable of an alias class substitution presents: concatenation arithmetic's zero residual,
-   a 0 stated for a variable ([stated_zero], which also takes a concatenation component's),
-   closure's guesses to 0 and their refusal of a concatenation component, and
-   [concat_bounded_waiting] (gh-ocannl-2368). [solve_dim_ineq]'s discardable count, which keeps a
-   broadcast inequality rather than an equation, is not a zero rule and reads plain membership. *)
-let may_be_empty env v =
-  Set.exists env.discardable_vars ~f:(fun w ->
-      match subst_dim env (Var w) with Var w -> equal_dim_var v w | _ -> false)
+(* Alias-aware membership in a dimension-variable mark set: true when [v]'s equivalence class
+   contains a member of [set], whichever variable substitution presents as the representative
+   (gh-ocannl-2316, gh-ocannl-2368, gh-ocannl-2418). *)
+let marked env set v =
+  if Set.is_empty set then false
+  else
+    match subst_dim env (Var v) with
+    | Var repr ->
+        Set.mem set repr
+        || Set.exists set ~f:(fun w ->
+            match subst_dim env (Var w) with Var w -> equal_dim_var repr w | _ -> false)
+    | _ -> Set.mem set v
+
+(* Closure's guess-to-0 permission: a [Block] spec's discardable component, or an alias of one. Read
+   by closure's four guess sites, [refuse_concat_component_guess]'s exemption, and
+   [concat_bounded_waiting] (gh-ocannl-2368, gh-ocannl-2418). [solve_dim_ineq]'s discardable count,
+   which keeps a broadcast inequality rather than an equation, is not a zero rule and reads plain
+   membership. *)
+let closure_guesses_empty env v = marked env env.discardable_vars v
+
+(* Structural permission to take size 0: a component whose spec allows it to be empty
+   ([env.emptiable_vars], which holds [env.discardable_vars] as a subset by construction), or an
+   alias of one. Read by [stated_zero] and by concatenation arithmetic's zero residuals; unlike
+   [closure_guesses_empty], it does not license closure to guess an unsized component to 0
+   (gh-ocannl-2418). *)
+let may_be_empty env v = marked env env.emptiable_vars v
 
 (* gh-ocannl-1656: dimension variables naming a component of a concatenated einsum axis. Closure
    never guesses one to dimension 1: an unsized component is a real segment, not a broadcast, and a
@@ -2851,19 +2869,14 @@ let add_concat_component v =
     note_mutation ();
     concat_component_vars := Set.add !concat_component_vars v)
 
-(* A component of a concatenated einsum axis, or a variable equated with one. A 0 stated for it is a
-   zero-width segment: only [Block] specs mark discardable components, so an einsum's extraction
-   [p^o^q => o] with [q] captured at 0 (gh-ocannl-1656) names no discardable variable, though the
-   same spec through a block accepts it. *)
+(* A component of a concatenated einsum axis, or a variable equated with one (gh-ocannl-2418). *)
 let is_concat_component env v =
   refuse_retired_read ~table:"concat_component_vars" v.Dim_var.id;
-  Set.mem !concat_component_vars v
-  || Set.exists !concat_component_vars ~f:(fun w ->
-      match subst_dim env (Var w) with Var w -> equal_dim_var v w | _ -> false)
+  marked env !concat_component_vars v
 
-(* gh-ocannl-2368: a constraint that states a 0 for a variable: one side substitutes to a variable
-   [v], the other is a concrete 0 that mentions no variable ([0], [Concat []]). The statement binds
-   [v] only when [v] may be empty or is a concatenation component; otherwise [Some v]. A 0 that
+(* gh-ocannl-2368, gh-ocannl-2418: a constraint that states a 0 for a variable: one side substitutes
+   to a variable [v], the other is a concrete 0 that mentions no variable ([0], [Concat []]). The
+   statement binds [v] only when [v] may be empty ([may_be_empty]); otherwise [Some v]. A 0 that
    reaches a variable through a variable already sized 0 ([u = w] after [w = 0], or a row equation
    substituting [w]) is not a statement here: every 0 binding passed this rule, so it is inherited,
    as the alias rule of [may_be_empty] has it. The solver's own zeros meet the arithmetic rules
@@ -2875,26 +2888,26 @@ let stated_zero env d1 d2 =
   in
   let check dv dz =
     match subst_dim env dv with
-    | Var v when concrete_zero dz && not (may_be_empty env v || is_concat_component env v) -> Some v
+    | Var v when concrete_zero dz && not (may_be_empty env v) -> Some v
     | _ -> None
   in
   match check d1 d2 with Some _ as v -> v | None -> check d2 d1
 
 (* A stated 0 that does not bind waits while constraints register, then is refused from stage 5,
    where closure starts sizing what is left. Waiting, as gh-ocannl-2316's zero residual does, keeps
-   one verdict when an alias to a discardable variable, or the discardable mark itself, arrives
-   after the 0. The held constraint bypasses [stated_zero] in one place: [settle_window] probes
-   every held [Dim_eq] through [unify_dim] at a fixpoint, which binds the 0 in the probe's
-   environment. That is safe because only a window pair sets [settling.settled]: an unsettled probe
-   drops its environment and restores the globals. A settling arm that could fire on a bare [Var] =
-   [Dim] equation would have to skip a held stated 0. *)
+   one verdict when an alias to an emptiable variable, or the emptiable mark itself, arrives after
+   the 0. The held constraint bypasses [stated_zero] in one place: [settle_window] probes every held
+   [Dim_eq] through [unify_dim] at a fixpoint, which binds the 0 in the probe's environment. That is
+   safe because only a window pair sets [settling.settled]: an unsettled probe drops its environment
+   and restores the globals. A settling arm that could fire on a bare [Var] = [Dim] equation would
+   have to skip a held stated 0. *)
 let zero_waits ~stage held env v =
   if is_stage5_up stage then
     raise
     @@ Shape_error
          ( [%string
-             "dimension %{Dim_var.to_string v} is sized 0, which only a discardable concatenation \
-              component may take"],
+             "dimension %{Dim_var.to_string v} is sized 0, which only a concatenation component \
+              its spec lets be empty may take"],
            [ Dim_mismatch [ Var v; get_default_dim ~d:0 () ] ] )
   else ([ held ], env)
 
@@ -3240,9 +3253,9 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
       (* An empty concat is the size-0 axis. *)
       unify_dim ?settling ~stage origin (get_default_dim ~d:0 (), d) env
   (* A single component's zero residual is the [Concat]/[Dim] arm's, and waits as it does there
-     (gh-ocannl-2316): erased first, it would reach the [Var] arm as a bare 0, which a concatenation
-     component may take when stated, as a zero-width segment, but not from the arithmetic
-     (gh-ocannl-2368: [[k; u; 2] = [k; 2]] sized [u] to 0 this way). *)
+     (gh-ocannl-2316, gh-ocannl-2418): erased first, it would reach the [Var] arm as a bare 0,
+     bypassing [stated_zero] (gh-ocannl-2368: [[k; u; 2] = [k; 2]] sized a non-emptiable [u] to 0
+     this way). *)
   | Concat [ Var v ], Dim { d = 0; _ } when not (may_be_empty env v) -> ([ held ], env)
   | Dim { d = 0; _ }, Concat [ Var v ] when not (may_be_empty env v) -> ([ held ], env)
   | Concat [ x ], d | d, Concat [ x ] ->
@@ -3405,10 +3418,10 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
       | [ _ ] when lost_claim () -> conflict ()
       | _ :: _ :: _ when lost_claim () -> ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
       | [ Var v ] when residual = 0 && not (may_be_empty env v) ->
-          (* Concatenation arithmetic never sizes a non-discardable component to 0, which is not a
-             size an axis may have (gh-ocannl-2316): only a block spec's discardable component may
-             be empty, also under an alias it was equated with ([may_be_empty]). The match is on a
-             variable because an einsum spec's components are labels or integers
+          (* Concatenation arithmetic never sizes a non-emptiable component to 0, which is not a
+             size an axis may have (gh-ocannl-2316, gh-ocannl-2418): only a component whose spec
+             lets it be empty may take 0, also under an alias it was equated with ([may_be_empty]).
+             The match is on a variable because an einsum spec's components are labels or integers
              ([Shape.concat_component_dim]); a hand-built non-variable component (an affine [2v],
              say) with a zero residual still falls to the arm below and is out of this rule's scope.
              The basis is decided first, so a conflicting claim still refuses (and a GLB merge still
@@ -3508,11 +3521,12 @@ let add_used_in_pointwise v =
 
 let row_var_id (Row_var.Row_var id) = id
 
-(* A component that may be empty is exempt through an alias too ([may_be_empty]): closure guesses it
-   to 0, as it does the discardable variable it was equated with (gh-ocannl-2368). *)
+(* Both marks read through aliases: a component equated with a fresh representative is still refused
+   here ([is_concat_component]), while one whose class may be guessed to 0 ([closure_guesses_empty],
+   [Block]'s discardable vars only) is exempt; structural emptiability alone does not license
+   closure to guess a component to 0 (gh-ocannl-2368, gh-ocannl-2418). *)
 let refuse_concat_component_guess env v =
-  refuse_retired_read ~table:"concat_component_vars" v.Dim_var.id;
-  if Set.mem !concat_component_vars v && not (may_be_empty env v) then
+  if is_concat_component env v && not (closure_guesses_empty env v) then
     raise
     @@ Shape_error
          ( [%string
@@ -4677,6 +4691,7 @@ let var_mark () = !uid
 let dim_var_id (v : dim_var) = v.id
 let row_var_id (Row_var.Row_var id) = id
 let discardable_vars env = env.discardable_vars
+let emptiable_vars env = env.emptiable_vars
 
 type renaming = { rn_dim : dim_var -> dim_var; rn_row : row_var -> row_var }
 
@@ -5546,7 +5561,7 @@ let%debug5_sexp rec close_dim_terminal ~deferred_dims ~(stage : stage) ~is_param
             [ Terminal_dim (is_param, dim, origin) ]
           else (
             refuse_concat_component_guess env v;
-            let guess_d = if may_be_empty env v then 0 else 1 in
+            let guess_d = if closure_guesses_empty env v then 0 else 1 in
             [ Dim_eq { d1 = dim; d2 = get_bcast_dim ~d:guess_d ~proj_id:53 (); origin } ])
       | _ when not (is_stage6_up stage) -> [ Terminal_dim (is_param, dim, origin) ]
       | _ -> [])
@@ -6146,7 +6161,7 @@ and eliminate_row_constraint ~deferred_dims ~depth stage origin ~terminal ~(glb 
                             | None when Set.mem deferred_dims v -> []
                             | None ->
                                 refuse_concat_component_guess env v;
-                                let d = if may_be_empty env v then 0 else 1 in
+                                let d = if closure_guesses_empty env v then 0 else 1 in
                                 [ Dim_eq { d1 = Var v; d2 = get_bcast_dim ~d (); origin } ]
                             | Some _ ->
                                 close_dim_terminal ~deferred_dims ~stage ~is_param:false origin env
@@ -6324,7 +6339,7 @@ let%track5_sexp close_row_terminal ~deferred_dims ~(stage : stage) ~is_param ori
 let%debug5_sexp eliminate_dim_entry stage origin env v ~defer_guess ~glb constr =
   let guess_dim () =
     refuse_concat_component_guess env v;
-    if may_be_empty env v then get_default_dim ~d:0 ~proj_id:56 ()
+    if closure_guesses_empty env v then get_default_dim ~d:0 ~proj_id:56 ()
     else get_bcast_dim ~d:1 ~proj_id:59 ()
   in
   match (glb, constr) with
@@ -6401,7 +6416,7 @@ let%track5_sexp process_shape_row ~deferred_dims ~held_totals ~(stage : stage) o
         let defer_guess = Set.mem deferred_dims v in
         let guess_dim () =
           refuse_concat_component_guess env v;
-          if may_be_empty env v then get_default_dim ~d:0 ~proj_id:61 ()
+          if closure_guesses_empty env v then get_default_dim ~d:0 ~proj_id:61 ()
           else get_bcast_dim ~d:1 ~proj_id:62 ()
         in
         match find_dim env.dim_env v with
@@ -6549,6 +6564,7 @@ let empty_env =
     dim_env = Utils.Tree_map.empty;
     row_env = Utils.Tree_map.empty;
     discardable_vars = dim_var_set_empty;
+    emptiable_vars = dim_var_set_empty;
     dims_mentioning = Map.empty (module Dim_var);
     rows_mentioning_dim = Map.empty (module Dim_var);
     rows_mentioning_row = Map.empty (module Row_var);
@@ -6720,13 +6736,13 @@ let closing_dim_dependencies ineqs env =
 
    These choices require independent dimension entries. A competing held relation can supply a
    component's tag after a fixed-index minimum closes. The existing closing pass handles those
-   components. The new choices also require a closing component that cannot be discarded, including
-   through an alias ([may_be_empty]). The usual close applies to one that may be empty too
-   (gh-ocannl-2368): the waiting variable exceeds the difference, so an empty closing component
-   would size it to the difference under the shared claim, which its GLB refutes; a guess of 0 could
-   only be refused. Skipping such a component by plain membership refused [[u; 4_a] = [k; 2_a] ; k
-   >= 5] with [u] equated to a discardable [w] when [w] represented the two, and accepted [u = 3_a]
-   otherwise. *)
+   components. The new choices also require a closing component that closure would not guess to 0,
+   including through an alias ([closure_guesses_empty]). The usual close applies to one that may be
+   guessed empty too (gh-ocannl-2368): the waiting variable exceeds the difference, so an empty
+   closing component would size it to the difference under the shared claim, which its GLB refutes;
+   a guess of 0 could only be refused. Skipping such a component by plain membership refused [[u;
+   4_a] = [k; 2_a] ; k >= 5] with [u] equated to a discardable [w] when [w] represented the two, and
+   accepted [u = 3_a] otherwise. *)
 let concat_bounded_waiting ~parameter_axes ineqs env =
   let ordinary_glb v =
     if Set.mem parameter_axes v then None
@@ -6806,7 +6822,8 @@ let concat_bounded_waiting ~parameter_axes ineqs env =
                 let residual = d - diff in
                 let wait_eq = Dim_eq { d1 = Var waiting; d2 = glb; origin } in
                 let usual = if residual > 1 then [ wait_eq ] else [] in
-                if Option.is_some (ordinary_glb waiting) && not (may_be_empty env closing) then
+                if Option.is_some (ordinary_glb waiting) && not (closure_guesses_empty env closing)
+                then
                   let waiting_plain = String.equal basis default_basis in
                   let independent () =
                     not (competing_equation d1 d2 closing || competing_equation d1 d2 waiting)
@@ -6831,9 +6848,16 @@ let concat_bounded_waiting ~parameter_axes ineqs env =
     | _ -> [])
 
 let%debug4_sexp rec solve_inequalities ~(stage : stage)
-    ?(discardable_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
+    ?(discardable_vars : dim_var_set = dim_var_set_empty)
+    ?(emptiable_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
     constraint_ list * _ =
-  let env = { env with discardable_vars = Set.union discardable_vars env.discardable_vars } in
+  let env =
+    {
+      env with
+      discardable_vars = Set.union discardable_vars env.discardable_vars;
+      emptiable_vars = Set.union emptiable_vars (Set.union discardable_vars env.emptiable_vars);
+    }
+  in
   (* gh-ocannl-2229: a fixed-index input without a use-site GLB closes to its minimum at stage 7. Do
      that before unconstrained result axes guess to 1, then let the existing leaf-before-result
      stages propagate the concrete bound. Otherwise an intermediate result in [(u *. 2) *. 2]

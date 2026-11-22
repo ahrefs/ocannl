@@ -1581,19 +1581,75 @@ let einsum_of_logic = function
       Some (spec, dim_refs)
   | Transpose _ | Broadcast _ | Broadcast_tern _ | Terminal _ -> None
 
+(* For einsum-family and Block specs, compute concatenation components that the spec structurally
+   allows to be empty (dimension 0): a variable v is emptiable if: 1. v appears in a component of a
+   Concat dimension on one side; 2. v does not appear in any non-Concat dimension (standalone or
+   affine axis) of any slot in the spec; 3. for ALL shapes on the other side, there EXISTS an axis
+   such that for ALL components of that axis, the complement of v's component has non-empty
+   intersection (∀shapes ∃axis ∀components: complement ∩ component ≠ ∅).
+
+   [Block] specs promote the result to [discardable_vars] (also licensing closure to guess 0);
+   [Permute], [Einsum], and [Einsum_tern] pass it as [emptiable_vars] only (gh-ocannl-2418). *)
+let compute_emptiable_vars ~(this_side_rows : Row.t list) ~(other_side_shapes : Row.t list list) :
+    Row.dim_var_set =
+  let dims_of_rows rows = List.concat_map rows ~f:(fun (row : Row.t) -> row.beg_dims @ row.dims) in
+  let axis_components_of_dim (dim : Row.dim) : Row.dim_var_set list =
+    match dim with
+    | Row.Concat dims -> List.map dims ~f:Row.vars_of_dim
+    | _ -> [ Row.vars_of_dim dim ]
+  in
+  let other_side_shape_axes : Row.dim_var_set list list list =
+    List.map other_side_shapes ~f:(fun shape_rows ->
+        List.map (dims_of_rows shape_rows) ~f:axis_components_of_dim)
+  in
+  let this_side_dims = dims_of_rows this_side_rows in
+  List.fold this_side_dims ~init:Row.dim_var_set_empty ~f:(fun acc dim ->
+      match dim with
+      | Row.Concat components ->
+          let component_var_sets = List.map components ~f:Row.vars_of_dim in
+          let all_concat_vars =
+            List.fold component_var_sets ~init:Row.dim_var_set_empty ~f:Set.union
+          in
+          List.fold component_var_sets ~init:acc ~f:(fun acc2 component_vars ->
+              let complement = Set.diff all_concat_vars component_vars in
+              let complement_covers_all_shapes =
+                List.for_all other_side_shape_axes ~f:(fun shape_axes ->
+                    List.exists shape_axes ~f:(fun axis_components ->
+                        List.for_all axis_components ~f:(fun axis_comp_vars ->
+                            not (Set.is_empty (Set.inter complement axis_comp_vars)))))
+              in
+              if complement_covers_all_shapes then Set.union acc2 component_vars else acc2)
+      | _ -> acc)
+
+let emptiable_of_bios ~bio_lhs:(b_lhs, i_lhs, o_lhs) ~bio_rhs_list : Row.dim_var_set =
+  let rhs_shapes : Row.t list list = List.map bio_rhs_list ~f:(fun (b, inp, o) -> [ b; inp; o ]) in
+  let lhs_rows = [ b_lhs; i_lhs; o_lhs ] in
+  let from_rhs =
+    compute_emptiable_vars ~this_side_rows:(List.concat rhs_shapes) ~other_side_shapes:[ lhs_rows ]
+  in
+  let from_lhs = compute_emptiable_vars ~this_side_rows:lhs_rows ~other_side_shapes:rhs_shapes in
+  let non_concat_vars =
+    List.fold
+      (lhs_rows @ List.concat rhs_shapes)
+      ~init:Row.dim_var_set_empty
+      ~f:(fun acc (row : Row.t) ->
+        List.fold (row.beg_dims @ row.dims) ~init:acc ~f:(fun acc -> function
+          | Row.Concat _ -> acc
+          | dim -> Set.union acc (Row.vars_of_dim dim)))
+  in
+  Set.diff (Set.union from_rhs from_lhs) non_concat_vars
+
 (** Shared n-ary einsum constraint builder used by [Broadcast (Einsum ...)],
     [Broadcast_tern (Einsum_tern ...)], and [Block]. Handles per-shape
-    [einsum_slot_spec_to_dims_bio] calls, name-clash check, delayed-var binding, proj-env merge, and
-    [Row_eq] emission.
+    [einsum_slot_spec_to_dims_bio] calls, name-clash check, delayed-var binding, proj-env merge,
+    emptiable-component analysis, and [Row_eq] emission.
 
     [rhs_slots] is a list of [(parsed_axis_labels, shape)] pairs, one per RHS. [result_label] is the
     operation string for LHS [Row_eq] origins (e.g. ["Broadcast RESULT"] or ["Block RESULT"]).
     [arg_label_prefix] is the prefix for RHS [Row_eq] origins; the index (1-based) is appended,
     yielding e.g. ["Broadcast ARGUMENT 1"]. [error_shapes] is the shape list for error context.
 
-    Returns [(proj_env, bio_lhs, bio_rhs_list, inequalities)] where [bio_lhs] and [bio_rhs_list] are
-    the batch/input/output row triples for the LHS and each RHS — needed by [Block] to compute
-    discardable vars. *)
+    Returns [(proj_env, emptiable_vars, inequalities)]. *)
 let einsum_n_constraints ?projection_sizing ~(spec : einsum_spec)
     ~(rhs_slots : (parsed_axis_labels * t) list) ~(cur_sh : t) ~ls_lhs ~dim_refs ~result_label
     ~arg_label_prefix ~(error_shapes : t list) ?(lhs_constraints_first = false) () =
@@ -1725,54 +1781,12 @@ let einsum_n_constraints ?projection_sizing ~(spec : einsum_spec)
     ]
   in
   let bio_rhs_list = List.map rhs_results ~f:(fun (_, _, _, _, bio) -> bio) in
+  let emptiable_vars = emptiable_of_bios ~bio_lhs ~bio_rhs_list in
   let ordered_constraints =
     if lhs_constraints_first then lhs_constraints @ rhs_constraints
     else rhs_constraints @ lhs_constraints
   in
-  (proj_env, bio_lhs, bio_rhs_list, extras_dim_refs @ extras_lhs @ ordered_constraints)
-
-(* For Block specs, compute discardable_vars: variables that are allowed to be 0. A variable v is
-   discardable if: 1. v appears in a component of a Concat dimension on one side 2. For ALL shapes
-   on the other side, there EXISTS an axis such that for ALL components of that axis, the complement
-   of v's component has non-empty intersection. This is a four-quantifier condition: ∀shapes ∃axis
-   ∀components: complement ∩ component ≠ ∅ *)
-let compute_block_discardable_vars ~(this_side_rows : Row.t list)
-    ~(other_side_shapes : Row.t list list) : Row.dim_var_set =
-  (* Extract all dims from rows (both flanks; bcast no longer carries beg_dims). *)
-  let dims_of_rows rows = List.concat_map rows ~f:(fun (row : Row.t) -> row.beg_dims @ row.dims) in
-  (* Get component var sets for each axis. For non-Concat dims, there's one component with all vars
-     of that dim. For Concat dims, each element is a separate component. *)
-  let axis_components_of_dim (dim : Row.dim) : Row.dim_var_set list =
-    match dim with
-    | Row.Concat dims -> List.map dims ~f:Row.vars_of_dim
-    | _ -> [ Row.vars_of_dim dim ]
-  in
-  (* For each shape on the other side, get its axes (each axis is a list of component var sets) *)
-  let other_side_shape_axes : Row.dim_var_set list list list =
-    List.map other_side_shapes ~f:(fun shape_rows ->
-        List.map (dims_of_rows shape_rows) ~f:axis_components_of_dim)
-  in
-  (* For each Concat on this side, find discardable vars. Non-Concat dims cannot contribute
-     discardable vars since their complement is empty. *)
-  let this_side_dims = dims_of_rows this_side_rows in
-  List.fold this_side_dims ~init:Row.dim_var_set_empty ~f:(fun acc dim ->
-      match dim with
-      | Row.Concat components ->
-          let component_var_sets = List.map components ~f:Row.vars_of_dim in
-          let all_concat_vars =
-            List.fold component_var_sets ~init:Row.dim_var_set_empty ~f:Set.union
-          in
-          List.fold component_var_sets ~init:acc ~f:(fun acc2 component_vars ->
-              let complement = Set.diff all_concat_vars component_vars in
-              (* Check: for ALL shapes, EXISTS an axis where ALL components intersect complement *)
-              let complement_covers_all_shapes =
-                List.for_all other_side_shape_axes ~f:(fun shape_axes ->
-                    List.exists shape_axes ~f:(fun axis_components ->
-                        List.for_all axis_components ~f:(fun axis_comp_vars ->
-                            not (Set.is_empty (Set.inter complement axis_comp_vars)))))
-              in
-              if complement_covers_all_shapes then Set.union acc2 component_vars else acc2)
-      | _ -> acc)
+  (proj_env, emptiable_vars, extras_dim_refs @ extras_lhs @ ordered_constraints)
 
 let unused_shapes = ref (Set.empty (module Int))
 
@@ -1788,18 +1802,24 @@ let mark_unused id =
     Row.note_mutation ();
     unused_shapes := Set.add !unused_shapes id)
 
+type zero_permissions = { discardable_vars : Row.dim_var_set; emptiable_vars : Row.dim_var_set }
+[@@deriving sexp_of]
+
+let no_empties =
+  { discardable_vars = Row.dim_var_set_empty; emptiable_vars = Row.dim_var_set_empty }
+
 (* [projection_sizing]: given by {!derive_projections} only, the one way to ask for its constraints;
    the step's capture sizes are added there and are absent from the result
    ({!capture_constraints}). *)
 let%debug4_sexp get_inequalities ?projection_sizing
     ({ shape = cur_sh; logic; _ } as _upd : update_step) :
-    proj_axis_env * Row.dim_var_set * Row.constraint_ list =
+    proj_axis_env * zero_permissions * Row.constraint_ list =
   let for_projections = Option.is_some projection_sizing in
   unmark_unused cur_sh.id;
   let _debug_cur_sh : t = cur_sh in
   let _debug_logic : logic = logic in
   let open Row in
-  let defaults ineqs = (dim_map_empty, dim_var_set_empty, ineqs) in
+  let defaults ineqs = (dim_map_empty, no_empties, ineqs) in
   let get_origin lhs_kind sh rhs_kind operation =
     Row.
       {
@@ -1824,7 +1844,7 @@ let%debug4_sexp get_inequalities ?projection_sizing
   | Terminal { is_param; logic = Fetch (Constant_bits _) } -> defaults @@ mark_terminal ~is_param
   | Terminal { is_param; logic = Data (Reshape nd) } ->
       ( dim_map_empty,
-        dim_var_set_empty,
+        no_empties,
         Rows_constr
           {
             r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
@@ -1852,7 +1872,7 @@ let%debug4_sexp get_inequalities ?projection_sizing
   | Terminal { is_param; logic = Data (Keep_shape_no_padding nd) } ->
       (* FIXME: constrain padding to "not padded". *)
       ( dim_map_empty,
-        dim_var_set_empty,
+        no_empties,
         (if for_projections then []
          else
            [
@@ -1880,7 +1900,7 @@ let%debug4_sexp get_inequalities ?projection_sizing
   | Terminal { is_param; logic = Data (Padded { data; padding; padded_value }) } ->
       ignore padded_value;
       ( dim_map_empty,
-        dim_var_set_empty,
+        no_empties,
         (if for_projections then []
          else
            [
@@ -1918,7 +1938,7 @@ let%debug4_sexp get_inequalities ?projection_sizing
   | Terminal { is_param; logic = Fetch (Constant_fill values) } ->
       let len = Array.length values in
       ( dim_map_empty,
-        dim_var_set_empty,
+        no_empties,
         Rows_constr
           {
             r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
@@ -1938,7 +1958,7 @@ let%debug4_sexp get_inequalities ?projection_sizing
   | Terminal { is_param; logic = Fetch (Slice { sliced = tn; batch_idx = _ }) } ->
       if Lazy.is_val tn.dims then
         ( dim_map_empty,
-          dim_var_set_empty,
+          no_empties,
           (if for_projections then []
            else
              [
@@ -2278,7 +2298,7 @@ let%debug4_sexp get_inequalities ?projection_sizing
         ]
       in
       ( proj_axis_env,
-        dim_var_set_empty,
+        no_empties,
         (Option.to_list (if for_projections then None else static_range)
         |> List.map ~f:(fun range ->
             Dim_eq
@@ -2336,8 +2356,11 @@ let%debug4_sexp get_inequalities ?projection_sizing
         let combine ~key:_ _ _ = assert false in
         Map.merge_skewed ~combine proj_env_rhs proj_env_lhs
       in
+      let emptiable_vars =
+        emptiable_of_bios ~bio_lhs:(b_lhs, i_lhs, o_lhs) ~bio_rhs_list:[ (b_rhs, i_rhs, o_rhs) ]
+      in
       ( proj_env,
-        dim_var_set_empty,
+        { discardable_vars = dim_var_set_empty; emptiable_vars },
         extras_dim_refs @ extras_rhs @ extras_lhs
         @ [
             Row_eq
@@ -2506,14 +2529,14 @@ let%debug4_sexp get_inequalities ?projection_sizing
                  ( "Invalid einsum spec (expected two arguments): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )
       in
-      let proj_env, _, _, inequalities =
+      let proj_env, emptiable_vars, inequalities =
         einsum_n_constraints ?projection_sizing ~spec:einsum_spec
           ~rhs_slots:[ (ls_rhs1, sh1); (ls_rhs2, sh2) ]
           ~cur_sh ~ls_lhs ~dim_refs ~result_label:"Broadcast RESULT"
           ~arg_label_prefix:"Broadcast ARGUMENT" ~error_shapes:[ cur_sh; sh1; sh2 ]
           ~lhs_constraints_first:true ()
       in
-      (proj_env, dim_var_set_empty, inequalities)
+      (proj_env, { discardable_vars = dim_var_set_empty; emptiable_vars }, inequalities)
   | Block { spec = einsum_spec; delayed_vars; rhses } ->
       let spec = spec_text einsum_spec in
       List.iter rhses ~f:(fun sh -> unmark_unused sh.id);
@@ -2529,26 +2552,13 @@ let%debug4_sexp get_inequalities ?projection_sizing
                      (List.length rhses) spec,
                    [ Shape_mismatch (cur_sh :: rhses) ] )
       in
-      let proj_env, (b_lhs, i_lhs, o_lhs), bio_rhs_list, inequalities =
+      let proj_env, emptiable_vars, inequalities =
         einsum_n_constraints ?projection_sizing ~spec:einsum_spec
           ~rhs_slots:(List.zip_exn ls_rhses rhses) ~cur_sh ~ls_lhs ~dim_refs:delayed_vars
           ~result_label:"Block RESULT" ~arg_label_prefix:"Block ARGUMENT"
           ~error_shapes:(cur_sh :: rhses) ()
       in
-      (* Compute discardable_vars for concat semantics: variables allowed to be 0. *)
-      let rhs_shapes : Row.t list list =
-        List.map bio_rhs_list ~f:(fun (b, inp, o) -> [ b; inp; o ])
-      in
-      let lhs_rows = [ b_lhs; i_lhs; o_lhs ] in
-      let discardable_from_rhs =
-        compute_block_discardable_vars ~this_side_rows:(List.concat rhs_shapes)
-          ~other_side_shapes:[ lhs_rows ]
-      in
-      let discardable_from_lhs =
-        compute_block_discardable_vars ~this_side_rows:lhs_rows ~other_side_shapes:rhs_shapes
-      in
-      let discardable_vars = Set.union discardable_from_rhs discardable_from_lhs in
-      (proj_env, discardable_vars, inequalities)
+      (proj_env, { discardable_vars = emptiable_vars; emptiable_vars }, inequalities)
   | Broadcast_tern (Einsum_tern (einsum_spec, dim_refs), sh1, sh2, sh3) ->
       let spec = spec_text einsum_spec in
       unmark_unused sh1.id;
@@ -2567,13 +2577,13 @@ let%debug4_sexp get_inequalities ?projection_sizing
                  ( "Invalid einsum spec (expected three arguments): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh1; sh2; sh3 ] ] )
       in
-      let proj_env, _, _, inequalities =
+      let proj_env, emptiable_vars, inequalities =
         einsum_n_constraints ?projection_sizing ~spec:einsum_spec
           ~rhs_slots:[ (ls_rhs1, sh1); (ls_rhs2, sh2); (ls_rhs3, sh3) ]
           ~cur_sh ~ls_lhs ~dim_refs ~result_label:"Broadcast RESULT"
           ~arg_label_prefix:"Broadcast ARGUMENT" ~error_shapes:[ cur_sh; sh1; sh2; sh3 ] ()
       in
-      (proj_env, dim_var_set_empty, inequalities)
+      (proj_env, { discardable_vars = dim_var_set_empty; emptiable_vars }, inequalities)
 
 let state = ref Row.empty_env [@@mutation_serial.fingerprinted]
 
@@ -4072,8 +4082,10 @@ let projected_operands = function
    axes already fix the variable at that size it is dropped, so the tag they carry stands -- the
    broadcast top a free capture closed to, a named tag an operand gave it. A different size still
    meets them, and is refused there. *)
-let solve_with_sizing ~discardable_vars ~sizing ineqs =
-  let unsolved, env = Row.solve_inequalities ~stage:Stage1 ~discardable_vars ineqs Row.empty_env in
+let solve_with_sizing ~zero_perms:{ discardable_vars; emptiable_vars } ~sizing ineqs =
+  let unsolved, env =
+    Row.solve_inequalities ~stage:Stage1 ~discardable_vars ~emptiable_vars ineqs Row.empty_env
+  in
   let open_sizing =
     List.filter sizing ~f:(function
       | Row.Dim_eq { d1 = Var v; d2 = Dim { d; _ }; _ } -> (
@@ -4096,15 +4108,14 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
      contributed by this step. *)
   let _debug_update_step : update_step = update_step in
   let sizing = ref [] in
-  let (proj_axis_env, discardable_vars, ineqs) :
-      proj_axis_env * Row.dim_var_set * Row.constraint_ list =
+  let (proj_axis_env, zero_perms, ineqs) : proj_axis_env * zero_permissions * Row.constraint_ list =
     get_inequalities ~projection_sizing:sizing update_step
   in
   (* We need to solve the equations/inequalities one last time because of fresh row variables
      potentially generated by [get_inequalities]. Since the variables in the shapes must be
      substituted-out at this point, the global state is already an empty env, but in principle we
      want to only find a local solution to not contaminate projections across operations. *)
-  let unsolved, local_env = solve_with_sizing ~discardable_vars ~sizing:!sizing ineqs in
+  let unsolved, local_env = solve_with_sizing ~zero_perms ~sizing:!sizing ineqs in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage2 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage3 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage4 unsolved local_env in
@@ -4666,13 +4677,15 @@ let propagate_inline (update_step : update_step) : unit =
       (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice
          does). *)
       iter_shapes update_step ~f:(apply_env_t !state);
-      let _, discardable_vars, ineqs = get_inequalities update_step in
+      let _, { discardable_vars; emptiable_vars }, ineqs = get_inequalities update_step in
       active_update_steps := update_step :: !active_update_steps;
       active_constraints := ineqs @ !active_constraints;
       if not (tracing_in_progress ()) then
         counts :=
           { !counts with inline_constraints = !counts.inline_constraints + List.length ineqs };
-      let ineqs', env = Row.solve_inequalities ~stage:Row.Stage1 ~discardable_vars ineqs !state in
+      let ineqs', env =
+        Row.solve_inequalities ~stage:Row.Stage1 ~discardable_vars ~emptiable_vars ineqs !state
+      in
       let _debug_remaining_constraints : Row.constraint_ list = ineqs' in
       apply_env_step ~closure:false env update_step;
       state := env)
@@ -5636,6 +5649,7 @@ module Scheme = struct
         (** Pre-existing open shapes the trace used, with their rows at the end of the trace. *)
     marks : Row.marks;
     discardable : Row.dim_var list;
+    emptiable : Row.dim_var list;
     unmarked_unused : int list;
     closure_bound : string option;
         (** Fixed variables no anchor covers: the scheme cannot be instantiated after a closure. *)
@@ -6163,6 +6177,8 @@ module Scheme = struct
         marks;
         discardable =
           Set.to_list (Set.diff (Row.discardable_vars env_end) (Row.discardable_vars env_start));
+        emptiable =
+          Set.to_list (Set.diff (Row.emptiable_vars env_end) (Row.emptiable_vars env_start));
         unmarked_unused = Set.to_list (Set.diff unused_start unused_end);
         closure_bound;
         closure_at_trace = !closure_count;
@@ -6317,6 +6333,9 @@ module Scheme = struct
       List.fold s.discardable ~init:Row.dim_var_set_empty ~f:(fun acc v ->
           Set.add acc (rn.rn_dim v))
     in
+    let emptiable_vars =
+      List.fold s.emptiable ~init:Row.dim_var_set_empty ~f:(fun acc v -> Set.add acc (rn.rn_dim v))
+    in
     let ref_inputs = if sabotaged No_ref_inputs then [] else s.ref_inputs in
     let rename_binding : ref_binding -> ref_binding = function
       | `Dim v -> `Dim (rn.rn_dim v)
@@ -6369,7 +6388,9 @@ module Scheme = struct
              });
           if instance then
             active_instances := { inst_shapes; inst_rows; inst_refs } :: !active_instances;
-          let _, env = Row.solve_inequalities ~stage:Row.Stage1 ~discardable_vars all !state in
+          let _, env =
+            Row.solve_inequalities ~stage:Row.Stage1 ~discardable_vars ~emptiable_vars all !state
+          in
           state := env;
           List.iter inst_shapes ~f:(apply_env_t env);
           (* As [propagate_inline] publishes a step's references after its Stage1 solve. *)

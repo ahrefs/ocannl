@@ -77,10 +77,11 @@ We can summarize the implementation as a judgment:
 G |- update_step u ==> (P, Z, Phi)
 ```
 
-where `P` is the projection-axis environment, `Z` is the set of discardable
-dimension variables allowed to close to `0` under block/concat semantics, and
-`Phi` is the generated shape-constraint list. `get_inequalities` implements this
-judgment.
+where `P` is the projection-axis environment, `Z` is the pair of zero-permission
+sets (`discardable_vars`, allowed for closure to guess `0` under block semantics,
+and `emptiable_vars`, allowed to bind a stated or forced `0` across einsum-family
+and block specs, with `discardable_vars ⊆ emptiable_vars`), and `Phi` is the
+generated shape-constraint list. `get_inequalities` implements this judgment.
 
 ## 2. Rows Generated from Specs
 
@@ -340,12 +341,17 @@ at the rigid/row-subtyping boundary. `shape.ml` deliberately strengthens this to
 equality so that labels and row variables are inferred bidirectionally. This is
 the implementation fact behind Remark 2.15 and Appendix A.8.
 
-`Block` adds one more generation product: `discardable_vars`. For concat axes,
-`compute_block_discardable_vars` identifies component variables that may close
-to size `0` because the complementary components cover the other side. This is
-outside the broadcast order: `0` is the additive unit for concatenation, not the
-broadcast top and not the contradiction bottom. The formal core's Conjecture 8.3
-is precisely the soundness obligation for this generation-side set.
+Einsum-family specs and `Block` add one more generation product: zero
+permissions (`discardable_vars` and `emptiable_vars`). For concat axes,
+`compute_emptiable_vars` (via `emptiable_of_bios`) identifies component variables
+that may take size `0` because the complementary components cover the other side
+and the variable appears in no non-`Concat` axis. `Permute`, `Einsum`, and
+`Einsum_tern` populate `emptiable_vars` only (stated or forced `0`, no closure
+guess); `Block` additionally promotes the set to `discardable_vars` (allowing
+closure to guess `0`). This is outside the broadcast order: `0` is the additive
+unit for concatenation, not the broadcast top and not the contradiction bottom.
+The formal core's Conjecture 8.3 is precisely the soundness obligation for this
+generation-side set.
 
 ### 3.5 Logic Defined Elsewhere
 
@@ -589,8 +595,9 @@ This introduces a second unit:
 - `0`: additive unit for concatenation components, outside the broadcast order.
 
 Any formalization that treats `0` as a broadcast dimension is wrong. The proof
-obligation is that every variable in `discardable_vars` occurs only where its
-zero contribution is projected away or covered by the complement test.
+obligation is that every variable in `emptiable_vars` (and hence
+`discardable_vars`) occurs only where its zero contribution is projected away or
+covered by the complement test and never as a non-`Concat` axis.
 
 ### 7.5 Terminals and Shape Rows
 
@@ -639,9 +646,9 @@ For quick reference, the core generation rules in `get_inequalities` are:
 | compose | `A_I <= B_O`, `C_B <= A_B`, `C_B <= B_B`, `C_I <= B_I`, `C_O <= A_O` |
 | compose accumulate | compose constraints plus `C_k <= D_k` |
 | batch slice | expanded result batch row equals operand batch; input/output equal |
-| permute | result equals LHS template; RHS template equals operand |
-| einsum | result equals LHS template; each RHS template equals its operand |
-| block | n-ary einsum equalities plus `discardable_vars` from concat analysis |
+| permute | result equals LHS template; RHS template equals operand; `emptiable_vars` from concat analysis |
+| einsum | result equals LHS template; each RHS template equals its operand; `emptiable_vars` from concat analysis |
+| block | n-ary einsum equalities plus `discardable_vars` and `emptiable_vars` from concat analysis |
 | uint4x32 conversion | input `Exact [v]`; output `Total_elems(coeff * v)` |
 | defined-by-cd | no constraints in `shape.ml` |
 
@@ -687,8 +694,8 @@ The main code correspondences are:
   plus fixed-index and affine side constraints.
 - `einsum_n_constraints`: n-ary exact spec matching for binary/ternary einsum
   and block operations.
-- `compute_block_discardable_vars`: generation-side additive-zero policy for
-  concat specs.
+- `compute_emptiable_vars` / `emptiable_of_bios`: generation-side additive-zero
+  policy for concat specs.
 - `propagate_shapes`: online Stage 1 generation and solving.
 - `finish_inference`: global staged solving, `Shape_row` injection, and
   projection derivation.
