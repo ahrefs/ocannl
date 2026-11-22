@@ -5,6 +5,7 @@ conv whole-routine: the site's output is zeroed in the lowering: true
 conv whole-routine: the GPU leg seeds the zeroed site: true
 conv whole-routine: the GPU tree omits CPU refutations: true
 conv whole-routine: the conv nest is listed, marked zeroed: true
+conv whole-routine: the untargeted flavor explains why it cannot seed: true
 conv whole-routine (no mma): the census's seeds are sketch_seed_params' list: true
 conv whole-routine (no mma): the target conv leg has seeds or a refutation: true
 no mma capability: the GPU leg names it: true

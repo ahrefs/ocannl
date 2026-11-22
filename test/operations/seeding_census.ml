@@ -142,6 +142,15 @@ let () =
         ~f:(fun (path, _) -> on_path (FD.Conv_leg `Cpu) path));
   p_exists "conv whole-routine: the conv nest is listed, marked zeroed" gpu.sc_conv_nests
     ~f:(fun (_, zeroed) -> zeroed);
+  let neither = Autotune.seeding_census ~is_gpu:false ~is_cpu:false ~limits:gpu_limits opt in
+  let neither_refutations =
+    Option.value_map (conv_seeding neither) ~default:[] ~f:(fun (_, tree) ->
+        Sspace.refutations tree)
+  in
+  p_exists "conv whole-routine: the untargeted flavor explains why it cannot seed"
+    neither_refutations ~f:(fun (path, witness) ->
+      List.equal Poly.equal (List.map path ~f:snd) [ FD.Fusion `Unfused ]
+      && String.equal witness "neither a CPU nor a GPU target");
   let no_mma =
     census ~where:"conv whole-routine no-mma" ~is_gpu:true
       ~limits:Ir.Backend_intf.no_hardware_limits opt

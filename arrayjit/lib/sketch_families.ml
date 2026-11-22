@@ -5454,11 +5454,13 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
   (* A target's absent leg is outside its search space. Reserve refutations for pipelines the target
      actually offers, so the census reports gates that can affect this search. *)
   let flavor ~fused =
-    Sspace.Child
-      (lazy
-        (let cpu = if is_cpu then [ (Family_decision.Conv_leg `Cpu, cpu_leg ~fused) ] else [] in
-         let gpu = if is_gpu then [ (Family_decision.Conv_leg `Gpu, gpu_leg ~fused) ] else [] in
-         Sspace.Choice { level = Family_decision.level (Conv_leg `Cpu); children = cpu @ gpu }))
+    if not (is_cpu || is_gpu) then Sspace.Refuted "neither a CPU nor a GPU target"
+    else
+      Sspace.Child
+        (lazy
+          (let cpu = if is_cpu then [ (Family_decision.Conv_leg `Cpu, cpu_leg ~fused) ] else [] in
+           let gpu = if is_gpu then [ (Family_decision.Conv_leg `Gpu, gpu_leg ~fused) ] else [] in
+           decided_choice (cpu @ gpu)))
   in
   (* Unfused first, so the leaves keep the seeds-then-twins order the flat enumeration established
      (candidate timing order, dedup keep-first). The fused flavor is a construction-time verdict of

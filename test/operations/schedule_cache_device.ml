@@ -95,7 +95,7 @@ let () =
         Sexp.equal (Sexp.List (List.filter fields ~f:in_key)) projected
     | _ -> false
   in
-  p "the cache key's limits projection renders as the record without its Untimed fields"
+  p "the cache key's limits projection preserves the record's field order and values"
     projection_agrees;
   p "a concrete context's identity is stable"
     (Option.equal BI.equal_timing_identity identity (timing_identity ctx));
