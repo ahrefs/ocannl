@@ -1,0 +1,15 @@
+stride 1: the materialized f32 gradient equals the host sums: true
+stride 1: rounding per step differs from rounding once per cell: true
+stride 1: rounding per window differs from rounding once per cell: true
+stride 1: the bf16 gradient equals the f32 gradient rounded once per cell: true
+stride 1: the input gradient's accumulator tiles are f32: true
+stride 1: the privatized gradient equals the f32 gradient rounded once per cell: true
+stride 2: the materialized f32 gradient equals the host sums: true
+stride 2: rounding per step differs from rounding once per cell: true
+stride 2: rounding per window differs from rounding once per cell: true
+stride 2: the bf16 gradient equals the f32 gradient rounded once per cell: true
+stride 2: the input gradient's accumulator tiles are f32: true
+stride 2: the privatized gradient equals the f32 gradient rounded once per cell: true
+the order witness loses the first small term at the overlapping cell: true
+the guarded nonunit-stride pair has a wide reduction in every residue: true
+the affine rewrite preserves the source contribution order and guarded cells: true

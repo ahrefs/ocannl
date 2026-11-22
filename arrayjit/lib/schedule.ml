@@ -370,7 +370,9 @@ let rewrite_loop ~what ~sym ~(f : floop -> Low_level.t) (llc : Low_level.t) : Lo
         let a = go a in
         Seq (a, b)
     | If { cond; body } -> If { cond; body = go body }
-    | Set s -> Set { s with llsc = go_scalar s.llsc }
+    | Set s ->
+        let llsc' = go_scalar s.llsc in
+        if phys_equal llsc' s.llsc then llc else Set { s with llsc = llsc' }
     | Set_dynamic ({ dyn_value = v, vp; llsc; _ } as s) ->
         let llsc = go_scalar llsc in
         let v = go_scalar v in
@@ -384,15 +386,18 @@ let rewrite_loop ~what ~sym ~(f : floop -> Low_level.t) (llc : Low_level.t) : Lo
     | Get_dynamic ({ dyn_value = v, vp; _ } as g) ->
         Get_dynamic { g with dyn_value = (go_scalar v, vp) }
     | Ternop (op, (a, pa), (b, pb), (c, pc)) ->
-        let c = go_scalar c in
-        let b = go_scalar b in
-        let a = go_scalar a in
-        Ternop (op, (a, pa), (b, pb), (c, pc))
+        let c' = go_scalar c in
+        let b' = go_scalar b in
+        let a' = go_scalar a in
+        if phys_equal a a' && phys_equal b b' && phys_equal c c' then llsc
+        else Ternop (op, (a', pa), (b', pb), (c', pc))
     | Binop (op, (a, pa), (b, pb)) ->
-        let b = go_scalar b in
-        let a = go_scalar a in
-        Binop (op, (a, pa), (b, pb))
-    | Unop (op, (a, pa)) -> Unop (op, (go_scalar a, pa))
+        let b' = go_scalar b in
+        let a' = go_scalar a in
+        if phys_equal a a' && phys_equal b b' then llsc else Binop (op, (a', pa), (b', pb))
+    | Unop (op, (a, pa)) ->
+        let a' = go_scalar a in
+        if phys_equal a a' then llsc else Unop (op, (a', pa))
     | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
         llsc
   in
@@ -3132,15 +3137,25 @@ let apply_privatize ~app ~target ~over ~acc_prec (opt : Low_level.optimized) : L
                 ("Schedule.Privatize: whether the serial rendering widens " ^ Tn.debug_name target
                ^ "'s accumulation depends on whether the backend renders a hardware-typed level \
                   serially, which the transform cannot know");
-            (* The entry write this update descends from: schedule ops rewrite a statement's loops
-               in place and never reorder a node's accumulating writes, so the k-th accumulating
-               write of [target] now is the k-th in [entry] — when the counts agree. Where they do
-               not (a materialization copied the update), every entry write must widen. *)
-            let current = accumulating_writes ~tn:target program in
+            (* An untouched write still has its entry identity after a sibling Privatize removes an
+               accumulation to the same target. Otherwise use position when the counts agree:
+               schedule ops rewrite a statement's loops in place. When neither identifies the entry
+               write (e.g. materialization copied it), require every entry write to widen. *)
+            let unique_position writes =
+              match
+                List.filter_mapi writes ~f:(fun k st -> Option.some_if (phys_equal st update) k)
+              with
+              | [ k ] -> Some k
+              | _ -> None
+            in
             let judged =
-              match List.findi current ~f:(fun _ st -> phys_equal st update) with
-              | Some (k, _) when List.length current = List.length bound -> [ List.nth_exn bound k ]
-              | _ -> bound
+              match unique_position (accumulating_writes ~tn:target entry) with
+              | Some k -> [ List.nth_exn bound k ]
+              | None -> (
+                  let current = accumulating_writes ~tn:target program in
+                  match unique_position current with
+                  | Some k when List.length current = List.length bound -> [ List.nth_exn bound k ]
+                  | _ -> bound)
             in
             (* The tile narrows once per execution of [over], which matches the serial rendering
                only where one execution of [over] covers exactly the level localizing the write:

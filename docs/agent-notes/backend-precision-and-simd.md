@@ -763,10 +763,14 @@ files.
   accumulator is the RMW exactly, so no backend fact is needed, and the optimizer stays
   backend-independent), and not applied to f32: there it is bitwise neutral but trades the untuned
   CPU and Metal backward's streaming rank-1 updates for strided dot products, a perf question of its
-  own. The allowlist is fail-closed (perfect serial chain, plain cell iterators, the target read only
-  at its own cell, pure index guards that move with the loop they mention); a convolution's input
-  gradient (cell moved by an affine reduction index) and the dynamic scatter are left alone and keep
-  per-step narrowing, which `bf16_arithmetic`'s reference entry states. Pinned by
+  own. The allowlist is fail-closed (perfect serial chain, the target read only at its own cell,
+  pure index guards that move with the loop they mention). Plain cell loops interchange.
+  A cell with one supported positive affine pair (gh-ocannl-2423) is reparametrized by cell
+  and residue, with the reduction preserving its original visit order across windows. Separate
+  residues own disjoint cells. After one is privatized, an untouched sibling write still
+  identifies its entry width decision by statement identity. Multiple affine pairs and dynamic
+  scatters keep per-step rounding. The affine path is pinned by `narrow_conv_grad_residency`
+  (overlapping stride-one and stride-two gradients against a once-rounded f32 twin). Pinned by
   `lowered_nest_order`'s narrow legs and `narrow_grad_residency` (a bf16 dense layer's three
   gradients onto nonzero incoming values equal an f32 twin's exact sums narrowed once on the default,
   the privatized preset and the seeded CUDA/HIP default, whose shipped `acc` tiles are f32).

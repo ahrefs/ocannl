@@ -13201,16 +13201,17 @@ let validate_operand_precisions ?(site = "Low_level.validate_operand_precisions"
    narrow float ([Ops.is_narrow_float]); f32, f64 and integer targets keep their lowered order (a
    perf trade on the CPU and Metal defaults, not a residency question); - the leaf reads its target,
    and only at its own cell (no other cell, no [Get_dynamic], no [Local_scope] body mentioning it),
-   so no step observes another cell's progress; - every chain loop the cell mentions is PLAIN: it is
-   one axis's whole index, [Iterator s], and no other axis mentions it. A cell a reduction loop's
-   affine or concatenated index also moves (a convolution's input gradient) has several contributing
-   tuples per cell interleaved with the other loops, so it is left alone; - guards between levels
-   are [pure_index_guard]s; each moves to just inside the innermost (new order) chain loop it
-   mentions, or above the chain if it mentions none -- a pure guard filters tuples, so where it sits
-   below its own loops changes neither which tuples run nor their order. [Set_dynamic] scatters,
-   [Tile_mma], scans, sibling statements and every other leaf are left alone. Runs after
-   [rewrite_one_hot_reductions], whose scatter match wants the vocabulary loop innermost as lowered
-   (gh-ocannl-466). *)
+   so no step observes another cell's progress; - cell loops are plain iterators, or belong to one
+   positive two-iterator affine axis (gh-ocannl-2423) with that pair absent from the other axes. An
+   overlapping pair is reparametrized so the cell loop owns all its windows and the entire reduction
+   can stay at [accum_prec]. The update must be an ordinary accumulation with remappable indices.
+   Multiple affine axes, concatenation and unproved bounds decline. An injective pair can use
+   interchange after the separation proof; - guards between levels are [pure_index_guard]s; each
+   moves to just inside the innermost (new order) chain loop it mentions, or above the chain if it
+   mentions none -- a pure guard filters tuples, so where it sits below its own loops changes
+   neither which tuples run nor their order. [Set_dynamic] scatters, [Tile_mma], scans, sibling
+   statements and every other leaf are left alone. Runs after [rewrite_one_hot_reductions], whose
+   scatter match wants the vocabulary loop innermost as lowered (gh-ocannl-466). *)
 let sink_narrow_reduction_loops (llc : t) : t =
   let only_self_reads d di =
     let rec go (s : scalar_t) =
@@ -13262,6 +13263,213 @@ let sink_narrow_reduction_loops (llc : t) : t =
     | Set _ -> Some ([], [], c)
     | _ -> None
   in
+  let rebuild order guards leaf =
+    let position s =
+      List.findi order ~f:(fun _ (s', _) -> Indexing.equal_symbol s s') |> Option.map ~f:fst
+    in
+    let placed = Array.create ~len:(List.length order + 1) [] in
+    List.iter guards ~f:(fun ((cond, _) as g) ->
+        let at =
+          List.filter_map (guard_symbols cond) ~f:position
+          |> List.max_elt ~compare:Int.compare
+          |> Option.value_map ~default:0 ~f:(fun p -> p + 1)
+        in
+        placed.(at) <- g :: placed.(at));
+    let wrap gs body = List.fold gs ~init:body ~f:(fun body cond -> If { cond; body }) in
+    let rec build i = function
+      | [] -> leaf
+      | (index, to_) :: rest ->
+          For_loop
+            {
+              index;
+              from_ = 0;
+              to_;
+              body = wrap placed.(i + 1) (build (i + 1) rest);
+              axis = Serial;
+            }
+    in
+    wrap placed.(0) (build 0 order)
+  in
+  (* For the old pair [a*i + b*j], set [g = gcd(a,b)], [j = r + (a/g)*q] and [p = i + (b/g)*q]. Each
+     cell [a*p + b*r] belongs to one residue (modulo [a]) and one [p]. Visiting [q] descending
+     visits [i] ascending for a fixed cell. The symmetric parametrization visits [q] ascending. In
+     either frame the step replaces the earlier old iterator in the traversal order, so an
+     interleaved channel reduction keeps its place. *)
+  let affine_window loops guards d di llsc leaf =
+    let exception Unsupported in
+    let iprec = Ops.index_prec () in
+    let limit =
+      if Ops.equal_prec iprec Ops.int32 then Int.of_int32_exn Int32.max_value else Int.max_value / 4
+    in
+    let checked n = if n < -limit || n > limit then raise Unsupported else n in
+    let add a b = checked (checked a + checked b) in
+    let mul a b =
+      let a = checked a and b = checked b in
+      if a <> 0 && abs b > limit / abs a then raise Unsupported;
+      a * b
+    in
+    let floor_div n d = (n - (n % d)) / d in
+    let rec gcd a b = if b = 0 then a else gcd b (a % b) in
+    let sym_eq = Indexing.equal_symbol in
+    let all = List.map loops ~f:(fun (s, n, _) -> (s, n)) in
+    let find loops s = List.Assoc.find loops s ~equal:sym_eq in
+    let compare_index a b =
+      (Binop (Ops.Cmple, (Embed_index a, iprec), (Embed_index b, iprec)), iprec)
+    in
+    try
+      let dims = Lazy.force d.Tn.dims in
+      let axis, (a, i), (b, j), offset =
+        match
+          Array.to_list di
+          |> List.filter_mapi ~f:(fun axis -> function
+            | Indexing.Iterator _ | Fixed_idx _ -> None
+            | Affine { symbols = [ (a, i); (b, j) ]; offset } when a > 0 && b > 0 ->
+                Some (axis, (a, i), (b, j), offset)
+            | Affine _ | Sub_axis | Concat _ -> raise Unsupported)
+        with
+        | [ (axis, ai, bj, offset) ] -> (axis, ai, bj, offset)
+        | _ -> raise Unsupported
+      in
+      let plain =
+        Array.to_list di
+        |> List.filter_map ~f:(function Indexing.Iterator s -> Some s | _ -> None)
+      in
+      if
+        Array.length dims <> Array.length di
+        || List.exists plain ~f:(fun s -> sym_eq s i || sym_eq s j)
+        || List.contains_dup plain ~compare:Indexing.compare_symbol
+        || Option.is_none (accum_update_parts ~tn:d ~idcs:di llsc)
+      then raise Unsupported;
+      let loop_position s =
+        match List.findi all ~f:(fun _ (s', _) -> sym_eq s s') with
+        | Some (pos, (_, n)) -> (pos, checked n)
+        | None -> raise Unsupported
+      in
+      let pi, imax = loop_position i and pj, jmax = loop_position j in
+      let (a, i, imax), (b, j, jmax) =
+        if pi < pj then ((a, i, imax), (b, j, jmax)) else ((b, j, jmax), (a, i, imax))
+      in
+      let early = i and late = j in
+      let g = gcd (checked a) (checked b) in
+      ignore (add (mul a imax) (mul b jmax) : int);
+      ignore (checked offset : int);
+      let is_write s = Array.exists di ~f:(Indexing.axis_index_mentions_symbol s) in
+      if imax < b / g || jmax < a / g then
+        (* A non-overlapping pair just needs interchange. Reuse the generic separation proof,
+           including the bounds the guarded peel will need. *)
+        let writes, reductions = List.partition_tf all ~f:(fun (s, _) -> is_write s) in
+        let range s = Option.map (find all s) ~f:(fun hi -> (0, hi)) in
+        let coords = Affine.view ~dims di in
+        if
+          List.equal (fun (s, _) (s', _) -> sym_eq s s') all (writes @ reductions)
+          || not
+               (Affine.within_box ~range coords
+               && Affine.separates ~range ~concurrent:is_write ~syms:(List.map writes ~f:fst)
+                    ~coords)
+        then None
+        else Some (rebuild (writes @ reductions) guards leaf)
+      else
+        let (a, i, imax), (b, j, jmax), descending =
+          if jmax / (a / g) <= imax / (b / g) then ((a, i, imax), (b, j, jmax), true)
+          else ((b, j, jmax), (a, i, imax), false)
+        in
+        let a_step = a / g and b_step = b / g in
+        let remaining = List.filter all ~f:(fun (s, _) -> not (sym_eq s i || sym_eq s j)) in
+        let phase r =
+          let qmax = (jmax - r) / a_step in
+          (* The intervals [b_step*q, b_step*q+imax] overlap, so their union has no holes. Clip the
+             owner loop to the physical destination before the peel moves its accumulator transfers
+             outside the update guards. *)
+          let phase_offset = add (mul b r) offset in
+          let lo = max 0 (-floor_div phase_offset a) in
+          let hi =
+            min (add imax (mul b_step qmax)) (floor_div (add (dims.(axis) - 1) (-phase_offset)) a)
+          in
+          if lo > hi then None
+          else
+            let owner = Indexing.get_symbol () and step = Indexing.get_symbol () in
+            let others =
+              List.map remaining ~f:(fun (s, n) ->
+                  (s, ((if a_step = 1 then s else Indexing.get_symbol ()), n)))
+            in
+            let writes = List.filter_map others ~f:(fun (s, l) -> Option.some_if (is_write s) l) in
+            let reductions =
+              List.filter_map all ~f:(fun (s, _) ->
+                  if sym_eq s early then Some (step, qmax)
+                  else if sym_eq s late || is_write s then None
+                  else find others s)
+            in
+            let order = writes @ ((owner, hi - lo) :: reductions) in
+            let range s = Option.map (find order s) ~f:(fun hi -> (0, hi)) in
+            let qdir, q0 = if descending then (-1, qmax) else (1, 0) in
+            let i_terms = [ (1, owner); (-qdir * b_step, step) ] in
+            let i_offset = add lo (-mul b_step q0) in
+            let j_terms = [ (qdir * a_step, step) ] in
+            let j_offset = add r (mul a_step q0) in
+            let subst s =
+              if sym_eq s i then (i_terms, i_offset)
+              else if sym_eq s j then (j_terms, j_offset)
+              else ([ (1, Option.value_map (find others s) ~default:s ~f:fst) ], 0)
+            in
+            let normalize ~symbols ~offset =
+              let index = Indexing.affine ~symbols ~offset in
+              (* A translated expression must fit even on the rectangular iterations that its bounds
+                 guards discard. Count both signs to bound intermediate C arithmetic. *)
+              (match index with
+              | Indexing.Affine { symbols; offset }
+                when List.exists symbols ~f:(fun (_, s) -> sym_eq s owner || sym_eq s step) ->
+                  ignore
+                    (List.fold symbols ~init:(abs offset) ~f:(fun sum (c, s) ->
+                         match find order s with
+                         | Some bound -> add sum (abs (mul c bound))
+                         | None -> raise Unsupported)
+                      : int)
+              | _ -> ());
+              index
+            in
+            let fidx idx =
+              let affine ~symbols ~offset =
+                let symbols, offset =
+                  List.fold symbols ~init:([], offset) ~f:(fun (ts, off) (c, s) ->
+                      let by, delta = subst s in
+                      ( List.rev_append (List.map by ~f:(fun (k, t) -> (mul c k, t))) ts,
+                        add off (mul c delta) ))
+                in
+                normalize ~symbols ~offset
+              in
+              match idx with
+              | Indexing.Iterator s -> affine ~symbols:[ (1, s) ] ~offset:0
+              | Affine { symbols; offset } -> affine ~symbols ~offset
+              | Fixed_idx _ | Sub_axis -> idx
+              | Concat _ -> raise Unsupported
+            in
+            let rec scalar (v : scalar_t) : scalar_t =
+              match v with
+              | Get (tn, idx) -> Get (tn, Array.map idx ~f:fidx)
+              | Embed_index idx -> Embed_index (fidx idx)
+              | Unop (op, a) -> Unop (op, arg a)
+              | Binop (op, a, b) -> Binop (op, arg a, arg b)
+              | Ternop (op, a, b, c) -> Ternop (op, arg a, arg b, arg c)
+              | Constant _ | Constant_bits _ -> v
+              | Get_dynamic _ | Get_merge_buffer _ | Get_local _ | Local_scope _ ->
+                  raise Unsupported
+            and arg (v, p) = (scalar v, p) in
+            let idcs = Array.map di ~f:fidx in
+            if not (Affine.within_box ~range (Affine.view ~dims idcs)) then raise Unsupported;
+            let i_index = normalize ~symbols:i_terms ~offset:i_offset in
+            let guards =
+              compare_index (Indexing.Fixed_idx 0) i_index
+              :: compare_index i_index (Indexing.Fixed_idx imax)
+              :: List.map guards ~f:arg
+            in
+            let leaf =
+              match leaf with Set r -> Set { r with idcs; llsc = scalar llsc } | _ -> assert false
+            in
+            Some (rebuild order guards leaf)
+        in
+        Some (unflat_lines (List.filter_map (List.range 0 a_step) ~f:phase))
+    with Unsupported -> None
+  in
   let sink (c : t) : t option =
     match chain c with
     | Some (_, (_ :: _ :: _ as loops), (Set { tn = d; idcs = di; llsc; _ } as leaf))
@@ -13274,43 +13482,15 @@ let sink_narrow_reduction_loops (llc : t) : t =
           Array.count di ~f:(mentions s) = 1
           && Array.exists di ~f:(Indexing.equal_axis_index (Indexing.Iterator s))
         in
-        if not (List.for_all syms ~f:(fun s -> (not (is_write s)) || plain s)) then None
+        let guards = List.concat_map loops ~f:(fun (_, _, gs) -> gs) in
+        if not (List.for_all syms ~f:(fun s -> (not (is_write s)) || plain s)) then
+          affine_window loops guards d di llsc leaf
         else
           let writes, reductions = List.partition_tf loops ~f:(fun (s, _, _) -> is_write s) in
           let order = writes @ reductions in
           if List.equal Indexing.equal_symbol syms (List.map order ~f:(fun (s, _, _) -> s)) then
             None
-          else
-            (* Re-place every guard: just inside the innermost loop of [order] it mentions. *)
-            let position s =
-              List.findi order ~f:(fun _ (s', _, _) -> Indexing.equal_symbol s s')
-              |> Option.map ~f:fst
-            in
-            let all_guards = List.concat_map loops ~f:(fun (_, _, gs) -> gs) in
-            let placed = Array.create ~len:(List.length order + 1) [] in
-            List.iter all_guards ~f:(fun ((cond, _) as g) ->
-                let at =
-                  List.filter_map (guard_symbols cond) ~f:position
-                  |> List.max_elt ~compare:Int.compare
-                  |> Option.value_map ~default:0 ~f:(fun p -> p + 1)
-                in
-                placed.(at) <- placed.(at) @ [ g ]);
-            let wrap gs body =
-              List.fold_right gs ~init:body ~f:(fun cond body -> If { cond; body })
-            in
-            let rec build i = function
-              | [] -> leaf
-              | (index, to_, _) :: rest ->
-                  For_loop
-                    {
-                      index;
-                      from_ = 0;
-                      to_;
-                      body = wrap placed.(i + 1) (build (i + 1) rest);
-                      axis = Serial;
-                    }
-            in
-            Some (wrap placed.(0) (build 0 order))
+          else Some (rebuild (List.map order ~f:(fun (s, n, _) -> (s, n))) guards leaf)
     | _ -> None
   in
   let rec walk (c : t) : t =
