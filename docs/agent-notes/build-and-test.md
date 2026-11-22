@@ -6168,6 +6168,13 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
 
 ### GPU boxes: job caps and runtime refusals
 
+- `tools/device-memory-load.sh -- CMD` adds memory churn on the default visible device through
+  torch's `cuda` API (gh-ocannl-1825). On fleet hosts, put the wrapper and CMD inside the caller's GPU slot.
+  The benchmark venv worker reports readiness after filling its four-buffer window, then replaces
+  one randomly sized buffer (16–256 MiB by default) per iteration and empties the torch cache.
+  Startup has a deadline, an early worker exit fails the run, and cleanup covers the worker and
+  command process groups. Use the driver readings to observe interference and process-local
+  accounting for verdicts (backend-memory.md).
 - Slow-suite budgets (gh-ocannl-2091): `SLOW_RUN_CAP_DEFAULT` in `tools/per-test-cap.sh`
   owns the four-hour budget shared by test-run batches naming slow aliases and sweep units
   launched with `--slow`. A test-run batch reaching the training aliases instead (`@train`, a

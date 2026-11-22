@@ -227,6 +227,7 @@ shell tools/test-merge-build-check.sh
 shell tools/test-merge-build-replay.sh
 shell tools/test-row-trace-compact.sh
 shell tools/test-compare-bounded-outcomes.sh
+shell tools/test-device-memory-load.sh
 shell tools/test-refusal-manifest-sync.sh
 shell benchmarks/test-gh1133-cells.sh
 shell benchmarks/test-gh1253-cells.sh
