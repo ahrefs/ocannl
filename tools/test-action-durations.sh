@@ -290,8 +290,12 @@ leg "--tsv names an alias action dune names by its digest alone @DIR/(anonymous-
 
 inventory_leg() {
   local empty=$TMP/executed-empty inventory=$TMP/executed anonymous=$TMP/executed-anonymous
-  exact "$SUBJECT" executed-empty /dev/null --executed-to "$empty" "$TMP/complete-empty" &&
-    [ -f "$empty" ] && [ ! -s "$empty" ] || return 1
+  run_subject "$SUBJECT" executed-empty --executed-to "$empty" "$TMP/complete-empty"
+  if leaked executed-empty || [ "$(cat "$TMP/runs/executed-empty/rc")" != 0 ] ||
+     [ -s "$TMP/runs/executed-empty/stdout" ] || [ ! -f "$empty" ] || [ -s "$empty" ] ||
+     ! grep -Fq 'a cached build starts none' "$TMP/runs/executed-empty/stderr"; then
+    return 1
+  fi
   exact "$SUBJECT" executed-partial "$TMP/table.expected" --executed-to "$TMP/executed-partial" "$TMP/trace" &&
     [ ! -e "$TMP/executed-partial" ] || return 1
   run_subject "$SUBJECT" executed --executed-to "$inventory" "$TMP/complete-inventory"

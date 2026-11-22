@@ -78,10 +78,12 @@
 #
 # The executed inventory uses only process records from a complete trace.
 # It accepts named Dune runtest, slow and train alias actions in any directory,
-# and .exe.output, .actual and .coverage targets under test/ or arrayjit/test/. Anonymous alias
-# actions and targetless processes must run a built .exe in one of those
-# trees. The TSV holds distinct program and action pairs with tabs and line
-# breaks excluded from fields. Alias membership, shell argv,
+# and .exe.output, .actual and .coverage targets under test/ or arrayjit/test/.
+# Named .raw startup captures and .out/.log benchmark intermediates fall
+# outside that file-target allowlist. Anonymous alias actions and targetless
+# processes must run a built .exe in one of the test trees. The TSV holds
+# distinct program and action pairs with tabs and line breaks excluded from
+# fields. Alias membership, shell argv,
 # subprocesses Dune did not trace, and incomplete traces are outside this
 # inventory.
 
@@ -503,10 +505,9 @@ for _, ns, ex, f in done:
     if prog_pat is None or prog_pat.search(prog):
         procs.append((ns / 1e9, ex, prog, f))
 if not procs:
-    if executed_to and complete and not done:
-        sys.exit(0)
-    sys.exit('action-durations.sh: no process in %s%s (a cached build starts none)'
-             % (path, ' matches --prog' if prog_pat else ''))
+    print('action-durations.sh: no process in %s%s (a cached build starts none)'
+          % (path, ' matches --prog' if prog_pat else ''), file=sys.stderr)
+    sys.exit(0 if executed_to and complete and not done else 1)
 
 if tsv:
     procs.sort(key=lambda p: (-p[0], p[2], action(p[3])[1]))

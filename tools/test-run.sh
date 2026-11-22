@@ -2136,11 +2136,12 @@ supervisor_perl=$lock_census_perl'
         select undef, undef, undef, 0.1;
       }
     }
+    my $read_ok = defined $st && $st == 0;
+    my $has_table = $read_ok && -s "$own/slowest.tmp";
+    rename("$own/slowest.tmp", "$own/slowest") if $has_table;
+    rename("$own/executed.tmp", "$own/executed") if $read_ok && -f "$own/executed.tmp";
     my $why;
-    if (defined $st && $st == 0) {
-      rename("$own/slowest.tmp", "$own/slowest") if -s "$own/slowest.tmp";
-      rename("$own/executed.tmp", "$own/executed") if -f "$own/executed.tmp";
-    } else {
+    if (!$has_table) {
       if ($cut) {
         $why = "the run was cancelled while the reader ran";
       } elsif (!defined $st) {
