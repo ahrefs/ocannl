@@ -6547,6 +6547,13 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   makes this output readable. A bridge that starts failing, stops, or fails in a NEW way still
   moves it — which is why the block carries its deduplicated signature list uncapped even though
   the raw lines it shows are capped at 40.
+- **Check `journalctl _TRANSPORT=kernel --since @<start>` for `segfault at` on a one-off native Linux SIGSEGV**
+  (gh-ocannl-2410). The native kernel-window filter (`NATIVE_KEEP='amdgpu|kfd|NVRM:'` in
+  `tools/kernel-window.sh`) keeps only GPU-driver lines, so a userspace segfault leaves an empty window.
+  Inspect the kernel line's `ip`/`Code:` bytes, fault error code and CPU before blaming OCANNL or CUDA:
+  on `gh-ocannl-2410` (`staging#2217`), the faulting PC sat in OCaml's `caml_modify_generational_global_root`,
+  and the crash did not reproduce across `compute-sanitizer`, 24 loaded `-j 8` runs, or a full
+  `tools/cuda-native-ptx-rerun.sh -j 8 @runtest @train` rerun (`verdict: holds`).
 - **Reading a rerun's verdict.** Adding a name means adding it in both places: the table in
   `sweep.sh` gates the rerun, this one records what the name has been seen with. Qualify a name
   by its status (`<name> <STATUS>` in `ENVIRONMENT_REFUSALS`) when the call site also fails for
