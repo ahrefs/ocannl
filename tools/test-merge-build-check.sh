@@ -25,8 +25,10 @@
 # the published ref from a local bare repository and prints its writer for one stubbed train alias.
 # Structured train-name rows require a count matching distinct names and an alias the
 # tree has; legacy count-only output still asks affected and must agree exactly.
-# The branch plan uses the chosen base's merged tree and the real record check,
-# distinguishing conflict, narrow reach, and wide reach with or without a record.
+# The branch plan and --plan-merge use the candidate merge and the real record check,
+# distinguishing conflict, narrow reach, and wide reach with or without a record, and emit
+# ship-pr's single `ship-pr-merge-plan:` verdict line (`nothing-owed`, `admitted <needs>`, or
+# `unadmitted <needs>`, and none on error or `--plan` alone).
 # The #compile-output leg alone uses real
 # dune and Python in a minimal isolated project: the repository's actual capped-fixture rule
 # runs twice, then with a planted failing case. It compares bytes and rejects the exact unittest
@@ -347,40 +349,113 @@ if harness_leg 'a branch plan reads the selected merge and its record without bu
   planned() {
     if [ "$rc" = 0 ] && [ ! -s "$TMP/record" ] && grep -qx "prepush --since $fork..$side --list" "$TMP/record.tiers" &&
        ! grep -q '^fmt ' "$TMP/record.tiers" && [ "$(git -C "$R" rev-parse HEAD)" = "$side" ] &&
-       [ "$(git -C "$R" status --porcelain)" = "$before" ] && has "$2" && has "$3"; then
+       [ "$(git -C "$R" status --porcelain)" = "$before" ] && has "$2" && has "$3" &&
+       [ "$(grep -c '^ship-pr-merge-plan:' "$TMP/out")" = 1 ] && grep -qxF -- "$4" "$TMP/out"; then
       report 0 "$1"
     else report 1 "$1" "exit $rc; $(cat "$TMP/record"); $(tiers); $(cat "$TMP/out")"; fi
   }
   FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_REASON='x.ml (6 aliases)' plan_branch "$tip"
   planned 'a cross-cutting branch plan names the need and missing record' \
-    'tests plan: CROSS-CUTTING (first tier selected)' 'owed-run needs: runtest (record does not admit'
+    'tests plan: CROSS-CUTTING (first tier selected)' 'owed-run needs: runtest (record does not admit' \
+    'ship-pr-merge-plan: unadmitted runtest'
   FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL plan_branch "$tip"
   planned 'a cross-cutting branch plan reads a record of the head' \
-    'tests plan: CROSS-CUTTING (first tier selected)' 'owed-run needs: runtest (record admits)'
+    'tests plan: CROSS-CUTTING (first tier selected)' 'owed-run needs: runtest (record admits)' \
+    'ship-pr-merge-plan: admitted runtest'
   FAKE_CROSS_ON_MOVED_BASE=1 plan_branch "$fork"
-  planned 'a narrow branch plan owes no record' 'tests plan: narrow' 'owed-run needs: none'
+  planned 'a narrow branch plan owes no record' 'tests plan: narrow' 'owed-run needs: none' \
+    'ship-pr-merge-plan: nothing-owed'
   FAKE_CROSS_ON_MOVED_BASE=1 plan_branch "$tip"
   planned 'the same head is cross-cutting with no first tier against the moved base' \
-    'tests plan: CROSS-CUTTING (no first tier selected)' 'owed-run needs: runtest (record does not admit'
+    'tests plan: CROSS-CUTTING (no first tier selected)' 'owed-run needs: runtest (record does not admit' \
+    'ship-pr-merge-plan: unadmitted runtest'
   if has 'fixture: merge gate from the moved base'; then
     report 0 'the candidate plan uses the merge gate version the base brought'
   else report 1 'the candidate plan uses the merge gate version the base brought' "$(cat "$TMP/out")"; fi
   FAKE_OPAM_ROOT=$(cd "$R" && pwd -P) plan_branch "$fork" "$TMP/opambin"
   planned 'a branch plan resolves checkout-local opam before querying the candidate' \
-    'dune is not on PATH; sourcing tools/opam-env.sh' 'owed-run needs: none'
+    'dune is not on PATH; sourcing tools/opam-env.sh' 'owed-run needs: none' \
+    'ship-pr-merge-plan: nothing-owed'
   FAKE_BAD_RULES=1 TMPDIR=$TMP plan_branch "$fork"
   raw=$(sed -n 's/^affected: rejected Dune answer, saved to //p' "$TMP/out")
-  if [ "$rc" = 1 ] && [ -n "$raw" ] && grep -qx 'raw rejected Dune answer' "$raw"; then
-    report 0 'the recorded raw Dune answer survives plan cleanup'
-  else report 1 'the recorded raw Dune answer survives plan cleanup' "exit $rc; $(cat "$TMP/out")"; fi
+  if [ "$rc" = 1 ] && [ -n "$raw" ] && grep -qx 'raw rejected Dune answer' "$raw" &&
+     [ "$(grep -c '^ship-pr-merge-plan:' "$TMP/out")" = 0 ]; then
+    report 0 'the recorded raw Dune answer survives plan cleanup, with no verdict line'
+  else report 1 'the recorded raw Dune answer survives plan cleanup, with no verdict line' "exit $rc; $(cat "$TMP/out")"; fi
   # The side needs a conflicting edit to the same line, relative to the fork.
   { echo conflict; tail -n +2 "$R/r.txt"; } >"$R/r.txt.new" && mv "$R/r.txt.new" "$R/r.txt" && commit_on side
   side=$(git -C "$R" rev-parse HEAD)
   plan_branch "$tip"
   if [ "$rc" = 1 ] && has 'plan: merge conflict' && has r.txt &&
-     [ ! -s "$TMP/record" ] && [ ! -s "$TMP/record.tiers" ]; then
-    report 0 'a conflicting branch plan reports the conflict before any tier is asked'
-  else report 1 'a conflicting branch plan reports the conflict before any tier is asked' "exit $rc; $(cat "$TMP/out")"; fi
+     [ ! -s "$TMP/record" ] && [ ! -s "$TMP/record.tiers" ] &&
+     [ "$(grep -c '^ship-pr-merge-plan:' "$TMP/out")" = 0 ]; then
+    report 0 'a conflicting branch plan reports the conflict before any tier is asked, with no verdict line'
+  else report 1 'a conflicting branch plan reports the conflict before any tier is asked, with no verdict line' "exit $rc; $(cat "$TMP/out")"; fi
+fi
+if harness_leg 'merged_plan prints ship-pr-merge-plan verdicts and omits them on error #plan-verdict'; then
+  plan_verdict_ok() { # LABEL WANT_LINE: exit 0, nothing built, exactly one verdict line matching WANT_LINE
+    if [ "$rc" = 0 ] && [ ! -s "$TMP/record" ] && ! grep -q '^fmt ' "$TMP/record.tiers" &&
+       [ "$(grep -c '^ship-pr-merge-plan:' "$TMP/out")" = 1 ] && grep -qxF -- "$2" "$TMP/out"; then
+      report 0 "$1"
+    else report 1 "$1" "exit $rc; $(cat "$TMP/record"); $(cat "$TMP/out")"; fi
+  }
+  R=$APART plan
+  if [ "$rc" = 0 ] && [ "$(grep -c '^ship-pr-merge-plan:' "$TMP/out")" = 0 ]; then
+    report 0 '--plan alone asks no record and prints no ship-pr-merge-plan line'
+  else report 1 '--plan alone asks no record and prints no ship-pr-merge-plan line' "exit $rc; $(cat "$TMP/out")"; fi
+  R=$APART run "$TMP/dunebin" --plan-merge
+  plan_verdict_ok '--plan-merge on a narrow merge prints nothing-owed' 'ship-pr-merge-plan: nothing-owed'
+  printf '%s\n' '@test/training/train-a' >"$TMP/plan-train"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TRAIN_N=1 FAKE_TRAIN_NAMES=$TMP/plan-train \
+    R=$APART run "$TMP/dunebin" --plan-merge
+  plan_verdict_ok '--plan-merge without a record prints unadmitted with every need' \
+    'ship-pr-merge-plan: unadmitted runtest @test/training/train-a'
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TRAIN_N=1 FAKE_TRAIN_NAMES=$TMP/plan-train \
+    R=$APART run "$TMP/dunebin" --plan-merge
+  plan_verdict_ok '--plan-merge with an admitting record prints admitted with every need' \
+    'ship-pr-merge-plan: admitted runtest @test/training/train-a'
+  plan_waivers=$TMP/plan-waivers.git
+  git init -q --bare "$plan_waivers"
+  R=$APART owed "$plan_waivers" waive --head "$APART_HEAD" --reason 'waived for plan verdict fixture'
+  OCANNL_TOOL_OWED_RUN_URL=$plan_waivers FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting \
+    R=$APART run "$TMP/dunebin" --plan-merge
+  if [ "$orc" = 0 ]; then
+    plan_verdict_ok '--plan-merge with a waiver prints admitted' 'ship-pr-merge-plan: admitted runtest'
+  else report 1 '--plan-merge with a waiver prints admitted' "waive exit $orc: $(cat "$TMP/owed-out")"; fi
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=3 FAKE_VERDICT=incomplete \
+    R=$APART run "$TMP/dunebin" --plan-merge
+  plan_verdict_ok '--plan-merge on an incomplete list without a record prints unadmitted runtest train' \
+    'ship-pr-merge-plan: unadmitted runtest train'
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL FAKE_PREPUSH_RC=3 FAKE_VERDICT=incomplete \
+    R=$APART run "$TMP/dunebin" --plan-merge
+  plan_verdict_ok '--plan-merge on an incomplete list with a full record prints admitted runtest train' \
+    'ship-pr-merge-plan: admitted runtest train'
+  OCANNL_TOOL_OWED_RUN_URL=$TMP/nowhere.git FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting \
+    R=$APART run "$TMP/dunebin" --plan-merge
+  plan_verdict_ok '--plan-merge on an unreadable record repository prints unadmitted' \
+    'ship-pr-merge-plan: unadmitted runtest'
+  OCANNL_TOOL_OWED_RUN_FETCH_CAP=0 OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting \
+    R=$APART run "$TMP/dunebin" --plan-merge
+  if [ "$rc" = 1 ] && [ "$(grep -c '^ship-pr-merge-plan:' "$TMP/out")" = 0 ] &&
+     has 'plan: owed-run.sh check failed (exit 2)'; then
+    report 0 'an owed-run.sh usage failure exits 1 with no verdict line'
+  else report 1 'an owed-run.sh usage failure exits 1 with no verdict line' "exit $rc; $(cat "$TMP/out")"; fi
+  fixture plan-empty-owed
+  first x.ml && commit_on base
+  git -C "$R" checkout -q side && last x.ml && commit_on side && merge_side
+  printf '#!/bin/sh\nexit 1\n' >"$R/tools/owed-run.sh"
+  chmod +x "$R/tools/owed-run.sh"
+  FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting run "$TMP/dunebin" --plan-merge
+  if [ "$rc" = 1 ] && [ "$(grep -c '^ship-pr-merge-plan:' "$TMP/out")" = 0 ] &&
+     has 'plan: owed-run.sh check exited 1 with no output'; then
+    report 0 'an empty-output exit-1 record check fails the plan with no verdict line'
+  else report 1 'an empty-output exit-1 record check fails the plan with no verdict line' "exit $rc; $(cat "$TMP/out")"; fi
+  fixture plan-one-parent
+  run "$TMP/dunebin" --plan-merge
+  if [ "$rc" = 1 ] && [ "$(grep -c '^ship-pr-merge-plan:' "$TMP/out")" = 0 ] &&
+     has 'plan: tests tier unreadable: HEAD has no two sides with a merge base'; then
+    report 0 '--plan-merge on a one-parent HEAD exits 1 with no verdict line'
+  else report 1 '--plan-merge on a one-parent HEAD exits 1 with no verdict line' "exit $rc; $(cat "$TMP/out")"; fi
 fi
 if harness_leg 'the format tier runs first, its scans off, and a red one ends the run #tiers'; then
   R=$APART run "$TMP/dunebin"
@@ -1262,9 +1337,11 @@ if harness_leg 'the merge-build config runs this script, and every tracked path 
       [ "$hit" = 1 ] || { unmatched=$p; break; }
     done < <(git -C "$HERE/.." ls-files -z)
   fi
-  label="the config's command is this script, it builds every merge, and its inputs match every tracked path"
+  label="the config's command and plan run this script, it builds every merge, and its inputs match every tracked path"
   if ! grep -qxF "command tools/merge-build-check.sh" "$config"; then
     report 1 "$label" "no \`command tools/merge-build-check.sh\` line: $(cat "$config" 2>&1)"
+  elif ! grep -qxF "plan tools/merge-build-check.sh --plan-merge" "$config"; then
+    report 1 "$label" "no \`plan tools/merge-build-check.sh --plan-merge\` line: $(cat "$config" 2>&1)"
   elif ! grep -qxF "trigger always" "$config"; then
     # The build is the merge gate only while it runs on every merge: under the default trigger a
     # merge whose base did not move, or whose sides share no path, lands unbuilt.

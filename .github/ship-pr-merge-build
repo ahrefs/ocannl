@@ -71,11 +71,21 @@
 # harness set or the per-alias cost grows: tools/merge-build-check.sh's header names the tiers,
 # and docs/agent-notes/build-and-test.md how each was timed.
 #
+# Plan. `plan tools/merge-build-check.sh --plan-merge` runs bare before the slot probe on every
+# candidate merge (lukstafi/ludics#1218, gh-ocannl-2358). It queries the tests tier and owed-run
+# record on HEAD (the candidate merge) and emits one `ship-pr-merge-plan:` verdict line
+# (`nothing-owed`, `admitted <needs>`, or `unadmitted <needs>`). An `unadmitted` verdict refuses
+# the merge before taking a build slot; any other exit or missing verdict line falls back to the
+# build, which keeps owning admission. The default `plan-timeout` (300 s) is left unset: a cold
+# cross-cutting candidate (`arrayjit/lib/low_level.ml`, two `affected` asks plus `dune show
+# aliases`) took 113-133 s across three runs on macbook-pro under wave load.
+#
 # Trust. The command is this repository's own code, trusted as a developer's build is: the
 # scratch repository is a place to build, not a sandbox. It runs from whatever environment
 # `merge` has; tools/merge-build-check.sh states its tiers, what selects them, their measured
 # cost and how it finds dune when that environment lacks the opam switch.
 command tools/merge-build-check.sh
+plan tools/merge-build-check.sh --plan-merge
 input *
 trigger always
 timeout 1800

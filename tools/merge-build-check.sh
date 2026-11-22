@@ -2,7 +2,7 @@
 # Check a merge commit: the command `.github/ship-pr-merge-build` gives ship-pr's merge build,
 # which runs it at the root of the PR head merged with master's tip, before the merge call.
 # Run it by hand the same way, at the root of a checkout whose HEAD is a merge you built.
-# Usage: tools/merge-build-check.sh [--plan [--base REV]] [--all]
+# Usage: tools/merge-build-check.sh [--plan [--base REV] | --plan-merge] [--all]
 #
 # HEAD is read as the merge to judge: first parent the base, second parent the PR head (the
 # order `git merge` and ship-pr's `commit-tree -p <base tip> -p <head>` give). Four tiers, run in
@@ -110,8 +110,17 @@
 # its refs stay untouched. The merged copy of this script handles the `--plan-merge` query, so
 # changes the base brought to the gate apply too. It runs Dune queries and reads the head's owed-run
 # record when there is a need.
-# Only the record check's status says whether it admits the need. A plan makes no build or
-# readiness verdict and writes no record. A conflict or an unreadable plan fails the query.
+# Only the record check's exit status decides the plan verdict (no prose of `owed-run.sh` is
+# parsed): `merged_plan` (`--plan-merge`, configured as `.github/ship-pr-merge-build`'s `plan` and
+# called by `--plan --base REV`) prints exactly one `ship-pr-merge-plan:` line beside its
+# `owed-run needs:` line: `nothing-owed` when nothing is owed, `admitted <needs>` when
+# `tools/owed-run.sh check` exits 0, or `unadmitted <needs>` when it exits 1 with output
+# (missing, foreign, invalid, uncovered or unreadable within the fetch cap). A diagnostics-file
+# setup/read error, an empty-output exit 1, any other `owed-run.sh` status (usage or execution
+# failure), or an unreadable tests tier fails the plan query (exit 1) with no verdict line, so
+# ship-pr treats it as no verdict and falls back to the build. `--plan` alone does not
+# ask Dune or read records and prints no verdict line. A plan makes no build or readiness verdict
+# and writes no record. A conflict or an unreadable plan fails the query.
 # The only extra affected text read is one anchored, printable `affected: CROSS-CUTTING reason:`
 # line from the full-list ask. It is display-only; a missing, duplicate or malformed reason
 # contributes nothing. The trailers, exit statuses and existing list protocol still govern.
@@ -120,8 +129,9 @@
 # (on mac-studio `zsh -c` resolves opam but not dune). When `dune` does not resolve, this sources
 # tools/opam-env.sh, first adding Homebrew's prefix when `opam` does not resolve either.
 #
-# Exit status: 0 every selected tier passed (or the plan answered, even if a record is missing),
-# 1 a tier failed or the plan could not be read, including a merge conflict; 2 a usage error.
+# Exit status: 0 every selected tier passed (or the plan answered, even if a record is unadmitted),
+# 1 a tier failed or the plan could not be read, including a merge conflict or record-check error;
+# 2 a usage error.
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 me=merge-build-check
@@ -555,7 +565,7 @@ show_cross_reason() {
 }
 
 check_record() {
-  "${BASH:-bash}" "$root/tools/owed-run.sh" check "$head" "${needs[@]}" >"$tests_dir/owed" 2>&1 </dev/null
+  "${BASH:-bash}" "$root/tools/owed-run.sh" check "$head" "${needs[@]}"
 }
 
 die_plan() { printf '%s: plan: %s\n' "$me" "$*" >&2; exit 1; }
@@ -631,15 +641,26 @@ merged_plan() (
   show_cross_reason
   if [ ${#needs[@]} -eq 0 ]; then
     echo "$me: owed-run needs: none"
+    echo 'ship-pr-merge-plan: nothing-owed'
   else
+    exec 3>"$tests_dir/owed" || die_plan 'cannot open record-check output file'
     rc=0
-    check_record || rc=$?
-    if [ "$rc" = 0 ]; then
-      echo "$me: owed-run needs: ${needs[*]} (record admits)"
-    else
-      echo "$me: owed-run needs: ${needs[*]} (record does not admit; owed-run.sh exit $rc)"
-    fi
-    cat "$tests_dir/owed"
+    check_record >&3 2>&3 </dev/null || rc=$?
+    exec 3>&-
+    needs_text=$(IFS=' '; printf '%s' "${needs[*]}")
+    case $rc in
+      0) echo "$me: owed-run needs: $needs_text (record admits)" ;;
+      1) echo "$me: owed-run needs: $needs_text (record does not admit; owed-run.sh exit $rc)" ;;
+      *) echo "$me: owed-run needs: $needs_text (record check failed; owed-run.sh exit $rc)" ;;
+    esac
+    cat "$tests_dir/owed" || die_plan 'cannot read record-check output'
+    case $rc in
+      0) echo "ship-pr-merge-plan: admitted $needs_text" ;;
+      1)
+        [ -s "$tests_dir/owed" ] || die_plan 'owed-run.sh check exited 1 with no output'
+        echo "ship-pr-merge-plan: unadmitted $needs_text" ;;
+      *) die_plan "owed-run.sh check failed (exit $rc)" ;;
+    esac
   fi
 )
 
@@ -683,7 +704,7 @@ if [ ${#needs[@]} -gt 0 ]; then
   [ -z "$tests_owed" ] || echo "$me: tests tier: OWED -- $tests_owed did not run here"
   [ "$train_why" = '' ] || echo "$me: tests tier: OWED -- $train_why"
   rc=0
-  check_record || rc=$?
+  check_record >"$tests_dir/owed" 2>&1 </dev/null || rc=$?
   while IFS= read -r line; do [ -z "$line" ] || echo "$me:   $line"; done <"$tests_dir/owed"
   if [ "$rc" != 0 ]; then
     show_cross_reason
