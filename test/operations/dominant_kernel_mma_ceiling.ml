@@ -508,16 +508,20 @@ let () =
       ~on:(backend ^ " (no GPU tensor-core unit)")
       ()
   in
-  let has_f16_peak =
-    lazy
-      (match Autotune.mma_peak_leg ~limits ~accum_prec:Ir.Ops.single BI.Mma_f16 with
-      | Autotune.Mma_peak_found _ -> true
-      | Autotune.Mma_peak_unavailable _ -> false)
+  (* Derive peak expectation from the device's independent MMA ISA capability (Ampere sm_80+ is
+     where CUDA first advertises bf16 tensor cores; pre-Ampere Volta/Turing advertise f16 only and
+     deliberately carry no Ampere+ GeForce peak constant) rather than reading [mma_peak_leg] /
+     [mma_peak_*], so missing backend peak wiring fails loudly instead of skipping. *)
+  let cuda_pre_ampere =
+    String.equal backend "cuda"
+    && not (BI.advertises_mma_format limits ~a:BI.Mma_bf16 ~b:BI.Mma_bf16 ~d:BI.Mma_f32)
   in
-  let peak_leg =
-    Verdict.sub_leg ~aggregation:`Backend leg ~when_:has_f16_peak
-      ~on:(backend ^ " (no advisory f16 MMA peak for this architecture)")
+  let has_f16_override =
+    not
+      (String.is_empty
+         (String.strip (Utils.get_global_arg ~arg_name:"model_peak_mma_f16" ~default:"")))
   in
+  let expect_f16_peak = (not cuda_pre_ampere) || has_f16_override in
   let run_tensorized_matmul ~prec_name ~a_prec ~d_prec =
     (* 256x256x256 puts arithmetic intensity above the ridge point on Metal, CUDA and HIP so compute
        binds (flops_exact = true) even when the lower-level byte count is an upper bound. *)
@@ -589,16 +593,19 @@ let () =
         (applied
         && CS.equal_tensorization mma.CS.tensorization CS.Tensorized
         && not (List.is_empty mma.CS.emitted_formats)));
-  in_leg ~leg:peak_leg "Bench_harness.mma_ceiling_of resolves the live GPU f16 matmul to mma-f16"
-    (fun label ->
+  in_leg ~leg
+    "Bench_harness.mma_ceiling_of resolves the live GPU f16 matmul per architecture (mma-f16 on \
+     sm_80+/HIP/Metal, no-ceiling on pre-Ampere CUDA)" (fun label ->
       let _, mma, _ = Lazy.force live in
       p label
-        (match H.mma_ceiling_of ~backend ~limits mma with
-        | Bench_json.Mma_peak { format = "f16"; flops; source } ->
+        (match (expect_f16_peak, H.mma_ceiling_of ~backend ~limits mma) with
+        | true, Bench_json.Mma_peak { format = "f16"; flops; source } ->
             Float.(is_finite flops && flops > 0.) && not (String.is_empty source)
+        | false, Bench_json.Mma_no_peak _ -> true
         | _ -> false));
-  in_leg ~leg:peak_leg "dominant_kernel scores the live GPU f16 tensorized matmul as exact mma-f16"
-    (fun label ->
+  in_leg ~leg
+    "dominant_kernel scores the live GPU f16 tensorized matmul per architecture (exact mma-f16 on \
+     sm_80+/HIP/Metal, no-ceiling on pre-Ampere CUDA)" (fun label ->
       let _, _, dk = Lazy.force live in
       let verdict = U.member "verdict" dk in
       let all_refused =
@@ -614,12 +621,18 @@ let () =
         | `Int i -> i > 0
         | _ -> false
       in
+      let scored_ok =
+        if expect_f16_peak then
+          Yojson.Safe.equal verdict (`String "exact")
+          && Yojson.Safe.equal (U.member "ceiling" dk) (`String "mma-f16")
+          && pct_positive
+        else
+          Yojson.Safe.equal verdict (`String "no-ceiling")
+          && Yojson.Safe.equal (U.member "ceiling" dk) `Null
+      in
       p_unless
         ~unless:[ ("no timing reading admitted under contention", all_refused) ]
-        label
-        (Yojson.Safe.equal verdict (`String "exact")
-        && Yojson.Safe.equal (U.member "ceiling" dk) (`String "mma-f16")
-        && pct_positive));
+        label scored_ok);
   let metal_f32_leg =
     Verdict.leg ~aggregation:`Backend
       ~when_:(String.equal backend "metal" && gpu_with_mma)

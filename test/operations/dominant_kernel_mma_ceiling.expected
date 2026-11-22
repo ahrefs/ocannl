@@ -18,6 +18,6 @@ choose_ceiling refuses a non-finite MMA peak rather than scoring compute time as
 model_peak_mma_* overrides backend constants and Metal scalar-ALU follows model_peak_flops: true
 invalid or non-finite model_peak_mma_* overrides fail closed to no-ceiling without raising: true
 a live GPU f16 matmul compiles tensorized with emitted MMA format recorded: true
-Bench_harness.mma_ceiling_of resolves the live GPU f16 matmul to mma-f16: true
-dominant_kernel scores the live GPU f16 tensorized matmul as exact mma-f16: true
+Bench_harness.mma_ceiling_of resolves the live GPU f16 matmul per architecture (mma-f16 on sm_80+/HIP/Metal, no-ceiling on pre-Ampere CUDA): true
+dominant_kernel scores the live GPU f16 tensorized matmul per architecture (exact mma-f16 on sm_80+/HIP/Metal, no-ceiling on pre-Ampere CUDA): true
 Metal f32 simdgroup_matrix matmul scores as exact mma-f32 against the scalar ALU ceiling: true

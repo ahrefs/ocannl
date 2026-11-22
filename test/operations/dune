@@ -7534,6 +7534,7 @@
   bench_harness
   bench_json
   arrayjit.verdict
+  arrayjit.utils
   arrayjit.ir
   arrayjit.context
   arrayjit.autotune))
