@@ -6572,16 +6572,22 @@ let fold_read_roundings llc ~init ~f =
       scan_implicit = Visit;
     }
   in
+  let rec read_node = function
+    | Get (read, _) | Get_dynamic { tn = read; _ } -> Some read
+    | Unop (Ops.Round_prec, (inner, _)) -> read_node inner
+    | _ -> None
+  in
   let scalar _ acc (sc : scalar_t) =
     match sc with
-    | Unop (Ops.Round_prec, (Get (read, _), t)) -> Prune (f acc read t)
+    | Unop (Ops.Round_prec, (inner, t)) -> (
+        match read_node inner with Some read -> Continue (f acc read t) | None -> Continue acc)
     | _ -> Continue acc
   in
   fold ~policy ~hooks:{ (hooks ()) with scalar } ~init llc
 
 let rounded_read_prec llc tn =
   fold_read_roundings llc ~init:None ~f:(fun acc read prec ->
-      if Tn.equal read tn then Some prec else acc)
+      if Option.is_none acc && Tn.equal read tn then Some prec else acc)
 
 (* gh-ocannl-1884: whether collapsing a [Local_scope] of integer precision [scope_prec], over [v],
    into a slot evaluating at [eval] leaves its value alone. A collapse drops two things: the
@@ -9437,44 +9443,167 @@ let sink_zero_outs (llc : t) : t =
          (List.init (n + 1) ~f:(fun j ->
               List.rev inserts.(j) @ if j < n && not moved.(j) then [ lines.(j) ] else [])))
 
+(* gh-ocannl-2374: true when every integer in [from_, to_] is represented exactly and distinctly in
+   [prec] -- no modular wrap-around for integers, and strictly below [float_exact_int_limit] for
+   floats (so no out-of-range integer can round down onto a class index either). *)
+let one_hot_range_exact_in (prec : Ops.prec) ~from_ ~to_ =
+  from_ >= 0 && from_ <= to_
+  &&
+  let lo_k = Float.of_int from_ and hi_k = Float.of_int to_ in
+  match (Ops.integer_range prec, Ops.float_exact_int_limit prec) with
+  | Some (lo, hi), _ -> Float.(lo <= lo_k && hi_k <= hi)
+  | None, Some limit -> Float.(abs lo_k < limit && abs hi_k < limit)
+  | None, None -> false
+
+let scalar_reads_scope_id (target : scope_id) (llsc : scalar_t) : bool =
+  let open Access_fold in
+  let policy =
+    {
+      discarded_operands = Visit;
+      gated_operands = Visit;
+      dead_loops = Visit;
+      local_scopes = Visit;
+      guards = Ignore;
+      scan_implicit = Visit;
+    }
+  in
+  let scalar _ acc = function
+    | Get_local id when equal_scope_id id target -> Prune true
+    | _ -> Continue acc
+  in
+  fold_scalar ~policy ~hooks:{ (hooks ()) with scalar } ~init:false llsc
+
 (* gh-343: recognize the in-range guard's reduction body. Matches the two semantically-equivalent
    one-hot selectors over loop variable [k]: - [Where (Cmpeq (Embed_index (Iterator k), index_expr),
    table_get, Constant 0.)] (either operand order of [Cmpeq]); - the multiply form [Binop (Mul,
-   <cmpeq 0/1>, table_get)] (either factor order). On success returns [Some (table, table_idcs,
-   index_expr)] where [index_expr] is the scalar value used as the dynamic index. *)
+   <cmpeq 0/1>, table_get)] (either factor order). gh-ocannl-2374: the table read may be wrapped
+   in precision conversions ([Round_prec] or a single-assignment float cast [Local_scope]), which are
+   kept on the gathered value; and the [Cmpeq] may remain inside its [Local_scope] (e.g. a uint32
+   selector inside a bfloat16 product with vocab >= 256, which [simplify_llc] keeps uncollapsed per
+   gh-ocannl-1884). On success returns [Some (table, table_idcs, rounds, index_expr)] where [rounds]
+   is the innermost-first list of conversion targets and [index_expr] is the dynamic index. *)
 (* Match a Cmpeq comparing [Embed_index (Iterator k)] against an index expression free of [k].
    Returns the index expression (with its precision). Uses [is_embedded_range_iterator] defined
    above, sharing the recognition logic with [is_one_hot_selector_assignment]. An index float-valued
    at an integer annotation is no match (gh-ocannl-1957): the comparison holds at no [k] where it is
    not integral, and no precision re-evaluates it as written for the guards and the dynamic index --
    an integer one converts its float result, a float one drops its leaves' conversions. *)
-let match_one_hot_cmpeq (k : Indexing.symbol) : scalar_t -> scalar_arg option =
+let match_one_hot_cmpeq ~ienv ~eval_prec ~from_ ~to_ (k : Indexing.symbol) :
+    scalar_t -> scalar_arg option =
   let index ((v, p) as arg : scalar_arg) =
     Option.some_if (not (Ops.is_integer p && float_valued v)) arg
   in
+  let scoped_index ~id ~scope_prec (v : scalar_t) : scalar_arg option =
+    if scalar_reads_scope_id id v then None
+    else
+      let read_exact ~from =
+        if
+          Ops.widens_exactly ~from ~to_:scope_prec
+          || (Ops.is_integer from && Ops.is_float scope_prec)
+        then Some (v, from)
+        else None
+      in
+      match v with
+      | Get (tn, _)
+      | Get_merge_buffer (tn, _)
+      | Get_dynamic { tn; _ }
+      | Get_local { tn; _ }
+      | Local_scope { id = { tn; _ }; _ } ->
+          read_exact ~from:(Lazy.force tn.Tn.storage_prec)
+      | Constant c -> (
+          if Ops.is_integer scope_prec then
+            match Ops.integer_range scope_prec with
+            | Some (lo, hi) when Float.is_integer c && Float.(lo <= c && c <= hi) ->
+                Some (v, scope_prec)
+            | _ -> None
+          else
+            match Ops.float_exact_int_limit scope_prec with
+            | Some limit when Float.is_integer c && Float.(abs c < limit) -> Some (v, scope_prec)
+            | _ -> None)
+      | Embed_index idx ->
+          let iv = interval_of_index ienv idx in
+          let fits =
+            iv.integral && iv.exact
+            &&
+            match (Ops.integer_range scope_prec, Ops.float_exact_int_limit scope_prec) with
+            | Some (lo, hi), _ -> Float.(lo <= iv.lo && iv.hi <= hi)
+            | None, Some limit -> Float.(abs iv.lo < limit && abs iv.hi < limit)
+            | None, None -> false
+          in
+          Option.some_if fits (v, Ops.index_prec ())
+      | _ ->
+          (* Compound expressions are only exact to unwrap when [scope_prec] already equals the
+             guard precision ([guard_conjuncts] widens narrower types), and not float-valued at an
+             integer precision (gh-ocannl-1957). *)
+          let is_guard_prec =
+            match scope_prec with
+            | Ops.Uint64_prec _ | Ops.Int64_prec _ | Ops.Double_prec _ -> true
+            | _ -> false
+          in
+          Option.some_if
+            (is_guard_prec && not (Ops.is_integer scope_prec && float_valued v))
+            (v, scope_prec)
+  in
   function
-  | Binop (Ops.Cmpeq, (a, pa), (b, pb)) ->
+  | Binop (Ops.Cmpeq, (a, pa), (b, pb)) when one_hot_range_exact_in eval_prec ~from_ ~to_ ->
       if is_embedded_range_iterator k a && not (scalar_mentions_symbol k b) then index (b, pb)
       else if is_embedded_range_iterator k b && not (scalar_mentions_symbol k a) then index (a, pa)
       else None
+  | Local_scope { id; body = Set_local (id', Binop (Ops.Cmpeq, (a, _), (b, _))); _ }
+    when equal_scope_id id id' ->
+      let scope_prec = Lazy.force id.tn.Tn.storage_prec in
+      if not (one_hot_range_exact_in scope_prec ~from_ ~to_) then None
+      else if is_embedded_range_iterator k a && not (scalar_mentions_symbol k b) then
+        scoped_index ~id ~scope_prec b
+      else if is_embedded_range_iterator k b && not (scalar_mentions_symbol k a) then
+        scoped_index ~id ~scope_prec a
+      else None
   | _ -> None
 
-let match_one_hot_contribution (k : Indexing.symbol) (contribution : scalar_t) :
-    (Tn.t * Indexing.axis_index array * scalar_arg) option =
-  let match_cmpeq = match_one_hot_cmpeq k in
-  let as_table_get = function Get (table, table_idcs) -> Some (table, table_idcs) | _ -> None in
+let match_one_hot_contribution ~ienv ~eval_prec ~from_ ~to_ (k : Indexing.symbol)
+    (contribution : scalar_t) :
+    (Tn.t * Indexing.axis_index array * Ops.prec list * scalar_arg) option =
+  let match_cmpeq = match_one_hot_cmpeq ~ienv ~eval_prec ~from_ ~to_ k in
+  (* gh-ocannl-2374: look through precision conversions wrapping the table read -- [Round_prec]
+     (from [simplify_llc]'s narrowing-read fold, gh-ocannl-1975) and single-assignment float cast
+     [Local_scope]s (e.g. f64 -> f32) -- preserving the conversion chain innermost-first. *)
+  let rec as_table_get = function
+    | Get (table, table_idcs) -> Some (table, table_idcs, [])
+    | Unop (Ops.Round_prec, (inner, t)) ->
+        Option.map (as_table_get inner) ~f:(fun (table, table_idcs, rounds) ->
+            (table, table_idcs, rounds @ [ t ]))
+    | Local_scope { id; body = Set_local (id', inner); _ } when equal_scope_id id id' ->
+        let scope_prec = Lazy.force id.tn.Tn.storage_prec in
+        if not (Ops.is_float scope_prec) then None
+        else
+          Option.bind (as_table_get inner) ~f:(fun (table, table_idcs, rounds) ->
+              let prev_prec =
+                match List.last rounds with Some p -> p | None -> Lazy.force table.Tn.storage_prec
+              in
+              match Ops.prec_family prev_prec with
+              | Packed_integer -> None
+              | _ ->
+                  let rounds =
+                    if Ops.equal_prec prev_prec scope_prec then rounds else rounds @ [ scope_prec ]
+                  in
+                  Some (table, table_idcs, rounds))
+    | _ -> None
+  in
   match contribution with
   | Ternop (Ops.Where, cond, (then_, _), (Constant 0., _)) -> (
       match (match_cmpeq (fst cond), as_table_get then_) with
-      | Some index_expr, Some (table, table_idcs) -> Some (table, table_idcs, index_expr)
+      | Some index_expr, Some (table, table_idcs, rounds) ->
+          Some (table, table_idcs, rounds, index_expr)
       | _ -> None)
   | Binop (Ops.Mul, (a, _), (b, _)) -> (
       (* one factor is the comparison, the other is the table read *)
       match (match_cmpeq a, as_table_get b) with
-      | Some index_expr, Some (table, table_idcs) -> Some (table, table_idcs, index_expr)
+      | Some index_expr, Some (table, table_idcs, rounds) ->
+          Some (table, table_idcs, rounds, index_expr)
       | _ -> (
           match (match_cmpeq b, as_table_get a) with
-          | Some index_expr, Some (table, table_idcs) -> Some (table, table_idcs, index_expr)
+          | Some index_expr, Some (table, table_idcs, rounds) ->
+              Some (table, table_idcs, rounds, index_expr)
           | _ -> None))
   | _ -> None
 
@@ -9484,9 +9613,9 @@ let match_one_hot_contribution (k : Indexing.symbol) (contribution : scalar_t) :
    (Embed_index (Iterator k), index_expr), g, Constant 0.)]; - the multiply form [Binop (Mul, <cmpeq
    0/1>, g)] (either factor order). On success returns [Some (index_expr, g_arg)]; the caller checks
    that [g] is free of [k] and does not read the written tensor. *)
-let match_transposed_one_hot_contribution (k : Indexing.symbol) (contribution : scalar_t) :
-    (scalar_arg * scalar_arg) option =
-  let match_cmpeq = match_one_hot_cmpeq k in
+let match_transposed_one_hot_contribution ~ienv ~eval_prec ~from_ ~to_ (k : Indexing.symbol)
+    (contribution : scalar_t) : (scalar_arg * scalar_arg) option =
+  let match_cmpeq = match_one_hot_cmpeq ~ienv ~eval_prec ~from_ ~to_ k in
   match contribution with
   | Ternop (Ops.Where, cond, then_, (Constant 0., _)) ->
       Option.map (match_cmpeq (fst cond)) ~f:(fun index_expr -> (index_expr, then_))
@@ -9573,13 +9702,16 @@ let conjoin ~guard_prec conjuncts =
              Binop (Ops.And, (acc, guard_prec), (c, guard_prec))))
 
 let build_guarded_gather ~ienv ~table ~table_idcs ~dyn_axis ~(index_expr : scalar_arg) ~class_count
-    ~value_prec : scalar_t =
+    ~(rounds : Ops.prec list) ~value_prec : scalar_t =
   let gather = Get_dynamic { tn = table; idcs = table_idcs; dyn_axis; dyn_value = index_expr } in
+  let gathered =
+    List.fold rounds ~init:gather ~f:(fun acc prec -> Unop (Ops.Round_prec, (acc, prec)))
+  in
   let conjuncts, guard_prec = guard_conjuncts ~ienv ~index_expr ~class_count in
   match conjoin ~guard_prec conjuncts with
-  | None -> gather (* Fully discharged: the (settled) bounds prove every access in range. *)
+  | None -> gathered (* Fully discharged: the (settled) bounds prove every access in range. *)
   | Some in_range ->
-      Ternop (Ops.Where, (in_range, guard_prec), (gather, value_prec), (Constant 0., value_prec))
+      Ternop (Ops.Where, (in_range, guard_prec), (gathered, value_prec), (Constant 0., value_prec))
 
 (* gh-466: build the guarded scatter-accumulate replacing a matched transposed one-hot reduction:
    [if in_range(e) then tn[.., e @dyn_axis, ..] += g]. The write reads back its own cell via
@@ -11418,9 +11550,10 @@ let accumulation_contribution ~(acc_is : scalar_t -> bool) (acc : scalar_t) : sc
 (* gh-343: shared core -- given a reduction over [k] with bounds [\[from_, to_\]] and a
    per-iteration [contribution], check the narrow one-hot side conditions and build the guarded
    gather. *)
-let gather_of_reduction ~ienv ~(k : Indexing.symbol) ~from_ ~to_ (contribution : scalar_t) :
-    scalar_t option =
-  Option.bind (match_one_hot_contribution k contribution) ~f:(fun (table, table_idcs, index_expr) ->
+let gather_of_reduction ~ienv ~eval_prec ~(k : Indexing.symbol) ~from_ ~to_
+    (contribution : scalar_t) : scalar_t option =
+  Option.bind (match_one_hot_contribution ~ienv ~eval_prec ~from_ ~to_ k contribution)
+    ~f:(fun (table, table_idcs, rounds, index_expr) ->
       let count, axis, only_plain = count_plain_iterator k table_idcs in
       match if count = 1 && only_plain then axis else None with
       | None -> None
@@ -11431,13 +11564,15 @@ let gather_of_reduction ~ienv ~(k : Indexing.symbol) ~from_ ~to_ (contribution :
           if (not (from_ = 0)) || to_ <> class_count - 1 then None
           else if scalar_mentions_symbol k (fst index_expr) then None
           else
-            let value_prec = Lazy.force table.Tn.storage_prec in
+            let value_prec =
+              Option.value (List.last rounds) ~default:(Lazy.force table.Tn.storage_prec)
+            in
             (* Neutralize the now-dead loop symbol at the dynamic axis. *)
             let table_idcs = Array.copy table_idcs in
             table_idcs.(dyn_axis) <- Indexing.Fixed_idx 0;
             Some
               (build_guarded_gather ~ienv ~table ~table_idcs ~dyn_axis ~index_expr ~class_count
-                 ~value_prec))
+                 ~rounds ~value_prec))
 
 (* gh-343: scalar-local form -- Local_scope { id; body = [init;] For k { Set_local (id, acc) } }. *)
 let try_rewrite_local_scope ~ienv (id : scope_id) (body : t) : scalar_t option =
@@ -11445,8 +11580,9 @@ let try_rewrite_local_scope ~ienv (id : scope_id) (body : t) : scalar_t option =
   | Some (For_loop { index = k; from_; to_; body = Set_local (id', acc); _ })
     when equal_scope_id id id' ->
       let acc_is = function Get_local id' -> equal_scope_id id id' | _ -> false in
+      let eval_prec = Lazy.force id.tn.Tn.storage_prec in
       Option.bind (accumulation_contribution ~acc_is acc) ~f:(fun contribution ->
-          gather_of_reduction ~ienv ~k ~from_ ~to_ contribution)
+          gather_of_reduction ~ienv ~eval_prec ~k ~from_ ~to_ contribution)
   | _ -> None
 
 (* gh-343: materialized form -- a reduction loop [For k { Set lhs idcs acc }] at any nesting depth,
@@ -11463,14 +11599,15 @@ let try_rewrite_materialized_loop ~ienv (llc : t) : t option =
         | Get (g, gi) -> Tn.equal g tn && [%equal: Indexing.axis_index array] gi idcs
         | _ -> false
       in
+      let eval_prec = Lazy.force tn.Tn.storage_prec in
       Option.bind (accumulation_contribution ~acc_is llsc) ~f:(fun contribution ->
-          Option.map (gather_of_reduction ~ienv ~k ~from_ ~to_ contribution) ~f:(fun gather ->
-              let value_prec = scalar_precision gather in
+          Option.map (gather_of_reduction ~ienv ~eval_prec ~k ~from_ ~to_ contribution)
+            ~f:(fun gather ->
               Set
                 {
                   tn;
                   idcs;
-                  llsc = Binop (Ops.Add, (Get (tn, idcs), value_prec), (gather, value_prec));
+                  llsc = Binop (Ops.Add, (Get (tn, idcs), eval_prec), (gather, eval_prec));
                   debug = "";
                 }))
   | _ -> None
@@ -11503,8 +11640,10 @@ let try_rewrite_transposed_loop ~ienv (llc : t) : t option =
             | Get (g, gi) -> Tn.equal g tn && [%equal: Indexing.axis_index array] gi idcs
             | _ -> false
           in
+          let eval_prec = Lazy.force tn.Tn.storage_prec in
           Option.bind (accumulation_contribution ~acc_is llsc) ~f:(fun contribution ->
-              Option.bind (match_transposed_one_hot_contribution k contribution)
+              Option.bind
+                (match_transposed_one_hot_contribution ~ienv ~eval_prec ~from_ ~to_ k contribution)
                 ~f:(fun (index_expr, grad_arg) ->
                   let class_count = from_ + (Lazy.force tn.Tn.dims).(dyn_axis) in
                   (* The loop must span exactly [0, class_count) over the written axis; the index
@@ -13154,7 +13293,9 @@ let walk_operand_precisions ~(mode : [ `Refuse | `Describe ]) (llc : t) : t =
     | Binop (op, a, b) ->
         let a = own ~dest a in
         Binop (op, a, own ~dest b)
-    | Unop (Ops.Round_prec, (((Get _ | Constant _ | Unop (Ops.Round_prec, _)), _) as a)) ->
+    | Unop
+        (Ops.Round_prec, (((Get _ | Get_dynamic _ | Constant _ | Unop (Ops.Round_prec, _)), _) as a))
+      ->
         Unop (Ops.Round_prec, own ~dest a)
     | Unop (Ops.Round_prec, _) ->
         raise

@@ -12106,6 +12106,29 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-2374: one-hot gather and backward scatter recognized through cast twins (Round_prec /
+; float cast scopes) and uncollapsed selector scopes (vocab >= float_exact_int_limit), with
+; executed parity on bf16 gpt2_mini_train-shaped inputs, f16 and f64->f32 legs, and negative
+; controls.
+
+(test
+ (name one_hot_cast_twin)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules one_hot_cast_twin)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  arrayjit.utils
+  arrayjit.context
+  ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-483: the online-softmax attention rewrite -- executed parity of the rewritten model
 ; against the same model composed (forward, masked prefixes, and training through the composed
 ; backward), the scan count, and which seq^2 intermediates survive under the recompute cap.

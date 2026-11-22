@@ -1,0 +1,30 @@
+f32 baseline lowers embedding forward as Get_dynamic and backward as Set_dynamic: true
+bf16 virtual twin: forward lowers as Get_dynamic gather: true
+bf16 virtual twin: gather keeps Round_prec on the dynamic read: true
+bf16 virtual twin: backward lowers as Set_dynamic scatter: true
+bf16 virtual twin: no vocabulary loop survives in forward or backward: true
+bf16 virtual twin: uint32 IDs emit no integrality Trunc: true
+bf16 virtual twin: forward embedding matches f32 within bf16 tolerance: true
+bf16 virtual twin: adjacent IDs 256/257 and 512/513 stay distinct: true
+bf16 virtual twin: backward wte.grad matches f32 within bf16 tolerance: true
+bf16 virtual twin: untouched vocabulary rows keep zero gradient: true
+bf16 materialized twin: forward lowers as Get_dynamic gather: true
+bf16 materialized twin: backward lowers as Set_dynamic scatter: true
+bf16 materialized twin: no vocabulary loop survives in forward or backward: true
+bf16 materialized twin: uint32 IDs emit no integrality Trunc: true
+bf16 materialized twin: forward embedding matches f32 within bf16 tolerance: true
+bf16 materialized twin: adjacent IDs 256/257 and 512/513 stay distinct: true
+bf16 materialized twin: backward wte.grad matches f32 within bf16 tolerance: true
+bf16 materialized twin: untouched vocabulary rows keep zero gradient: true
+bf16-into-f32: lowers as Round_prec over Get_dynamic with no vocab loop: true
+bf16-into-f32: gathered value rounds to bf16 (1.0, not unrounded f32): true
+bf16-into-f32: OOB ID writes exact zero row: true
+f16 vocab=1024: forward lowers as rounded Get_dynamic and backward as Set_dynamic: true
+f16 vocab=1024: forward and backward match f32 within f16 tolerance: true
+f16 vocab=2050: forward lowers as rounded Get_dynamic and backward as Set_dynamic: true
+f16 vocab=2050: forward and backward match f32 within f16 tolerance: true
+f64->f32 cast twin: lowers as Round_prec over Get_dynamic with no vocab loop: true
+f64->f32 cast twin: gathered value rounds to f32 (1.0, not f64 1 + 2^-25): true
+narrowing byte selector over int32 IDs is NOT rewritten to Get_dynamic: true
+narrowing byte selector preserves modular wrap semantics (257 mod 256 = 1 -> 20.): true
+bare bfloat16 Cmpeq with vocab >= 256 is NOT rewritten to Get_dynamic: true

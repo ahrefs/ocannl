@@ -128,7 +128,8 @@ let canonical_of ~static_indices ~node_tag ~companions (llc : LL.t) : canonical 
         (hooks ()) with
         scalar =
           (fun _ nodes -> function
-            | LL.Unop (Ops.Round_prec, (LL.Get (tn, _), Ops.Half_prec _)) ->
+            | LL.Unop
+                (Ops.Round_prec, ((LL.Get (tn, _) | LL.Get_dynamic { tn; _ }), Ops.Half_prec _)) ->
                 Continue (Set.add nodes tn)
             | _ -> Continue nodes);
       }

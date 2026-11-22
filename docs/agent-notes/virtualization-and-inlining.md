@@ -278,7 +278,13 @@ files.
   scopes collapse (`test_bounds_folded_gather`, and the tune-cache tests go red when they do not). A
   comparison at a float precision therefore also holds with one side exact there and the other an
   integer read: the exact side lies strictly inside `float_exact_int_limit`, and an integer past the
-  limit rounds monotonically to at least the limit, so no decision flips. A setter's own nested
+  limit rounds monotonically to at least the limit, so no decision flips. When the vocabulary
+  reaches a narrow product's `float_exact_int_limit` (256 for bfloat16, 2048 for half),
+  `simplify_llc` still keeps the uint32 selector in its `Local_scope` rather than conflating
+  adjacent IDs, and `rewrite_one_hot_reductions` unwraps that scope directly (checking range
+  exactness and lossless index conversion) and looks through `Round_prec` / float-cast wrappers on
+  the table read, keeping `Round_prec` on the gathered `Get_dynamic` (gh-ocannl-2374,
+  `one_hot_cast_twin`). A setter's own nested
   arithmetic has no node and no oracle, and stays C-promoted (`op_table_compile`'s
   `Min(a + b, c) = 250`). `test/operations/integer_scope_collapse` runs every shape materialized,
   uncollapsed, inlined and through a schedule, with a worked value and a kept-or-collapsed claim.
