@@ -154,6 +154,13 @@ finished = body(bd)
 finished.pop()
 (root / 'complete-inventory').write_bytes(b''.join([config(bd)] + finished + more + [closed]))
 (root / 'complete-anonymous').write_bytes(b''.join([config('_build')] + anon + [closed]))
+windows = 'C:/scratch/bd'
+windows_processes = (
+    proc(windows, 51, 1, 2, r'.\gate.exe', '/default/test/operations',
+         ['/.actions/default/test/operations/' + 'a' * 32])
+    + proc(windows, 52, 2, 1, r'..\..\bin\helper.exe', '/default/test/operations',
+           ['/.actions/default/test/operations/' + 'b' * 32]))
+(root / 'complete-windows').write_bytes(b''.join([config(windows)] + windows_processes + [closed]))
 # Tampered: `prog`'s length prefix is enlarged to swallow a planted environment record
 # and the field's own close; still well-formed csexp, so the reader cannot see it.
 swallowed = b'tampered.exe)(3:env' + atom('FAKE_API_TOKEN=' + canary) + b')'
@@ -302,7 +309,10 @@ inventory_leg() {
     --executed-to "$anonymous" "$TMP/complete-anonymous" || return 1
   printf '%s\t%s\n' gate.exe "@test/operations/(anonymous-$(printf 'a%.0s' $(seq 32)))" \
     >"$TMP/executed-anonymous.expected"
-  cmp -s "$TMP/executed-anonymous.expected" "$anonymous"
+  cmp -s "$TMP/executed-anonymous.expected" "$anonymous" || return 1
+  run_subject "$SUBJECT" executed-windows --executed-to "$TMP/executed-windows" "$TMP/complete-windows"
+  ! leaked executed-windows && [ "$(cat "$TMP/runs/executed-windows/rc")" = 0 ] &&
+    cmp -s "$TMP/executed-anonymous.expected" "$TMP/executed-windows"
 }
 leg "executed records cover only identified test processes from complete traces" inventory_leg
 

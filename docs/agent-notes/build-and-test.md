@@ -1543,10 +1543,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   observed action pairs the complete, run-owned Dune trace identifies.
   The trace reader's header lists the accepted forms. An empty inventory means the
   trace had no matching process, as on a cached rerun. A missing inventory exits 2,
-  including on older trace formats, interrupted trace writes and caller-owned
-  traces. A forced build can reuse an unchanged test's output rule and still pass
-  its alias. The harness removes the test's external witness between runs and
+  including on older trace formats, interrupted trace writes, caller-owned
+  traces and runs with a caller-set `DUNE_TRACE`. A forced build can reuse an
+  unchanged test's output rule and still pass its alias. The harness removes
+  the test's external witness between runs and
   checks both the witness and the inventory on cold, warm and forced builds.
+  A separate cold build with process tracing disabled runs the test and leaves
+  the inventory unavailable.
   The harness uses path queries for fixture pointers, run discovery, and repeat lock assertions;
   deliberately tested process predicates/identity fixtures still extract functions. Prefer foreground `run` launched through the agent harness's background mode
   (the harness notifies on exit); `start`/`status`/

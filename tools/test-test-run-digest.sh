@@ -132,7 +132,8 @@
 #      manual build running beside a managed run keeps its live trace.
 #  80c. A cold batch lists its two test processes and no compiler, a warm
 #      batch lists none, and --force still reuses a target-producing test.
-#      All three publish elapsed seconds with their verdict (real dune).
+#      A cold run with process tracing disabled leaves inventory unavailable.
+#      All four publish elapsed seconds with their verdict (real dune).
 #  92 sits after leg 80b: a red run whose own trace holds a failed build step
 #      (a nonzero exit producing only compile artifacts) is BUILD FAILED,
 #      exit 65 over a recorded 1 (`wait` too), naming the step and the output
@@ -1739,24 +1740,30 @@ let () =
   print_endline "baseline"
 ML
   printf 'baseline\n' >"$root/test/baseline.expected"
-  receipt_run() {
-    (cd "$root" && PATH=$(dirname "$dune_path"):$PATH OCANNL_TOOL_TEST_RUNS=$TMP/receipt-runs \
-      RECEIPT_WITNESS=$TMP/receipt-witness bash tools/test-run.sh "$@")
-  }
-  for phase in cold warm forced; do
+  receipt_run() (
+    cd "$root" || exit
+    unset DUNE_TRACE
+    if [ "$phase" = filtered ]; then export DUNE_TRACE=-process; fi
+    PATH=$(dirname "$dune_path"):$PATH OCANNL_TOOL_TEST_RUNS=$TMP/receipt-runs \
+      RECEIPT_WITNESS=$TMP/receipt-witness bash tools/test-run.sh "$@"
+  )
+  for phase in cold warm forced filtered; do
     set -- @test/runtest-baseline @test/runtest-ordinary
-    if [ "$phase" = forced ]; then set -- --force @test/runtest-baseline; fi
+    case $phase in
+      forced) set -- --force @test/runtest-baseline ;;
+      filtered) set -- --build-dir="$root/filtered-build" @test/runtest-baseline ;;
+    esac
     started=$SECONDS
     if ! receipt_run run build --cache=disabled "$@" >"$TMP/receipt-$phase.log" 2>&1; then
       harness_abandon "$phase: the fixture run failed: $(tail -12 "$TMP/receipt-$phase.log")"; return
     fi
     receipt=$(receipt_run paths run last) ||
       { harness_abandon "$phase: could not find the run record"; return; }
-    if [ "$phase" = cold ]; then
+    if [ "$phase" = cold ] || [ "$phase" = filtered ]; then
       if [ ! -s "$TMP/receipt-witness" ]; then
-        harness_abandon "cold: baseline did not execute"; return
+        harness_abandon "$phase: baseline did not execute"; return
       fi
-      mv "$TMP/receipt-witness" "$TMP/receipt-witness.cold"
+      mv "$TMP/receipt-witness" "$TMP/receipt-witness.$phase"
       expected=$(printf 'baseline.exe\ttest/baseline.exe.output\nordinary.exe\ttest/ordinary.actual')
     else
       if [ -e "$TMP/receipt-witness" ]; then
@@ -1767,6 +1774,13 @@ ML
     elapsed=$(cat "$receipt/elapsed" 2>/dev/null)
     if [[ ! $elapsed =~ ^[0-9]+$ ]] || ! [ "$elapsed" -le "$((SECONDS - started + 1))" ]; then
       detail="$detail $phase: missing or invalid elapsed '$elapsed' in $receipt;"
+    fi
+    if [ "$phase" = filtered ]; then
+      if ! harness_rejected 2 'no executed-action inventory' "$TMP/receipt-filtered-query.log" \
+           receipt_run paths executed "$receipt" || [ -e "$receipt/executed" ]; then
+        detail="$detail $phase: filtered trace should leave inventory unavailable in $receipt;"
+      fi
+      continue
     fi
     if ! inventory=$(receipt_run paths executed "$receipt" 2>/dev/null); then
       detail="$detail $phase: no executed-action inventory in $receipt;"

@@ -40,6 +40,7 @@
 #   --executed-to PATH
 #                      also write the executed test-action inventory, including
 #                      an empty file for a complete trace with no matching rows.
+#                      The caller must know the trace includes process events.
 #                      A complete trace with no processes is successful in this mode.
 #   -h, --help         this header
 #
@@ -350,6 +351,8 @@ for _, t, _ in events:
 config = next((f for kind, _, f in events if kind == (b'config', b'init')), {})
 build_dir = config.get('build_dir') if isinstance(config.get('build_dir'), str) else '_build'
 build_prefix = build_dir.rstrip('/') + '/'
+windows_paths = (os.name == 'nt' or sys.platform in ('cygwin', 'msys')
+                 or re.match(r'^[A-Za-z]:[/\\]', build_dir) is not None)
 
 
 def in_context(path):
@@ -411,7 +414,9 @@ def executed_test(f):
     prog = f.get('prog')
     if not isinstance(prog, str) or not prog:
         return None
-    name = os.path.basename(prog)
+    if windows_paths:
+        prog = prog.replace('\\', '/')
+    name = posixpath.basename(prog)
     raw_targets = f.get('target_files')
     targets = raw_targets if isinstance(raw_targets, list) else []
     for target in targets:

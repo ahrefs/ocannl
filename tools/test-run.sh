@@ -471,8 +471,8 @@
 # explicit_trace_file). The same read records `executed` when it has a complete
 # run-owned trace. See tools/action-durations.sh for the recognised process
 # forms. Each TSV row names the process program and its observed action.
-# Dune versions with an older trace format, explicitly redirected traces and
-# repeat sets have no inventory. After cancellation, trace diagnostics can
+# Older formats, caller-owned traces, a caller-set DUNE_TRACE and repeat
+# sets leave the inventory unavailable. After cancellation, trace diagnostics can
 # land after the verdict. A batch naming a test with a sibling golden the batch
 # leaves unrun records `sibling-goldens`, which the digest prints too (see
 # alias_siblings_perl).
@@ -2117,7 +2117,10 @@ supervisor_perl=$lock_census_perl'
       open(STDIN, "<", "/dev/null");
       open(STDERR, ">", "$own/slowest.err");
       open(STDOUT, ">", "$own/slowest.tmp") or POSIX::_exit(126);
-      exec("bash", $reader, "-n", "5", "--executed-to", "$own/executed.tmp", $trace);
+      # A category override can hide every process from an otherwise complete trace.
+      my @inventory = exists $ENV{DUNE_TRACE} ? () : ("--executed-to", "$own/executed.tmp");
+      # The credential harness copies the trace by its argument position.
+      exec("bash", $reader, "-n", "5", $trace, @inventory);
       POSIX::_exit(127);
     }
     my ($st, $cut);
