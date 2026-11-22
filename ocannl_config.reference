@@ -1907,11 +1907,10 @@
 # can be inlined. Values worth considering: 0 (disables inlining) to 3.
 #virtualize_max_visits=1
 
-# Recompute-cost cap for inlining: a tensor node whose computation contains reduction loops
-# (loops enclosing a setter without appearing in its indices) with a total trip-count product
-# exceeding this value is never virtualized, because inlining would replay the reduction at
-# every read site (multiplying through chains of virtual consumers). Negative values disable
-# the cap.
+# Recompute-cost cap for inlining. The setter-side guard considers reduction loops (loops
+# enclosing a setter whose indices omit their symbols). It also considers loops that survive
+# affine binding at later reads of a single injective scatter. The largest trip-count product
+# in one such nest is compared with this value. Negative values disable the cap.
 #virtualize_max_inline_reduction=16
 
 # Transitive fan-in cap for inlining: a tensor node whose fully-inlined computation would read

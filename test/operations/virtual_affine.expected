@@ -95,6 +95,48 @@ unit-solve(plain) consumer setter kept: true
 unit-solve(plain) emits a range guard (Where + Cmple lower + Cmplt upper): true
 unit-solve(plain): every cell holds the value of the one iteration that scattered it: true
 unit-solve(plain): virtual and materialized arms agree: true
+scatter_at_cap: the scatter remains virtual: true
+scatter_at_cap: only plain reads need a guard: true
+scatter_at_cap: the executed outputs match the scatter and its reduction: true
+scatter_at_cap: the outputs agree with explicit materialization: true
+scatter_over_cap: the replay cap materializes the scatter: true
+scatter_over_cap: each reader loads the scatter buffer: true
+scatter_over_cap: no guarded replay survives: true
+scatter_over_cap: the executed outputs match the scatter and its reduction: true
+scatter_over_cap: the outputs agree with explicit materialization: true
+scatter_matching: the scatter remains virtual: true
+scatter_matching: only plain reads need a guard: true
+scatter_matching: the executed outputs match the scatter and its reduction: true
+scatter_matching: the outputs agree with explicit materialization: true
+scatter_mixed_reads: the replay cap materializes the scatter: true
+scatter_mixed_reads: each reader loads the scatter buffer: true
+scatter_mixed_reads: no guarded replay survives: true
+scatter_mixed_reads: the executed outputs match the scatter and its reduction: true
+scatter_mixed_reads: the outputs agree with explicit materialization: true
+scatter_overwritten: the scatter remains virtual: true
+scatter_overwritten: only plain reads need a guard: true
+scatter_overwritten: the copy keeps the value captured before the clear: true
+scatter_overwritten: the executed outputs match the scatter and its reduction: true
+scatter_overwritten: the outputs agree with explicit materialization: true
+scatter_observed: the replay cap materializes the scatter: true
+scatter_observed: each reader loads the scatter buffer: true
+scatter_observed: no guarded replay survives: true
+scatter_observed: the observable copy retains a buffer for readback: true
+scatter_observed: the executed outputs match the scatter and its reduction: true
+scatter_observed: the outputs agree with explicit materialization: true
+scatter_committed_observer: the scatter remains virtual: true
+scatter_committed_observer: only plain reads need a guard: true
+scatter_committed_observer: the independent observable writer stays virtual: true
+scatter_committed_observer: the executed outputs match the scatter and its reduction: true
+scatter_committed_observer: the outputs agree with explicit materialization: true
+scatter_no_cap: the scatter remains virtual: true
+scatter_no_cap: only plain reads need a guard: true
+scatter_no_cap: the executed outputs match the scatter and its reduction: true
+scatter_no_cap: the outputs agree with explicit materialization: true
+scatter_inline_preference: the scatter remains virtual: true
+scatter_inline_preference: only plain reads need a guard: true
+scatter_inline_preference: the executed outputs match the scatter and its reduction: true
+scatter_inline_preference: the outputs agree with explicit materialization: true
 triangular producer virtual: true
 triangular producer inlined (no array reads survive): true
 triangular consumer setter kept: true
