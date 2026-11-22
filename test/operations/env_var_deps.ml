@@ -1073,7 +1073,11 @@ let width_key = "cc_vector_bytes"
    [search_values_extra]) of [search_home] and the values of the framework library
    ([search_wrapper_root]) that reach it, transitively (`Train.tune_placements`): the paths a
    program names them by, under an alias or an `open` too, or any path ending in one, whatever
-   qualifies it. "Can select cc" is the backend rule's own answer for the run: `(env_var
+   qualifies it. The functor form is read from qualified value references such as `Search.tune`
+   after `module Search = Autotune.Make (Driver)`, including local bindings and module aliases. The
+   reader follows lexical shadowing. Opens of the result, re-exports through structures or
+   first-class modules, and wrapper discovery through an instantiation in a different file are
+   outside this source pass. "Can select cc" is the backend rule's own answer for the run: `(env_var
    OCANNL_BACKEND)`, or a backend marker naming cc or multidev_cc, the two backends rendering
    through `Cc_backend`.
 
@@ -1094,12 +1098,14 @@ let width_key = "cc_vector_bytes"
    a script launches is past what dune's text says, and stated here as the boundary. A text-valued
    pform (`%{read:…}`, `%{deps}`) may name one, so it is refused. *)
 let search_home = "arrayjit/lib/autotune.ml"
-let search_value = [ "Autotune"; "tune" ]
+let search_module = "Autotune"
+let search_value = [ search_module; "tune" ]
+let search_functor = "Make"
 
 (* Further entry points, followed where [search_home] defines them: [tune_deferred]
    (gh-ocannl-1408), which [Train.tune_placements] searches through. [search_value] alone is the
    anchor the derivation refuses to lose. *)
-let search_values_extra = [ [ "Autotune"; "tune_deferred" ] ]
+let search_values_extra = [ [ search_module; "tune_deferred" ] ]
 let search_wrapper_root = "lib/"
 let search_wrapper_library = "Ocannl"
 
@@ -1391,6 +1397,17 @@ let main () =
   in
   let search_anchor_found = search_home_defines search_value in
   let search_values = search_value :: List.filter search_values_extra ~f:search_home_defines in
+  let applied_search_sites content =
+    if
+      String.is_substring content ~substring:search_module
+      && String.is_substring content ~substring:search_functor
+    then
+      Test_scan.Lexical_scope.functor_value_sites content
+        ~functor_path:[ search_module; search_functor ]
+        ~members:(List.map search_values ~f:List.last_exn)
+    else []
+  in
+  let applied_spelling value = Printf.sprintf "%s.%s(_).%s" search_module search_functor value in
   (* The framework library's values reaching the search, by module and name: a value reaches it when
      it names a qualified path ending in the entry point or in an earlier-found wrapper, or a value
      of its own module that does, closed to its fixpoint across the library's modules. A call
@@ -1479,7 +1496,10 @@ let main () =
                          (List.drop path (List.length path - List.length tail))))
             |> List.map ~f:(String.concat ~sep:".")
           in
-          match List.dedup_and_sort (named @ suffixed) ~compare:String.compare with
+          let applied =
+            List.map (applied_search_sites content) ~f:(fun (value, _) -> applied_spelling value)
+          in
+          match List.dedup_and_sort (named @ suffixed @ applied) ~compare:String.compare with
           | [] -> None
           | spellings -> Some (String.lowercase path, spellings))
     |> Map.of_alist_reduce (module String) ~f:(fun a _ -> a)
@@ -1572,7 +1592,19 @@ let main () =
             || List.exists search_sites ~f:(fun (components, _) ->
                 List.equal String.equal components path)
           in
-          Some (String.lowercase path, (items, helper_of, is_search)))
+          let items, first_applied =
+            match applied_search_sites content with
+            | [] -> (items, None)
+            | (_, (start, stop)) :: _ ->
+                (* The initializer reader inlines some includes. Read the prefix and the search item
+                   separately so an include cannot move the lexical search boundary. *)
+                let before = Sources.initialization_items (String.prefix content start) in
+                let first =
+                  Sources.initialization_items (String.sub content ~pos:start ~len:(stop - start))
+                in
+                (before @ first, Some (List.length before))
+          in
+          Some (String.lowercase path, (items, helper_of, is_search, first_applied)))
     |> Map.of_alist_reduce (module String) ~f:(fun a _ -> a)
   in
   let search_table = ref [] in
@@ -3128,15 +3160,23 @@ let main () =
                               List.filter modules ~f:(fun m' -> not (String.equal m m'))
                             in
                             match Map.find vector_file_init_order (in_here m) with
-                            | Some (items, helper_of, is_search)
+                            | Some (items, helper_of, is_search, first_applied)
                               when not (List.exists others ~f:names_search) ->
                                 let barrier = function
                                   | path when is_search path -> true
                                   | first :: _ :: _ -> List.mem others first ~equal:String.equal
                                   | _ -> false
                                 in
-                                let rec scan pinned = function
+                                let spells_key item =
+                                  List.exists item.Sources.literals ~f:(fun literal ->
+                                      List.mem key_literals literal ~equal:String.equal)
+                                in
+                                let rec scan index pinned = function
                                   | [] -> pinned
+                                  | item :: _ when Option.exists first_applied ~f:(Int.equal index)
+                                    ->
+                                      (* The same item may reset the pin before the reference. *)
+                                      if spells_key item then None else pinned
                                   | item :: _ when List.exists item.Sources.paths ~f:barrier ->
                                       pinned
                                   | item :: rest ->
@@ -3149,16 +3189,10 @@ let main () =
                                         | [] -> pinned
                                         | helpers -> Some helpers
                                       in
-                                      let pinned =
-                                        if
-                                          List.exists item.Sources.literals ~f:(fun literal ->
-                                              List.mem key_literals literal ~equal:String.equal)
-                                        then None
-                                        else pinned
-                                      in
-                                      scan pinned rest
+                                      let pinned = if spells_key item then None else pinned in
+                                      scan (index + 1) pinned rest
                                 in
-                                Option.map (scan None items) ~f:(fun helpers ->
+                                Option.map (scan 0 None items) ~f:(fun helpers ->
                                     Printf.sprintf
                                       "%s.ml calls %s at initialization, before any search"
                                       (String.lowercase m)
@@ -3536,6 +3570,7 @@ let main () =
   printf "  (the search's entry points: %s)\n"
     (String.concat ~sep:", "
        (List.map search_values ~f:(String.concat ~sep:".")
+       @ List.map search_values ~f:(fun path -> applied_spelling (List.last_exn path))
        @ List.map search_wrappers ~f:(fun w -> String.concat ~sep:"." (wrapper_path w))));
   printf "  (the blessed support values pinning the file: %s)\n"
     (String.concat ~sep:", " (List.map vector_file_blessed ~f:(fun (m, v) -> m ^ "." ^ v)));
@@ -6057,8 +6092,9 @@ let search_control () =
     "t/dune" :: "t/ambient.ml" :: "t/probe.ml" :: search_home :: search_wrapper_home
     :: vector_file_pin_home :: List.map context ~f:fst
   in
-  let run ?(home = "let tune () = ()\n") ?(stub = search_helper_stub ()) ?marker ?action ?backend
-      ?rule_marker ?preamble ?head ?programs ?rules ?(extra = []) ~probe () =
+  let run ?(home = "let tune () = ()\nmodule Make (_ : sig end) = struct let tune () = () end\n")
+      ?(stub = search_helper_stub ()) ?marker ?action ?backend ?rule_marker ?preamble ?head
+      ?programs ?rules ?(extra = []) ~probe () =
     write_file (Stdlib.Filename.concat root search_home) home;
     write_file (Stdlib.Filename.concat root vector_file_pin_home) stub;
     write_file (Stdlib.Filename.concat root "t/probe.ml") probe;
@@ -6076,6 +6112,26 @@ let search_control () =
   let registers_var = Utils.env_var_name registers_key in
   let tune = "let () = Autotune.tune ()\n" in
   let named = tune in
+  let applied_setup = "module Driver = struct end\nmodule Search = Autotune.Make (Driver)\n" in
+  let applied = applied_setup ^ "let () = Search.tune ()\n" in
+  let local_applied =
+    "module Driver = struct end\n\
+     module Tuner = Autotune\n\
+     let () = let module Search = Tuner.Make (Driver) in let module Alias = Search in Alias.tune ()\n"
+  in
+  let shadowed_applied =
+    applied_setup
+    ^ "module Other = struct let tune () = () end\n\
+       let () = let module Search = Other in Search.tune ()\n"
+  in
+  let shadowed_parameter =
+    applied_setup
+    ^ "module Other = struct let tune () = () end\n\
+       module Run (Search : sig val tune : unit -> unit end) = struct\n\
+       let () = Search.tune ()\n\
+       end\n\
+       include Run (Other)\n"
+  in
   let wrapped = "open Ocannl\nlet () = Train.tune_placements ()\n" in
   let pin = "let () = Fissioned_chain.small_menu ()\n" in
   let helper = pin ^ tune in
@@ -6112,6 +6168,21 @@ let search_control () =
   let arms =
     [
       ("unanswered", refused (run ~probe:named ()));
+      ("applied_unanswered", refused (run ~probe:applied ()));
+      ("applied_marked", passed (run ~marker ~probe:applied ()));
+      ("applied_local", refused (run ~probe:local_applied ()));
+      ("applied_shadowed", passed (run ~probe:shadowed_applied ()));
+      ("applied_shadowed_parameter", passed (run ~probe:shadowed_parameter ()));
+      ("applied_early_pin", passed (run ~probe:(pin ^ applied) ()));
+      ("applied_late_pin", refused (run ~probe:(applied ^ pin) ()));
+      ( "applied_reset",
+        refused
+          (run
+             ~probe:
+               (pin ^ applied_setup
+               ^ Printf.sprintf "let () = Utils.state_config ~key:%S ~data:\"-1\"; Search.tune ()\n"
+                   width_key)
+             ()) );
       ("marked", passed (run ~marker ~probe:named ()));
       ("setenv", passed (run ~action:(setenv "32") ~probe:named ()));
       ("helper", passed (run ~probe:helper ()));
@@ -6282,6 +6353,16 @@ let search_control () =
     "a program starting a search with a run that can select cc is reported when it neither pins \
      the width nor carries the marker"
     (ok "unanswered");
+  Verdict.p "an unmarked search through an Autotune.Make instance is refused"
+    (ok "applied_unanswered");
+  Verdict.p "a search through an Autotune.Make instance can carry the width marker"
+    (ok "applied_marked");
+  Verdict.p "local module aliases follow the functor instance until shadowed"
+    (ok "applied_local" && ok "applied_shadowed" && ok "applied_shadowed_parameter");
+  Verdict.p "an initialization pin must precede a search through the functor instance"
+    (ok "applied_early_pin" && ok "applied_late_pin");
+  Verdict.p "a width reset in the functor search item invalidates an earlier pin"
+    (ok "applied_reset");
   Verdict.p "the same stanza carrying `; cc-vector-width: independent -- <reason>` passes"
     (ok "marked");
   Verdict.p "and so does one pinning the variable with `setenv` around its run" (ok "setenv");

@@ -62,7 +62,7 @@ Run-time reads exempted from declaration, each for the reason `exempt_reads` giv
 
 Programs starting a search with a run that can select cc, each pinning the cc vector file
 (`cc_vector_bytes`, `cc_vector_registers`) or saying why its claims hold at every width (gh-ocannl-1368):
-  (the search's entry points: Autotune.tune, Autotune.tune_deferred, Ocannl.Calibrate.stream, Scripted_search.search, Ocannl.Train.tune_placements, Wait_wedge_fixture.placements)
+  (the search's entry points: Autotune.tune, Autotune.tune_deferred, Autotune.Make(_).tune, Autotune.Make(_).tune_deferred, Ocannl.Calibrate.stream, Scripted_search.search, Ocannl.Train.tune_placements, Wait_wedge_fixture.placements)
   (the blessed support values pinning the file: Fissioned_chain.small_menu, Fissioned_chain.small_menu_envelope)
   benchmarks/runners/ocannl/dune, executables bench_rank_site (Autotune.tune): pinned: every run that can select cc pins `OCANNL_CC_VECTOR_BYTES`; every run that can select cc pins `OCANNL_CC_VECTOR_REGISTERS`
   bin/dune, executable companion_flavor_bench (Autotune.tune): independent, by its marker
@@ -81,6 +81,8 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, executable flip_abandonment (Autotune.tune, Train.tune_placements): independent, by its marker
   test/operations/dune, executable flip_bound_pruning (Train.tune_placements): independent, by its marker
   test/operations/dune, executable flip_twins (Train.tune_placements): independent, by its marker
+  test/operations/dune, executable hip_scratch_tune_survives (Autotune.Make(_).tune): independent, by its marker
+  test/operations/dune, executable metal_wait_bound_real_hang (Autotune.Make(_).tune): independent, by its marker
   test/operations/dune, executable tune_ship_arm (Train.tune_placements): independent, by its marker
   test/operations/dune, test autotune_baseline_window (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_beam_finals (Scripted_search.search): pinned: autotune_beam_finals.ml calls `Fissioned_chain.small_menu` at initialization, before any search
@@ -100,6 +102,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, test autotune_lowering_reuse (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_lowering_reuse_drift (Scripted_search.search): independent, by its marker
   test/operations/dune, test autotune_measured_refusal (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_nothing_timed (Autotune.Make(_).tune): independent, by its marker
   test/operations/dune, test autotune_progress (Train.tune_placements): independent, by its marker
   test/operations/dune, test autotune_refusal_causes (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_replay_fallback (Autotune.tune, Autotune.tune_deferred): independent, by its marker
@@ -120,10 +123,11 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, test fission_replay_segmentation (Autotune.tune): independent, by its marker
   test/operations/dune, test gpu_kernel_cache (Autotune.tune): independent, by its marker
   test/operations/dune, test inline_flip_tune (Train.tune_placements): independent, by its marker
+  test/operations/dune, test metal_hang_declines (Autotune.Make(_).tune): pinned: every run that can select cc pins `OCANNL_CC_VECTOR_BYTES`; every run that can select cc pins `OCANNL_CC_VECTOR_REGISTERS`
   test/operations/dune, test never_zeroed_grad (Autotune.tune): independent, by its marker
   test/operations/dune, test padded_conv_cache (Autotune.tune): independent, by its marker
   test/operations/dune, test placement_store (Train.tune_placements): independent, by its marker
-  test/operations/dune, test schedule_cache_device (Autotune.tune): independent, by its marker
+  test/operations/dune, test schedule_cache_device (Autotune.Make(_).tune, Autotune.tune): independent, by its marker
   test/operations/dune, test schedule_cache_numerics (Autotune.tune): independent, by its marker
   test/operations/dune, test schedule_conv_gemm (Autotune.tune): independent, by its marker
   test/operations/dune, test schedule_epilogue_fusion (Autotune.tune): independent, by its marker
@@ -138,6 +142,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, test tune_placements_config_refusal (Train.tune_placements): independent, by its marker
   test/operations/dune, test tune_strict_replay (Autotune.tune_deferred): independent, by its marker
   test/operations/dune, test tune_warm_cache_key (Scripted_search.search): independent, by its marker
+  test/operations/dune, test wait_bound_declines (Autotune.Make(_).tune): pinned: every run that can select cc pins `OCANNL_CC_VECTOR_BYTES`; every run that can select cc pins `OCANNL_CC_VECTOR_REGISTERS`
   test/operations/dune, test wait_bound_placements (Wait_wedge_fixture.placements): independent, by its marker
   test/operations/dune, test winograd_conv (Autotune.tune): independent, by its marker
   test/operations/dune, test wrapper_release_paths (Train.tune_placements): independent, by its marker

@@ -951,6 +951,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   the key) is refused as unread rather than passed, and an `(env … (env-vars …))` binding is
   refused outright, since it pins stanzas in other dune files no one marker speaks for. The
   decision is `Dune_stanza_scan.backend_pin_issues`, put to synthetic stanzas by `dune_scan_cases`.
+- The `env_var_deps` width rule counts qualified value references through an `Autotune.Make`
+  instance alongside the default entry points (gh-ocannl-2405). Its control checks the same
+  search with and without a marker, and checks that an initialization pin precedes the search.
+  The scanner's width-rule header gives the source forms it reads.
 - A ratchet whose corpus is the repository's own test sources will scan its OWN fixture, and a
   fixture that pins a shape has to spell that shape out to pin it — so the fixture matches, every
   time, by construction (gh-ocannl-668). Exempt the FILE rather than its matches one at a time: the

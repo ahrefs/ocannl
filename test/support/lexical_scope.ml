@@ -350,3 +350,57 @@ class virtual ['v, 'm] scoped =
           ignore (self#class_field inner field : class_field));
       cs
   end
+
+type functor_module = Path of string list | Instance | Shadowed
+
+(** Qualified value references through a lexically bound application of [functor_path]. Each result
+    carries the member's name and the byte range of its enclosing top-level item, in item order. The
+    original syntax keeps functor parameters in scope. Opens, re-exports and unpacked modules are
+    opaque. *)
+let functor_value_sites content ~functor_path ~members =
+  let found = ref [] in
+  let found_in_item = ref [] in
+  let reader =
+    object (self)
+      inherit [unit, functor_module] scoped as super
+      method local = ()
+      method! shadowed = Some Shadowed
+
+      method module_path env path =
+        match Longident.flatten_exn path with
+        | head :: tail -> (
+            match Map.find env.modules head with
+            | None -> Some (Path (head :: tail))
+            | Some (Path prefix) -> Some (Path (prefix @ tail))
+            | Some Instance when List.is_empty tail -> Some Instance
+            | Some (Instance | Shadowed) -> Some Shadowed)
+        | [] | (exception Invalid_argument _) -> None
+
+      method! module_of env expr =
+        match expr.pmod_desc with
+        | Pmod_apply (fn, _) -> (
+            match self#module_of env fn with
+            | Some (Path path) when List.equal String.equal path functor_path -> Some Instance
+            | _ -> self#shadowed)
+        | _ -> super#module_of env expr
+
+      method! ident env ident =
+        match ident.txt with
+        | Ldot (qualifier, member) when List.mem members member ~equal:String.equal -> (
+            match self#module_path env qualifier with
+            | Some Instance -> found_in_item := member :: !found_in_item
+            | _ -> ())
+        | _ -> ()
+
+      method! item_scope ~top env item =
+        if top then (
+          let loc = item.pstr_loc in
+          let range = (loc.loc_start.pos_cnum, loc.loc_end.pos_cnum) in
+          List.iter !found_in_item ~f:(fun member -> found := (member, range) :: !found);
+          found_in_item := []);
+        env
+    end
+  in
+  let env = { frames = []; modules = Map.empty (module String) } in
+  ignore (reader#structure env (Parse.implementation (Lexing.from_string content)) : structure);
+  List.rev !found
