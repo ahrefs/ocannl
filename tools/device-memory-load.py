@@ -106,13 +106,33 @@ def wait_ready(hog, timeout):
         refuse("hog exited at startup")
 
 
-def run_command(command):
+def reap(group, label, grace):
+    result = cell_group.terminate(group, grace=grace)
+    if not result.reaped or result.observation is not cell_group.GONE:
+        raise cell_group.CleanupFailed(f"{NAME}: could not reap {label} group {group.pgid}")
+
+
+def run_command(argv, hog, cancellation):
     try:
-        status = subprocess.run(command).returncode
+        command = cell_group.spawn(argv)
     except OSError as exc:
         print(f"{NAME}: {exc}", file=sys.stderr)
         return 127 if isinstance(exc, FileNotFoundError) else 126
-    return 128 - status if status < 0 else status
+
+    try:
+        with cancellation.cancellable():
+            while True:
+                try:
+                    status = command.wait(timeout=0.1)
+                except subprocess.TimeoutExpired:
+                    status = None
+                if hog.poll() is not None:
+                    refuse(f"hog exited during CMD (status {hog.returncode})")
+                if status is not None:
+                    return 128 - status if status < 0 else status
+    finally:
+        # Give a signal-aware command time to unwind before escalating its group.
+        reap(command, "CMD", grace=2)
 
 
 def main(argv):
@@ -125,7 +145,7 @@ def main(argv):
 
     python, route = bench_venv.resolve()
     cancellation = cell_group.CancellationDeferral(
-        NAME, cleanup_message="the hog group was cleaned first"
+        NAME, cleanup_message="the managed process groups were cleaned first"
     )
     cancellation.install()
     with cancellation.deferring():
@@ -139,11 +159,9 @@ def main(argv):
         try:
             with cancellation.cancellable():
                 wait_ready(hog, options.ready_timeout)
-                return run_command(command)
+            return run_command(command, hog, cancellation)
         finally:
-            result = cell_group.terminate(hog, grace=0.5)
-            if not result.reaped or result.observation is not cell_group.GONE:
-                raise cell_group.CleanupFailed(f"{NAME}: could not reap hog group {hog.pgid}")
+            reap(hog, "hog", grace=0.5)
 
 
 if __name__ == "__main__":

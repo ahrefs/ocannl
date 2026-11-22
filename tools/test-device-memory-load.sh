@@ -11,6 +11,7 @@ harness_scratch test-device-memory-load
 
 subject=$here/device-memory-load.sh
 export BENCH_VENV_PY="$TMP/stub python" PIDS="$TMP/pids" HOG_ARGS="$TMP/args"
+export CMD_PIDS="$TMP/cmd-pids"
 unset FLEET_SLOT_HELD
 cat >"$BENCH_VENV_PY" <<'PY'
 #!/usr/bin/env python3
@@ -20,6 +21,27 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+
+def record_group(path):
+    # A TERM-ignoring descendant keeps the group populated after its leader exits.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(12)"])
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    Path(path).write_text(f"{os.getpid()} {child.pid}\n")
+
+
+if sys.argv[1] == "--cmd":
+    record_group(os.environ["CMD_PIDS"])
+    if sys.argv[2] == "drop-hog":
+        target = int(Path(os.environ["PIDS"]).read_text().split()[0])
+    else:
+        target = os.getppid()
+        assert target > 1
+    os.kill(target, signal.SIGTERM)
+    time.sleep(4)
+    print("CMD finished", flush=True)
+    sys.exit(0)
 
 mode = os.environ["HOG_MODE"]
 assert sys.argv[1] == "-c"
@@ -35,17 +57,15 @@ if mode in ("missing-torch", "no-device"):
     exec(sys.argv[0])
     raise AssertionError("the worker accepted unavailable hardware")
 
-# A TERM-ignoring descendant keeps the group populated after its leader exits.
-signal.signal(signal.SIGTERM, signal.SIG_IGN)
-child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(12)"])
-signal.signal(signal.SIGTERM, signal.SIG_DFL)
-Path(os.environ["PIDS"]).write_text(f"{os.getpid()} {child.pid}\n")
+record_group(os.environ["PIDS"])
 if mode == "ready":
     print("ready", flush=True)
 elif mode == "wrong":
     print("ready?", flush=True)
 elif mode == "cancel":
-    os.kill(os.getppid(), signal.SIGTERM)
+    supervisor = os.getppid()
+    assert supervisor > 1
+    os.kill(supervisor, signal.SIGTERM)
 else:
     # A partial line must obey the deadline too, even with the pipe readable.
     os.write(1, b"rea")
@@ -58,6 +78,7 @@ run() {
   shift
   : >"$PIDS"
   : >"$HOG_ARGS"
+  : >"$CMD_PIDS"
   rc=0
   HOG_MODE=$mode python3 -c '
 import subprocess
@@ -71,10 +92,10 @@ except subprocess.TimeoutExpired:
 }
 
 group_reaped() {
-  local hog child
-  read -r hog child <"$PIDS" || return 1
-  if pid_alive "$hog" || pid_alive "$child"; then
-    kill -KILL "$hog" "$child" 2>/dev/null || :
+  local leader child
+  read -r leader child <"${1:-$PIDS}" || return 1
+  if pid_alive "$leader" || pid_alive "$child"; then
+    kill -KILL "$leader" "$child" 2>/dev/null || :
     return 1
   fi
 }
@@ -156,6 +177,28 @@ if harness_leg '6: startup cancellation reaps the group'; then
   fi
   group_reaped
   report "$?" 'the cancelled hog and descendant are gone' "$(cat "$PIDS")"
+fi
+
+check_interrupted_command() {
+  local mode=$1 message=$2
+  run ready -- "$BENCH_VENV_PY" --cmd "$mode"
+  if [ "$rc" = 1 ] && [ ! -s "$TMP/out" ] && grep -q "$message" "$TMP/err"; then
+    report 0 'the wrapper fails before CMD finishes normally'
+  else
+    report 1 'the wrapper fails before CMD finishes normally' "$(details)"
+  fi
+  group_reaped
+  report "$?" 'hog group is gone' "$(cat "$PIDS")"
+  group_reaped "$CMD_PIDS"
+  report "$?" 'CMD group is gone' "$(cat "$CMD_PIDS")"
+}
+
+if harness_leg '7: hog loss during CMD invalidates the stress run'; then
+  check_interrupted_command drop-hog 'hog exited during CMD'
+fi
+
+if harness_leg '8: TERM directed at the wrapper reaps both groups'; then
+  check_interrupted_command cancel 'terminated by signal 15'
 fi
 
 finish
