@@ -547,6 +547,9 @@ let raw_entries =
         "[scanner-refusal:321a18c08b264e43b8d54ef69e4786bf] the definition reaching";
         "[scanner-refusal:b4baf80e206eea100c4257a2cb0cc11d] fallback every search-less";
         "[scanner-refusal:5de8818597d1f7b0e33446b61b0cf363] backend_intf.ml";
+        "[scanner-refusal:8cb8dd2d540fbb23c426e1e40d98a1bd] untimed_limits";
+        "[scanner-refusal:c5b36a6c7a3ca9df76f09052570d546e] reporting_limits";
+        "[scanner-refusal:393f73abc235553841f56b85cc181a23] hardware_limits";
         "[scanner-refusal:8f9176198240323dbd1fb605e9c46ba6] backend_intf.ml";
         "[scanner-refusal:afe5c720e31bee3c4413dcb920198bb4] backend_intf.ml";
         "[scanner-refusal:ef99980e8fef8e93f88e9ada52db5875] autotune.ml";

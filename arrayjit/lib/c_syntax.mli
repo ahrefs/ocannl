@@ -103,10 +103,12 @@ type emitted_mma = {
   mma_a_prec : Ops.prec;
   mma_b_prec : Ops.prec;
   mma_d_prec : Ops.prec;
+  mma_accum_prec : Ops.prec;
   mma_tf32 : bool;
 }
 [@@deriving sexp_of, equal]
-(** Operand storage precisions and active [tf32_matmuls] flag of a [Tile_mma] statement that
+(** Operand storage precisions, actual emitted accumulator precision (from
+    {!C_syntax_config.mma_arm}), and active [tf32_matmuls] flag of a [Tile_mma] statement that
     rendered through the backend's intrinsic hook ({!Mma_intrinsics} / {!Mma_intrinsics_ldmatrix};
     gh-ocannl-1092). Never recorded for {!Mma_scalar_fallback} or {!Mma_register_tiled}. *)
 

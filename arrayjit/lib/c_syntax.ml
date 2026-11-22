@@ -189,6 +189,7 @@ type emitted_mma = {
   mma_a_prec : Ops.prec;
   mma_b_prec : Ops.prec;
   mma_d_prec : Ops.prec;
+  mma_accum_prec : Ops.prec;
   mma_tf32 : bool;
 }
 [@@deriving sexp_of, equal]
@@ -7712,31 +7713,36 @@ module C_syntax (B : C_syntax_config) = struct
                       | (`Device | `Shared | `Thread) as space -> Some (space, layout)
                       | `Fragment _ -> None
                     in
+                    let scope =
+                      match d_op with
+                      | _, _, `Fragment _, _ -> Backend_intf.Mma_fragment_scope
+                      | _, _, (`Device | `Shared | `Thread), _ -> Backend_intf.Mma_per_statement
+                    in
                     let uses_ldmatrix =
                       match (place a_src, place b_src) with
                       | Some a, Some b ->
                           let a_ldm, b_ldm =
-                            B.mma_operand_loads ~a_prec ~b_prec ~d_prec
-                              ~scope:
-                                (match d_op with
-                                | _, _, `Fragment _, _ -> Backend_intf.Mma_fragment_scope
-                                | _, _, (`Device | `Shared | `Thread), _ ->
-                                    Backend_intf.Mma_per_statement)
-                              ~ta ~tb ~a ~b
+                            B.mma_operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a ~b
                           in
                           a_ldm || b_ldm
                       | _ -> false
                     in
                     record (if uses_ldmatrix then Mma_intrinsics_ldmatrix else Mma_intrinsics);
-                    if !(ctx.mma_census_enabled) then
-                      ctx.mma_emitted_census :=
-                        {
-                          mma_a_prec = a_prec;
-                          mma_b_prec = b_prec;
-                          mma_d_prec = d_prec;
-                          mma_tf32 = (Numerics.get ()).Numerics.tf32_matmuls;
-                        }
-                        :: !(ctx.mma_emitted_census);
+                    (if !(ctx.mma_census_enabled) then
+                       let mma_accum_prec =
+                         match B.mma_arm ~a_prec ~b_prec ~d_prec ~scope with
+                         | Some arm -> arm.Backend_intf.arm_accumulator
+                         | None -> d_prec
+                       in
+                       ctx.mma_emitted_census :=
+                         {
+                           mma_a_prec = a_prec;
+                           mma_b_prec = b_prec;
+                           mma_d_prec = d_prec;
+                           mma_accum_prec;
+                           mma_tf32 = (Numerics.get ()).Numerics.tf32_matmuls;
+                         }
+                         :: !(ctx.mma_emitted_census));
                     ctx.emitted_mma_triples :=
                       (d_prec, a_prec, b_prec) :: !(ctx.emitted_mma_triples);
                     emission ~a_ptr:a_ptr_doc ~b_ptr:b_ptr_doc

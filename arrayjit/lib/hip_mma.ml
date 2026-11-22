@@ -208,6 +208,7 @@ let rdna3_wmma_peak fmt =
     mma_peak_provenance =
       Datasheet_class
         (Printf.sprintf "AMD RDNA3 WMMA class, 512 FLOP/cycle/CU, RX 7700S 41 TFLOP/s dense %s" fmt);
+    mma_peak_accum = Any_accum;
   }
 
 let mma_peak_f16 = rdna3_wmma_peak "FP16"

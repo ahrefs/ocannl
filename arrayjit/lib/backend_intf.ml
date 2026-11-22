@@ -153,12 +153,19 @@ type mma_peak_provenance =
       (** Peak derived from a measuring run; the string names the hardware and run. *)
 [@@deriving sexp_of]
 
+(** Which accumulator widths an advisory {!mma_peak} constant describes (gh-ocannl-1092). On
+    consumer GeForce RTX, dense FP16 with FP16 accumulation runs at twice the FP32-accumulate rate,
+    so an f32-accumulate datasheet peak must not score a narrow-accumulate arm ([Wmma_f16_f16]). On
+    RDNA3 [v_wmma], both accumulator widths share the same 512 FLOP/cycle/CU rate. *)
+type mma_peak_accum = F32_accum_only | Any_accum [@@deriving sexp_of]
+
 type mma_peak = {
   mma_peak_flops : float;
       (** Advisory peak dense matrix-unit throughput in FLOP/s (FMA counted as two, matching
           {!Ir.Cost_model}'s [2*m*n*k] op count). Reporting-only: never feeds autotune ranking or
           bound pruning. *)
   mma_peak_provenance : mma_peak_provenance;
+  mma_peak_accum : mma_peak_accum;
 }
 [@@deriving sexp_of]
 

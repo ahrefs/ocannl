@@ -1,6 +1,7 @@
 (* gh-ocannl-1092: per-format advisory MMA peak ceilings for the benchmark report's [kernel %peak]
-   column, with provenance in [hardware_limits], Metal's shader-ALU scalar-ceiling rule, config
-   overrides ([model_peak_mma_*]), and an end-to-end GPU execution leg. *)
+   column, with provenance in [hardware_limits], accumulator-width matching, Metal's shader-ALU
+   scalar-ceiling rule, config overrides ([model_peak_mma_*]), fail-closed partial/invalid handling,
+   and an end-to-end GPU execution leg. *)
 
 open Base
 open Ocannl
@@ -11,7 +12,9 @@ module CS = Ir.C_syntax
 module H = Bench_harness
 module U = Yojson.Safe.Util
 
+let defaults_probe_arg = "--defaults-probe"
 let override_probe_arg = "--override-probe"
+let invalid_override_probe_arg = "--invalid-override-probe"
 
 let cuda_limits ~cc =
   let peaks = Ir.Cuda_mma.mma_peaks ~cc in
@@ -47,35 +50,185 @@ let metal_limits =
     mma_uses_scalar_peak = true;
   }
 
-let summary_of emitted_formats = CS.summarize_census ~emitted_formats [ ("k0", CS.Mma_intrinsics) ]
+let summary_of ?(renderings = [ ("k0", CS.Mma_intrinsics) ]) emitted_formats =
+  CS.summarize_census ~emitted_formats renderings
 
-let emit ?(tf32 = false) a b d =
-  { CS.mma_a_prec = a; mma_b_prec = b; mma_d_prec = d; mma_tf32 = tf32 }
+let emit ?(tf32 = false) ?accum a b d =
+  {
+    CS.mma_a_prec = a;
+    mma_b_prec = b;
+    mma_d_prec = d;
+    mma_accum_prec = Option.value accum ~default:d;
+    mma_tf32 = tf32;
+  }
 
-(* Child-process mode: launched with explicit [--ocannl_model_peak_mma_f16] and
-   [--ocannl_model_peak_flops] flags so the lazy config readers resolve those overrides in a clean
-   process without touching any GPU. *)
+(* Child-process probe 1: default-peak resolution in an isolated environment where caller
+   [model_peak_*] calibration cannot override the backend class constants. Writes the token of each
+   passing check to stdout (one per line) and exits 0. *)
+let () =
+  if Array.exists Stdlib.Sys.argv ~f:(String.equal defaults_probe_arg) then (
+    let cuda120 = cuda_limits ~cc:120 in
+    let cuda75 = cuda_limits ~cc:75 in
+    let cuda_cases =
+      [
+        ("f16", emit Ir.Ops.half Ir.Ops.half Ir.Ops.single, 3.0e13);
+        ("bf16", emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single, 3.0e13);
+        ("tf32", emit ~tf32:true Ir.Ops.single Ir.Ops.single Ir.Ops.single, 1.5e13);
+        ("fp8", emit Ir.Ops.fp8 Ir.Ops.fp8 Ir.Ops.single, 6.0e13);
+      ]
+    in
+    let ok_cuda_sm120 =
+      List.for_all cuda_cases ~f:(fun (expected_fmt, emitted, expected_flops) ->
+          match H.mma_ceiling_of ~backend:"cuda" ~limits:cuda120 (summary_of [ emitted ]) with
+          | Bench_json.Mma_peak { format; flops; source } ->
+              String.equal format expected_fmt && Float.equal flops expected_flops
+              && String.is_substring source ~substring:"cuda datasheet ("
+          | Bench_json.Mma_no_peak _ -> false)
+    in
+    let ok_cuda_wide_f16 =
+      match
+        H.mma_ceiling_of ~backend:"cuda" ~limits:cuda120
+          (summary_of [ emit ~accum:Ir.Ops.single Ir.Ops.half Ir.Ops.half Ir.Ops.half ])
+      with
+      | Bench_json.Mma_peak { format = "f16"; flops; source } ->
+          Float.equal flops 3.0e13 && String.is_substring source ~substring:"cuda datasheet ("
+      | _ -> false
+    in
+    let ok_cuda_narrow_f16_refused =
+      match
+        H.mma_ceiling_of ~backend:"cuda" ~limits:cuda120
+          (summary_of [ emit ~accum:Ir.Ops.half Ir.Ops.half Ir.Ops.half Ir.Ops.half ])
+      with
+      | Bench_json.Mma_no_peak reason -> String.is_substring reason ~substring:"f32 accumulation"
+      | Bench_json.Mma_peak _ -> false
+    in
+    let ok_cuda_sm75 =
+      (match
+         H.mma_ceiling_of ~backend:"cuda" ~limits:cuda75
+           (summary_of [ emit Ir.Ops.half Ir.Ops.half Ir.Ops.single ])
+       with
+        | Bench_json.Mma_peak { format = "f16"; flops; _ } -> Float.equal flops 3.0e13
+        | _ -> false)
+      &&
+      match
+        H.mma_ceiling_of ~backend:"cuda" ~limits:cuda75
+          (summary_of [ emit Ir.Ops.fp8 Ir.Ops.fp8 Ir.Ops.single ])
+      with
+      | Bench_json.Mma_no_peak _ -> true
+      | Bench_json.Mma_peak _ -> false
+    in
+    let hip_cases =
+      [
+        ("f16", emit Ir.Ops.half Ir.Ops.half Ir.Ops.single, 4.0e13);
+        ("f16", emit ~accum:Ir.Ops.half Ir.Ops.half Ir.Ops.half Ir.Ops.half, 4.0e13);
+        ("bf16", emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single, 4.0e13);
+        ("bf16", emit ~accum:Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.bfloat16, 4.0e13);
+      ]
+    in
+    let ok_hip_rdna3 =
+      List.for_all hip_cases ~f:(fun (expected_fmt, emitted, expected_flops) ->
+          match
+            H.mma_ceiling_of ~backend:"hip" ~limits:hip_rdna3_limits (summary_of [ emitted ])
+          with
+          | Bench_json.Mma_peak { format; flops; source } ->
+              String.equal format expected_fmt && Float.equal flops expected_flops
+              && String.is_substring source ~substring:"hip datasheet ("
+          | Bench_json.Mma_no_peak _ -> false)
+    in
+    let ok_hip_cdna =
+      match
+        H.mma_ceiling_of ~backend:"hip" ~limits:BI.no_hardware_limits
+          (summary_of [ emit Ir.Ops.half Ir.Ops.half Ir.Ops.single ])
+      with
+      | Bench_json.Mma_no_peak _ -> true
+      | Bench_json.Mma_peak _ -> false
+    in
+    let metal_cases =
+      [
+        ("f32", emit Ir.Ops.single Ir.Ops.single Ir.Ops.single);
+        ("f16", emit Ir.Ops.half Ir.Ops.half Ir.Ops.half);
+        ("bf16", emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single);
+      ]
+    in
+    let ok_metal =
+      List.for_all metal_cases ~f:(fun (expected_fmt, emitted) ->
+          match H.mma_ceiling_of ~backend:"metal" ~limits:metal_limits (summary_of [ emitted ]) with
+          | Bench_json.Mma_peak { format; flops; source } ->
+              String.equal format expected_fmt && Float.equal flops 5.0e12
+              && String.equal source "metal class constant (mma shares shader ALU)"
+          | Bench_json.Mma_no_peak _ -> false)
+    in
+    let ok_mixed_formats =
+      match
+        H.mma_ceiling_of ~backend:"cuda" ~limits:cuda120
+          (summary_of
+             [
+               emit Ir.Ops.half Ir.Ops.half Ir.Ops.single;
+               emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single;
+             ])
+      with
+      | Bench_json.Mma_no_peak reason -> String.is_substring reason ~substring:"mixes MMA formats"
+      | Bench_json.Mma_peak _ -> false
+    in
+    let ok_partial_fallback =
+      match
+        H.mma_ceiling_of ~backend:"cuda" ~limits:cuda120
+          (summary_of
+             ~renderings:[ ("k0", CS.Mma_intrinsics); ("k1", CS.Mma_scalar_fallback) ]
+             [ emit Ir.Ops.half Ir.Ops.half Ir.Ops.single ])
+      with
+      | Bench_json.Mma_no_peak reason ->
+          String.is_substring reason ~substring:"partially tensorized"
+      | Bench_json.Mma_peak _ -> false
+    in
+    let ok_empty_formats =
+      match H.mma_ceiling_of ~backend:"cuda" ~limits:cuda120 (summary_of []) with
+      | Bench_json.Mma_no_peak reason ->
+          String.is_substring reason ~substring:"no emitted MMA format"
+      | Bench_json.Mma_peak _ -> false
+    in
+    let checks =
+      [
+        ("cuda_sm120", ok_cuda_sm120);
+        ("cuda_wide_f16", ok_cuda_wide_f16);
+        ("cuda_narrow_f16_refused", ok_cuda_narrow_f16_refused);
+        ("cuda_sm75", ok_cuda_sm75);
+        ("hip_rdna3", ok_hip_rdna3);
+        ("hip_cdna", ok_hip_cdna);
+        ("metal", ok_metal);
+        ("mixed_formats", ok_mixed_formats);
+        ("partial_fallback", ok_partial_fallback);
+        ("empty_formats", ok_empty_formats);
+      ]
+    in
+    List.iter checks ~f:(fun (tag, ok) -> if ok then Stdio.printf "%s\n%!" tag);
+    Stdlib.exit 0)
+
+(* Child-process probe 2: valid config overrides in a clean process. *)
 let () =
   if Array.exists Stdlib.Sys.argv ~f:(String.equal override_probe_arg) then (
     let cuda = cuda_limits ~cc:120 in
     let ok_cuda_override =
-      match Autotune.mma_peak_leg ~limits:cuda BI.Mma_f16 with
-      | Some (v, Autotune.Mma_peak_config "model_peak_mma_f16") -> Float.equal v 8.79e13
+      match Autotune.mma_peak_leg ~limits:cuda ~accum_prec:Ir.Ops.single BI.Mma_f16 with
+      | Autotune.Mma_peak_found (v, Autotune.Mma_peak_config "model_peak_mma_f16") ->
+          Float.equal v 8.79e13
       | _ -> false
     in
     let ok_cuda_untouched =
-      match Autotune.mma_peak_leg ~limits:cuda BI.Mma_fp8_e5m2 with
-      | Some (v, Autotune.Mma_peak_backend (Datasheet_class _)) -> Float.equal v 6.0e13
+      match Autotune.mma_peak_leg ~limits:cuda ~accum_prec:Ir.Ops.single BI.Mma_fp8_e5m2 with
+      | Autotune.Mma_peak_found (v, Autotune.Mma_peak_backend (Datasheet_class _)) ->
+          Float.equal v 6.0e13
       | _ -> false
     in
     let ok_metal_explicit =
-      match Autotune.mma_peak_leg ~limits:metal_limits BI.Mma_f16 with
-      | Some (v, Autotune.Mma_peak_config "model_peak_mma_f16") -> Float.equal v 8.79e13
+      match Autotune.mma_peak_leg ~limits:metal_limits ~accum_prec:Ir.Ops.half BI.Mma_f16 with
+      | Autotune.Mma_peak_found (v, Autotune.Mma_peak_config "model_peak_mma_f16") ->
+          Float.equal v 8.79e13
       | _ -> false
     in
     let ok_metal_scalar_override =
-      match Autotune.mma_peak_leg ~limits:metal_limits BI.Mma_f32 with
-      | Some (v, Autotune.Mma_peak_scalar_alu `Config) -> Float.equal v 1.7e13
+      match Autotune.mma_peak_leg ~limits:metal_limits ~accum_prec:Ir.Ops.single BI.Mma_f32 with
+      | Autotune.Mma_peak_found (v, Autotune.Mma_peak_scalar_alu `Config) -> Float.equal v 1.7e13
       | _ -> false
     in
     let ok_harness_provenance =
@@ -114,11 +267,91 @@ let () =
       Stdio.eprintf "override probe failed (%s)\n%!" (String.concat ~sep:", " failed);
       Stdlib.exit 1)
 
-(* Part 1: pure backend tables and ceiling resolution, no GPU needed. *)
+(* Child-process probe 3: invalid and non-finite MMA peak overrides fail closed to [no-ceiling]
+   instead of raising past [dominant_kernel] or scoring against [infinity]. *)
+let () =
+  if Array.exists Stdlib.Sys.argv ~f:(String.equal invalid_override_probe_arg) then
+    let cuda = cuda_limits ~cc:120 in
+    let ok_unparseable =
+      match
+        H.mma_ceiling_of ~backend:"cuda" ~limits:cuda
+          (summary_of [ emit Ir.Ops.half Ir.Ops.half Ir.Ops.single ])
+      with
+      | Bench_json.Mma_no_peak reason ->
+          String.is_substring reason ~substring:"invalid model_peak_mma_f16 override"
+      | Bench_json.Mma_peak _ -> false
+    in
+    let ok_overflow_inf =
+      match
+        H.mma_ceiling_of ~backend:"cuda" ~limits:cuda
+          (summary_of [ emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single ])
+      with
+      | Bench_json.Mma_no_peak reason ->
+          String.is_substring reason ~substring:"not a finite positive number"
+      | Bench_json.Mma_peak _ -> false
+    in
+    let ok_explicit_inf =
+      match
+        H.mma_ceiling_of ~backend:"cuda" ~limits:cuda
+          (summary_of [ emit ~tf32:true Ir.Ops.single Ir.Ops.single Ir.Ops.single ])
+      with
+      | Bench_json.Mma_no_peak reason ->
+          String.is_substring reason ~substring:"not a finite positive number"
+      | Bench_json.Mma_peak _ -> false
+    in
+    if ok_unparseable && ok_overflow_inf && ok_explicit_inf then Stdlib.exit 0
+    else (
+      Stdio.eprintf "invalid-override probe failed (%s)\n%!"
+        (String.concat ~sep:", "
+           (List.filter_map
+              [
+                ("unparseable", ok_unparseable);
+                ("overflow_inf", ok_overflow_inf);
+                ("explicit_inf", ok_explicit_inf);
+              ]
+              ~f:(fun (k, ok) -> if ok then None else Some k)));
+      Stdlib.exit 1)
+
+let clean_peak_env () =
+  let peak_env_prefixes =
+    [
+      "OCANNL_MODEL_PEAK_FLOPS=";
+      "OCANNL_MODEL_PEAK_MMA_F16=";
+      "OCANNL_MODEL_PEAK_MMA_BF16=";
+      "OCANNL_MODEL_PEAK_MMA_TF32=";
+      "OCANNL_MODEL_PEAK_MMA_FP8=";
+    ]
+  in
+  Array.filter (Unix.environment ()) ~f:(fun binding ->
+      not (List.exists peak_env_prefixes ~f:(fun prefix -> String.is_prefix binding ~prefix)))
+
+let unset_peak_flags =
+  [
+    "--ocannl_model_peak_flops=";
+    "--ocannl_model_peak_mma_f16=";
+    "--ocannl_model_peak_mma_bf16=";
+    "--ocannl_model_peak_mma_tf32=";
+    "--ocannl_model_peak_mma_fp8=";
+  ]
+
+let run_probe_lines args =
+  let exe = Stdlib.Sys.executable_name in
+  let env = clean_peak_env () in
+  let rfd, wfd = Unix.pipe () in
+  let argv = Array.of_list (exe :: args) in
+  let pid = Unix.create_process_env exe argv env Unix.stdin wfd Unix.stderr in
+  Unix.close wfd;
+  let ic = Unix.in_channel_of_descr rfd in
+  let lines = In_channel.input_lines ic in
+  In_channel.close ic;
+  let _, status = Unix.waitpid [] pid in
+  (status, lines)
+
+(* Part 1: pure backend tables (config-free) and isolated default-peak resolution. *)
 let () =
   let check_datasheet = function
-    | Some { BI.mma_peak_flops; mma_peak_provenance = Datasheet_class cite } ->
-        Float.(mma_peak_flops > 0.) && not (String.is_empty cite)
+    | Some { BI.mma_peak_flops; mma_peak_provenance = Datasheet_class cite; mma_peak_accum = _ } ->
+        Float.(is_finite mma_peak_flops && mma_peak_flops > 0.) && not (String.is_empty cite)
     | _ -> false
   in
   let sm60 = Ir.Cuda_mma.mma_peaks ~cc:60
@@ -143,92 +376,32 @@ let () =
     (check_datasheet (Some Ir.Hip_mma.mma_peak_f16)
     && check_datasheet (Some Ir.Hip_mma.mma_peak_bf16));
 
-  let cuda120 = cuda_limits ~cc:120 in
-  let cuda_cases =
-    [
-      ("f16", emit Ir.Ops.half Ir.Ops.half Ir.Ops.single, 3.0e13);
-      ("bf16", emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single, 3.0e13);
-      ("tf32", emit ~tf32:true Ir.Ops.single Ir.Ops.single Ir.Ops.single, 1.5e13);
-      ("fp8", emit Ir.Ops.fp8 Ir.Ops.fp8 Ir.Ops.single, 6.0e13);
-    ]
+  let defaults_status, passed = run_probe_lines (unset_peak_flags @ [ defaults_probe_arg ]) in
+  let defaults_ok tag =
+    match defaults_status with
+    | Unix.WEXITED 0 -> List.mem passed tag ~equal:String.equal
+    | _ -> false
   in
-  p_all "CUDA sm_120 resolves each emitted MMA format to its datasheet peak" cuda_cases
-    ~f:(fun (expected_fmt, emitted, expected_flops) ->
-      match H.mma_ceiling_of ~backend:"cuda" ~limits:cuda120 (summary_of [ emitted ]) with
-      | Bench_json.Mma_peak { format; flops; source } ->
-          String.equal format expected_fmt && Float.equal flops expected_flops
-          && String.is_substring source ~substring:"cuda datasheet ("
-      | Bench_json.Mma_no_peak _ -> false);
-
-  let cuda75 = cuda_limits ~cc:75 in
+  p "CUDA sm_120 resolves each emitted MMA format to its datasheet peak" (defaults_ok "cuda_sm120");
+  p "CUDA wide f16 (f16 storage, f32 accumulator) resolves to its f32-accum datasheet peak"
+    (defaults_ok "cuda_wide_f16");
+  p
+    "CUDA narrow f16-accumulate arm (Wmma_f16_f16) fails closed rather than using the f32-accum \
+     peak"
+    (defaults_ok "cuda_narrow_f16_refused");
   p "CUDA sm_75 refuses fp8 (no peak for that architecture) while keeping f16"
-    ((match
-        H.mma_ceiling_of ~backend:"cuda" ~limits:cuda75
-          (summary_of [ emit Ir.Ops.half Ir.Ops.half Ir.Ops.single ])
-      with
-       | Bench_json.Mma_peak { format = "f16"; flops; _ } -> Float.equal flops 3.0e13
-       | _ -> false)
-    &&
-    match
-      H.mma_ceiling_of ~backend:"cuda" ~limits:cuda75
-        (summary_of [ emit Ir.Ops.fp8 Ir.Ops.fp8 Ir.Ops.single ])
-    with
-    | Bench_json.Mma_no_peak _ -> true
-    | Bench_json.Mma_peak _ -> false);
-
-  let hip_cases =
-    [
-      ("f16", emit Ir.Ops.half Ir.Ops.half Ir.Ops.single, 4.0e13);
-      ("bf16", emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single, 4.0e13);
-    ]
-  in
-  p_all "HIP RDNA3 resolves f16 and bf16 WMMA to their datasheet peaks" hip_cases
-    ~f:(fun (expected_fmt, emitted, expected_flops) ->
-      match H.mma_ceiling_of ~backend:"hip" ~limits:hip_rdna3_limits (summary_of [ emitted ]) with
-      | Bench_json.Mma_peak { format; flops; source } ->
-          String.equal format expected_fmt && Float.equal flops expected_flops
-          && String.is_substring source ~substring:"hip datasheet ("
-      | Bench_json.Mma_no_peak _ -> false);
-
-  p "HIP without mma capability (CDNA) fails closed to no-ceiling"
-    (match
-       H.mma_ceiling_of ~backend:"hip" ~limits:BI.no_hardware_limits
-         (summary_of [ emit Ir.Ops.half Ir.Ops.half Ir.Ops.single ])
-     with
-    | Bench_json.Mma_no_peak _ -> true
-    | Bench_json.Mma_peak _ -> false);
-
-  let metal_cases =
-    [
-      ("f32", emit Ir.Ops.single Ir.Ops.single Ir.Ops.single);
-      ("f16", emit Ir.Ops.half Ir.Ops.half Ir.Ops.half);
-      ("bf16", emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single);
-    ]
-  in
-  p_all "Metal maps f32, f16 and bf16 simdgroup_matrix kernels to the scalar ceiling" metal_cases
-    ~f:(fun (expected_fmt, emitted) ->
-      match H.mma_ceiling_of ~backend:"metal" ~limits:metal_limits (summary_of [ emitted ]) with
-      | Bench_json.Mma_peak { format; flops; source } ->
-          String.equal format expected_fmt && Float.equal flops 5.0e12
-          && String.equal source "metal class constant (mma shares shader ALU)"
-      | Bench_json.Mma_no_peak _ -> false);
-
+    (defaults_ok "cuda_sm75");
+  p "HIP RDNA3 resolves wide and narrow f16 and bf16 WMMA to their datasheet peaks"
+    (defaults_ok "hip_rdna3");
+  p "HIP without mma capability (CDNA) fails closed to no-ceiling" (defaults_ok "hip_cdna");
+  p "Metal maps f32, f16 and bf16 simdgroup_matrix kernels to the scalar ceiling"
+    (defaults_ok "metal");
   p "a kernel mixing two distinct MMA formats fails closed to no-ceiling"
-    (match
-       H.mma_ceiling_of ~backend:"cuda" ~limits:cuda120
-         (summary_of
-            [
-              emit Ir.Ops.half Ir.Ops.half Ir.Ops.single;
-              emit Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.single;
-            ])
-     with
-    | Bench_json.Mma_no_peak reason -> String.is_substring reason ~substring:"mixes MMA formats"
-    | Bench_json.Mma_peak _ -> false);
-
+    (defaults_ok "mixed_formats");
+  p "a partially tensorized kernel with scalar fallbacks fails closed to no-ceiling"
+    (defaults_ok "partial_fallback");
   p "a tensorized summary with no emitted formats fails closed to no-ceiling"
-    (match H.mma_ceiling_of ~backend:"cuda" ~limits:cuda120 (summary_of []) with
-    | Bench_json.Mma_no_peak reason -> String.is_substring reason ~substring:"no emitted MMA format"
-    | Bench_json.Mma_peak _ -> false);
+    (defaults_ok "empty_formats");
 
   p "choose_ceiling still refuses a GPU tensor-core kernel when bandwidth is absent"
     (match
@@ -240,37 +413,51 @@ let () =
          ~peak_memory_bandwidth:None
      with
     | Error reason -> String.is_substring reason ~substring:"peak_memory_bandwidth"
+    | Ok _ -> false);
+
+  p "choose_ceiling refuses a non-finite MMA peak rather than scoring compute time as zero"
+    (match
+       Bench_json.choose_ceiling
+         ~mma_ceiling:
+           (Some
+              (Bench_json.Mma_peak
+                 { format = "f16"; flops = Float.infinity; source = "model_peak_mma_f16 config" }))
+         ~gpu:true ~tensorization:"tensorized" ~narrow_native:false
+         ~peak_flops:(Some (1.5e13, "cuda class constant"))
+         ~peak_memory_bandwidth:(Some (1.0e12, "cuda class constant"))
+     with
+    | Error reason -> String.is_substring reason ~substring:"non-finite"
     | Ok _ -> false)
 
-(* Part 2: config overrides in a clean subprocess. *)
+(* Part 2: config overrides and malformed/non-finite overrides in isolated subprocesses. *)
 let () =
-  let exe = Stdlib.Sys.executable_name in
-  let peak_env_prefixes =
-    [
-      "OCANNL_MODEL_PEAK_FLOPS=";
-      "OCANNL_MODEL_PEAK_MMA_F16=";
-      "OCANNL_MODEL_PEAK_MMA_BF16=";
-      "OCANNL_MODEL_PEAK_MMA_TF32=";
-      "OCANNL_MODEL_PEAK_MMA_FP8=";
-    ]
-  in
-  let env =
-    Array.filter (Unix.environment ()) ~f:(fun binding ->
-        not (List.exists peak_env_prefixes ~f:(fun prefix -> String.is_prefix binding ~prefix)))
-  in
-  let pid =
-    Unix.create_process_env exe
-      [|
-        exe;
+  let ov_status, _ =
+    run_probe_lines
+      [
         "--ocannl_model_peak_mma_f16=8.79e13";
+        "--ocannl_model_peak_mma_bf16=";
+        "--ocannl_model_peak_mma_tf32=";
+        "--ocannl_model_peak_mma_fp8=";
         "--ocannl_model_peak_flops=1.7e13";
         override_probe_arg;
-      |]
-      env Unix.stdin Unix.stdout Unix.stderr
+      ]
   in
-  let _, status = Unix.waitpid [] pid in
   p "model_peak_mma_* overrides backend constants and Metal scalar-ALU follows model_peak_flops"
-    (match status with Unix.WEXITED 0 -> true | _ -> false)
+    (match ov_status with Unix.WEXITED 0 -> true | _ -> false);
+
+  let inv_status, _ =
+    run_probe_lines
+      [
+        "--ocannl_model_peak_mma_f16=30TFLOPS";
+        "--ocannl_model_peak_mma_bf16=1e999";
+        "--ocannl_model_peak_mma_tf32=inf";
+        "--ocannl_model_peak_mma_fp8=";
+        "--ocannl_model_peak_flops=";
+        invalid_override_probe_arg;
+      ]
+  in
+  p "invalid or non-finite model_peak_mma_* overrides fail closed to no-ceiling without raising"
+    (match inv_status with Unix.WEXITED 0 -> true | _ -> false)
 
 (* Part 3: live GPU execution leg — compiles a real tensorized matmul on the active GPU backend
    (Metal on mac-studio, CUDA/HIP on GPU boxes) and runs [Bench_harness.dominant_kernel] on it. *)
@@ -362,7 +549,7 @@ let () =
       p label
         (match H.mma_ceiling_of ~backend ~limits mma with
         | Bench_json.Mma_peak { format = "f16"; flops; source } ->
-            Float.(flops > 0.) && not (String.is_empty source)
+            Float.(is_finite flops && flops > 0.) && not (String.is_empty source)
         | _ -> false));
   in_leg ~leg "dominant_kernel scores the live GPU f16 tensorized matmul as exact mma-f16"
     (fun label ->
@@ -375,18 +562,18 @@ let () =
         | `String note -> String.is_substring note ~substring:": 0 declined to compile alone"
         | _ -> false
       in
-      if all_refused then skipped ~aggregation:`Environment ~backend label
-      else
-        let pct_positive =
-          match U.member "pct_of_peak" dk with
-          | `Float f -> Float.(is_finite f && f > 0.)
-          | `Int i -> i > 0
-          | _ -> false
-        in
-        p label
-          (Yojson.Safe.equal verdict (`String "exact")
-          && Yojson.Safe.equal (U.member "ceiling" dk) (`String "mma-f16")
-          && pct_positive));
+      let pct_positive =
+        match U.member "pct_of_peak" dk with
+        | `Float f -> Float.(is_finite f && f > 0.)
+        | `Int i -> i > 0
+        | _ -> false
+      in
+      p_unless
+        ~unless:[ ("no timing reading admitted under contention", all_refused) ]
+        label
+        (Yojson.Safe.equal verdict (`String "exact")
+        && Yojson.Safe.equal (U.member "ceiling" dk) (`String "mma-f16")
+        && pct_positive));
   let metal_f32_leg =
     Verdict.leg ~aggregation:`Backend
       ~when_:(String.equal backend "metal" && gpu_with_mma)
@@ -406,22 +593,22 @@ let () =
         | `String note -> String.is_substring note ~substring:": 0 declined to compile alone"
         | _ -> false
       in
-      if all_refused then skipped ~aggregation:`Environment ~backend label
-      else
-        let pct_positive =
-          match U.member "pct_of_peak" dk with
-          | `Float f -> Float.(is_finite f && f > 0.)
-          | `Int i -> i > 0
-          | _ -> false
-        in
-        let source_ok =
-          match U.member "ceiling_source" dk with
-          | `String s -> String.is_substring s ~substring:"mma shares shader ALU"
-          | _ -> false
-        in
-        p label
-          (applied
-          && CS.equal_tensorization mma.CS.tensorization CS.Tensorized
-          && Yojson.Safe.equal verdict (`String "exact")
-          && Yojson.Safe.equal (U.member "ceiling" dk) (`String "mma-f32")
-          && source_ok && pct_positive))
+      let pct_positive =
+        match U.member "pct_of_peak" dk with
+        | `Float f -> Float.(is_finite f && f > 0.)
+        | `Int i -> i > 0
+        | _ -> false
+      in
+      let source_ok =
+        match U.member "ceiling_source" dk with
+        | `String s -> String.is_substring s ~substring:"mma shares shader ALU"
+        | _ -> false
+      in
+      p_unless
+        ~unless:[ ("no timing reading admitted under contention", all_refused) ]
+        label
+        (applied
+        && CS.equal_tensorization mma.CS.tensorization CS.Tensorized
+        && Yojson.Safe.equal verdict (`String "exact")
+        && Yojson.Safe.equal (U.member "ceiling" dk) (`String "mma-f32")
+        && source_ok && pct_positive))

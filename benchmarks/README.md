@@ -1461,8 +1461,10 @@ both `cifar_resnet` and `cifar_resnet_b1` absent from the store (gh-ocannl-1825)
     gh-ocannl-1092) matched to the intrinsic `Tile_mma` format actually emitted: CUDA and HIP supply
     per-format datasheet peaks in `hardware_limits` (overridable via `model_peak_mma_*`), and Apple
     Silicon Metal maps `simdgroup_matrix` kernels to the scalar `peak_flops` ceiling
-    (`mma_uses_scalar_peak = true`, following any `model_peak_flops` override). Unconfigured or
-    mixed-format GPU tensor-core kernels still fail closed to `no ceiling`. These per-format MMA
+    (`mma_uses_scalar_peak = true`, following any `model_peak_flops` override). Unconfigured,
+    mixed-format, partially tensorized (`scalar_fallbacks > 0`), or narrow-accumulator CUDA
+    (`Wmma_f16_f16`, whose 2x rate differs from the f32-accum advisory peak) GPU tensor-core
+    kernels fail closed to `no ceiling`. These per-format MMA
     peaks are reporting-only (`Autotune.mma_peak_leg`) and never feed autotune ranking or bound
     pruning. The C backends' `Tile_mma` register tile runs on the SIMD units `peak_flops` describes
     and keeps the scalar ceiling. Both legs or nothing: the C backends carry no class constant, so a

@@ -2379,13 +2379,21 @@ type mma_peak_source =
           whether that scalar ceiling came from [`Config] or [`Backend]. *)
 [@@deriving sexp_of]
 
+(** Outcome of resolving an advisory per-format MMA peak in {!mma_peak_leg} (gh-ocannl-1092). Config
+    parse/finiteness errors and accumulator mismatches return {!Mma_peak_unavailable} rather than
+    raising, so reporting never discards a completed benchmark measurement. *)
+type mma_peak_result = Mma_peak_found of float * mma_peak_source | Mma_peak_unavailable of string
+[@@deriving sexp_of]
+
 val mma_peak_leg :
   limits:Ir.Backend_intf.hardware_limits ->
+  accum_prec:Ir.Ops.prec ->
   Ir.Backend_intf.mma_input_format ->
-  (float * mma_peak_source) option
+  mma_peak_result
 (** Advisory per-format matrix-unit peak in FLOP/s with its provenance, for the benchmark report's
-    [kernel %peak] column (gh-ocannl-1092). Resolution order: explicit [model_peak_mma_<fmt>] config
-    override, then [limits]' per-format advisory constant, then — when
+    [kernel %peak] column (gh-ocannl-1092). Resolution order: explicit finite positive
+    [model_peak_mma_<fmt>] config override, then [limits]' per-format advisory constant (checked
+    against [accum_prec] when the constant is [F32_accum_only]), then — when
     {!Ir.Backend_intf.hardware_limits.mma_uses_scalar_peak} is [true] — the scalar {!envelope_legs}
     compute leg. Reporting-only: never consulted by {!model_score}, {!model_default},
     {!seeded_default}, or {!tune} ([test/operations/limits_field_classes] enforces this). *)

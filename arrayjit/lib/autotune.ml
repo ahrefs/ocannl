@@ -3071,9 +3071,17 @@ type mma_peak_source =
   | Mma_peak_scalar_alu of [ `Config | `Backend ]
 [@@deriving sexp_of]
 
-let mma_peak_leg ~(limits : Ir.Backend_intf.hardware_limits)
+type mma_peak_result = Mma_peak_found of float * mma_peak_source | Mma_peak_unavailable of string
+[@@deriving sexp_of]
+
+let mma_peak_leg ~(limits : Ir.Backend_intf.hardware_limits) ~(accum_prec : Ir.Ops.prec)
     (format : Ir.Backend_intf.mma_input_format) =
   let rep = Ir.Backend_intf.reporting_limits limits in
+  let fmt_name = Ir.Backend_intf.mma_input_format_name format in
+  let check_finite ~label v =
+    if Float.is_finite v && Float.(v > 0.) then Ok v
+    else Error (Printf.sprintf "%s is not a finite positive number (%g)" label v)
+  in
   let override, advisory =
     match format with
     | Mma_f16 -> (Some ("model_peak_mma_f16", peak_mma_f16_override), rep.rep_mma_peak_f16)
@@ -3083,18 +3091,58 @@ let mma_peak_leg ~(limits : Ir.Backend_intf.hardware_limits)
     | Mma_f32 -> (None, None)
   in
   let from_config =
-    Option.bind override ~f:(fun (key, ov) ->
-        Option.map (Lazy.force ov) ~f:(fun v -> (v, Mma_peak_config key)))
+    match override with
+    | None -> Ok None
+    | Some (key, ov) -> (
+        match Lazy.force ov with
+        | None -> Ok None
+        | Some v -> (
+            match check_finite ~label:key v with
+            | Ok v -> Ok (Some (v, Mma_peak_config key))
+            | Error msg -> Error msg)
+        | exception exn -> Error (Printf.sprintf "invalid %s override (%s)" key (Exn.to_string exn))
+        )
   in
   match from_config with
-  | Some _ as hit -> hit
-  | None -> (
+  | Error msg -> Mma_peak_unavailable msg
+  | Ok (Some (v, src)) -> Mma_peak_found (v, src)
+  | Ok None -> (
       match advisory with
-      | Some { Ir.Backend_intf.mma_peak_flops; mma_peak_provenance } ->
-          Some (mma_peak_flops, Mma_peak_backend mma_peak_provenance)
-      | None when rep.rep_mma_uses_scalar_peak ->
-          Option.map (fst (envelope_legs ~limits)) ~f:(fun (v, src) -> (v, Mma_peak_scalar_alu src))
-      | None -> None)
+      | Some { Ir.Backend_intf.mma_peak_flops; mma_peak_provenance; mma_peak_accum } -> (
+          let accum_matches =
+            match (mma_peak_accum, accum_prec) with
+            | Ir.Backend_intf.Any_accum, _ -> true
+            | Ir.Backend_intf.F32_accum_only, Ir.Ops.Single_prec _ -> true
+            | Ir.Backend_intf.F32_accum_only, _ -> false
+          in
+          if not accum_matches then
+            Mma_peak_unavailable
+              (Printf.sprintf
+                 "emitted %s with %s accumulator has no matching advisory peak (advisory peak \
+                  describes f32 accumulation; set model_peak_mma_%s to override)"
+                 fmt_name (Ir.Ops.prec_string accum_prec) fmt_name)
+          else
+            match check_finite ~label:("mma_peak_" ^ fmt_name) mma_peak_flops with
+            | Ok v -> Mma_peak_found (v, Mma_peak_backend mma_peak_provenance)
+            | Error msg -> Mma_peak_unavailable msg)
+      | None when rep.rep_mma_uses_scalar_peak -> (
+          match fst (envelope_legs ~limits) with
+          | None ->
+              Mma_peak_unavailable
+                (Printf.sprintf
+                   "no scalar peak_flops for mma-%s under scalar-ALU rule (set model_peak_flops)"
+                   fmt_name)
+          | Some (v, src) -> (
+              match check_finite ~label:"peak_flops" v with
+              | Ok v -> Mma_peak_found (v, Mma_peak_scalar_alu src)
+              | Error msg -> Mma_peak_unavailable msg)
+          | exception exn ->
+              Mma_peak_unavailable
+                (Printf.sprintf "invalid scalar peak_flops override (%s)" (Exn.to_string exn)))
+      | None ->
+          Mma_peak_unavailable
+            (Printf.sprintf "no mma peak for format %s (set model_peak_mma_%s or backend limits)"
+               fmt_name fmt_name))
 
 (* The roofline lower bound summed over a candidate's kernels; [None] — no model coverage — when any
    kernel is opaque (its counts may UNDER-estimate, so ranking on them could prune the true winner)

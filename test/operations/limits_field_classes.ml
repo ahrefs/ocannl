@@ -78,11 +78,34 @@ let full =
     staged_copy_rate = Some 1e12;
     shared_load_rate = Some 1e13;
     fill_lane_width = Some 32;
-    mma_peak_f16 = Some { BI.mma_peak_flops = 3e13; mma_peak_provenance = Datasheet_class "f16" };
-    mma_peak_bf16 = Some { BI.mma_peak_flops = 3e13; mma_peak_provenance = Datasheet_class "bf16" };
+    mma_peak_f16 =
+      Some
+        {
+          BI.mma_peak_flops = 3e13;
+          mma_peak_provenance = Datasheet_class "f16";
+          mma_peak_accum = F32_accum_only;
+        };
+    mma_peak_bf16 =
+      Some
+        {
+          BI.mma_peak_flops = 3e13;
+          mma_peak_provenance = Datasheet_class "bf16";
+          mma_peak_accum = F32_accum_only;
+        };
     mma_peak_tf32 =
-      Some { BI.mma_peak_flops = 1.5e13; mma_peak_provenance = Datasheet_class "tf32" };
-    mma_peak_fp8 = Some { BI.mma_peak_flops = 6e13; mma_peak_provenance = Datasheet_class "fp8" };
+      Some
+        {
+          BI.mma_peak_flops = 1.5e13;
+          mma_peak_provenance = Datasheet_class "tf32";
+          mma_peak_accum = F32_accum_only;
+        };
+    mma_peak_fp8 =
+      Some
+        {
+          BI.mma_peak_flops = 6e13;
+          mma_peak_provenance = Datasheet_class "fp8";
+          mma_peak_accum = F32_accum_only;
+        };
     mma_uses_scalar_peak = true;
     native_fp16_arithmetic = true;
     simdgroup_width = Some 32;
@@ -130,28 +153,48 @@ let toggles : (string * (BI.hardware_limits -> BI.hardware_limits)) list =
         {
           l with
           mma_peak_f16 =
-            Some { BI.mma_peak_flops = 1.; mma_peak_provenance = Measured_run "toggle" };
+            Some
+              {
+                BI.mma_peak_flops = 1.;
+                mma_peak_provenance = Measured_run "toggle";
+                mma_peak_accum = Any_accum;
+              };
         } );
     ( "mma_peak_bf16",
       fun l ->
         {
           l with
           mma_peak_bf16 =
-            Some { BI.mma_peak_flops = 1.; mma_peak_provenance = Measured_run "toggle" };
+            Some
+              {
+                BI.mma_peak_flops = 1.;
+                mma_peak_provenance = Measured_run "toggle";
+                mma_peak_accum = Any_accum;
+              };
         } );
     ( "mma_peak_tf32",
       fun l ->
         {
           l with
           mma_peak_tf32 =
-            Some { BI.mma_peak_flops = 1.; mma_peak_provenance = Measured_run "toggle" };
+            Some
+              {
+                BI.mma_peak_flops = 1.;
+                mma_peak_provenance = Measured_run "toggle";
+                mma_peak_accum = Any_accum;
+              };
         } );
     ( "mma_peak_fp8",
       fun l ->
         {
           l with
           mma_peak_fp8 =
-            Some { BI.mma_peak_flops = 1.; mma_peak_provenance = Measured_run "toggle" };
+            Some
+              {
+                BI.mma_peak_flops = 1.;
+                mma_peak_provenance = Measured_run "toggle";
+                mma_peak_accum = Any_accum;
+              };
         } );
     ("mma_uses_scalar_peak", fun l -> { l with mma_uses_scalar_peak = false });
     ("native_fp16_arithmetic", fun l -> { l with native_fp16_arithmetic = false });
@@ -343,6 +386,47 @@ let field_reads ~fields (source : string) : string list =
   in
   iter#structure (Test_scan.Config_key_scan.structure_of source);
   List.rev !found
+
+(* Sorted, deduplicated fields from [fields] read inside the top-level value binding [binding_name]
+   of [source] (e.g. [untimed_limits] or [reporting_limits] in [backend_intf.ml]). *)
+let binding_field_reads ~binding_name ~fields (source : string) : string list =
+  let found = ref [] in
+  let last = function Ppxlib.Longident.Lident s | Ldot (_, s) -> Some s | Lapply _ -> None in
+  let hit lid =
+    Option.value_map (last lid) ~default:false ~f:(List.mem fields ~equal:String.equal)
+  in
+  let iter =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression e =
+        (match e.pexp_desc with
+        | Pexp_field (_, { txt; _ }) when hit txt -> found := Option.value_exn (last txt) :: !found
+        | _ -> ());
+        super#expression e
+
+      method! pattern p =
+        (match p.ppat_desc with
+        | Ppat_record (fields_pats, _) ->
+            List.iter fields_pats ~f:(fun ({ Ppxlib.txt; _ }, (pat : pattern)) ->
+                match pat.ppat_desc with
+                | Ppat_any -> ()
+                | _ -> if hit txt then found := Option.value_exn (last txt) :: !found)
+        | _ -> ());
+        super#pattern p
+    end
+  in
+  List.iter (Test_scan.Config_key_scan.structure_of source) ~f:(fun item ->
+      match item.pstr_desc with
+      | Pstr_value (_, bindings) ->
+          List.iter bindings ~f:(fun vb ->
+              match vb.pvb_pat.ppat_desc with
+              | (Ppat_var { txt; _ } | Ppat_constraint ({ ppat_desc = Ppat_var { txt; _ }; _ }, _))
+                when String.equal txt binding_name ->
+                  iter#expression vb.pvb_expr
+              | _ -> ())
+      | _ -> ());
+  List.dedup_and_sort !found ~compare:String.compare
 
 (* Whether a source names [name] as a value (bare or qualified). *)
 let references ~name (source : string) : bool =
@@ -1277,8 +1361,39 @@ let () =
   let base path = Stdlib.Filename.basename path in
   let read path = In_channel.read_all path in
   let is_lib path = String.is_substring path ~substring:"arrayjit/lib/" in
-  p_exists "the scan reads backend_intf.ml" sources ~f:(fun f ->
-      String.equal (base f) "backend_intf.ml");
+  let backend_intf =
+    List.find sources ~f:(fun f -> is_lib f && String.equal (base f) "backend_intf.ml")
+  in
+  p "the scan reads backend_intf.ml" (Option.is_some backend_intf);
+  Option.iter backend_intf ~f:(fun f ->
+      let source = read f in
+      let untimed_reads = binding_field_reads ~binding_name:accessor ~fields:all_fields source in
+      let reporting_reads =
+        binding_field_reads ~binding_name:reporting_accessor ~fields:all_fields source
+      in
+      let sorted_untimed = List.sort untimed_fields ~compare:String.compare in
+      let sorted_reporting = List.sort reporting_fields ~compare:String.compare in
+      let untimed_ok = List.equal String.equal untimed_reads sorted_untimed in
+      if not untimed_ok then
+        eprintf "untimed_limits reads [%s], expected [%s]\n"
+          (String.concat ~sep:", " untimed_reads)
+          (String.concat ~sep:", " sorted_untimed);
+      p "untimed_limits reads exactly the Untimed fields and no Reporting field" untimed_ok;
+      let reporting_ok = List.equal String.equal reporting_reads sorted_reporting in
+      if not reporting_ok then
+        eprintf "reporting_limits reads [%s], expected [%s]\n"
+          (String.concat ~sep:", " reporting_reads)
+          (String.concat ~sep:", " sorted_reporting);
+      p "reporting_limits reads exactly the Reporting fields and no Untimed field" reporting_ok;
+      let disjoint =
+        let combined = key_fields @ untimed_reads @ reporting_reads in
+        Int.equal (List.length combined) (List.length all_fields)
+        && List.equal String.equal
+             (List.dedup_and_sort combined ~compare:String.compare)
+             (List.sort all_fields ~compare:String.compare)
+      in
+      p "the Key, Untimed and Reporting projections partition hardware_limits pairwise-disjointly"
+        disjoint);
   let outside_intf =
     List.filter sources ~f:(fun f -> not (String.equal (base f) "backend_intf.ml"))
   in

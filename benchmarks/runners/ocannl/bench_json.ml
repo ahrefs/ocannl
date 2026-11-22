@@ -335,13 +335,19 @@ let choose_ceiling ~mma_ceiling ~gpu ~tensorization ~narrow_native ~peak_flops
     match (mma_ceiling, peak_memory_bandwidth) with
     | Some (Mma_peak { format; flops; source = flops_source }), Some (bandwidth, bandwidth_source)
       ->
-        Ok
-          {
-            tag = "mma-" ^ format;
-            ceiling_flops = flops;
-            ceiling_bandwidth = bandwidth;
-            source = combine_sources flops_source bandwidth_source;
-          }
+        if not (Float.is_finite flops && Float.(flops > 0.)) then
+          Error (Printf.sprintf "tensor-core kernel: non-finite mma-%s peak (%g)" format flops)
+        else if not (Float.is_finite bandwidth && Float.(bandwidth > 0.)) then
+          Error
+            (Printf.sprintf "tensor-core kernel: non-finite peak_memory_bandwidth (%g)" bandwidth)
+        else
+          Ok
+            {
+              tag = "mma-" ^ format;
+              ceiling_flops = flops;
+              ceiling_bandwidth = bandwidth;
+              source = combine_sources flops_source bandwidth_source;
+            }
     | Some (Mma_no_peak reason), Some _ -> Error reason
     | None, Some _ ->
         Error "tensor-core kernel: no mma peak for this format, and peak_flops is scalar f32"

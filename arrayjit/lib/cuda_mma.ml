@@ -890,7 +890,11 @@ let mma_peaks ~cc =
   let admits arm = cc >= arm_floor arm in
   let peak arm flops cite =
     Option.some_if (admits arm)
-      { Backend_intf.mma_peak_flops = flops; mma_peak_provenance = Datasheet_class cite }
+      {
+        Backend_intf.mma_peak_flops = flops;
+        mma_peak_provenance = Datasheet_class cite;
+        mma_peak_accum = F32_accum_only;
+      }
   in
   {
     f16 =
