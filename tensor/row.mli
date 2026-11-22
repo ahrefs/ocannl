@@ -429,6 +429,15 @@ val find_row_entry : environment -> row_var -> row_entry option
 
 val unsolved_constraints : environment -> constraint_ list
 
+val add_zero_permissions :
+  ?discardable_vars:dim_var_set ->
+  ?emptiable_vars:dim_var_set ->
+  ?non_zero_vars:dim_var_set ->
+  environment ->
+  environment
+(** Register zero permissions in [env], holding [discardable_vars ⊆ emptiable_vars] and refusing any
+    [non_zero_vars] member already solved to 0 (gh-ocannl-2418). *)
+
 val solve_inequalities :
   stage:stage ->
   ?discardable_vars:dim_var_set ->
@@ -441,10 +450,10 @@ val solve_inequalities :
     [Block] specs where the component does not participate in projections. [emptiable_vars] may be
     bound to a stated or forced 0 by constraints and concatenation arithmetic, without licensing
     closure to guess them to 0 (gh-ocannl-2418). Every discardable variable is emptiable
-    ([discardable_vars] is unioned into [emptiable_vars] on entry). [non_zero_vars] are required
-    standalone or affine tensor axes that may never take size 0, overriding [emptiable_vars] /
-    [discardable_vars] across shared captures and aliases. Concatenation arithmetic sizes no other
-    component to 0 (gh-ocannl-2316). *)
+    ([discardable_vars] is unioned into [emptiable_vars] on entry). [non_zero_vars] are variables
+    appearing both as a concatenation component and as a required standalone or affine axis of a
+    spec, overriding [emptiable_vars] / [discardable_vars] across shared captures and aliases.
+    Concatenation arithmetic sizes no other component to 0 (gh-ocannl-2316). *)
 
 val solve_closing_stages :
   stages:stage list ->

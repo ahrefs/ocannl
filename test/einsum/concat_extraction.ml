@@ -418,4 +418,17 @@ let () =
         | exception Row.Shape_error (msg, _) -> String.is_substring msg ~substring:"Shape.set_dim"
         | exception _ -> false
       in
-      p "instantiated scheme still refuses uncaptured a => a^b" refused_uncap)
+      p "instantiated scheme still refuses uncaptured a => a^b" refused_uncap);
+  (* gh-ocannl-2418: [non_zero_vars] only marks variables appearing both as a concat component and
+     as a non-concat axis in the same spec, so a literal 0-extent axis passed through a plain
+     non-concat einsum keeps its base verdict (out of scope for the zero rules). *)
+  Verdict.case "plain einsum keeps 0-extent row axis out of scope" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let z = NTDSL.term ~fetch_op:(Constant 0.) ~output_dims:[ 0 ] () in
+      let t = NTDSL.einsum1 "a => a" z () in
+      let ok =
+        match Lazy.force t.Tensor.value.dims with
+        | dims -> List.equal Int.equal (Array.to_list dims) [ 0 ]
+        | exception _ -> false
+      in
+      p "0-extent operand through plain einsum a => a still solves to [0]" ok)

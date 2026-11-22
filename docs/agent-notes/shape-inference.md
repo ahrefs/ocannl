@@ -148,18 +148,20 @@ files.
   row and checks that the fresh destination is absent.
 - No path sizes a non-emptiable concatenation component to 0 (gh-ocannl-2316, gh-ocannl-2368,
   gh-ocannl-2418). Zero permission is split into environment sets (with `discardable_vars ⊆
-  emptiable_vars` held at `solve_inequalities` entry, and `non_zero_vars` recording required
-  standalone/affine spec axes that override zero permissions across shared captures even against an
-  already-solved 0), all read through aliases by the shared `marked` helper via `dims_mentioning`
-  (as is `concat_component_vars` in `is_concat_component`), so unrelated closure guesses avoid
-  scanning the component set and no verdict depends on which variable of an alias class
-  substitution presents:
+  emptiable_vars` held at `add_zero_permissions` / `solve_inequalities` entry, and `non_zero_vars`
+  recording variables that appear both as a concatenation component and as a required
+  standalone/affine axis in a spec, overriding zero permissions across shared captures even against
+  an already-solved 0 without touching plain non-concat specs), all read through aliases by the
+  shared `marked` helper via `dims_mentioning` (as is `concat_component_vars` in
+  `is_concat_component`), so unrelated closure guesses avoid scanning the component set and no
+  verdict depends on which variable of an alias class substitution presents:
   - Structural emptiability (`emptiable_vars`, read via `may_be_empty`): computed by
     `Shape.compute_emptiable_vars` / `emptiable_and_required_of_bios` (the four-quantifier
     complement test in both directions minus variables appearing in any non-`Concat` axis of any
-    slot, which go into `non_zero_vars`) for `Block`, `Permute`, `Einsum` and `Einsum_tern`,
-    carried through `derive_projections`, `product_space_shape`, and `Shape.Scheme`. It lets a
-    stated or forced 0 bind a component without licensing closure to guess one.
+    slot; the intersection with the spec's `Concat` variables goes into `non_zero_vars`) for
+    `Block`, `Permute`, `Einsum` and `Einsum_tern`, carried through `derive_projections`,
+    `product_space_shape`, and `Shape.Scheme`. It lets a stated or forced 0 bind a component
+    without licensing closure to guess one.
   - Closure's guess-to-0 permission (`discardable_vars`, read via `closure_guesses_empty`): set by
     `Block` (`++^`) only. Closure's four guess-to-0 sites, `refuse_concat_component_guess`'s
     exemption (which now reads `is_concat_component` through aliases too, fixing aliased

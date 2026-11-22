@@ -2854,18 +2854,30 @@ let marked env set v =
                 && match subst_dim env (Var w) with Var r -> equal_dim_var repr r | _ -> false))
     | _ -> Set.mem set v
 
-(* A variable required as a standalone or affine axis of an einsum-family or [Block] spec (or an
-   alias of one): may never take size 0, overriding [emptiable_vars] / [discardable_vars] across
-   shared captures (gh-ocannl-2418). *)
+(* A variable appearing both as a concatenation component and as a required standalone or affine
+   axis of an einsum-family or [Block] spec (or an alias of one): may never take size 0, overriding
+   [emptiable_vars] / [discardable_vars] across shared captures without affecting plain non-concat
+   specs (gh-ocannl-2418). *)
 let is_non_zero env v = marked env env.non_zero_vars v
 
-let refuse_non_zero_as_zero v dim2 =
+let refuse_zero_dim v dim2 =
   raise
   @@ Shape_error
        ( [%string
            "dimension %{Dim_var.to_string v} is sized 0, which only a concatenation component its \
             spec lets be empty may take"],
          [ Dim_mismatch [ Var v; dim2 ] ] )
+
+let add_zero_permissions ?(discardable_vars = dim_var_set_empty)
+    ?(emptiable_vars = dim_var_set_empty) ?(non_zero_vars = dim_var_set_empty) env =
+  Set.iter non_zero_vars ~f:(fun v ->
+      match subst_dim env (Var v) with Dim { d = 0; _ } as d0 -> refuse_zero_dim v d0 | _ -> ());
+  {
+    env with
+    discardable_vars = Set.union discardable_vars env.discardable_vars;
+    emptiable_vars = Set.union emptiable_vars (Set.union discardable_vars env.emptiable_vars);
+    non_zero_vars = Set.union non_zero_vars env.non_zero_vars;
+  }
 
 (* Closure's guess-to-0 permission: a [Block] spec's discardable component, or an alias of one,
    unless the class also holds a required standalone/affine axis. Read by closure's four guess
@@ -2925,14 +2937,7 @@ let stated_zero env d1 d2 =
    and restores the globals. A settling arm that could fire on a bare [Var] = [Dim] equation would
    have to skip a held stated 0. *)
 let zero_waits ~stage held env v =
-  if is_stage5_up stage then
-    raise
-    @@ Shape_error
-         ( [%string
-             "dimension %{Dim_var.to_string v} is sized 0, which only a concatenation component \
-              its spec lets be empty may take"],
-           [ Dim_mismatch [ Var v; get_default_dim ~d:0 () ] ] )
-  else ([ held ], env)
+  if is_stage5_up stage then refuse_zero_dim v (get_default_dim ~d:0 ()) else ([ held ], env)
 
 let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : constraint_ list * _ =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
@@ -3212,7 +3217,7 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
              ( "occurs check failed: dimension variable occurs in its own definition",
                [ Dim_mismatch [ Var v; dim2 ] ] );
       (match dim2 with
-      | Dim { d = 0; _ } when is_non_zero env v -> refuse_non_zero_as_zero v dim2
+      | Dim { d = 0; _ } when is_non_zero env v -> refuse_zero_dim v dim2
       | _ -> ());
       (* Unification merges the axes, so use-site resolvability is shared (gh-ocannl-544). A marked
          axis equated to a window passes the mark to the variables that determine its extent
@@ -6883,18 +6888,7 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
     ?(emptiable_vars : dim_var_set = dim_var_set_empty)
     ?(non_zero_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
     constraint_ list * _ =
-  Set.iter non_zero_vars ~f:(fun v ->
-      match subst_dim env (Var v) with
-      | Dim { d = 0; _ } as d0 -> refuse_non_zero_as_zero v d0
-      | _ -> ());
-  let env =
-    {
-      env with
-      discardable_vars = Set.union discardable_vars env.discardable_vars;
-      emptiable_vars = Set.union emptiable_vars (Set.union discardable_vars env.emptiable_vars);
-      non_zero_vars = Set.union non_zero_vars env.non_zero_vars;
-    }
-  in
+  let env = add_zero_permissions ~discardable_vars ~emptiable_vars ~non_zero_vars env in
   (* gh-ocannl-2229: a fixed-index input without a use-site GLB closes to its minimum at stage 7. Do
      that before unconstrained result axes guess to 1, then let the existing leaf-before-result
      stages propagate the concrete bound. Otherwise an intermediate result in [(u *. 2) *. 2]

@@ -141,3 +141,4 @@ margins wider than the operand, p^o => o with p = 6: refused with a shape error 
 empty integer component, 0^o => o: refused with a shape error naming the fix: true
 instantiated scheme solves forced zero-width suffix (p^o^q => o, p=2, o=3, src=5): true
 instantiated scheme still refuses uncaptured a => a^b: true
+0-extent operand through plain einsum a => a still solves to [0]: true

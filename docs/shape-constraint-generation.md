@@ -346,8 +346,9 @@ permissions (`discardable_vars`, `emptiable_vars`, and `non_zero_vars`). For
 concat axes, `compute_emptiable_vars` (via `emptiable_and_required_of_bios`)
 identifies component variables that may take size `0` because the complementary
 components cover the other side and the variable appears in no non-`Concat`
-axis; variables appearing in any non-`Concat` axis go into `non_zero_vars`,
-which overrides zero permissions across shared captures. `Permute`, `Einsum`,
+axis; variables appearing both as a `Concat` component and in a non-`Concat`
+axis of the spec go into `non_zero_vars`, overriding zero permissions across
+shared captures without affecting plain non-concat specs. `Permute`, `Einsum`,
 and `Einsum_tern` populate `emptiable_vars` and `non_zero_vars` (stated or
 forced `0`, no closure guess); `Block` additionally promotes `emptiable_vars`
 to `discardable_vars` (allowing closure to guess `0`). This is outside the
