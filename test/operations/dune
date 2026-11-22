@@ -5864,17 +5864,20 @@
      (setenv
       OCANNL_PROFILE
       ""
-      (with-stderr-to
-       %{target}
-       (ignore-stdout
-        (with-accepted-exit-codes
-         1
-         (run
-          %{dep:config_usage_scan.exe}
-          --fixture
-          %{dep:config_usage_scan_bogus.fixture}
-          %{dep:config_usage_scan_bogus_config.fixture}
-          %{dep:config_usage_scan_multiline_bogus.fixture}))))))))))
+      (setenv
+       OCANNL_TOOL_VERDICT_POPULATION
+       ""
+       (with-stderr-to
+        %{target}
+        (ignore-stdout
+         (with-accepted-exit-codes
+          1
+          (run
+           %{dep:config_usage_scan.exe}
+           --fixture
+           %{dep:config_usage_scan_bogus.fixture}
+           %{dep:config_usage_scan_bogus_config.fixture}
+           %{dep:config_usage_scan_multiline_bogus.fixture})))))))))))
 
 (rule
  (alias runtest-config_usage_scan_control)
@@ -5935,17 +5938,20 @@
      (setenv
       OCANNL_PROFILE
       ""
-      (with-stderr-to
-       %{target}
-       (ignore-stdout
-        (with-accepted-exit-codes
-         1
-         (run
-          %{dep:config_usage_scan.exe}
-          --source-fixtures
-          %{dep:config_usage_scan_tool_invented.sh.fixture}
-          %{dep:config_usage_scan_tool_invented.py.fixture}
-          %{dep:config_usage_scan_tool_invented.ml.fixture}))))))))))
+      (setenv
+       OCANNL_TOOL_VERDICT_POPULATION
+       ""
+       (with-stderr-to
+        %{target}
+        (ignore-stdout
+         (with-accepted-exit-codes
+          1
+          (run
+           %{dep:config_usage_scan.exe}
+           --source-fixtures
+           %{dep:config_usage_scan_tool_invented.sh.fixture}
+           %{dep:config_usage_scan_tool_invented.py.fixture}
+           %{dep:config_usage_scan_tool_invented.ml.fixture})))))))))))
 
 (rule
  (alias runtest-config_usage_scan_script_hint)
@@ -5979,17 +5985,20 @@
   (setenv
    ocannl-log_level
    1
-   (with-stderr-to
-    %{target}
-    (ignore-stdout
-     (with-accepted-exit-codes
-      1
-      (run
-       %{dep:config_var_spellings.exe}
-       --ocannl_no_config_file=true
-       --ocannl_suppress_welcome_message=true
-       --ocannl_log_config_sourcing=false
-       --ocannl_log_level=0)))))))
+   (setenv
+    OCANNL_TOOL_VERDICT_POPULATION
+    ""
+    (with-stderr-to
+     %{target}
+     (ignore-stdout
+      (with-accepted-exit-codes
+       1
+       (run
+        %{dep:config_var_spellings.exe}
+        --ocannl_no_config_file=true
+        --ocannl_suppress_welcome_message=true
+        --ocannl_log_config_sourcing=false
+        --ocannl_log_level=0))))))))
 
 (rule
  (alias runtest-config_var_fatal_spelling)
@@ -6117,21 +6126,24 @@
     (setenv
      OCANNL_LOG_LEVEL_ROW
      9
-     (with-stderr-to
-      %{target}
-      (ignore-stdout
-       (run
-        %{dep:config_var_spellings.exe}
-        --ocannl_no_config_file=true
-        --ocannl_suppress_welcome_message=true
-        --ocannl_log_config_sourcing=false
-        --ocannl_log_level=0
-        --ocannl-print-decimals-precision-7
-        --ocannl-print_decimals_precision=7
-        --ocannl_log_level_0
-        ocannl_config
-        --ocannl-print_decimals-precision=7
-        --ocannl-not-a-real-key=7))))))))
+     (setenv
+      OCANNL_TOOL_VERDICT_POPULATION
+      ""
+      (with-stderr-to
+       %{target}
+       (ignore-stdout
+        (run
+         %{dep:config_var_spellings.exe}
+         --ocannl_no_config_file=true
+         --ocannl_suppress_welcome_message=true
+         --ocannl_log_config_sourcing=false
+         --ocannl_log_level=0
+         --ocannl-print-decimals-precision-7
+         --ocannl-print_decimals_precision=7
+         --ocannl_log_level_0
+         ocannl_config
+         --ocannl-print_decimals-precision=7
+         --ocannl-not-a-real-key=7)))))))))
 
 (rule
  (alias runtest-config_var_warnings)

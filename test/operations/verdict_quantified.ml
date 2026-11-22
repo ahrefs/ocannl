@@ -42,12 +42,16 @@ open Verdict.Claims
 let run_child mode = Fresh_process.run [ mode ]
 
 let env_with_population selection =
-  let prefix = "OCANNL_TOOL_VERDICT_POPULATION=" in
+  let var = "OCANNL_TOOL_VERDICT_POPULATION" in
+  let same_name = if Stdlib.Sys.win32 then fun a b -> String.Caseless.equal a b else String.equal in
   let kept =
     Unix.environment () |> Array.to_list
-    |> List.filter ~f:(fun entry -> not (String.is_prefix entry ~prefix))
+    |> List.filter ~f:(fun entry ->
+        match String.lsplit2 entry ~on:'=' with
+        | Some (name, _) -> not (same_name name var)
+        | None -> true)
   in
-  Array.of_list (match selection with None -> kept | Some v -> (prefix ^ v) :: kept)
+  Array.of_list (match selection with None -> kept | Some v -> (var ^ "=" ^ v) :: kept)
 
 let run_child_with_population selection mode =
   Fresh_process.run ~env:(env_with_population selection) [ mode ]
@@ -149,6 +153,31 @@ let () =
   | "shape_p_close_what_ran" ->
       p_close ~min:2 ~what_ran:"seed 3" "the claim" got want ~tol:(fun _ -> 0.)
   | "shape_within_only" -> p "the claim" (Verdict.within "the block" got want ~tol:(fun _ -> 0.))
+  | "population_fd2_redirected" ->
+      (* Mirrors [ppx_expect] and [Stderr_capture]: redirect fd 2 onto a temp file after module
+         init, evaluate a passing quantified claim, then verify the redirected capture saw only the
+         ordinary [Stdio.eprintf] while the real stderr descriptor received the population row. *)
+      let path = Stdlib.Filename.temp_file "verdict_pop_cap" ".stderr" in
+      let saved_fd2 = Unix.dup Unix.stderr in
+      let capture_fd = Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o600 in
+      Exn.protect
+        ~f:(fun () ->
+          Stdio.Out_channel.flush Stdio.stderr;
+          Unix.dup2 capture_fd Unix.stderr;
+          Stdio.eprintf "inside capture\n%!";
+          Verdict.p_all "the claim" seeds ~f:even;
+          Stdio.Out_channel.flush Stdio.stderr)
+        ~finally:(fun () ->
+          Unix.dup2 saved_fd2 Unix.stderr;
+          Unix.close saved_fd2;
+          Unix.close capture_fd);
+      let captured =
+        Exn.protect
+          ~f:(fun () -> Stdio.In_channel.read_all path)
+          ~finally:(fun () -> try Stdlib.Sys.remove path with Sys_error _ -> ())
+      in
+      Verdict.p "in-process fd-2 capture sees no population line"
+        (String.equal captured "inside capture\n")
   | "gated_all_bypassed" ->
       gated_all ~when_:true ~on:"a fixture backend"
         ~unless:[ ("contended", true) ]
@@ -645,8 +674,9 @@ let () =
         run_child_with_population None "holds"
       in
       p_all
-        "unset, empty, and blank-only population selectors print nothing on stderr and preserve \
-         stdout" [ None; Some ""; Some "\n"; Some "\r\n\n" ] ~f:(fun sel ->
+        "unset, empty, and whitespace-only population selectors print nothing on stderr and \
+         preserve stdout" [ None; Some ""; Some " "; Some "\t "; Some "\n"; Some " \t\r\n " ]
+        ~f:(fun sel ->
           let status, out, err = run_child_with_population sel "holds" in
           Poly.equal status (Unix.WEXITED 0)
           && String.equal out holds_unset_out && String.is_empty err);
@@ -804,5 +834,15 @@ let () =
         ] ~f:(fun mode ->
           let status, _, err = run_child_with_population (Some "*") mode in
           Poly.equal status (Unix.WEXITED 1)
-          && not (String.is_substring err ~substring:": population "))
+          && not (String.is_substring err ~substring:": population "));
+      let redir_status, redir_out, redir_err =
+        run_child_with_population (Some "*") "population_fd2_redirected"
+      in
+      Verdict.p
+        "in-process fd-2 redirection (as ppx_expect performs) does not capture population lines, \
+         which still reach real stderr"
+        (Poly.equal redir_status (Unix.WEXITED 0)
+        && String.equal redir_out
+             "the claim: true\nin-process fd-2 capture sees no population line: true\n"
+        && String.equal redir_err "the claim: population 3, floor 1 (not part of the golden)\n")
   | other -> failwith ("verdict_quantified: unknown mode " ^ other)

@@ -125,10 +125,10 @@ let recorded_diagnostic = "which the ambient record already carries"
 let exempt_reads =
   [
     ( "test/support/verdict.ml:OCANNL_TOOL_VERDICT_POPULATION",
-      "selects passing quantified claims whose population and floor Verdict echoes to stderr \
-       (gh-ocannl-2390); the verdict and the stdout a golden diffs are the same with it set or \
-       not, and a control editing the source under test or running via `tools/test-run.sh fresh` \
-       reruns the action anyway" );
+      "selects passing quantified claims whose population and floor Verdict echoes to its \
+       pre-capture stderr descriptor (gh-ocannl-2390); stderr-golden actions clear it explicitly, \
+       so the verdict and every golden are the same with it set or not, and a control editing the \
+       source under test or running via `tools/test-run.sh fresh` reruns the action anyway" );
     ( "test/support/verdict.ml:OCANNL_TOOL_VERDICT_RECORDS",
       "names the directory Verdict copies each action's machine records into (gh-ocannl-1114); the \
        verdict and the stdout a golden diffs are the same with it set or not, and only a forced \
