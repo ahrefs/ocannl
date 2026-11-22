@@ -268,18 +268,23 @@ class Gh1180DriverTest(StubRunTest):
         return proc, out
 
     def test_a_clean_run_pairs_the_two_geometries(self):
-        proc, out = self.measure()
+        proc, out = self.measure(rounds=6)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         summary = (out / "summary.md").read_text()
-        self.assertIn("| f16 n=64 bm=8 bk=16 | serial | rn4 | rn6 | 2 | 1.500 | 1.500-1.500 | 0 of 2 |",
+        self.assertIn("| f16 n=64 bm=8 bk=16 | serial | rn4 | rn6 | 6 | 1.500 | 1.500-1.500 | 0 of 6 |",
                       summary)
+        self.assertIn("| 1.000-1.000 | 0.00% | - | control clears effect |", summary)
         self.assertNotIn("INVALID", summary)
         # Unimodal arms read pooled, as before the mode reading: no row marked, no Modes section.
         self.assertNotIn("pooled over modes", summary)
         self.assertNotIn("## Modes", summary)
         run = out / "f16-64-8-16-3-rn4-rn6"
         records = self.records(run)
-        self.assertEqual([r["arm"] for r in records], ["rn4", "rn6", "rn6", "rn4"])
+        self.assertEqual([r["arm"] for r in records[:6]], ["rn4", "rn6", "control",
+                                                          "control", "rn6", "rn4"])
+        for rnd in range(6):
+            by_arm = {r["arm"]: r for r in records if r["round"] == rnd}
+            self.assertEqual(by_arm["control"]["argv"], by_arm["rn4"]["argv"])
         # The case's precision flag is on argv, the ambient one cleared.
         self.assertTrue(all(r["config"]["fp16_arithmetic"] == {
             "value": "false", "source": "commandline", "layer": "commandline", "profile": None,
@@ -309,7 +314,7 @@ class Gh1180DriverTest(StubRunTest):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         jsonl = out / "f16-64-8-16-3-rn4-rn6/cells.jsonl"
         records = self.records(jsonl.parent)
-        self.assertEqual(len(records), 24)
+        self.assertEqual(len(records), 36)
         for r in records:
             base = (10.0 + 0.01 * r["round"]) * 1e-3
             serial = 0.9 * base if r["arm"] == "rn6" and r["round"] in (1, 5, 9) else base
@@ -334,6 +339,34 @@ class Gh1180DriverTest(StubRunTest):
         self.assertIn(f"{case} rn4 | rn6 | serial | rn6 | slow/- | 9 | 1.000 | 1.000-1.000 | 0 of 0 |", summary)
         self.assertNotIn("| parallel |", summary.split("## Modes")[1])
         self.assertNotIn("naive", summary)
+
+    def test_control_drift_and_short_parallel_timings_gate_the_reading(self):
+        proc, out = self.measure(rounds=6)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        jsonl = out / "f16-64-8-16-3-rn4-rn6/cells.jsonl"
+        records = self.records(jsonl.parent)
+        for r in records:
+            serial = {"rn4": 0.004, "rn6": 0.006, "control": 0.007}[r["arm"]]
+            parallel = {"rn4": 0.0001, "rn6": 0.00008, "control": 0.0001}[r["arm"]]
+            r["results"] = [[v, {"packmma": serial, "packmma_par": parallel}.get(v, s), c, n]
+                            for v, s, c, n in r["results"]]
+        jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
+        proc = self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("| 1.750-1.750 | 75.00% | - | inconclusive (control spread) |", proc.stdout)
+        self.assertIn("| 1.000-1.000 | 0.00% | rn6 6/6 | inconclusive (short parallel timings) |",
+                      proc.stdout)
+
+    def test_a_control_with_different_argv_invalidates_the_run(self):
+        proc, out = self.measure(rounds=6)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        jsonl = out / "f16-64-8-16-3-rn4-rn6/cells.jsonl"
+        records = self.records(jsonl.parent)
+        next(r for r in records if r["arm"] == "control")["argv"].append("--different-treatment")
+        jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
+        proc = self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("round 1: control did not repeat rn4", proc.stdout)
 
     def test_a_scalar_fallback_census_invalidates_the_run(self):
         proc, out = self.measure(census="scalar fallback RN")

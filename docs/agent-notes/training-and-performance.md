@@ -1081,6 +1081,14 @@ files.
   Metal kernel timings) was larger than the effect under test. After `Train.tune_placements` the
   debug source left on disk is arm B's — the returned already-compiled arm — so grep the artifact you
   actually mean.
+- For the gh-ocannl-1180 geometry comparison, `gh1180_tie_ab.sh` repeats A as a third arm in
+  every round (gh-ocannl-1261). Use a multiple of six rounds to balance positions. The largest
+  absolute deviation of control/A from 1 must be below the absolute median B/A effect. In the
+  exclusive mac-studio M4 Max replay the control cleared this bar for five of fourteen serial
+  sites. All controlled parallel samples took under 100 µs per routine run. The threshold
+  applies to the reported per-run average because each repeat pays dispatch again. A four-site
+  `taskpolicy -a -l 0 -t 0` probe gave mixed results, so the driver uses the same scheduling
+  policy for all arms and flags drift and modes in the report.
 - For gh-ocannl-1741, one-operand max pooling removed the zero add before each LeNet pool tap.
   Six exclusive CUDA training-step pairs on rog-nv-linux gave a median queued ratio of
   0.99712 [0.99564, 0.99785] and identical parity losses. The unchanged launch control varied
