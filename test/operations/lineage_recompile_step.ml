@@ -53,6 +53,8 @@ let () =
   let comp = Ll_test.unowned_copy comp in
   let grad t = (Option.value_exn ~here:[%here] t.Tensor.diff).grad in
   let y_grad = grad y and w_grad = grad w in
+  (* The fixture observes the update and needs the gradient template to replay over scratch. *)
+  w_grad.observable <- false;
   let read ctx = Context.get_values ctx w.Tensor.value in
   (* gh-ocannl-1653: what a recompile costs the lineage -- the stored template components every
      later read replays, and the statements of the routine the compile emits. *)
