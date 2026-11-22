@@ -11153,9 +11153,8 @@
   (select
    metal_gpu_core_count.ml
    from
-   (metal -> metal_gpu_core_count.real.ml)
+   (metal arrayjit.verdict -> metal_gpu_core_count.real.ml)
    (-> metal_gpu_core_count.missing.ml))
-  arrayjit.verdict
   arrayjit.context
   arrayjit.autotune
   arrayjit.ir))
@@ -17179,13 +17178,15 @@
   stdio
   ocannl
   arrayjit.utils
-  test_utils
   (select
    test_metal_guarded_gather_codegen.ml
    from
-   (metal -> test_metal_guarded_gather_codegen.real.ml)
+   (metal
+    test_utils
+    arrayjit.verdict
+    ->
+    test_metal_guarded_gather_codegen.real.ml)
    (-> test_metal_guarded_gather_codegen.missing.ml))
-  arrayjit.verdict
   arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
@@ -17204,9 +17205,8 @@
   (select
    test_metal_pool_bindings.ml
    from
-   (metal -> test_metal_pool_bindings.real.ml)
+   (metal arrayjit.verdict -> test_metal_pool_bindings.real.ml)
    (-> test_metal_pool_bindings.missing.ml))
-  arrayjit.verdict
   arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
@@ -17224,13 +17224,11 @@
   stdio
   ocannl
   arrayjit.utils
-  test_utils
   (select
    test_metal_pool_slot_width.ml
    from
-   (metal -> test_metal_pool_slot_width.real.ml)
+   (metal test_utils arrayjit.verdict -> test_metal_pool_slot_width.real.ml)
    (-> test_metal_pool_slot_width.missing.ml))
-  arrayjit.verdict
   arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))

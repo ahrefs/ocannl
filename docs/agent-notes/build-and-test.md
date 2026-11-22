@@ -7474,7 +7474,8 @@ box.
   stale. The canonical harness is explicitly permanent rather than a migration quota. Tuple and
   nullary constructions remain outside this record-literal ratchet's detection boundary.
   Both selected source arms are checked regardless of host availability, against their generated
-  target module and actual owning stanza; shared arms require every owner to link the harness.
+  target module and actual owning stanza. A positive library condition links the harness for its
+  own arm. Shared arms require every owner to link the harness.
   Literal `copy_files` / `copy_files#` relationships carry ownership through destination modules
   and copy chains; a linked original cannot cover an unlinked copied consumer. Unsupported copy
   globs/dynamic inputs and inputs outside the declared test corpus are refused explicitly. Documented

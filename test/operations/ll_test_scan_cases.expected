@@ -65,6 +65,8 @@ both select arms inherit the generated target module's harness: true
 default module ownership includes select targets, not arm basenames: true
 a sibling harness cannot cover the selected real source: true
 the off-platform select arm is checked independently too: true
+the fallback still needs its own harness declaration: true
+a select arm can link its own harness: true
 select target exclusion prevents harness ownership: true
 every owning select stanza must link the harness for a shared arm: true
 an unowned copy source inherits its destination harness: true
