@@ -17,7 +17,18 @@
    one the seam does not follow was refused by the host, for the cause its record's [admission]
    names. The report's refusal count must equal the two sources together on every run, and so must
    each cause's count; the claims only a quiet host can decide are gated on there having been no
-   such refusal. *)
+   such refusal.
+
+   That gate is rarely open on its own: a GPU device, a loaded Mac, or the other test actions of the
+   same dune build refuse a window or two in most runs, and on 2026-11-22 the sweep skipped "exactly
+   one distinct candidate stayed unmeasured" on every box. So the search runs twice. The first leg
+   keeps PRODUCTION admission, with the host's refusals as they come; the second runs the same
+   search under [Autotune.with_uncontended_test_windows], which clears the contention flag (and, the
+   seam being a script, the [unbatched] one) at admission, so the host refuses a window there only
+   for a degenerate clock reading and the dedup claims are decided by construction. Neither the
+   scope nor the gate reads the value under test: the scope acts on every window alike, the gate
+   counts the windows the seam never saw. Both legs print the same claims, so a box whose first leg
+   skips a quiet-host claim still evaluates it in the second. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -51,105 +62,115 @@ let () =
       (Autotune.default_seed_label ~facts:(Context.backend_facts_of_name backend_name))
       ~default:"<no default seed>"
   in
-  let default_digest = ref None and seam_refused = ref 0 and report = ref None in
-  (* The label of the latest attempt, the label and admission of a timed window the seam has not yet
-     followed, and the labels and causes of the windows the host refused. *)
-  let attempt = ref "" and unfollowed = ref None and host_refused = ref [] in
-  let retried = ref [] in
-  let settle_window () =
-    Option.iter !unfollowed ~f:(fun label -> host_refused := label :: !host_refused);
-    unfollowed := None
+  let run_leg ~leg ~name ~scope =
+    Stdio.printf "%s\n%!" leg;
+    Stdio.eprintf "measured refusal %s\n%!" leg;
+    let default_digest = ref None and seam_refused = ref 0 and report = ref None in
+    (* The label of the latest attempt, the label and admission of a timed window the seam has not
+       yet followed, and the labels and causes of the windows the host refused. *)
+    let attempt = ref "" and unfollowed = ref None and host_refused = ref [] in
+    let retried = ref [] in
+    let settle_window () =
+      Option.iter !unfollowed ~f:(fun label -> host_refused := label :: !host_refused);
+      unfollowed := None
+    in
+    let old_measured = Autotune.Seam.get Autotune.on_candidate_measured
+    and old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
+    Exn.protect
+      ~finally:(fun () ->
+        Autotune.Seam.set Autotune.on_candidate_measured old_measured;
+        Autotune.Seam.set Autotune.on_candidate_attempt old_attempt)
+      ~f:(fun () ->
+        Autotune.with_timing_call_observer (fun (c : Autotune.timing_call) ->
+            let depth = c.decision.depth in
+            Option.iter c.discarded_window ~f:(fun w ->
+                retried := !attempt :: !retried;
+                Stdio.eprintf "retrying %s: host contention over %d samples at depth %d\n%!"
+                  !attempt w.samples depth);
+            Stdio.eprintf
+              "  (not part of the golden) %s: depth %d, samples %d, median batch wall %.4f ms\n%!"
+              !attempt depth c.window.samples c.window.median_wall_ms;
+            settle_window ();
+            unfollowed := Some (!attempt, c.decision.admission))
+        @@ fun () ->
+        (Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label -> attempt := label);
+        ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest ms ->
+          unfollowed := None;
+          if String.equal label default_seed_label then default_digest := Some digest;
+          if Option.exists !default_digest ~f:(String.equal digest) then (
+            Int.incr seam_refused;
+            Stdio.eprintf "refusing %s (digest %s)\n%!" label digest;
+            Float.nan)
+          else ms );
+        let ctx, routine =
+          scope (fun () ->
+              Autotune.tune ~name ~search:true ~beam_width:1 ~rounds:0 ~repeats:1
+                ~timing:Autotune.Queued ~cache_dir:""
+                ~report:(fun r -> report := Some r)
+                parent comp Ir.Indexing.Empty)
+        in
+        Context.release (Context.run ctx routine));
+    settle_window ();
+    let host_causes = List.rev !host_refused in
+    let host_refused = List.map host_causes ~f:fst in
+    let host_refused_for cause =
+      List.count host_causes ~f:(fun (_, admission) -> Poly.equal admission cause)
+    in
+    Stdio.eprintf "refused by the seam: %d; by the host: %d [%s]\n%!" !seam_refused
+      (List.length host_refused)
+      (String.concat ~sep:"; "
+         (List.map host_causes ~f:(fun (label, admission) ->
+              label ^ " " ^ Autotune.batch_admission_name admission)));
+    Stdio.eprintf "windows retried after host contention: %d [%s]\n%!" (List.length !retried)
+      (String.concat ~sep:"; " (List.rev !retried));
+    let quiet_host = List.is_empty host_refused in
+    let default_reached_seam = not (List.mem host_refused default_seed_label ~equal:String.equal) in
+    gated ~aggregation:`Environment ~when_:default_reached_seam
+      ~on:"a host that refused the default seed's window" "the seam saw the default seed's window"
+      (Option.is_some !default_digest);
+    match !report with
+    | None -> p "the search reported" false
+    | Some r ->
+        Stdio.eprintf
+          "timings_contended=%d (unreadable %d, unbatched %d, contention %d) \
+           candidates_contended=%d candidates_timed=%d\n\
+           %!"
+          r.Autotune.timings_contended r.timings_unreadable r.timings_unbatched
+          (Autotune.contention_refusals r) r.candidates_contended r.candidates_timed;
+        (* Timed or not: a loaded host may refuse every window the seam does not
+           (gh-ocannl-2310). *)
+        p "the search completed"
+          (match r.outcome with
+          | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback ->
+              true
+          | Autotune.Search_died _ | Autotune.Cache_replay | Autotune.Abandonment_replay _
+          | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandoned _
+          | Autotune.Lineage_refused _ ->
+              false);
+        p "default_refused" r.default_refused;
+        p "every started retry is retained in the search report"
+          (r.timings_retried = List.length !retried);
+        p "at least one window was refused" (r.timings_contended >= 1);
+        p "every refused window is one the seam or the host refused"
+          (r.timings_contended = !seam_refused + List.length host_refused);
+        (* The seam's refusals are degenerate readings; the host's are counted under the cause its
+           own timing call named. *)
+        p "every window the seam refused counts as a degenerate clock reading, the host's by cause"
+          (r.timings_unreadable = !seam_refused + host_refused_for Autotune.Refused_unreadable
+          && r.timings_unbatched = host_refused_for Autotune.Refused_unbatched
+          && Autotune.contention_refusals r = host_refused_for Autotune.Refused_contended);
+        (* Where the host refused the default's own window first, the seam never learned its digest,
+           and an equivalent later seed it admitted measured the default after all. *)
+        p "the unmeasured candidates are the default and at most the host's refusals"
+          ((if default_reached_seam then 1 else 0) <= r.candidates_contended
+          && r.candidates_contended <= 1 + List.length host_refused);
+        gated ~aggregation:`Environment ~when_:quiet_host ~on:"a host that refused a window"
+          "exactly one distinct candidate stayed unmeasured" (r.candidates_contended = 1);
+        gated ~aggregation:`Environment ~when_:default_reached_seam
+          ~on:"a host that refused the default seed's window" "the default has no reference time"
+          (Option.is_none r.default_ms);
+        p "the refused seed did not win" (not (String.equal r.best_label default_seed_label))
   in
-  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured
-  and old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
-  Exn.protect
-    ~finally:(fun () ->
-      Autotune.Seam.set Autotune.on_candidate_measured old_measured;
-      Autotune.Seam.set Autotune.on_candidate_attempt old_attempt)
-    ~f:(fun () ->
-      Autotune.with_timing_call_observer (fun (c : Autotune.timing_call) ->
-          let depth = c.decision.depth in
-          Option.iter c.discarded_window ~f:(fun w ->
-              retried := !attempt :: !retried;
-              Stdio.eprintf "retrying %s: host contention over %d samples at depth %d\n%!" !attempt
-                w.samples depth);
-          Stdio.eprintf
-            "  (not part of the golden) %s: depth %d, samples %d, median batch wall %.4f ms\n%!"
-            !attempt depth c.window.samples c.window.median_wall_ms;
-          settle_window ();
-          unfollowed := Some (!attempt, c.decision.admission))
-      @@ fun () ->
-      (Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label -> attempt := label);
-      ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest ms ->
-        unfollowed := None;
-        if String.equal label default_seed_label then default_digest := Some digest;
-        if Option.exists !default_digest ~f:(String.equal digest) then (
-          Int.incr seam_refused;
-          Stdio.eprintf "refusing %s (digest %s)\n%!" label digest;
-          Float.nan)
-        else ms );
-      let ctx, routine =
-        Autotune.tune ~search:true ~beam_width:1 ~rounds:0 ~repeats:1 ~timing:Autotune.Queued
-          ~cache_dir:""
-          ~report:(fun r -> report := Some r)
-          parent comp Ir.Indexing.Empty
-      in
-      Context.release (Context.run ctx routine));
-  settle_window ();
-  let host_causes = List.rev !host_refused in
-  let host_refused = List.map host_causes ~f:fst in
-  let host_refused_for cause =
-    List.count host_causes ~f:(fun (_, admission) -> Poly.equal admission cause)
-  in
-  Stdio.eprintf "refused by the seam: %d; by the host: %d [%s]\n%!" !seam_refused
-    (List.length host_refused)
-    (String.concat ~sep:"; "
-       (List.map host_causes ~f:(fun (label, admission) ->
-            label ^ " " ^ Autotune.batch_admission_name admission)));
-  Stdio.eprintf "windows retried after host contention: %d [%s]\n%!" (List.length !retried)
-    (String.concat ~sep:"; " (List.rev !retried));
-  let quiet_host = List.is_empty host_refused in
-  let default_reached_seam = not (List.mem host_refused default_seed_label ~equal:String.equal) in
-  gated ~aggregation:`Environment ~when_:default_reached_seam
-    ~on:"a host that refused the default seed's window" "the seam saw the default seed's window"
-    (Option.is_some !default_digest);
-  match !report with
-  | None -> p "the search reported" false
-  | Some r ->
-      Stdio.eprintf
-        "timings_contended=%d (unreadable %d, unbatched %d, contention %d) candidates_contended=%d \
-         candidates_timed=%d\n\
-         %!"
-        r.Autotune.timings_contended r.timings_unreadable r.timings_unbatched
-        (Autotune.contention_refusals r) r.candidates_contended r.candidates_timed;
-      (* Timed or not: a loaded host may refuse every window the seam does not (gh-ocannl-2310). *)
-      p "the search completed"
-        (match r.outcome with
-        | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback -> true
-        | Autotune.Search_died _ | Autotune.Cache_replay | Autotune.Abandonment_replay _
-        | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandoned _
-        | Autotune.Lineage_refused _ ->
-            false);
-      p "default_refused" r.default_refused;
-      p "every started retry is retained in the search report"
-        (r.timings_retried = List.length !retried);
-      p "at least one window was refused" (r.timings_contended >= 1);
-      p "every refused window is one the seam or the host refused"
-        (r.timings_contended = !seam_refused + List.length host_refused);
-      (* The seam's refusals are degenerate readings; the host's are counted under the cause its own
-         timing call named. *)
-      p "every window the seam refused counts as a degenerate clock reading, the host's by cause"
-        (r.timings_unreadable = !seam_refused + host_refused_for Autotune.Refused_unreadable
-        && r.timings_unbatched = host_refused_for Autotune.Refused_unbatched
-        && Autotune.contention_refusals r = host_refused_for Autotune.Refused_contended);
-      (* Where the host refused the default's own window first, the seam never learned its digest,
-         and an equivalent later seed it admitted measured the default after all. *)
-      p "the unmeasured candidates are the default and at most the host's refusals"
-        ((if default_reached_seam then 1 else 0) <= r.candidates_contended
-        && r.candidates_contended <= 1 + List.length host_refused);
-      gated ~aggregation:`Environment ~when_:quiet_host ~on:"a host that refused a window"
-        "exactly one distinct candidate stayed unmeasured" (r.candidates_contended = 1);
-      gated ~aggregation:`Environment ~when_:default_reached_seam
-        ~on:"a host that refused the default seed's window" "the default has no reference time"
-        (Option.is_none r.default_ms);
-      p "the refused seed did not win" (not (String.equal r.best_label default_seed_label))
+  run_leg ~leg:"leg: production admission" ~name:"amr_production" ~scope:(fun f -> f ());
+  run_leg ~leg:"leg: uncontended windows" ~name:"amr_uncontended"
+    ~scope:Autotune.with_uncontended_test_windows
