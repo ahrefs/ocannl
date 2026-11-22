@@ -6549,22 +6549,26 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   the raw lines it shows are capped at 40.
 - **Check `journalctl _TRANSPORT=kernel` on a one-off `rog-nv-linux` SIGSEGV before blaming OCANNL or CUDA**
   (gh-ocannl-2410). The native kernel-window filter (`amdgpu|kfd|NVRM:`) keeps only GPU-driver lines, so a
-  host CPU fault leaves an empty window. On 2026-11-19 `autotune_candidate_release` died with SIGSEGV under
+  userspace segfault leaves an empty window. On 2026-11-19 `autotune_candidate_release` died with SIGSEGV under
   `tools/cuda-native-ptx-rerun.sh -j 8 @runtest @train` (`staging#2217`, `c7f0a55c`), blocking
   `gh-ocannl-1910`'s native-target baseline. The kernel log (`segfault at 6488f66170e0 ip 00006088b8c8980e
   ... error 6 ... likely on CPU 15 (core 15, socket 0)`) matched OCaml 5.5.1's
   `caml_modify_generational_global_root` byte-for-byte at `<48> 89 5d 00` (`mov %rbx, 0x0(%rbp)`), a
-  user-mode write to an unmapped page (`X86_PF_PROT=0`) after `mov (%rdi), %rax` had just read the same
-  permanent root pointer (`0x6088f66170e0`, +998.8 MiB above PIE base `0x6088b7f52000` inside the kernel's
-  0-1024 MiB `[heap]` ASLR range) without faulting: bit 42 (`0x0400_0000_0000`) flipped from 0 to 1 in
-  `%rbp`. The only other OCANNL/CUDA segfault in `rog-nv-linux`'s journal (2026-11-11,
-  `virtual_rejection_boundary` inside `libnvrtc.so.13.4.92`, `<80> 4b 17 20` `orb $0x20, 0x17(%rbx)`) hit
-  the exact same core (`CPU 15`, 1 of 24 on the Core Ultra 9 275HX) with the same `error 6` bit-42-set
-  address pattern (`650a1a10461f`). At `172cc2753` on `rog-nv-linux` (`sm_120`, `cuda_ptx_target=native`),
-  `autotune_candidate_release` passed alone (`-j 1`), across all four `compute-sanitizer` tools (`memcheck`,
-  `initcheck`, `synccheck`, `racecheck`: 0 errors, 0 warnings, 0 hazards under `test/config/ocannl_config`),
-  across 24 loaded `-j 8` runs (3 rounds x 8 concurrent, including `taskset -c 15`), and in a full
-  `tools/cuda-native-ptx-rerun.sh -j 8 @runtest @train` rerun (`verdict: holds`).
+  user-mode write to an unmapped page (`X86_PF_PROT=0`) reached only after `mov (%rdi), %rax` at entry
+  dereferenced `%rdi` without faulting; clearing bit 42 (`0x0400_0000_0000`) gives `0x6088f66170e0`,
+  +998.8 MiB above PIE base `0x6088b7f52000` (within this kernel's 0-1024 MiB `[heap]` ASLR range). The
+  only other OCANNL/CUDA segfault in `rog-nv-linux`'s journal (2026-11-11, `virtual_rejection_boundary` in
+  `libnvrtc.so.13.4.92`, `<80> 4b 17 20` `orb $0x20, 0x17(%rbx)`) also reported `error 6` with bit 42 set
+  (`650a1a10461f`) on the same core (`CPU 15`, 1 of 24 on the Core Ultra 9 275HX). Without crash-time core
+  dumps or register maps, a transient bit-42 flip on `CPU 15` remains a hypothesis rather than a proven
+  hardware fault, and clean reruns establish non-reproduction rather than root cause; the faulting PC in
+  the OCaml runtime and clean sanitizer runs did rule out a device-memory bug in the release path on the
+  observed workload. At `172cc2753` on `rog-nv-linux` (`sm_120`, `cuda_ptx_target=native`),
+  `autotune_candidate_release` did not reproduce alone (`-j 1`), across all four `compute-sanitizer` tools
+  (`memcheck`, `initcheck`, `synccheck`, `racecheck`: 0 errors, 0 warnings, 0 hazards under
+  `test/config/ocannl_config`), across 24 loaded `-j 8` runs (3 rounds x 8 concurrent, including
+  `taskset -c 15`), or in a full `tools/cuda-native-ptx-rerun.sh -j 8 @runtest @train` rerun
+  (`verdict: holds`).
 - **Reading a rerun's verdict.** Adding a name means adding it in both places: the table in
   `sweep.sh` gates the rerun, this one records what the name has been seen with. Qualify a name
   by its status (`<name> <STATUS>` in `ENVIRONMENT_REFUSALS`) when the call site also fails for
