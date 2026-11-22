@@ -2870,14 +2870,17 @@ let refuse_zero_dim v dim2 =
 
 let add_zero_permissions ?(discardable_vars = dim_var_set_empty)
     ?(emptiable_vars = dim_var_set_empty) ?(non_zero_vars = dim_var_set_empty) env =
-  Set.iter non_zero_vars ~f:(fun v ->
-      match subst_dim env (Var v) with Dim { d = 0; _ } as d0 -> refuse_zero_dim v d0 | _ -> ());
-  {
-    env with
-    discardable_vars = Set.union discardable_vars env.discardable_vars;
-    emptiable_vars = Set.union emptiable_vars (Set.union discardable_vars env.emptiable_vars);
-    non_zero_vars = Set.union non_zero_vars env.non_zero_vars;
-  }
+  if Set.is_empty discardable_vars && Set.is_empty emptiable_vars && Set.is_empty non_zero_vars then
+    env
+  else (
+    Set.iter non_zero_vars ~f:(fun v ->
+        match subst_dim env (Var v) with Dim { d = 0; _ } as d0 -> refuse_zero_dim v d0 | _ -> ());
+    {
+      env with
+      discardable_vars = Set.union discardable_vars env.discardable_vars;
+      emptiable_vars = Set.union emptiable_vars (Set.union discardable_vars env.emptiable_vars);
+      non_zero_vars = Set.union non_zero_vars env.non_zero_vars;
+    })
 
 (* Closure's guess-to-0 permission: a [Block] spec's discardable component, or an alias of one,
    unless the class also holds a required standalone/affine axis. Read by closure's four guess

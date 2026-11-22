@@ -1621,27 +1621,38 @@ let compute_emptiable_vars ~(this_side_rows : Row.t list) ~(other_side_shapes : 
               if complement_covers_all_shapes then Set.union acc2 component_vars else acc2)
       | _ -> acc)
 
-let emptiable_and_required_of_bios ~bio_lhs:(b_lhs, i_lhs, o_lhs) ~bio_rhs_list :
+let emptiable_and_required_of_bios ~bio_lhs:((b_lhs, i_lhs, o_lhs) as bio_lhs) ~bio_rhs_list :
     Row.dim_var_set * Row.dim_var_set =
-  let rhs_shapes : Row.t list list = List.map bio_rhs_list ~f:(fun (b, inp, o) -> [ b; inp; o ]) in
-  let lhs_rows = [ b_lhs; i_lhs; o_lhs ] in
-  let from_rhs =
-    compute_emptiable_vars ~this_side_rows:(List.concat rhs_shapes) ~other_side_shapes:[ lhs_rows ]
+  let is_concat = function Row.Concat _ -> true | _ -> false in
+  let row_has_concat (row : Row.t) =
+    List.exists row.beg_dims ~f:is_concat || List.exists row.dims ~f:is_concat
   in
-  let from_lhs = compute_emptiable_vars ~this_side_rows:lhs_rows ~other_side_shapes:rhs_shapes in
-  let concat_vars, non_concat_vars =
-    List.fold
-      (lhs_rows @ List.concat rhs_shapes)
-      ~init:(Row.dim_var_set_empty, Row.dim_var_set_empty)
-      ~f:(fun acc (row : Row.t) ->
-        List.fold (row.beg_dims @ row.dims) ~init:acc ~f:(fun (c_vars, nc_vars) -> function
-          | Row.Concat _ as dim -> (Set.union c_vars (Row.vars_of_dim dim), nc_vars)
-          | dim -> (c_vars, Set.union nc_vars (Row.vars_of_dim dim))))
-  in
-  (* Only variables that appear both as a concat component and as a non-concat axis in this spec go
-     into [non_zero_vars]: plain non-concat specs keep their out-of-scope 0-extent row behavior
-     while concat-bearing specs protect required components across shared captures. *)
-  (Set.diff (Set.union from_rhs from_lhs) non_concat_vars, Set.inter non_concat_vars concat_vars)
+  let bio_has_concat (b, inp, o) = row_has_concat b || row_has_concat inp || row_has_concat o in
+  if not (bio_has_concat bio_lhs || List.exists bio_rhs_list ~f:bio_has_concat) then
+    (Row.dim_var_set_empty, Row.dim_var_set_empty)
+  else
+    let rhs_shapes : Row.t list list =
+      List.map bio_rhs_list ~f:(fun (b, inp, o) -> [ b; inp; o ])
+    in
+    let lhs_rows = [ b_lhs; i_lhs; o_lhs ] in
+    let from_rhs =
+      compute_emptiable_vars ~this_side_rows:(List.concat rhs_shapes)
+        ~other_side_shapes:[ lhs_rows ]
+    in
+    let from_lhs = compute_emptiable_vars ~this_side_rows:lhs_rows ~other_side_shapes:rhs_shapes in
+    let concat_vars, non_concat_vars =
+      List.fold
+        (lhs_rows @ List.concat rhs_shapes)
+        ~init:(Row.dim_var_set_empty, Row.dim_var_set_empty)
+        ~f:(fun acc (row : Row.t) ->
+          List.fold (row.beg_dims @ row.dims) ~init:acc ~f:(fun (c_vars, nc_vars) -> function
+            | Row.Concat _ as dim -> (Set.union c_vars (Row.vars_of_dim dim), nc_vars)
+            | dim -> (c_vars, Set.union nc_vars (Row.vars_of_dim dim))))
+    in
+    (* Only variables that appear both as a concat component and as a non-concat axis in this spec
+       go into [non_zero_vars]: plain non-concat specs keep their out-of-scope 0-extent row behavior
+       while concat-bearing specs protect required components across shared captures. *)
+    (Set.diff (Set.union from_rhs from_lhs) non_concat_vars, Set.inter non_concat_vars concat_vars)
 
 (** Shared n-ary einsum constraint builder used by [Broadcast (Einsum ...)],
     [Broadcast_tern (Einsum_tern ...)], and [Block]. Handles per-shape
