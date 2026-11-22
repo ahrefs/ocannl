@@ -1392,7 +1392,11 @@ files.
   attempt hook in force when it starts, so the test scopes its other injections (`_preflight`,
   `_timed`, `on_staffed_start`, an attempt-time raise) around the call. A test whose windows must
   keep PRODUCTION admission (`autotune_measured_refusal`, `autotune_callback_release`,
-  `placement_store`'s ranking) stays hand-rolled: the harness's scope is uncontended.
+  `placement_store`'s ranking) stays hand-rolled: the harness's scope is uncontended. A claim such
+  a test can decide only on a quiet host gets a second leg under `with_uncontended_test_windows`
+  printing the same label: GPU boxes, a loaded Mac and the build's own parallel actions refuse a
+  window in most runs, so a quiet-host gate alone skipped `autotune_measured_refusal`'s dedup claim
+  on every sweep box (2026-11-22).
 ## Render-time typed declines
 - This section is the inventory of every render-time typed decline (gh-ocannl-1351): a
   `Schedule_outcome.Cause_at` constructed at phase `Backend_codegen`, one candidate's decline
