@@ -10202,9 +10202,10 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; gh-ocannl-1867: the check itself, on a hand-built kernel in the form gh-ocannl-1769's miscompile
-; left (a lane index sized for half beneath a single-precision extract). The out-of-range leg aborts,
-; so every leg runs in a child of this executable and the parent reads its fate.
+; gh-ocannl-1867: the check itself, on a hand-built kernel whose lane index is read from a
+; materialized index buffer (an operand gh-ocannl-2412's static check cannot judge). The
+; out-of-range leg aborts, so every leg runs in a child of this executable and the parent reads its
+; fate.
 
 (test
  ; ocannl-backend: cc -- the parent passes --ocannl_backend=cc to every child, and only the children
@@ -10243,6 +10244,26 @@
   stdio
   unix
   fresh_process
+  arrayjit.verdict
+  arrayjit.ir
+  arrayjit.context))
+
+; gh-ocannl-2412: static twin of debug_check_lane_bounds -- refuses Mod (_, K) lane operands with
+; fixed integer K > Ops.vec_unop_lanes of the rendered precision before rendering, on every backend
+; and with no config key.
+
+(test
+ (name lane_bounds_static)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules lane_bounds_static)
+ (libraries
+  base
+  ocannl
+  stdio
+  ll_test
   arrayjit.verdict
   arrayjit.ir
   arrayjit.context))

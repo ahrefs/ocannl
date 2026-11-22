@@ -6,10 +6,11 @@
    what it read was platform-dependent garbage (zeros and 1.4e27 on x86/gcc, a finite wrong loss on
    arm64/clang), not a crash.
 
-   The kernel is hand-built in that form, since the lowering no longer produces it: a single-
-   precision store of the lane extract at lane [i mod lanes], for [lanes] 4 (every lane inside the
-   block) and 8 (lanes 4..7 outside it). An abort ends the process, so each leg runs in a child (the
-   [child] mode) and the parent reads its fate:
+   Fixed-modulus forms [Mod (_, K)] above the lane count are now refused statically before rendering
+   on every backend (gh-ocannl-2412, pinned by [lane_bounds_static]), so this test reads the lane
+   index from a materialized index buffer -- an operand the static rule cannot judge -- seeded with
+   [j mod lanes] for [lanes] 4 (every lane inside the block) and 8 (lanes 4..7 outside it). An abort
+   ends the process, so each leg runs in a child (the [child] mode) and the parent reads its fate:
 
    - in range, key on: the lane operand is wrapped, the child exits normally; - in range, key off:
    the kernel carries no check, and draws the same bits as the checked one; - out of range, key on:
@@ -37,28 +38,28 @@ let child ~lanes =
   Utils.settings.output_debug_files_in_build_directory <- true;
   Test_utils.Generated.init ~backend_name:"cc";
   let mk = Ll_test.node_factory ~first_id:1867000 ~dims:[| n |] () in
+  let mk_idx = Ll_test.node_factory ~prec:iprec ~first_id:1867100 ~dims:[| n |] () in
   let out = mk "lane_out" in
-  Ll_test.materialize out;
+  let lane_idx = mk_idx "lane_idx" in
+  List.iter [ out; lane_idx ] ~f:Ll_test.materialize;
   let i = Ll_test.sym () in
   let bits =
     LL.Binop
       (Ops.Threefry4x32_light, (LL.Constant_bits 7L, u4), (LL.Embed_index (Idx.Fixed_idx 3), u4))
   in
-  let lane =
-    LL.Binop
-      ( Ops.Mod,
-        (LL.Embed_index (Ll_test.iter i), iprec),
-        (LL.Embed_index (Idx.Fixed_idx lanes), iprec) )
-  in
+  let lane = LL.Get (lane_idx, [| Ll_test.iter i |]) in
   let llc =
     Ll_test.loop_n i n
       (Ll_test.set_at out (Ll_test.iter i)
          (LL.Binop (Ops.Uint4x32_to_prec_uniform_lane, (bits, u4), (lane, iprec))))
   in
-  let optimized = Ll_test.optimize ~materialized:[ out ] ~name:routine llc in
+  let optimized = Ll_test.optimize ~materialized:[ out; lane_idx ] ~name:routine llc in
+  let idx_values = Array.init n ~f:(fun j -> Float.of_int (j % lanes)) in
   Test_utils.Generated.arm routine;
   let values =
-    match Ll_test.execute ~name:routine optimized ~seed:[] ~read:[ out ] with
+    match
+      Ll_test.execute ~name:routine optimized ~seed:[ (lane_idx, idx_values) ] ~read:[ out ]
+    with
     | [ values ] -> values
     | _ -> assert false
   in

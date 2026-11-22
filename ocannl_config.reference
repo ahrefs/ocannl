@@ -531,17 +531,28 @@
 # debugging/soak switch: off by default, no effect on behavior beyond the check.
 #debug_check_upload_arenas=false
 
-# gh-ocannl-1867: bound-check, at run time, the lane index of every packed-uniform lane extract a
-# kernel makes (the `uint4x32_to_<prec>_uniform_lane` builtins, which a virtualized `uniform`
-# tensor is inlined through). A lane outside the block of the precision the call renders at prints
-# the lane, the lane count and the precision to stderr and ABORTS the process, where the unchecked
-# read returns whatever lies past the block (gh-ocannl-1769: zeros and 1.4e27 on x86/gcc, a finite
-# wrong loss on arm64). The cc and multidev_cc backends only: a GPU kernel has no abort to raise,
-# and the lowering that sizes the lane index is shared, so a cc run under the key covers it. On
-# CUDA, HIP and Metal the kernels are left unchecked and unchanged, and the first compile under the
-# key prints one stderr line saying the key is cc-only (gh-ocannl-1990), once per process; their
-# schedule cache keys do not move. A debugging/soak switch: off by default, and then the kernels are
-# what they were. On, in-range draws are bit-identical; cc's schedule cache keys on it.
+# gh-ocannl-1867, gh-ocannl-2412: bound-check, at run time, the lane index of every packed-uniform
+# lane extract a kernel makes (the `uint4x32_to_<prec>_uniform_lane` builtins, which a virtualized
+# `uniform` tensor is inlined through).
+#
+# Coverage split between the static and run-time checks:
+# - Static check (always on, every backend, no config key; gh-ocannl-2412): `Raise_backend.compile`
+#   (`Low_level.validate_lane_bounds`) refuses before rendering any `Uint4x32_to_prec_uniform_lane`
+#   whose lane operand has the form `Mod (_, K)` with a fixed integer modulus `K` above
+#   `Ops.vec_unop_lanes` of the precision the call renders at (naming the node, `K`, the precision
+#   and its lane count). This catches the gh-ocannl-1769 shape statically on cc, CUDA, HIP and Metal
+#   alike.
+# - Run-time check (this key, cc and multidev_cc only; gh-ocannl-1867): covers every lane operand
+#   the static rule cannot judge — dynamic lane indices read from a buffer, variable moduli,
+#   non-`Mod` expressions, and negative lanes. A lane outside the block of the precision the call
+#   renders at prints the lane, the lane count and the precision to stderr and ABORTS the process,
+#   where the unchecked read returns whatever lies past the block (gh-ocannl-1769: zeros and 1.4e27
+#   on x86/gcc, a finite wrong loss on arm64). A GPU kernel has no abort to raise, and the lowering
+#   that sizes the lane index is shared, so a cc run under the key covers dynamic cases. On CUDA,
+#   HIP and Metal the kernels are left unchecked and unchanged, and the first compile under the key
+#   prints one stderr line saying the key is cc-only (gh-ocannl-1990), once per process; their
+#   schedule cache keys do not move. A debugging/soak switch: off by default, and then the kernels
+#   are what they were. On, in-range draws are bit-identical; cc's schedule cache keys on it.
 #debug_check_lane_bounds=false
 
 # gh-ocannl-1899: at every Tensor.consume_forward_code that decides a handout, check that the

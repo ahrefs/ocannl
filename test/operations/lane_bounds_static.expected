@@ -1,0 +1,34 @@
+byte (16 lanes): fixed modulus 17 is refused statically: true
+byte (16 lanes): in-range modulus 16 compiles and executes: true
+uint16 (8 lanes): fixed modulus 9 is refused statically: true
+uint16 (8 lanes): in-range modulus 8 compiles and executes: true
+int32 (4 lanes): fixed modulus 5 is refused statically: true
+int32 (4 lanes): in-range modulus 4 compiles and executes: true
+uint32 (4 lanes): fixed modulus 5 is refused statically: true
+uint32 (4 lanes): in-range modulus 4 compiles and executes: true
+int64 (2 lanes): fixed modulus 3 is refused statically: true
+int64 (2 lanes): in-range modulus 2 compiles and executes: true
+uint64 (2 lanes): fixed modulus 3 is refused statically: true
+uint64 (2 lanes): in-range modulus 2 compiles and executes: true
+half (8 lanes): fixed modulus 9 is refused statically: true
+half (8 lanes): in-range modulus 8 compiles and executes: true
+bfloat16 (8 lanes): fixed modulus 9 is refused statically: true
+bfloat16 (8 lanes): in-range modulus 8 compiles and executes: true
+fp8 (16 lanes): fixed modulus 17 is refused statically: true
+fp8 (16 lanes): in-range modulus 16 compiles and executes: true
+single (4 lanes): fixed modulus 5 is refused statically: true
+single (4 lanes): in-range modulus 4 compiles and executes: true
+double (2 lanes): fixed modulus 3 is refused statically: true
+double (2 lanes): in-range modulus 2 compiles and executes: true
+unsimplified Mod (_, Fixed_idx 8) at single is refused statically: true
+half Local_scope with modulus 8 inside single store compiles and executes: true
+single Local_scope with modulus 8 inside half store is refused statically: true
+half store arithmetic with modulus 8 renders at half (8 lanes) and executes: true
+half store arithmetic with modulus 9 is refused statically: true
+dynamic buffer-read lane operand is accepted statically and executes: true
+discarded Arg1 operand with modulus 8 is not refused and executes: true
+fissioned batch with modulus 8 in second segment is refused statically: true
+Where condition annotated half with modulus 8: accepted when comp_prec keeps half: true
+Where condition annotated half with modulus 8: refused when comp_prec widens half to single: true
+If condition annotated half with modulus 8: accepted when comp_prec keeps half: true
+If condition annotated half with modulus 8: refused when comp_prec widens half to single: true
