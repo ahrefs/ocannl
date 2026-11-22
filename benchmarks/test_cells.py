@@ -255,14 +255,18 @@ sys.exit(3 if positionals[1] == "REFUSE_N" else EXIT)
 class Gh1180DriverTest(StubRunTest):
     """gh1180_tie_ab.sh on bin_cells: the census and header checks over each case's cells."""
 
+    def gebp_stub(self, census, exit_code, refuse_n, par_grid):
+        bench = self.dir / "root/_build/default/bin/narrow_gebp_bench.exe"
+        write_stub(bench, GEBP_BODY.replace("CENSUS", census).replace("REFUSE_N", refuse_n)
+                   .replace("EXIT", str(exit_code)).replace("PAR_GRID", par_grid)
+                   .replace("{{", "{").replace("}}", "}"))
+        return bench
+
     def measure(self, census="Mma_register_tiled", exit_code=0, refuse_n="none",
                 cases=("f16:64:8:16:3:4:6",), rounds=2,
                 par_grid="grid: 1 of 2 on the pool; i45 serial: below cc_grid_min_updates = 16384"):
+        self.gebp_stub(census, exit_code, refuse_n, par_grid)
         root = self.dir / "root"
-        write_stub(root / "_build/default/bin/narrow_gebp_bench.exe",
-                   GEBP_BODY.replace("CENSUS", census).replace("REFUSE_N", refuse_n)
-                   .replace("EXIT", str(exit_code)).replace("PAR_GRID", par_grid)
-                   .replace("{{", "{").replace("}}", "}"))
         out = self.dir / "out"
         proc = self.run_tool(
             [box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "measure", str(root), str(out),
@@ -330,6 +334,7 @@ class Gh1180DriverTest(StubRunTest):
         # The pooled row stays, marked: it mixes the modes (0.900-1.000 for an identical arm).
         self.assertIn(f"{case} serial (pooled over modes) | rn4 | rn6 | 12 | 1.000 | 0.900-1.000 |"
                       " 3 of 3 |", summary)
+        self.assertIn("inconclusive (modes,", summary)
         self.assertIn(f"{case} parallel | rn4 | rn6 | 12 | 1.000 | 1.000-1.000 | 0 of 0 |", summary)
         self.assertIn("## Modes", summary)
         self.assertIn(cells.MODE_RULE, summary)
@@ -341,6 +346,25 @@ class Gh1180DriverTest(StubRunTest):
         self.assertIn(f"{case} rn4 | rn6 | serial | rn6 | slow/- | 9 | 1.000 | 1.000-1.000 | 0 of 0 |", summary)
         self.assertNotIn("| parallel |", summary.split("## Modes")[1])
         self.assertNotIn("naive", summary)
+
+    def test_a_two_round_smoke_run_reports_unequal_positions(self):
+        proc, out = self.measure(rounds=2)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("inconclusive (unequal position counts)", (out / "summary.md").read_text())
+
+    def test_a_saved_two_arm_run_reports_no_control(self):
+        bench = self.gebp_stub("Mma_register_tiled", 0, "none", "grid: 2 of 2 on the pool")
+        out = self.dir / "legacy"
+        proc = self.run_tool(
+            [sys.executable, str(HERE / "bin_cells.py"), "--exe", str(bench), "--backend", "cc",
+             "--out", str(out / "f16-64-8-16-3-rn4-rn6"), "--rounds", "2",
+             "--arm", "rn4=--rn=4", "--arm", "rn6=--rn=6",
+             "--", "f16", "64", "3", "8", "16", "--ocannl_fp16_arithmetic=false"])
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        (out / "driver.log").write_text("gh1180: cases: f16:64:8:16:3:4:6\n")
+        proc = self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("inconclusive (no control)", proc.stdout)
 
     def retime(self, out, serial, parallel):
         jsonl = out / "f16-64-8-16-3-rn4-rn6/cells.jsonl"

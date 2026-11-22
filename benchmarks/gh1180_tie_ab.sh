@@ -20,7 +20,9 @@
 #           OUT/driver.log records the run, OUT/<case>/ is that case's bin_cells run (report.md,
 #           cells.jsonl, cells/<NNN>-rn<N>/stdout), `summary` writes OUT/summary.md (and `measure`
 #           runs it at the end).
-#   ROUNDS  a positive even count (Bench_design's spread mirrored rotation).
+#   ROUNDS  a positive even count (Bench_design's spread mirrored rotation). Two rounds work for
+#           a smoke run. A geometry reading requires equal position counts, reached at multiples
+#           of cells.exact_batches(3).
 #   CASE    PREC:N:BM:BK:REPEATS:RNA:RNB -- narrow_gebp_bench's positionals and the two column
 #           counts. PREC is f32, f16 (narrow storage, f32 compute: --ocannl_fp16_arithmetic=false)
 #           or f16a (pure f16 where the target has the arithmetic: --ocannl_fp16_arithmetic=true).
@@ -40,6 +42,8 @@
 # Each variant is read for modes as bin_cells.py's own report reads it (bin_cells.mode_rows,
 # cells.MODE_RULE; gh-ocannl-2308): a variant with a bimodal arm keeps its pooled row, marked
 # "pooled over modes", and the Modes section gives its arms' groups and within-mode ratios.
+# With the control present, the rule also considers the control/A effect when setting A's mode
+# threshold. This can make the three-arm rule more sensitive to modes than its two-arm counterpart.
 # The control measures drift visible across processes. It cannot identify their core placement.
 #
 # Exit: 0 every cell valid; 1 a cell failed or failed a check (this outranks a refusal); 2 usage;
