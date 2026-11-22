@@ -7,11 +7,13 @@
     log -- a [tools/test-run.sh] run record's [log], or any dune output of the same runs -- and
     sorts each failure into what the leg predicts and what it does not:
 
-    - a {b census failure} (expected): a failed claim, in a stanza running a census-judging test,
-      whose label asserts no parity and speaks the census's vocabulary ({!names_census});
-    - an {b expected value failure}: a failed claim asserting parity that {!decline_sensitive}
-      lists, each with the reason its reference is one rendering's numerics or its label conjoins a
-      census judgment (build-and-test.md#verdict-claims names them);
+    - an {b expected value failure}: a failed claim that {!decline_sensitive} lists (checked before
+      the label heuristics so non-parity-worded value checks are never absorbed into census counts),
+      each with the reason its reference is one rendering's numerics or its label conjoins a census
+      judgment (build-and-test.md#verdict-claims names them);
+    - a {b census failure} (expected): an unlisted failed claim, in a stanza running a
+      census-judging test, whose label asserts no parity and speaks the census's vocabulary
+      ({!names_census});
     - an {b anomaly}, with its stanza: a failed parity claim nothing lists, a crash, a stanza whose
       failure count the reader cannot account for, a failure in a stanza that runs no census-judging
       test, and any failure dune reports on a file other than a dune file (a golden diff, a build
@@ -76,6 +78,24 @@ let decline_sensitive =
       label =
         "on CUDA and HIP the default policy's staged+tensorized uniform-f16 matmul equals the \
          once-narrowed wide reference bitwise";
+      reason =
+        "its reference is the persistent fragment's once-per-tile narrowing, which the declined \
+         scope's per-block narrowing misses by construction";
+    };
+    {
+      source = "test/operations/schedule_mma_matmul.ml";
+      label =
+        "staged+tensorized default-policy uniform-bf16 matmul narrows between blocks exactly where \
+         the backend keeps bf16 storage residency";
+      reason =
+        "its reference is the persistent fragment's once-per-tile narrowing, which the declined \
+         scope's per-block narrowing misses by construction";
+    };
+    {
+      source = "test/operations/schedule_mma_matmul.ml";
+      label =
+        "staged+tensorized Bf16_narrow uniform-bf16 matmul narrows between blocks exactly where \
+         that mode keeps bf16 storage residency";
       reason =
         "its reference is the persistent fragment's once-per-tile narrowing, which the declined \
          scope's per-block narrowing misses by construction";
@@ -511,15 +531,16 @@ let sort ~judged log =
       let claims =
         List.map block.fails ~f:(fun label ->
             let verdict =
-              if not (asserts_parity label) then if names_census label then Census else Unread
-              else
-                match
-                  List.find decline_sensitive ~f:(fun e ->
-                      Option.equal String.equal (Some e.source) source
-                      && glob_matches ~pattern:e.label label)
-                with
-                | Some e -> Expected_value e.reason
-                | None -> Parity
+              match
+                List.find decline_sensitive ~f:(fun e ->
+                    Option.equal String.equal (Some e.source) source
+                    && glob_matches ~pattern:e.label label)
+              with
+              | Some e -> Expected_value e.reason
+              | None ->
+                  if asserts_parity label then Parity
+                  else if names_census label then Census
+                  else Unread
             in
             (label, verdict))
       in
