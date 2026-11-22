@@ -79,6 +79,33 @@ let minix_cc =
       (34394341376, 5.23);
     ]
 
+(* gh-ocannl-1910: ARM cross-check of cc's advisory capacity -- mac-studio's Apple M4 Max,
+   [CAPACITY_ONLY=1 benchmarks/gh1253_cells.sh cc] at dd438e64b, 2026-11-22 (exclusive window
+   wave-20261122-ocannl-t1910-mac-studio-2). Like Zen 5, the untiled contraction is issue-bound
+   (5-27 GB/s requested against 338.75 GB/s STREAM). Unlike Zen 5's 12-15 GB/s plateau through 6.45
+   GB, the M4 Max rate falls gradually from 2.15 GB on (23.93 -> 21.30 -> 17.94 -> 12.37 -> 9.69 ->
+   7.28 GB/s; steepest step 4.30 -> 6.45 GB). Splitting on the geometric-mean contrast threshold
+   places the knee in the same k = 6144..8192 grid bracket (6.45 to 8.60 GB) as Zen 5's, so the
+   discrete-grid fit yields the same 7447425761-byte geometric mean to within the sweep's 1.33x grid
+   step; across 2.15..8.60 GB the knee stays well inside the issue's 3x bound, so one cc advisory
+   holds across x86_64 and ARM without a per-architecture constant. *)
+let mac_studio_cc =
+  recorded
+    [
+      (269746176, 27.22);
+      (538443776, 26.84);
+      (1075838976, 25.23);
+      (2150629376, 23.93);
+      (3225419776, 21.30);
+      (4300210176, 17.94);
+      (6449790976, 12.37);
+      (8599371776, 9.69);
+      (12898533376, 7.28);
+      (17197694976, 6.58);
+      (25796018176, 5.55);
+      (34394341376, 5.08);
+    ]
+
 let () =
   let step =
     [
@@ -131,6 +158,19 @@ let () =
     | _ -> false);
   p "against the STREAM rate the issue-bound cc sweep reads all spilled"
     (match Cal.fit_capacity ~dram_rate:1.18588e11 minix_cc with
+    | Cal.All_spilled _ -> true
+    | _ -> false);
+  p
+    "the recorded mac-studio ARM cc sweep fits a monotone capacity between 6.45 GB and 8.60 GB, on \
+     its own contrast"
+    (transition_at ~cached:6449790976 ~spilled:8599371776 (Cal.fit_capacity mac_studio_cc));
+  p "the mac-studio ARM sweep's bracket gives cc's published capacity"
+    (match Cal.fit_capacity mac_studio_cc with
+    | Cal.Transition { capacity; monotone = true; _ } ->
+        Option.equal Int.equal cc_published (Some capacity)
+    | _ -> false);
+  p "against mac-studio's STREAM rate the issue-bound ARM cc sweep reads all spilled"
+    (match Cal.fit_capacity ~dram_rate:3.38751e11 mac_studio_cc with
     | Cal.All_spilled _ -> true
     | _ -> false);
   p "rates that do not split by working set fit a capacity flagged non-monotone"
