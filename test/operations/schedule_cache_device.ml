@@ -77,35 +77,26 @@ let () =
     (Sexp.to_string_hum ([%sexp_of: BI.timing_identity option] identity));
   p "identity queries preserve conservative construction limits"
     (Sexp.equal construction (BI.sexp_of_hardware_limits (Context.hardware_limits ctx)));
-  (* gh-ocannl-1253: the cache key hashes the limits' Key-class projection, which on this backend's
-     real limits renders as the full record with its Untimed fields absent -- the rendering the key
-     had before they existed (limits_field_classes holds the field classes on synthetic records). *)
-  p "the cache key's limits projection renders as the record without its Untimed fields"
-    (Sexp.equal
-       (BI.Limits_key.sexp_of_t (BI.limits_key limits))
-       (BI.sexp_of_hardware_limits
-          {
-            limits with
-            cache_capacity_bytes = None;
-            max_resident_threads = None;
-            cache_bandwidth = None;
-            issue_rate = None;
-            dram_bandwidth = None;
-            mma_rate = None;
-            device_gather_rate = None;
-            multiprocessors = None;
-            fill_threads = None;
-            transaction_rate = None;
-            workgroup_bytes_per_multiprocessor = None;
-            staged_copy_rate = None;
-            shared_load_rate = None;
-            fill_lane_width = None;
-            mma_peak_f16 = None;
-            mma_peak_bf16 = None;
-            mma_peak_tf32 = None;
-            mma_peak_fp8 = None;
-            mma_uses_scalar_peak = false;
-          }));
+  (* [limits_field_classes] checks membership with every field populated. Here the retained fields
+     must keep their order and values for the running backend, even with an optional untimed
+     advisory populated. *)
+  let limits_with_chains = { limits with fill_chains = Some 8 } in
+  let projected = BI.Limits_key.sexp_of_t (BI.limits_key limits_with_chains) in
+  let projection_agrees =
+    match (BI.sexp_of_hardware_limits limits_with_chains, projected) with
+    | Sexp.List fields, Sexp.List key_fields ->
+        let in_key = function
+          | Sexp.List (Sexp.Atom name :: _) ->
+              List.exists key_fields ~f:(function
+                | Sexp.List (Sexp.Atom key_name :: _) -> String.equal name key_name
+                | _ -> false)
+          | _ -> false
+        in
+        Sexp.equal (Sexp.List (List.filter fields ~f:in_key)) projected
+    | _ -> false
+  in
+  p "the cache key's limits projection preserves the record's field order and values"
+    projection_agrees;
   p "a concrete context's identity is stable"
     (Option.equal BI.equal_timing_identity identity (timing_identity ctx));
   (match identity with

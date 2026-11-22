@@ -14,6 +14,9 @@ files.
   and comparing them broadcasts to an [n,n] grid; `range_of_shape` gives row-major flattened
   offsets, not per-axis indices. In `%op` only numeric literals auto-lift to tensors — a
   let-bound float needs `!.x`.
+- The single-char einsum lexer inserts a comma after each identifier or fixed index. Call
+  `Lexer.token` once per parse so each parser and each diagnostic reparse has its own pending
+  separator (gh-ocannl-1537).
 - Solver deferral discipline: `unify_dim` solves eagerly (recursing internally), so any
   constraint it RETURNS is a deferral that cannot progress in the current env — e.g. a conv axis
   whose kernel dim is still a variable. Deferrals are idempotent: re-solving one in place

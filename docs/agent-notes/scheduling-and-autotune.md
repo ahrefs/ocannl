@@ -394,8 +394,10 @@ files.
   family judged by its own detector, the other refuted with `no_matmul_site_witness` /
   `no_conv_site_witness`; the per-family trees and `family_seeding`'s trees carry no such level,
   so a path read off the combined view starts one level deeper), and its census lines are the
-  tree's refutations, path by path, where the conv legs used to keep free-text notes. `model_family_search` walks it too, so a conv
-  site gets the family bound, the stats ledger and the operand-load tie-break: where `model_default`
+  tree's refutations, path by path. The conv tree offers the CPU and GPU legs only on their
+  respective targets (gh-ocannl-1537), so the census counts only gates affecting the search.
+  `model_family_search` walks it too, so a conv site gets the family bound, the stats ledger and
+  the operand-load tie-break: where `model_default`
   used to scan conv seeds flat (`best_flat`, first strict improvement), an exact score tie between
   two conv leaves with tile-MMA load counts can now crown the second one. The conv traffic-floor
   increment (gh-ocannl-1489, `conv_path_traffic_floor`) prices both staged operand tiles, written
@@ -974,11 +976,14 @@ files.
   winner replay) replay the plan the search seeded; the paths that never search (search off, a
   refused lineage, a deferred replay that failed) compile through `seeded_transform`, as
   `seeded_default` does, and recompile the plain default only when that fails classified. Before,
-  those paths shipped the plain default the recipes had already beaten. A seed changes no cache
-  key, so a crown searched under seed A still replays under seed B, but its `best_steps` and an
-  abandonment recorded under A do not (`autotune_seeded_seed` runs both seeds; only the
-  `Autotune.on_seeded_plan` seam moves the seed alone, since every key that steers the plan also
-  renders in the trajectory's settings).
+  those paths shipped the plain default the recipes had already beaten. The two helpers work
+  in different phases (gh-ocannl-1537). `compile_untuned_default` derives the recipe plan during
+  its own lowering and reports a pre-search failure. `untuned_default_or_raise` replays the trajectory's
+  existing plan against the search's captured lowering and can keep its partial report and release
+  its candidates on a fatal failure. A seed changes no cache key, so a crown searched under seed A
+  still replays under seed B, but its `best_steps` and an abandonment recorded under A do not.
+  `autotune_seeded_seed` runs both seeds. Only the `Autotune.on_seeded_plan` seam moves the seed
+  alone, since every key that steers the plan also renders in the trajectory's settings.
 - **`gpu_default_sketch_min_reduction=auto` (the default) replaces the threshold by the ranking
   score** (gh-ocannl-1253, `Autotune.Ranked`): a segment seeds when `seeded_params`' sketch ranks
   strictly below the same segment's preset, scored alone under the device's capacity and cache
@@ -3103,10 +3108,10 @@ files.
   beside its payload, and a lookup whose stored key differs reads as a miss. A key-spelling name
   grew with every key component and outgrew Windows' 260-character MAX_PATH (rog's staging paths
   were 268-279, hosted CI's ~263), so every store was refused there. A test or tool that needs the
-  keys present reads them with `Schedule_cache.entry_keys`, and derives a path with `cache_file`,
-  never by parsing or spelling a filename; a shell script reads the key off the entry's first line,
-  `((key <key>)` (`entry_key` in `benchmarks/gh612_cells.sh`), and prints that rather than the
-  opaque `basename`.
+  keys present reads them with `Schedule_cache.entry_keys`, or uses `entry_inventory` to get the
+  directory's regime and keys together under the read lock (gh-ocannl-1537). Derive the path with
+  `cache_file`. The `entry_key` helper in `benchmarks/gh612_cells.sh` prints the key from the
+  entry's first line, `((key <key>)`.
 - **A version bump appends its own history line.** Each version constant in `schedule_cache.ml`
   (`entry_version`, `placement_entry_version`, `cache_regime_version`) sits under a verbatim
   `(*= <name> history` comment, one `<value>: gh-ocannl-<N> -- <what changed>` line per value,

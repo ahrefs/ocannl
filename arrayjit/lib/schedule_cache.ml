@@ -1017,15 +1017,29 @@ let sweep_superseded_entries dir =
             remove_entry (Stdlib.Filename.concat dir name) && removed
           else removed)
 
-type regime_stamp = Missing | Version of int | Refuse
+let unix_refusal error fn arg = Printf.sprintf "%s %s: %s" fn arg (Unix.error_message error)
+
+(* [Sys.file_exists] also answers false when the filesystem refuses the query. Only [ENOENT] and
+   [ENOTDIR] can establish absence for a cache lookup or inventory. *)
+let stat_path path =
+  match Unix.stat path with
+  | stats -> Ok (Some stats)
+  | exception Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> Ok None
+  | exception Unix.Unix_error (error, fn, arg) -> Error (unix_refusal error fn arg)
+
+let probe path = Result.map (stat_path path) ~f:Option.is_some
+
+type regime_stamp = Unstamped | Stamped of int | Unreadable_stamp
 
 let read_regime_stamp dir =
   let path = regime_stamp_file dir in
-  if not (Stdlib.Sys.file_exists path) then Missing
-  else
-    match Int.of_string (String.strip (Stdio.In_channel.read_all path)) with
-    | version -> Version version
-    | exception _ -> Refuse
+  match stat_path path with
+  | Ok None -> Unstamped
+  | Ok (Some { Unix.st_kind = Unix.S_REG; _ }) -> (
+      match Int.of_string (String.strip (Stdio.In_channel.read_all path)) with
+      | version -> Stamped version
+      | exception _ -> Unreadable_stamp)
+  | Ok (Some _) | Error _ -> Unreadable_stamp
 
 let write_regime_stamp dir =
   Utils.Atomic_file.write_all ~path:(regime_stamp_file dir)
@@ -1042,10 +1056,10 @@ type regime_open = Current | Superseded | Refused
 
 let open_current_regime ~mode dir =
   match read_regime_stamp dir with
-  | Version version when version = cache_regime_version -> Current
-  | Version version when version > cache_regime_version -> Refused
-  | Refuse -> Refused
-  | Missing | Version _ -> (
+  | Stamped version when version = cache_regime_version -> Current
+  | Stamped version when version > cache_regime_version -> Refused
+  | Unreadable_stamp -> Refused
+  | Unstamped | Stamped _ -> (
       match mode with
       | Read -> Superseded
       | Write ->
@@ -1062,17 +1076,6 @@ let open_current_regime ~mode dir =
    lookup's ordinary miss, left for the next store to sweep), or the lock, the regime stamp or the
    sweep of a superseded regime refused it. *)
 type open_refusal = Missing_dir | Superseded_regime | Refused_open of string
-
-let unix_refusal error fn arg = Printf.sprintf "%s %s: %s" fn arg (Unix.error_message error)
-
-(* Whether [path] exists. [Sys.file_exists] answers [false] also when the filesystem refused the
-   query (an ACL, a transient Windows refusal), which the cache-I/O record must not read as an
-   ordinary absence: only [ENOENT]/[ENOTDIR] are. *)
-let probe path =
-  match Unix.stat path with
-  | _ -> Ok true
-  | exception Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> Ok false
-  | exception Unix.Unix_error (error, fn, arg) -> Error (unix_refusal error fn arg)
 
 (* The record lock a cache-open holds through its operation (gh-ocannl-1492). A [Write] open creates
    the permanent lock file and takes it exclusively. A [Read] open creates and writes nothing: it
@@ -1109,28 +1112,34 @@ let rec with_regime_lock ~mode dir f =
           Unix.lockf fd (match mode with Read -> Unix.F_RLOCK | Write -> Unix.F_LOCK) 0;
           f ())
 
+let with_cache_lock ~mode ~dir f =
+  Stdlib.Mutex.lock cache_open_mutex;
+  Stdlib.Fun.protect
+    ~finally:(fun () -> Stdlib.Mutex.unlock cache_open_mutex)
+    (fun () ->
+      match with_regime_lock ~mode dir f with
+      | result -> Ok result
+      | exception Unix.Unix_error (error, fn, arg) -> Error (unix_refusal error fn arg)
+      | exception Stdlib.Sys_error msg -> Error msg)
+
 let open_cache ~mode ~dir f =
   match probe dir with
   | Ok false -> Error Missing_dir
   | Error msg -> Error (Refused_open msg)
-  | Ok true ->
-      Stdlib.Mutex.lock cache_open_mutex;
-      Stdlib.Fun.protect
-        ~finally:(fun () -> Stdlib.Mutex.unlock cache_open_mutex)
-        (fun () ->
-          try
-            with_regime_lock ~mode dir (fun () ->
-                match open_current_regime ~mode dir with
-                | Current -> Ok (f ())
-                | Superseded -> Error Superseded_regime
-                | Refused ->
-                    Error
-                      (Refused_open
-                         "regime refused: a newer or malformed stamp, or a superseded entry that \
-                          could not be removed"))
-          with
-          | Unix.Unix_error (error, fn, arg) -> Error (Refused_open (unix_refusal error fn arg))
-          | Stdlib.Sys_error msg -> Error (Refused_open msg))
+  | Ok true -> (
+      match
+        with_cache_lock ~mode ~dir (fun () ->
+            match open_current_regime ~mode dir with
+            | Current -> Ok (f ())
+            | Superseded -> Error Superseded_regime
+            | Refused ->
+                Error
+                  (Refused_open
+                     "regime refused: a newer or malformed stamp, or a superseded entry that could \
+                      not be removed"))
+      with
+      | Ok result -> result
+      | Error msg -> Error (Refused_open msg))
 
 (* {2 The cache-I/O record} (gh-ocannl-1040)
 
@@ -1171,6 +1180,11 @@ let process_level = function
 (* What an entry file holds: the full key the filename is a digest of, beside the payload. *)
 type stored_entry = { key : string; payload : Sexp.t } [@@deriving sexp]
 
+let read_entry_file file =
+  match stored_entry_of_sexp (Sexplib.Sexp.load_sexp file) with
+  | { key; payload } -> Some (key, payload)
+  | exception exn when not (process_level exn) -> None
+
 let entry_keys ~dir =
   match Stdlib.Sys.readdir dir with
   | exception Stdlib.Sys_error _ -> []
@@ -1180,9 +1194,15 @@ let entry_keys ~dir =
           String.is_suffix name ~suffix:".sexp" && not (Utils.Atomic_file.is_staging_file name))
       |> List.sort ~compare:String.compare
       |> List.filter_map ~f:(fun name ->
-          match stored_entry_of_sexp (Sexplib.Sexp.load_sexp (Stdlib.Filename.concat dir name)) with
-          | { key; _ } -> Some key
-          | exception exn when not (process_level exn) -> None)
+          let file = Stdlib.Filename.concat dir name in
+          (* The inventory holds the cache lock. A stray pipe must never turn enumeration into a
+             blocking open. Participating writers publish regular files under that lock. *)
+          match stat_path file with
+          | Ok (Some { Unix.st_kind = Unix.S_REG; _ }) -> Option.map (read_entry_file file) ~f:fst
+          | Ok None | Ok (Some _) | Error _ -> None)
+
+let entry_inventory ~dir =
+  with_cache_lock ~mode:Read ~dir (fun () -> (read_regime_stamp dir, entry_keys ~dir))
 
 (* One entry I/O protocol for every kind of entry the directory holds: schedule winners, abandoned
    searches and placement decisions (gh-ocannl-786) share the lock, the regime stamp and the atomic
@@ -1267,11 +1287,6 @@ let store ~dir ~key entry = store_sexp ~dir ~key (sexp_of_entry entry)
 
 let lookup ~dir ~key =
   lookup_sexp ~dir ~key ~of_sexp:entry_of_sexp ~current:(fun e -> e.version = entry_version)
-
-let read_entry_file file =
-  match stored_entry_of_sexp (Sexplib.Sexp.load_sexp file) with
-  | { key; payload } -> Some (key, payload)
-  | exception exn when not (process_level exn) -> None
 
 (** {2 Abandoned searches} *)
 
