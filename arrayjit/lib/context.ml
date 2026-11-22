@@ -1866,6 +1866,14 @@ let hardware_limits ctx =
   let (module Backend) = backend_module ctx in
   Backend.hardware_limits ()
 
+let thread_scratch_limit ctx =
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
+          Backend.thread_scratch_limit c.BI.device);
+    }
+
 let timing_identity ctx =
   Backends.query ctx.wrapped
     {

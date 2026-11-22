@@ -450,8 +450,9 @@ files.
   gate's 261112 B; 104832-261112 B on gfx1151): fission promotes statement-crossing `Local`s to
   device memory and the whole-routine presets dedup to the refused baseline. So the guard
   (gh-ocannl-1494) wraps `Autotune.Context_driver` and prepends a 250000 B scratch kernel to the
-  first candidate whose kernels bind a hardware dimension, and its decline claims run in a leg
-  opened by the device's reported `max_resident_threads`, not by the outcome. Guard:
+  first candidate whose kernels bind a hardware dimension, and both tests' decline claims run in a
+  leg opened by `Context.thread_scratch_limit` on the selected device (which returns `None` off HIP
+  or when `hip_scratch_validation=false`), never by the outcome (gh-ocannl-2404). Guard:
   `test/operations/hip_scratch_tune_survives.ml` (`slow` alias).
 - The compiler's frame limit is the other half, and it is gated BEFORE codegen (gh-ocannl-1313):
   LLVM AMDGPU refuses a stack frame over 262136 B, and hiprtc says so untyped, only after compiling

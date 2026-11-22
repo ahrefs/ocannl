@@ -1888,6 +1888,14 @@ module type Backend_device_common = sig
       {!static_properties}: computing it (device enumeration) must not run at backend-module
       initialization. *)
 
+  val thread_scratch_limit : device -> int option
+  (** Per-work-item private (scratch) memory budget enforced at link time on this [device], in
+      bytes, or [None] when no post-link per-device scratch limit is enforced (non-HIP backends, HIP
+      with [ocannl_hip_scratch_validation=false], or a device reporting no usable occupancy
+      figures). Unlike {!hardware_limits}, which is conservative across all devices of a backend,
+      this queries [device] itself and returns the exact limit the backend's post-link validator
+      enforces (gh-ocannl-2404). *)
+
   val codegen_capabilities : unit -> codegen_capabilities
   (** Facts from the backend's C-syntax configuration. A function, like {!hardware_limits}, so
       policy-dependent fields reflect the current process configuration. *)

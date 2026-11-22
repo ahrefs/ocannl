@@ -14,10 +14,11 @@
    values.
 
    Gated behind the [slow] alias: it is meaningful only on HIP, and it deliberately compiles a
-   kernel with a ~260 KB per-work-item stack frame. There are two ways for it to be inapplicable — a
-   non-HIP backend, and a HIP device whose scratch budget exceeds what the compiler will emit — and
-   both are announced on stderr rather than folded into the result, so the golden stays backend- and
-   device-independent (the autotune_mma_companion idiom). *)
+   kernel with a ~260 KB per-work-item stack frame. The decline claims run in a [Verdict.leg] open
+   only on HIP when the selected device's enforced limit ([Context.thread_scratch_limit]) puts the
+   fixture over budget; off HIP they are counted backend skips, and on a HIP device whose enforced
+   limit covers the fixture (or with [hip_scratch_validation=false]) they are counted environment
+   skips (gh-ocannl-2404). *)
 
 open Base
 open Ocannl
@@ -33,13 +34,12 @@ open Verdict.Claims
    (at 65528 the margin is 8 bytes — thin enough that an unrelated codegen change would turn this
    test into a compile error).
 
-   Near-maximal rather than merely over gfx1151's ~104 KB budget, because the budget is [4 GiB /
-   resident work-items] and therefore RISES on smaller devices: a fixed 128 KiB frame would silently
-   fall UNDER budget on a device with fewer CUs, and the rejection checks would then report false
-   rather than "not applicable". At this size the only devices that still cannot be pushed over
-   budget are those with <= 16384 resident work-items, where no compilable kernel can exceed the
-   budget at all; that case is announced as vacuous below instead of failing. *)
+   Near-maximal rather than merely over gfx1151's ~104 KB budget, because the budget rises on
+   smaller devices: a fixed 128 KiB frame would fall under budget on a device with fewer CUs. At
+   this size only devices whose enforced per-work-item scratch limit exceeds the fixture skip the
+   decline leg via [Context.thread_scratch_limit]. *)
 let scratch_floats = 65024
+let scratch_bytes = scratch_floats * 4
 
 (* Replaces the routine body with: per Grid thread, fill a [Local] array of [scratch_floats]
    forward, then read it back in REVERSE into an accumulation. The reversed second loop is what
@@ -101,9 +101,20 @@ let () =
   let ctx = Context.auto () in
   let backend = Context.backend_name ctx in
   let on_hip = String.equal backend "hip" in
-  if not on_hip then
+  let scratch_limit = Context.thread_scratch_limit ctx in
+  if on_hip then
     Stdio.eprintf
-      "scratch: backend is %s, not hip — the scratch-rejection checks below are vacuous\n%!" backend;
+      "scratch: enforced thread scratch limit %s B, fixture array %d B (not part of the golden)\n%!"
+      (Option.value_map scratch_limit ~default:"(none)" ~f:Int.to_string)
+      scratch_bytes;
+  let hip_leg = Verdict.leg ~when_:on_hip ~on:backend () in
+  let scratch_leg =
+    Verdict.sub_leg ~aggregation:`Environment hip_leg
+      ~when_:(lazy (Option.exists scratch_limit ~f:(fun limit -> scratch_bytes > limit)))
+      ~on:
+        "a hip device whose enforced thread scratch limit covers the fixture, or \
+         hip_scratch_validation=false"
+  in
 
   let rows = 8 in
   let src_values = Array.init rows ~f:(fun i -> Float.of_int (i + 1)) in
@@ -121,46 +132,44 @@ let () =
     (Array.length warm_got = 1 && Float.(abs (warm_got.(0) - expected) < 1e-4));
 
   (* --- 1. The over-budget candidate. --- *)
-  let declined, effect_is_clean =
-    if not on_hip then (true, true)
-    else begin
-      (* Built here, not alongside [warm]: two live forward roots sharing [src] as a non-embedded
-         descendant is a [consume_forward_code] conflict. *)
-      let%op out = src *. 2.0 in
-      let comp = Train.forward out in
-      let outcome =
-        Context.compile_outcome ~name:"hip_scratch_over_budget"
-          ~lowered_transform:(fun o ->
-            [ (over_budget_transform ~out_tn:out.Tensor.value ~src_tn:src.Tensor.value ~rows) o ])
-          ~provenance:SO.User_schedule ~candidate:"over-budget scratch" ctx comp Idx.Empty
-      in
-      match outcome with
-      | Ok _ ->
-          (* Accepted, at the largest frame the compiler will emit. On a device whose scratch budget
-             exceeds that ceiling (<= 16384 resident work-items) no compilable kernel can be over
-             budget, so the rejection is structurally unreachable here rather than broken. Announced
-             on stderr, like the non-HIP case, so the golden stays portable. *)
-          Stdio.eprintf
-            "scratch: this device's scratch budget exceeds hipcc's %d-byte frame ceiling — no \
-             compilable kernel is over budget, so the rejection checks below are vacuous\n\
-             %!"
-            (scratch_floats * 4);
-          (true, true)
-      | Error (SO.Fatal _) -> (false, false)
-      | Error (SO.Classified { phase; cause; execution_effect }) ->
-          let right_cause =
-            match (phase, cause) with
-            | SO.Backend_link, SO.Resource_exceeded { resource = SO.Thread_scratch; requested; _ }
-              ->
-                (* The requested figure must be the kernel's real frame, not a placeholder. *)
-                requested >= scratch_floats * 4
-            | _ -> false
-          in
-          (right_cause, SO.equal_execution_effect execution_effect SO.No_device_writes)
-    end
+  let over_budget_outcome =
+    lazy
+      ((* Built here, not alongside [warm]: two live forward roots sharing [src] as a non-embedded
+          descendant is a [consume_forward_code] conflict. *)
+       let%op out = src *. 2.0 in
+       let comp = Train.forward out in
+       let outcome =
+         Context.compile_outcome ~name:"hip_scratch_over_budget"
+           ~lowered_transform:(fun o ->
+             [ (over_budget_transform ~out_tn:out.Tensor.value ~src_tn:src.Tensor.value ~rows) o ])
+           ~provenance:SO.User_schedule ~candidate:"over-budget scratch" ctx comp Idx.Empty
+       in
+       (* Release any unexpectedly linked routine without launching it: launching an over-budget
+          kernel on HIP can abort the HSA queue (gh-ocannl-533). *)
+       (match outcome with Ok (ctx', _) -> Context.release ctx' | Error _ -> ());
+       outcome)
   in
-  p "scratch: over-budget kernel declined as Resource_exceeded Thread_scratch at link" declined;
-  p "scratch: the decline claims no device writes" effect_is_clean;
+  in_leg ~leg:scratch_leg
+    "scratch: over-budget kernel declined as Resource_exceeded Thread_scratch at link" (fun label ->
+      p label
+        (match Lazy.force over_budget_outcome with
+        | Error
+            (SO.Classified
+               {
+                 phase = SO.Backend_link;
+                 cause = SO.Resource_exceeded { resource = SO.Thread_scratch; requested; limit; _ };
+                 _;
+               }) ->
+            (* The requested figure must be the kernel's real frame, not a placeholder, and the
+               reported limit must agree with [Context.thread_scratch_limit]. *)
+            requested >= scratch_bytes && Option.equal Int.equal limit scratch_limit
+        | Ok _ | Error (SO.Classified _ | SO.Fatal _) -> false));
+  in_leg ~leg:scratch_leg "scratch: the decline claims no device writes" (fun label ->
+      p label
+        (match Lazy.force over_budget_outcome with
+        | Error (SO.Classified { execution_effect; _ }) ->
+            SO.equal_execution_effect execution_effect SO.No_device_writes
+        | Ok _ | Error (SO.Fatal _) -> false));
 
   (* --- 2. The device is still usable: a reduction afterwards computes the right values. This is
      the half a structural assertion cannot cover — a validator that rejected by poisoning the

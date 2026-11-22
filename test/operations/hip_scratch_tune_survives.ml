@@ -25,9 +25,10 @@
    prepended kernel rewrites [col_sums] with a value every candidate's later kernels overwrite, so
    even a candidate that linked would compute the same total.
 
-   The candidate claims run in a leg open only where the decline is guaranteed by the device's own
-   reported limits, never by the outcome: the HIP backend, [hip_scratch_validation] on, and the
-   injected array's bytes over the budget computed from [max_resident_threads]. Elsewhere they are
+   The candidate claims run in a leg open only where the decline is guaranteed by the selected
+   device's own enforced scratch limit ([Context.thread_scratch_limit]), never by the outcome: the
+   HIP backend and the injected array's bytes over the device's reported limit (which is [None] when
+   [hip_scratch_validation] is off or the device reports no usable residency). Elsewhere they are
    counted skips. The claims that never depended on a decline (the census arithmetic, the search
    completes, times candidates, computes the right value, replays from the cache) run on every
    backend, and the gh-ocannl-1340 fact that made the baseline claims vacuous is itself pinned on
@@ -63,13 +64,6 @@ let expected_total = 2.0 *. (Float.of_int (side * side) *. 0.5)
    104,832 B budget). *)
 let scratch_floats = 62500
 let scratch_bytes = scratch_floats * 4
-
-(* The budget [Hip_backend.scratch_limit_per_work_item] computes, from the same documented constant
-   (the 4 GiB WSL WDDM scratch cap) and the same queried residency. It decides only whether the leg
-   below is open: a gate on the device's reported limits, not on the decline under test. *)
-let scratch_budget ~resident =
-  let granule = 64 and cap = 4 * 1024 * 1024 * 1024 in
-  cap / resident / granule * granule
 
 let scratch_tn =
   lazy
@@ -181,31 +175,23 @@ let () =
   let backend = Context.backend_name ctx in
   let on_hip = String.equal backend "hip" in
   let on_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts ctx) in
-  let resident = (Context.hardware_limits ctx).Ir.Backend_intf.max_resident_threads in
-  let validation = Utils.get_global_flag ~default:true ~arg_name:"hip_scratch_validation" in
-  (* [None] where the device reports no usable residency, as the validator itself treats it. *)
-  let budget =
-    Option.bind resident ~f:(fun resident ->
-        if resident <= 0 then None
-        else Option.some_if (scratch_budget ~resident > 0) (scratch_budget ~resident))
-  in
+  let scratch_limit = Context.thread_scratch_limit ctx in
   if on_hip then
     Stdio.eprintf
-      "scratch/tune: %d resident work-items, scratch budget %s B, injected array %d B, validation \
-       %b (not part of the golden)\n\
+      "scratch/tune: enforced thread scratch limit %s B, injected array %d B (not part of the \
+       golden)\n\
        %!"
-      (Option.value resident ~default:0)
-      (Option.value_map budget ~default:"(none)" ~f:Int.to_string)
-      scratch_bytes validation;
+      (Option.value_map scratch_limit ~default:"(none)" ~f:Int.to_string)
+      scratch_bytes;
   let gpu_leg = Verdict.leg ~when_:on_gpu ~on:backend () in
   let hip_leg = Verdict.leg ~when_:on_hip ~on:backend () in
-  let declines_by_limits =
-    validation && Option.exists budget ~f:(fun budget -> scratch_bytes > budget)
-  in
+  let declines_by_limits = Option.exists scratch_limit ~f:(fun limit -> scratch_bytes > limit) in
   let scratch_leg =
     Verdict.sub_leg ~aggregation:`Environment hip_leg
       ~when_:(lazy declines_by_limits)
-      ~on:"a hip device whose scratch budget covers the fixture, or hip_scratch_validation=false"
+      ~on:
+        "a hip device whose enforced thread scratch limit covers the fixture, or \
+         hip_scratch_validation=false"
   in
   let over_budget = on_hip && declines_by_limits in
 
@@ -264,9 +250,9 @@ let () =
         ((match declined_rejection with
            | Some
                ( SO.Backend_link,
-                 SO.Resource_exceeded
-                   { resource = SO.Thread_scratch; requested; limit = _; detail = _ } ) ->
-               requested >= scratch_bytes
+                 SO.Resource_exceeded { resource = SO.Thread_scratch; requested; limit; detail = _ }
+               ) ->
+               requested >= scratch_bytes && Option.equal Int.equal limit scratch_limit
            | Some _ | None -> false)
         && scratch_count r = 1
         && List.exists r.Autotune.declines ~f:(fun d ->

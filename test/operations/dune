@@ -9779,7 +9779,6 @@
   stdio
   arrayjit.verdict
   test_utils
-  arrayjit.utils
   arrayjit.ll_builders
   arrayjit.autotune
   arrayjit.context)
