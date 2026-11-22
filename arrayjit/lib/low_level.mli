@@ -1526,9 +1526,9 @@ type traced_array = {
           [is_one_hot_selector_assignment] to prove that a [Get(rtn, [k])] will inline to
           [Embed_index k] rather than arbitrary values (task-73617488). *)
   mutable inline_reduction_extent : int;
-      (** The largest product of trip counts of loops that enclose one of the node's setters without
-          appearing in its indices (i.e. reduction loops). Inlining the computation replays these
-          loops at every read site; compared against [virtualize_settings.max_inline_reduction]. *)
+      (** The setter-side lower bound for [virtualize_settings.max_inline_reduction]: the largest
+          product of trip counts of loops enclosing a setter without appearing in its indices. The
+          replay can also retain loops whose indices the inliner could not bind at the read. *)
   mutable read_by_other : bool;
       (** True when some statement other than the node's own setters reads the node. Unlike the
           read-multiplicity metric, same-cell reads count, while a setter's own read-modify-write

@@ -60,7 +60,9 @@ type provenance =
       (** Per-cell visits above [virtualize_max_visits], or an uncovered read. One of the three
           heuristic caps of [Low_level.decide_placements]: policy priors, which the decision-vector
           search may flip back to inlining, unlike a legality or observability verdict. *)
-  | Inline_reduction_cap  (** Reduction extent above [virtualize_max_inline_reduction]. *)
+  | Inline_reduction_cap
+      (** Setter-side reduction extent or read-site replay extent above
+          [virtualize_max_inline_reduction]. *)
   | Inline_fanin_cap  (** Transitive fan-in above [virtualize_max_inline_fanin]. *)
   | Observed_reader_reads_local
       (** The reader owns an observable buffer and its already-captured lexical scopes still compute

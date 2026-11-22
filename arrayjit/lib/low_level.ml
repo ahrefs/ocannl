@@ -1076,10 +1076,9 @@ type traced_array = {
   mutable has_non_one_hot_setter : bool;
   mutable is_range_producer : bool;
   mutable inline_reduction_extent : int;
-      (** The largest product of trip counts of loops that enclose one of the node's setters without
-          appearing in its indices (i.e. reduction loops). Inlining the computation replays these
-          loops at every read site, so large extents make virtualization pathological; see
-          [virtualize_max_inline_reduction]. *)
+      (** The setter-side lower bound for [virtualize_max_inline_reduction]: the largest product of
+          trip counts of loops enclosing a setter without appearing in its indices. The replay can
+          also retain loops whose indices the inliner could not bind at the read. *)
   mutable read_by_other : bool;
       (** True when some statement other than the node's own setters reads the node. Unlike
           [accesses], same-cell reads count (they are exempt from the visit cap), while a setter's
@@ -12331,8 +12330,110 @@ let layout_order (o : optimized) =
   let positions = first_access_positions o.source in
   compare_program_order positions
 
+(* gh-ocannl-1011: the symbols and scope ids pricing mints. Negative, so never one the counters
+   generated code is numbered by ([Indexing.get_symbol], [get_scope]) hands out, and never reset, so
+   no two pricing instantiations share one. *)
+let pricing_counter = ref 0
+
+let pricing_symbol () =
+  Int.decr pricing_counter;
+  Indexing.Symbol !pricing_counter
+
+let pricing_scope tn =
+  Int.decr pricing_counter;
+  { tn; scope_id = !pricing_counter }
+
+(* A guarded update still visits every retained iteration. Divide the remaining budget down the nest
+   so its inclusive loop widths and their product cannot overflow. *)
+let rec replay_exceeds_reduction_cap budget = function
+  | For_loop { from_; to_; body; _ } when from_ <= to_ ->
+      let span = Int64.(of_int to_ - of_int from_) in
+      let budget =
+        if Int64.compare span (Int64.of_int budget) >= 0 then 0
+        else budget / (Int64.to_int_exn span + 1)
+      in
+      replay_exceeds_reduction_cap budget body
+  | Seq (a, b) -> replay_exceeds_reduction_cap budget a || replay_exceeds_reduction_cap budget b
+  | Set_local _ -> budget = 0
+  | _ -> false
+
+(* gh-ocannl-2371: price a single, unconditional affine scatter with at most a whole-node
+   initialization before it. Replays of a producer overwritten later can preserve an earlier value
+   in a captured consumer, so leave multiple writes to the ordinary placement policy. A dummy setter
+   gives the real binder the same write map and loop box without making a template or depending on
+   which operands the placement walk will inline. *)
+let affine_replay_cap_query ~static_indices ~live_reads (accesses : Tn.t Affine.access list) =
+  let ordinary_scatter (a : _ Affine.access) =
+    a.a_write && (not a.a_whole) && (not a.a_vec_last) && Option.is_none a.a_dyn_axis
+    && (not a.a_guarded)
+    && List.for_all a.a_path ~f:(function Affine.Stmt _ | Write -> true | _ -> false)
+    && Array.exists a.a_map ~f:(function
+      | Indexing.Affine { symbols = _ :: _ :: _; _ } -> true
+      | _ -> false)
+  in
+  let candidates = Hash_set.create (module Tnode) in
+  List.iter accesses ~f:(fun a -> if ordinary_scatter a then Hash_set.add candidates a.a_tn);
+  let sites =
+    lazy
+      (List.fold (Lazy.force live_reads)
+         ~init:(Hashtbl.create (module Tnode))
+         ~f:(fun sites (a : _ Affine.access) ->
+           if Hash_set.mem candidates a.a_tn then Hashtbl.add_multi sites ~key:a.a_tn ~data:a;
+           sites))
+  in
+  let before (a : _ Affine.access) (b : _ Affine.access) =
+    List.compare Affine.compare_path_comp a.a_path b.a_path < 0
+  in
+  let price ~cap ~reads tn (write : _ Affine.access) =
+    let write_loops = List.rev write.a_loops in
+    let range s =
+      match List.Assoc.find write_loops s ~equal:Indexing.equal_symbol with
+      | Some (lo, hi) -> hi - lo + 1
+      | None -> 1
+    in
+    Indexing.affine_injective ~symbol_range:range write.a_map
+    &&
+    let body =
+      List.fold_right write.a_loops
+        ~init:(Set { tn; idcs = write.a_map; llsc = Constant 1.; debug = "" })
+        ~f:(fun (index, (from_, to_)) body -> For_loop { index; from_; to_; body; axis = Serial })
+    in
+    let placements = Tn.Placements.create () in
+    List.exists reads ~f:(fun (read : _ Affine.access) ->
+        Option.is_none read.a_dyn_axis
+        && (not
+              (Option.equal Int.equal (Affine.stmt_head write.a_path) (Affine.stmt_head read.a_path)))
+        && before write read
+        &&
+        let loops = List.rev read.a_loops in
+        match
+          instantiate_computations ~fresh_symbol:pricing_symbol ~placements
+            ~call_range:(fun s -> List.Assoc.find loops s ~equal:Indexing.equal_symbol)
+            ~coverage_exempt:false ~id:(pricing_scope tn) tn
+            [ (Some write.a_map, body) ]
+            static_indices read.a_map
+        with
+        | Ok replay -> replay_exceeds_reduction_cap cap replay
+        | Error _ -> false)
+  in
+  fun ~cap tn ->
+    Hash_set.mem candidates tn
+    &&
+    let writes, reads =
+      List.partition_tf
+        (Hashtbl.find_multi (Lazy.force sites) tn)
+        ~f:(fun (a : _ Affine.access) -> a.a_write)
+    in
+    match List.partition_tf writes ~f:(fun a -> a.a_whole) with
+    | [], [ write ] when ordinary_scatter write -> price ~cap ~reads tn write
+    | [ init ], [ write ]
+      when ordinary_scatter write && List.is_empty init.a_loops && (not init.a_guarded)
+           && before init write ->
+        price ~cap ~reads tn write
+    | _ -> false
+
 let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_store ~max_visits
-    ~reads_covered ~read_multiplicity ~footprint
+    ~reads_covered ~read_multiplicity ~affine_replay_cap ~footprint
     ~(footprint_scoped : (Tn.t, Tn.provenance option) Hashtbl.t)
     ~(tentative_constexpr : Tn.t Hash_set.t)
     ~(live_local : Tn.t -> [ `Unread | `Covered | `Uncovered ])
@@ -12402,6 +12503,13 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
     (traced.prefers_virtual_one_hot && not traced.has_non_one_hot_setter)
     || Hash_set.mem optim_ctx.inline_preferences traced.tn
   in
+  (* A committed observable reader has no placement fallback. Keep its existing replay policy. *)
+  let replay_cap_allowed =
+    lazy
+      (not
+         (Hashtbl.exists traced_store ~f:(fun t ->
+              t.has_assignment && Tn.is_observable t.tn && Tn.Placements.known_virtual plc t.tn)))
+  in
   Hashtbl.iter traced_store ~f:(fun traced ->
       let tn = traced.tn in
       (* Exemption-dependent coverage ([`Covered_rmw_exempt]) is NOT coverage here (gh-ocannl-793):
@@ -12454,11 +12562,13 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
          reduction too. Cap the tolerated extent. One-hot selector producers are exempt like for the
          visit cap: they must stay virtual so [rewrite_one_hot_reductions] can fire (the rewrite
          itself removes the recompute cost). *)
-      if
-        virtualize_settings.max_inline_reduction >= 0
-        && traced.inline_reduction_extent > virtualize_settings.max_inline_reduction
-        && traced.read_by_other && undecided tn && not cap_exempt
-      then land_on_cap traced Inline_reduction_cap;
+      let reduction_cap = virtualize_settings.max_inline_reduction in
+      if reduction_cap >= 0 && traced.read_by_other && undecided tn && not cap_exempt then
+        if traced.inline_reduction_extent > reduction_cap then
+          land_on_cap traced Inline_reduction_cap
+        else if
+          Lazy.force replay_cap_allowed && (Lazy.force affine_replay_cap) ~cap:reduction_cap tn
+        then land_on_cap traced Inline_reduction_cap;
       let skip_simple =
         virtualize_settings.inline_simple_computations && (not traced.is_complex)
         && not (Tn.Placements.known_non_virtual plc tn)
@@ -12856,6 +12966,7 @@ type analysis = {
   an_reads_covered :
     (Tn.t -> [ `Covered | `Covered_rmw_exempt of string | `Unknown of string ]) Lazy.t;
   an_read_multiplicity : (Tn.t -> int) Lazy.t;
+  an_affine_replay_cap : (cap:int -> Tn.t -> bool) Lazy.t;
   an_footprint : (Tn.t -> footprint_eligibility) Lazy.t;
       (** gh-ocannl-616: decision-independent like the other metrics — which reads the footprint
           form can serve is a property of the raw code's access relations; whether it is chosen is
@@ -12930,6 +13041,8 @@ let%diagn2_sexp analyze_proc (static_indices : Indexing.static_symbol list) (llc
            (drop_dead_loop_effects (snd (Lazy.force rels))));
     an_reads_covered = lazy (reads_covered_query static_indices (Lazy.force accs));
     an_read_multiplicity = lazy (read_multiplicity_query static_indices (Lazy.force accs));
+    an_affine_replay_cap =
+      lazy (affine_replay_cap_query ~static_indices ~live_reads:live_accs (Lazy.force accs));
     an_live_reads = lazy (live_read_query (Lazy.force live));
     an_live_coverage =
       lazy
@@ -13931,19 +14044,6 @@ let post_virtualization_pipeline plc traced_store ~input_scopes ~static_indices 
   @@ simplify_llc static_indices
   @@ cleanup_virtual_llc plc ~input_scopes ~static_indices llc
 
-(* gh-ocannl-1011: the symbols and scope ids pricing mints. Negative, so never one the counters
-   generated code is numbered by ([Indexing.get_symbol], [get_scope]) hands out, and never reset, so
-   no two pricing instantiations share one. *)
-let pricing_counter = ref 0
-
-let pricing_symbol () =
-  Int.decr pricing_counter;
-  Indexing.Symbol !pricing_counter
-
-let pricing_scope tn =
-  Int.decr pricing_counter;
-  { tn; scope_id = !pricing_counter }
-
 let rec writes_node (self : Tn.t) (c : t) =
   match c with
   | Seq (a, b) -> writes_node self a || writes_node self b
@@ -14219,8 +14319,8 @@ let%diagn2_sexp specialize_proc ?(blends_value_selects = false) (input_ctx : opt
   let program_position = lazy (first_access_positions an.an_llc) in
   decide_placements ~blends_value_selects input_ctx traced_store
     ~max_visits:virtualize_settings.max_visits ~reads_covered:an.an_reads_covered
-    ~read_multiplicity:an.an_read_multiplicity ~footprint:an.an_footprint ~footprint_scoped
-    ~tentative_constexpr ~live_local ~program_position;
+    ~read_multiplicity:an.an_read_multiplicity ~affine_replay_cap:an.an_affine_replay_cap
+    ~footprint:an.an_footprint ~footprint_scoped ~tentative_constexpr ~live_local ~program_position;
   [%log "optimizing"];
   (* gh-ocannl-681: taken BEFORE virtualization, so cleanup can tell the scopes this pass was handed
      from the ones it mints and only retracts its own. *)

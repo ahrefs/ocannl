@@ -390,7 +390,15 @@ files.
   BELOW that point is part of the stored computation (the ordinary `x[t] += a[s]`, priced by
   `virtualize_max_inline_reduction`) while a repetition loop ABOVE it is not,
   and is rejected as `Non_virtual 147` (gh-ocannl-674); width-1 loops stay exempt,
-  since replaying one iteration once is exact. A symbol-free index map instead captures at the
+  since replaying one iteration once is exact. The setter-side extent omits loop symbols in the
+  write indices, but affine inversion can retain such loops: reading `x[2i+u; 2j+v]` at plain
+  indices binds `u` and `v` while searching `i` and `j` under range guards (gh-ocannl-2371).
+  Before capture, price the inliner's retained loop nest for a later read of a single injective
+  affine scatter with at most one preceding whole-node clear. A later overwrite can change a
+  captured reader's value if its inline replay becomes a buffer read, so it stays outside this
+  check. Use the usual cap, footprint, fan-in and observable-reader placement machinery.
+  `virtual_affine` pins the guarded replay, cheap binding, stable readback and materialized parity.
+  A symbol-free index map instead captures at the
   outermost enclosing loop when its statements are only that node's assignment nests
   (gh-ocannl-2149), so all reduction/repetition binders ride along, including those of an extent-1
   init-then-accumulate node. `virtual_extent_one` pins the original DSL case against extent 2 and

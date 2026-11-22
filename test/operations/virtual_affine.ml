@@ -369,6 +369,115 @@ let case_unit_solve_plain () =
     (same virt [ scattered ]);
   p "unit-solve(plain): virtual and materialized arms agree" (same virt mat)
 
+(* A pool-style scatter read at plain indices solves the two window offsets but keeps both
+   pool-position loops. Each is cheap alone. Their product can exceed the replay cap even though the
+   setter is injective and has no reduction symbols. *)
+let case_scatter_replay ~name ~height ~reading ~policy ~capped () =
+  let width = 4 in
+  let rows = 2 * height and cols = 2 * width in
+  let dims = [| rows; cols |] in
+  let tgt = mk ~dims (name ^ "_x") in
+  let scatter_indices i j u v = [| aff [ (2, i); (1, u) ] 0; aff [ (2, j); (1, v) ] 0 |] in
+  let scatter_nest f =
+    let i = sym () and j = sym () and u = sym () and v = sym () in
+    loop_n i height (loop_n j width (loop_n u 2 (loop_n v 2 (f i j u v))))
+  in
+  let prod =
+    scatter_nest (fun i j u v ->
+        let value = add (mul (c 100.) (tag i j)) (tag u v) in
+        set tgt (scatter_indices i j u v) value)
+  in
+  let matched = mk ~dims (name ^ "_matched") and reduced = mk ~dims:[| cols |] (name ^ "_sum") in
+  (match reading with
+  | `Observed -> Tn.set_observable matched
+  | `Overwritten | `Plain -> ()
+  | `Matching | `Both -> materialize matched);
+  materialize reduced;
+  let matching_read =
+    scatter_nest (fun i j u v ->
+        let at = scatter_indices i j u v in
+        set matched at (get tgt at))
+  in
+  let copy =
+    let h = sym () and w = sym () in
+    let at = [| iter h; iter w |] in
+    loop_n h rows (loop_n w cols (set matched at (get tgt at)))
+  in
+  let reduce source =
+    let h = sym () and w = sym () in
+    let at = [| iter w |] in
+    seq (zero reduced)
+      (loop_n h rows
+         (loop_n w cols (set reduced at (add (get reduced at) (get source [| iter h; iter w |])))))
+  in
+  let consumer =
+    match reading with
+    | `Plain -> reduce tgt
+    | `Matching -> matching_read
+    | `Both -> seq matching_read (reduce tgt)
+    | `Overwritten -> seq copy (seq (zero tgt) (reduce matched))
+    | `Observed -> copy
+  in
+  let llc = seq prod consumer in
+  let ctx = LL.empty_optimize_ctx () in
+  if Poly.equal policy `Prefer_inline then Hash_set.add ctx.LL.inline_preferences tgt;
+  let settings = LL.virtualize_settings in
+  let saved_cap = settings.LL.max_inline_reduction in
+  let opt =
+    Exn.protect
+      ~f:(fun () ->
+        settings.LL.max_inline_reduction <- (match policy with `No_cap -> -1 | _ -> 16);
+        optimize_in ctx ~name llc)
+      ~finally:(fun () -> settings.LL.max_inline_reduction <- saved_cap)
+  in
+  let assert_case claim = p (name ^ ": " ^ claim) in
+  if capped then (
+    assert_case "the replay cap materializes the scatter"
+      (known_non_virtual opt tgt
+      && Option.exists (rejection_code opt tgt) ~f:(Tn.equal_provenance Tn.Inline_reduction_cap));
+    assert_case "each reader loads the scatter buffer"
+      (count_get opt tgt = match reading with `Both -> 2 | _ -> 1);
+    assert_case "no guarded replay survives" (count_where opt = 0))
+  else (
+    assert_case "the scatter remains virtual" (known_virtual opt tgt && count_get opt tgt = 0);
+    assert_case "only plain reads need a guard"
+      (match reading with `Matching -> count_where opt = 0 | _ -> count_where opt > 0));
+  (match reading with
+  | `Observed ->
+      assert_case "the observable copy retains a buffer for readback"
+        (known_non_virtual opt matched
+        && Option.exists (rejection_code opt matched)
+             ~f:(Tn.equal_provenance Tn.Observed_reader_reads_local))
+  | `Overwritten ->
+      assert_case "the copy keeps the value captured before the clear" (known_virtual opt matched)
+  | _ -> ());
+  let value h w = (100 * (1 + (10 * (h / 2)) + (w / 2))) + 1 + (10 * (h % 2)) + (w % 2) in
+  let expected_match =
+    Array.init (rows * cols) ~f:(fun k -> Float.of_int (value (k / cols) (k % cols)))
+  in
+  let expected_sum =
+    Array.init cols ~f:(fun w ->
+        List.range 0 rows |> List.sum (module Int) ~f:(fun h -> value h w) |> Float.of_int)
+  in
+  let read, expected =
+    match reading with
+    | `Plain | `Overwritten -> ([ reduced ], [ expected_sum ])
+    | `Matching | `Observed -> ([ matched ], [ expected_match ])
+    | `Both -> ([ matched; reduced ], [ expected_match; expected_sum ])
+  in
+  let seed =
+    List.filter_map read ~f:(fun tn ->
+        Option.some_if (not (known_virtual opt tn)) (tn, blank (Tn.num_elems tn)))
+  in
+  let actual = execute ~name opt ~seed ~read in
+  let mat =
+    execute ~name:(name ^ "_mat")
+      (optimize ~materialized:[ tgt; matched ] llc)
+      ~seed:(prefill tgt :: seed) ~read
+  in
+  assert_case "the executed outputs match the scatter and its reduction" (same actual expected);
+  assert_case "the outputs agree with explicit materialization" (same actual mat)
+
 (* === Case 3: triangular (s1, s1 + s2), unit-coefficient solving after pinning s1 === *)
 let case_triangular () =
   let tgt = mk ~dims:[| 3; 4 |] "tri" and out = mk ~dims:[| 3; 4 |] "out3" in
@@ -490,6 +599,30 @@ let () =
   case "zeroed-static-past"
     (case_zeroed_static ~name:"zeroed-static-past" ~launch:3 ~expected:[| 0. |]);
   case "unit-solve(plain)" case_unit_solve_plain;
+  case "scatter-at-cap"
+    (case_scatter_replay ~name:"scatter_at_cap" ~height:4 ~reading:`Plain ~policy:`Default
+       ~capped:false);
+  case "scatter-over-cap"
+    (case_scatter_replay ~name:"scatter_over_cap" ~height:5 ~reading:`Plain ~policy:`Default
+       ~capped:true);
+  case "scatter-matching"
+    (case_scatter_replay ~name:"scatter_matching" ~height:5 ~reading:`Matching ~policy:`Default
+       ~capped:false);
+  case "scatter-mixed-reads"
+    (case_scatter_replay ~name:"scatter_mixed_reads" ~height:5 ~reading:`Both ~policy:`Default
+       ~capped:true);
+  case "scatter-overwritten"
+    (case_scatter_replay ~name:"scatter_overwritten" ~height:5 ~reading:`Overwritten
+       ~policy:`Default ~capped:false);
+  case "scatter-observed"
+    (case_scatter_replay ~name:"scatter_observed" ~height:5 ~reading:`Observed ~policy:`Default
+       ~capped:true);
+  case "scatter-no-cap"
+    (case_scatter_replay ~name:"scatter_no_cap" ~height:5 ~reading:`Plain ~policy:`No_cap
+       ~capped:false);
+  case "scatter-inline-preference"
+    (case_scatter_replay ~name:"scatter_inline_preference" ~height:5 ~reading:`Plain
+       ~policy:`Prefer_inline ~capped:false);
   case "triangular" case_triangular;
   case "non-injective" case_noninjective;
   case "stage-a diagonal" case_stage_a_diagonal;
