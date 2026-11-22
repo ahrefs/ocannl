@@ -11,5 +11,6 @@ conv: the search seeds at least one candidate here: true
 every seeded candidate compiles, or is refused typed: true
 every compiled candidate reports one figure per shipped kernel: true
 no compiled kernel allocates more workgroup memory than its charge rounded to the reporting granule: true
-some compiled kernel allocates exactly its positive charge: true
-some unaligned compiled kernel allocates exactly its granule-rounded bound, not a coarser multiple: true
+some aligned compiled kernel allocates exactly its positive charge: true
+the 37-byte unaligned staged kernel allocates exactly its granule-rounded bound: true
+some unaligned seeded kernel allocates exactly its granule-rounded bound, not a coarser multiple: true

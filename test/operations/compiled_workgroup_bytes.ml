@@ -21,8 +21,10 @@
    are charged at the wider of two precisions), and an over-charge only costs candidates, while an
    under-charge is the defect. Each kernel's slack is printed to stderr. So that the claim can fail,
    some aligned kernel's figure must equal its positive charge exactly (a dropped term of the charge
-   shows on it), and some unaligned kernel's figure must equal its granule-rounded bound below a 32
-   B multiple (pinning the reporting granule from both sides).
+   shows on it), a single-array 37 B [byte] staged probe must equal its granule-rounded bound (48 B
+   on Metal, 37 B on CUDA and HIP — catching granule 1 vs 2 as well as coarser Metal granules, with
+   no MMA requirement), and where f16 tensorization is advertised some unaligned seeded kernel must
+   equal its granule-rounded bound below a 32 B multiple.
 
    Candidates: every whole-routine seed [Autotune.search_seeding] proposes under the device's own
    limits and capabilities (sketch and coalesced; staged, tensorized and [Fuse_epilogue] twins
@@ -86,6 +88,8 @@ type outcome =
 
 let all_kernels : kernel list ref = ref []
 let all_outcomes : (string * outcome) list ref = ref []
+let probe_kernels : kernel list ref = ref []
+let probe_outcomes : (string * outcome) list ref = ref []
 
 let fixture ?(materialize = true) ?(fp16_wide = false) ?scratch_triple tag build =
   let saved = Ir.Numerics.get () in
@@ -284,6 +288,102 @@ let conv ~hw ~ic ~oc tag () =
   let%op y = z + bias in
   (z, y)
 
+(* A single-array 37 B [byte] staged kernel (no MMA, no second array to inter-array-align):
+   exercises an odd byte count on every GPU backend so granule 1 vs 2 is caught directly on CUDA and
+   HIP (37 vs 38 B), while Metal charges ceil4(37) = 40 B and reports ceil16(40) = 48 B (16 mod 32,
+   catching both finer and coarser granules). *)
+let run_byte_odd_probe () =
+  Tensor.unsafe_reinitialize ();
+  let tag = "cwb_byte_odd_37" in
+  let bi = 37 and cols = 16 in
+  let u =
+    NTDSL.init ~l:(tag ^ "_u") ~prec:Ir.Ops.byte
+      ~o:[ 2 * bi ]
+      ~f:(fun idcs -> Float.of_int ((idcs.(0) % 7) + 1))
+      ()
+  in
+  let v =
+    NTDSL.init ~l:(tag ^ "_v") ~prec:Ir.Ops.byte ~o:[ cols ]
+      ~f:(fun idcs -> Float.of_int ((idcs.(0) % 11) + 1))
+      ()
+  in
+  let%op c = u +++ "i; j => ij" v in
+  let fwd = named tag (Train.forward c) in
+  let ctx = Context.auto () in
+  let capabilities = Context.codegen_capabilities ctx in
+  let granule = capabilities.Ir.Backend_intf.workgroup_reporting_granule in
+  let lowered_transform (opt : Ir.Low_level.optimized) =
+    let i, _j =
+      match List.find_exn (Ll_test.nest_paths opt.llc) ~f:(fun p -> List.length p = 2) with
+      | [ i; j ] -> (i, j)
+      | _ -> assert false
+    in
+    let sp_i, _, i_i =
+      Sched.split ~axis:i ~factor:bi ~outer:Ir.Low_level.Grid ~inner:Ir.Low_level.Workgroup
+    in
+    let stage_u =
+      Sched.Stage
+        {
+          source = u.Tensor.value;
+          tile_loops = [ i_i ];
+          shared = true;
+          cooperative = None;
+          hoisted = false;
+          swizzle = None;
+          pad_stride = None;
+          pipeline_depth = 1;
+          tile_prec = None;
+        }
+    in
+    [ Sched.apply [ sp_i; stage_u ] opt ]
+  in
+  let outcome =
+    match
+      Ir.Compiled_kernels.with_census (fun () ->
+          Context.compile_outcome ~provenance:Ir.Schedule_outcome.Candidate ~candidate:tag
+            ~lowered_transform ctx fwd Ir.Indexing.Empty)
+    with
+    | Ok (cctx, routine), records ->
+        let segments = routine.Context.segments in
+        let outcome =
+          if List.length records <> List.length segments then
+            Unpaired
+              (Printf.sprintf "%d compiled figures for %d segments" (List.length records)
+                 (List.length segments))
+          else
+            Compiled
+              (List.map2_exn records segments ~f:(fun r seg ->
+                   let charged = Sched.workgroup_memory_bytes ~capabilities seg in
+                   {
+                     name = r.Ir.Compiled_kernels.kernel;
+                     compiled = r.static_workgroup_bytes;
+                     charged;
+                     reported_bound = round_up ~granule charged;
+                     mma_scratch = 0;
+                   }))
+        in
+        Context.release cctx;
+        outcome
+    | Error (Ir.Schedule_outcome.Classified c), _ ->
+        Refused (Ir.Schedule_outcome.detail_of_cause c.cause)
+    | Error (Ir.Schedule_outcome.Fatal f), _ -> Crashed (Exn.to_string f.exn)
+    | exception exn -> Crashed (Exn.to_string exn)
+  in
+  (match outcome with
+  | Compiled ks ->
+      List.iter ks ~f:(fun k ->
+          Stdio.eprintf
+            "byte_odd_37: kernel %s: compiled %d, charged %d, bound %d (granule %d)%s (not part of \
+             the golden)\n\
+             %!"
+            k.name k.compiled k.charged k.reported_bound granule
+            (if k.compiled > k.reported_bound then " UNDER-CHARGED" else ""))
+  | Unpaired msg -> Stdio.eprintf "byte_odd_37: UNPAIRED: %s (not part of the golden)\n%!" msg
+  | Refused msg -> Stdio.eprintf "byte_odd_37: refused: %s (not part of the golden)\n%!" msg
+  | Crashed msg -> Stdio.eprintf "byte_odd_37: CRASHED: %s (not part of the golden)\n%!" msg);
+  probe_outcomes := [ (tag, outcome) ];
+  probe_kernels := match outcome with Compiled ks -> ks | _ -> []
+
 let () =
   fixture "dense" (gemm ~m:32 ~k:64 ~n:64 "cwb_dense");
   (* The product left to the fused tail alone: a tensorized fused twin places it, routine-local, in
@@ -307,10 +407,23 @@ let () =
     "half_out"
     (gemm ~prec:Ir.Ops.half ~out_prec:Ir.Ops.half ~m:32 ~k:32 ~n:32 "cwb_half_out");
   fixture "contraction" (out_proj ~bb:2 ~ss:32 ~jj:64 ~hh:4 ~ee:16 "cwb_contraction");
-  fixture "conv" (conv ~hw:10 ~ic:4 ~oc:8 "cwb_conv")
+  fixture "conv" (conv ~hw:10 ~ic:4 ~oc:8 "cwb_conv");
+  if is_gpu then run_byte_odd_probe ()
 
 let () =
-  let outcomes = !all_outcomes and kernels = !all_kernels in
+  let outcomes = !all_outcomes @ !probe_outcomes
+  and kernels = !all_kernels @ !probe_kernels
+  and seeded_kernels = !all_kernels
+  and probe = !probe_kernels in
+  let limits = Context.hardware_limits (Context.auto ()) in
+  let f16_mma_when, f16_mma_agg =
+    match
+      Ll_test.tensorized_capability ~is_gpu ~is_cpu ~limits ~a_prec:Ir.Ops.half ~b_prec:Ir.Ops.half
+        ~d_prec:Ir.Ops.half
+    with
+    | `Advertised -> (is_gpu, None)
+    | `Withheld aggregation -> (false, Some aggregation)
+  in
   in_leg ~leg "every seeded candidate compiles, or is refused typed" (fun label ->
       p_all ~min:1 label outcomes ~f:(function _, Crashed _ -> false | _ -> true));
   in_leg ~leg "every compiled candidate reports one figure per shipped kernel" (fun label ->
@@ -320,10 +433,15 @@ let () =
   in_leg ~leg
     "no compiled kernel allocates more workgroup memory than its charge rounded to the reporting \
      granule" (fun label -> p_all ~min:1 label kernels ~f:(fun k -> k.compiled <= k.reported_bound));
-  in_leg ~leg "some compiled kernel allocates exactly its positive charge" (fun label ->
-      p_exists label kernels ~f:(fun k -> k.compiled > 0 && k.compiled = k.charged));
-  in_leg ~leg
-    "some unaligned compiled kernel allocates exactly its granule-rounded bound, not a coarser \
-     multiple" (fun label ->
-      p_exists label kernels ~f:(fun k ->
-          k.charged % 16 <> 0 && k.compiled = k.reported_bound && k.reported_bound % 32 <> 0))
+  in_leg ~leg "some aligned compiled kernel allocates exactly its positive charge" (fun label ->
+      p_exists label seeded_kernels ~f:(fun k ->
+          k.charged % 16 = 0 && k.compiled > 0 && k.compiled = k.charged));
+  in_leg ~leg "the 37-byte unaligned staged kernel allocates exactly its granule-rounded bound"
+    (fun label ->
+      p_all ~min:1 label probe ~f:(fun k ->
+          k.charged % 16 <> 0 && k.compiled = k.reported_bound && k.reported_bound % 32 <> 0));
+  gated_exists ?aggregation:f16_mma_agg ~when_:f16_mma_when ~on:backend_name
+    "some unaligned seeded kernel allocates exactly its granule-rounded bound, not a coarser \
+     multiple"
+    seeded_kernels ~f:(fun k ->
+      k.charged % 16 <> 0 && k.compiled = k.reported_bound && k.reported_bound % 32 <> 0)
