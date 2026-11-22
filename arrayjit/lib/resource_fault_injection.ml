@@ -16,6 +16,7 @@ type point =
   | Schedule_cache_before_regime_commit
   | Schedule_cache_before_commit
   | Schedule_cache_before_replay
+  | Autotune_before_winner_replay
   | Run_before_launch
   | Cuda_scratch_allocated
   | Cuda_scratch_freed

@@ -1865,6 +1865,28 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- a two-segment elementwise chain seeds no sketch family; the
+ ; scripted ranking and simulated winner-replay refusal do not depend on the vector width.
+ ; gh-ocannl-2416: a direct Autotune.tune winner-replay fallback reports Searched_replay_fallback.
+ (name autotune_replay_fallback)
+ ; ocannl-backend: cc -- Context.cpu (); winner-replay fallback reporting is backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_replay_fallback)
+ (libraries
+  base
+  ocannl
+  stdio
+  stderr_capture
+  arrayjit.verdict
+  ll_test
+  scripted_search
+  arrayjit.context
+  arrayjit.autotune)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  ; cc-vector-width: independent -- the refusals happen at cache replay and at the baseline, before
  ; any sketch is seeded.
  (name autotune_replay_refusal)

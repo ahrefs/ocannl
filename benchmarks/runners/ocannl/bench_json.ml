@@ -56,11 +56,13 @@ let string s =
     [state] names what the arm did about searching — the {!Autotune.outcome_name} of its outcome
     (gh-ocannl-677), one of ["searched"], ["searched-untimed"] (a search that timed nothing and
     shipped the untuned default, gh-ocannl-2310), ["searched-budget-fallback"] (a cut search
-    returned the unmeasured untuned default, gh-ocannl-2365), ["search-died"], ["cache-replay"],
-    ["search-disabled"], ["pre-search-failure"], ["abandoned"], ["abandonment-replay"],
-    ["lineage-refused"]. [searched] and [cache_hit] are that same fact projected onto the two
-    booleans the wire format carried before, kept for readers that predate the field; they are NOT
-    complements, and deriving the state from them is the mistake the outcome type exists to stop.
+    returned the unmeasured untuned default, gh-ocannl-2365), ["searched-replay-fallback"] (a direct
+    search whose crowned winner failed to replay returned the unmeasured untuned default,
+    gh-ocannl-2416), ["search-died"], ["cache-replay"], ["search-disabled"], ["pre-search-failure"],
+    ["abandoned"], ["abandonment-replay"], ["lineage-refused"]. [searched] and [cache_hit] are that
+    same fact projected onto the two booleans the wire format carried before, kept for readers that
+    predate the field; they are NOT complements, and deriving the state from them is the mistake the
+    outcome type exists to stop.
 
     [rounds_run] and [beam_width] are the search's own record of how far it went (gh-ocannl-1137):
     the result line's [regime_knobs] carries what the configuration ASKED for, and a runner passing

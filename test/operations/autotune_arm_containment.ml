@@ -32,7 +32,9 @@ open Verdict.Claims
    by the state rather than by a [partial] flag both of them set. *)
 let completed (r : Autotune.report) =
   match r.Autotune.outcome with
-  | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback -> true
+  | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback
+  | Autotune.Searched_replay_fallback ->
+      true
   | Autotune.Search_died _ | Autotune.Cache_replay | Autotune.Abandonment_replay _
   | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandoned _
   | Autotune.Lineage_refused _ ->

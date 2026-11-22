@@ -1190,10 +1190,11 @@ type abandonment = {
 
 (** What the call did about searching (gh-ocannl-677). The states are mutually exclusive and each
     carries exactly its own data, so a consumer matches instead of re-deriving: "it searched" is
-    [Searched | Searched_untimed | Searched_budget_fallback | Search_died _ | Abandoned _]. Deriving
-    it as [not cache_hit] costs a benchmark harness every tuned cell under the reproducible profile,
-    where a call reports having neither searched nor replayed. Spelled as four independent booleans
-    until gh-ocannl-677, where two consumers mis-derived the state in one PR. *)
+    [Searched | Searched_untimed | Searched_budget_fallback | Searched_replay_fallback | Search_died
+     _ | Abandoned _]. Deriving it as [not cache_hit] costs a benchmark harness every tuned cell
+    under the reproducible profile, where a call reports having neither searched nor replayed.
+    Spelled as four independent booleans until gh-ocannl-677, where two consumers mis-derived the
+    state in one PR. *)
 
 type outcome =
   | Searched
@@ -1214,6 +1215,18 @@ type outcome =
           before it measured the untuned floor (gh-ocannl-2365). The census records the work done.
           There is no crown, so [best_label] is [""], [best_ms] is [infinity], and nothing is
           cached. *)
+  | Searched_replay_fallback
+      (** A search crowned a timed winner, then its replay compile failed classified or degenerated
+          and the untuned default shipped unmeasured in its place (gh-ocannl-2416). Reported to
+          direct {!tune} callers, whose shipping compile runs before the report; the census records
+          the search work done while the crown fields are cleared ([best_label] is [""], [best_ms]
+          is [infinity]) so no caller credits the default with the discarded crown. Unlike
+          {!Searched_budget_fallback}, when caching is enabled the timed crown has already been
+          stored before the winner replay runs (a transient link refusal need not discard a sound
+          schedule); a later call's cache lookup re-validates the entry by replaying it and
+          re-searches if that replay fails. A deferred search ({!tune_deferred}) reports before
+          {!compile_deferred} runs and exposes a later replay substitution through
+          {!shipped_substitute}. *)
   | Search_died of terminal_failure
       (** A search ran and terminated on the carried fatal failure. The counters hold the work it
           had reached, and [best_ms] is a mid-search measurement of the {e search} context: no
@@ -1988,8 +2001,9 @@ type report = {
           [default_ms]), when its seed failed to compile or both its window and its one retry were
           refused, and on a cache hit (not stored). *)
   best_ms : float;
-      (** The winner's measured time. In {!Searched_untimed} and {!Searched_budget_fallback}, this
-          is [infinity] because the untuned default was returned unmeasured.
+      (** The winner's measured time. In {!Searched_untimed}, {!Searched_budget_fallback} and
+          {!Searched_replay_fallback}, this is [infinity] because the untuned default was returned
+          unmeasured.
 
           It is a reading of {!timing_mode}, and which one is not recorded anywhere in the report or
           the cache entry, so a number carried across processes is only comparable to another taken
@@ -2004,8 +2018,8 @@ type report = {
   best_spread : float option;
       (** The winning window's [spread] (gh-ocannl-1558): how noisy the measurement behind [best_ms]
           was. On a {!Cache_replay} report it is the storing search's, replayed from the entry as
-          [best_ms] is. [None] for {!Searched_untimed}, {!Searched_budget_fallback}, and a hit whose
-          entry predates the field. *)
+          [best_ms] is. [None] for {!Searched_untimed}, {!Searched_budget_fallback},
+          {!Searched_replay_fallback}, and a hit whose entry predates the field. *)
   timing : timing_mode;
       (** The {!timing_mode} every time in this report was measured under (gh-ocannl-755), including
           the times a [Cache_replay] carries: the objective is a cache-key component, so an entry
@@ -2298,8 +2312,9 @@ val progress_stopwatch : unit -> unit -> float
 
 val outcome_name : outcome -> string
 (** The stable one-word name of an outcome state — ["searched"], ["searched-untimed"],
-    ["search-died"], ["cache-replay"], ["search-disabled"], ["pre-search-failure"], ["abandoned"],
-    ["abandonment-replay"], ["lineage-refused"] — for logs, JSON records and test goldens. *)
+    ["searched-budget-fallback"], ["searched-replay-fallback"], ["search-died"], ["cache-replay"],
+    ["search-disabled"], ["pre-search-failure"], ["abandoned"], ["abandonment-replay"],
+    ["lineage-refused"] — for logs, JSON records and test goldens. *)
 
 val terminal_failure : report -> terminal_failure option
 (** The fatal failure that ended the call, from whichever of the two failing states carried it;

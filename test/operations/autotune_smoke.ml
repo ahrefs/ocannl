@@ -30,7 +30,9 @@ let accum_prec = Ll_test.backend_accum_prec
    exists to stop, and the states section below pins the distinction. *)
 let completed (r : Autotune.report) =
   match r.Autotune.outcome with
-  | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback -> true
+  | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback
+  | Autotune.Searched_replay_fallback ->
+      true
   | Autotune.Search_died _ | Autotune.Cache_replay | Autotune.Abandonment_replay _
   | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandoned _
   | Autotune.Lineage_refused _ ->
@@ -41,7 +43,8 @@ let replayed (r : Autotune.report) =
 
 (* The state a completed search names (gh-ocannl-2310): one whose every window host contention
    refused completed having timed nothing, which is the only way this test's searches may time
-   nothing -- an uncontended search that timed nothing still expects ["searched"], and fails. *)
+   nothing -- an uncontended search that timed nothing, or a winner replay that substituted the
+   default (gh-ocannl-1480, gh-ocannl-2416), still expects ["searched"], and fails. *)
 let searched_name (r : Autotune.report) =
   if r.Autotune.timings_contended > 0 && r.Autotune.candidates_timed = 0 then "searched-untimed"
   else "searched"
@@ -362,9 +365,9 @@ let () =
        it inside the round band, or where the finals outranked it (both above), which are the
        preconditions the bare inequality was missing. [infinity >= infinity *. 0.99] holds, so a
        search that timed nothing passes; a finite [mma_best_ms] under an infinite [best_ms] would
-       not, and should not. Judged on a cache hit too: its two times are the storing search's,
-       replayed from the entry, and so is the finals record that explains a gap between them
-       (gh-ocannl-1725). *)
+       not, and should not (an unexpected replay fallback fails here too, gh-ocannl-1480). Judged on
+       a cache hit too: its two times are the storing search's, replayed from the entry, and so is
+       the finals record that explains a gap between them (gh-ocannl-1725). *)
     Verdict.pass_fail
       (which
      ^ "'s best tensorized time undercuts the winner only inside the beam's progress band, or \
@@ -528,7 +531,8 @@ let () =
   p_all "a report that neither searched nor replayed timed nothing" named_states ~f:(fun (_, r) ->
       match r.Autotune.outcome with
       | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback
-      | Autotune.Search_died _ | Autotune.Abandoned _ | Autotune.Cache_replay ->
+      | Autotune.Searched_replay_fallback | Autotune.Search_died _ | Autotune.Abandoned _
+      | Autotune.Cache_replay ->
           true
       | Autotune.Search_disabled | Autotune.Pre_search_failure _ | Autotune.Abandonment_replay _
       | Autotune.Lineage_refused _ ->

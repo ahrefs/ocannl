@@ -914,7 +914,7 @@ let () =
         &&
         match rb.Autotune.outcome with
         | Autotune.Searched | Autotune.Searched_untimed | Autotune.Searched_budget_fallback
-        | Autotune.Cache_replay ->
+        | Autotune.Searched_replay_fallback | Autotune.Cache_replay ->
             true
         | Autotune.Search_died _ | Autotune.Abandonment_replay _ | Autotune.Search_disabled
         | Autotune.Pre_search_failure _ | Autotune.Abandoned _ | Autotune.Lineage_refused _ ->
