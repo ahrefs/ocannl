@@ -1,4 +1,6 @@
 (* Type context for the migration protocol snippet; models only the runtime API it calls. *)
+type node
+
 module Ll_test : sig
   val operand : b:int list -> o:int list -> i:int list -> (int array -> float) -> int array -> float
 
@@ -10,7 +12,7 @@ module Ll_test : sig
 
   val exact_partials : sig_bits:int -> float list -> bool
   val execute : name:string -> unit -> seed:unit list -> read:unit list -> float array list
-  val virtualize : unit -> unit
+  val virtualize : node -> unit
 end
 
 module type Additive = sig
@@ -40,21 +42,30 @@ end
 val program : unit
 val p_all : string -> 'a list -> f:('a -> bool) -> unit
 val p_all2 : string -> 'a array -> 'b array -> f:('a -> 'b -> bool) -> unit
+val check_reference : float array -> unit
 
 module Other : module type of Ll_test
 
 val ignore_comparison : string -> 'a array -> 'b array -> f:('a -> 'b -> bool) -> unit
 
 module Context : sig
+  type t
+  type routine
+  type prelowered
+  type reuse
   type observability = Stored | Recomputable
 
-  val compile : ?prelowered:unit -> unit -> unit -> unit -> unit * unit
-  val run : unit -> unit -> unit
-  val observability : unit -> unit -> observability
-  val get_values : unit -> unit -> float array
-  val release : unit -> unit
-  val auto : unit -> unit
+  val compile : ?prelowered:prelowered -> ?reuse:reuse -> t -> unit -> unit -> t * routine
+  val run : t -> routine -> t
+  val observability : t -> node -> observability
+  val get_values : t -> node -> float array
+  val release : t -> unit
+  val auto : unit -> t
 end
+
+val prelowered : Context.prelowered
+val reuse : Context.reuse
+val opaque_compile : Context.t -> node -> Context.t * Context.routine
 
 (* gh-ocannl-2334: the support module the cross-module snippets call, a same-typed stand-in for a
    rebound name, and the [Train] once-runs. *)
@@ -69,8 +80,8 @@ end
 module Other_sums : module type of Exact_sums
 
 module Tensor : sig
-  type diff = { grad : unit }
-  type t = { value : unit; diff : diff option }
+  type diff = { grad : node }
+  type t = { value : node; diff : diff option }
 end
 
 module Option : sig
@@ -81,9 +92,9 @@ val build : unit -> Tensor.t
 
 module Train : sig
   val forward : Tensor.t -> unit
-  val forward_once : unit -> Tensor.t -> unit
-  val update_once : ?output_cd_file:bool -> unit -> Tensor.t -> unit
-  val set_materialized : unit -> unit
+  val forward_once : Context.t -> Tensor.t -> Context.t
+  val update_once : ?output_cd_file:bool -> Context.t -> Tensor.t -> Context.t
+  val set_materialized : node -> unit
 end
 
 module Other_train : module type of Train

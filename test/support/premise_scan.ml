@@ -37,19 +37,20 @@
    from Ll_test.execute's result list (List.hd_exn or list-pattern extraction), or from a run
    followed by a read of a stored node. For Context.get_values the run must be Train.forward_once,
    Train.update_once (both positional arguments supplied), or Context.run (two positional arguments)
-   using the routine from Context.compile (three positional arguments, no ~/?prelowered). The read
-   must name the [.value] or [.Tensor.value] of the same tensor binding passed to the _once call or
-   to Train.forward directly in the compile's assignments slot. Those calls materialize that tensor.
+   using the context and routine from the same Context.compile (three positional arguments, no
+   ~/?prelowered or ~/?reuse), or rerunning that routine on the returned context. The read must name
+   the [.value] or [.Tensor.value] of the same tensor binding passed to the _once call or to
+   Train.forward directly in the compile's assignments slot. Those calls materialize that tensor.
    Otherwise an explicit [Train.set_materialized node] statement must precede the _once call or
    compile in its scope. The statement and read must name the same node expression (printed AST:
    identifiers, field projections and one-argument applications of identifiers), with each name
    resolving to the same binding. All Train paths also accept Ocannl. For opaque routine
-   construction (including prelowered code), a read can check storage at runtime: match
-   Context.observability ctx node with Context.Stored -> Context.get_values ctx node, with the same
-   two identifiers and a nonreturning wildcard fallback. A Virtual node can be recomputed on read
-   (gh-ocannl-777), so an unchecked read confers nothing. Local wrappers, tuples/fst/snd, lazy/force
-   preserve that provenance. Compile, get_values without run, and host sums alone never establish an
-   executed reference.
+   construction (including prelowered code and reused lowering), a read can check storage at
+   runtime: match Context.observability ctx node with Context.Stored -> Context.get_values ctx node,
+   with the same two identifiers and a nonreturning wildcard fallback. A Virtual node can be
+   recomputed on read (gh-ocannl-777), so an unchecked read confers nothing. Local wrappers,
+   tuples/fst/snd, lazy/force preserve that provenance. Compile, get_values without run, and host
+   sums alone never establish an executed reference.
 
    Inline List.iter over a literal collection joins the elements' tuple fields before walking its
    callback. ALL dispatched products must be checked and compared; an unknown arm grants nothing.
@@ -59,7 +60,8 @@
    function wrappers can still derive facts from their bodies. Aliases of standard modules and names
    imported by unknown opens are not resolved. Helper module/value aliases ARE scoped. Only the
    listed arguments are read; dimensions, claim labels, routine bodies and lowering transforms are
-   opaque. The scan does not infer writes or placements from assignments or lowering.
+   opaque. An explicit declaration is evidence of placement intent. The scan does not infer which
+   nodes arbitrary assignments write or whether a context has an earlier placement decision.
 
    Mutations after construction/read (beyond the set_materialized statement above, never undone) and
    aliases through mutable storage are not tracked. This is source provenance, not a proof of
@@ -81,6 +83,7 @@ type value =
   | Products of string list
   | References
   | Reference
+  | Compiled_context of compilation
   | Compiled of compilation
   | Ran of compilation option
   (* A set_materialized marker: the binding frame of each identifier of its node expression. *)
@@ -95,7 +98,7 @@ type value =
 (* What a module name denotes: the harness, a support source's exports, or nothing modelled. *)
 and denotes = Harness | Support of value Map.M(String).t | Opaque
 and env = (value, denotes) Lexical_scope.env
-and compilation = { tensor : string option; at_compile : env }
+and compilation = { identity : unit ref; placement : (string option * env) option }
 
 type site = { line : int; covered : bool }
 
@@ -224,7 +227,7 @@ let materialize env statement =
 
 (* Placement is decided at compilation. A materialization statement after compile cannot establish
    that the routine has a buffer for the read. *)
-let executed_read { tensor; at_compile } ~at_read node =
+let executed_read ~tensor ~at_compile ~at_read node =
   let own_value =
     match (tensor, node.pexp_desc) with
     | ( Some n,
@@ -253,8 +256,7 @@ let opened env = function
               ~f:(fun n -> (n, Helper n))))
   | Some Opaque | None -> env
 
-let same_compilation a b =
-  Option.equal String.equal a.tensor b.tensor && phys_equal a.at_compile b.at_compile
+let same_compilation a b = phys_equal a.identity b.identity
 
 let rec join a b =
   match (a, b) with
@@ -264,8 +266,13 @@ let rec join a b =
   | Operand, Operand -> Operand
   | Reference, Reference -> Reference
   | References, References -> References
+  | Compiled_context a, Compiled_context b when same_compilation a b -> Compiled_context a
   | Compiled a, Compiled b when same_compilation a b -> Compiled a
   | Ran (Some a), Ran (Some b) when same_compilation a b -> Ran (Some a)
+  | ( Ran (Some { placement = Some (tensor, at_compile); _ }),
+      Ran (Some { placement = Some (other, at_other); _ }) )
+    when Option.equal String.equal tensor other && phys_equal at_compile at_other ->
+      Ran (Some { identity = ref (); placement = Some (tensor, at_compile) })
   | Ran _, Ran _ -> Ran None
   | Products a, Products b -> Products (union a b)
   | Compared a, Compared b -> Compared (union a b)
@@ -359,24 +366,32 @@ let rec value fuel env e =
           | _ -> Unknown)
       | Helper "execute", _ -> References
       | _, [ _ ] when named env f [ "invalid_arg"; "failwith"; "raise" ] -> Bottom
-      | _, [ _; _; _ ]
-        when named env f [ "Context.compile" ]
-             && not
-                  (List.exists args ~f:(function
-                    | (Labelled "prelowered" | Optional "prelowered"), _ -> true
-                    | _ -> false)) -> (
+      | _, [ _; _; _ ] when named env f [ "Context.compile" ] -> (
           match pos with
           | [ _; comp; _ ] ->
-              Tuple [ Unknown; Compiled { tensor = forward_tensor env comp; at_compile = env } ]
+              let opaque =
+                List.exists args ~f:(function
+                  | (Labelled ("prelowered" | "reuse") | Optional ("prelowered" | "reuse")), _ ->
+                      true
+                  | _ -> false)
+              in
+              (* These facts share this call's result even when another compile in the same lexical
+                 scope takes the same arguments. *)
+              let placement = if opaque then None else Some (forward_tensor env comp, env) in
+              let compile = { identity = ref (); placement } in
+              Tuple [ Compiled_context compile; Compiled compile ]
           | _ -> Unknown)
-      | _, [ _; Compiled compile ] when named env f [ "Context.run" ] -> Ran (Some compile)
+      | _, [ (Compiled_context ctx | Ran (Some ctx)); Compiled compile ]
+        when named env f [ "Context.run" ] ->
+          if same_compilation ctx compile then Ran (Some compile) else Unknown
       | _, [ _; _ ] when named env f [ "Context.run" ] -> Ran None
       | _, [ _; _ ] when named env f once_runs ->
           let tensor = match pos with [ _; t ] -> identifier t | _ -> None in
-          Ran (Some { tensor; at_compile = env })
-      | _, [ Ran (Some compile); _ ] when named env f [ "Context.get_values" ] -> (
+          Ran (Some { identity = ref (); placement = Some (tensor, env) })
+      | _, [ Ran (Some { placement = Some (tensor, at_compile); _ }); _ ]
+        when named env f [ "Context.get_values" ] -> (
           match pos with
-          | [ _; node ] when executed_read compile ~at_read:env node -> Reference
+          | [ _; node ] when executed_read ~tensor ~at_compile ~at_read:env node -> Reference
           | _ -> Unknown)
       | _, [ References ] when named env f [ "List.hd_exn"; "Base.List.hd_exn" ] -> Reference
       | _, [ Delayed x ] when named env f [ "Lazy.force" ] -> x

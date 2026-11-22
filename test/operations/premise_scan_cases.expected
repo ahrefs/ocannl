@@ -17,6 +17,8 @@ materializing after Context.compile confers nothing: true
 a Context.run read at a rebound node confers nothing: true
 compiling Train.forward preserves its own output as an executed reference: true
 a prelowered Context.compile cannot establish the Train.forward output: true
+a reused lowering cannot establish the compile's placement: true
+a sibling context confers nothing: true
 a runtime storage check validates a read from an opaque routine: true
 a storage check that reads another node confers nothing: true
 a storage check with a returning fallback confers nothing: true
