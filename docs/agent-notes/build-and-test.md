@@ -4377,12 +4377,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     Shell fixture and heredoc literals no longer count as reaches (gh-ocannl-2380; closed allowlist
     in `tools/affected-tests.sh`'s header): unpiped `cat`/`tee` data heredoc bodies (`<<'EOF'`,
     `<<EOF`, `<<-`; never `<<<` here-strings), literal arguments of unpiped top-level `echo` and
-    `printf` (excluding `printf -v`, any pipeline downstream, `eval`, and `$(...)`/`<(...)`/
-    `>(...)`), and truncating output redirection targets (`>`, `>|`, `&>`; never `<`, `<>`, `>>`,
-    `&>>`, or `>(...)`), while command/process substitutions, append redirections, non-`cat`/`tee`
-    or piped heredocs, and function/alias overrides stay scanned fail-closed. A harness that stages
-    a real helper script through a data heredoc (such as `test/operations/ci_matrix.sh`'s
-    `cat >"$TMP/contracts.py" <<'PY'`) declares its repository inputs with `# affected-reads:`.
+    `printf` (excluding `printf -v`, any pipeline downstream, piped compound blocks such as
+    `{ ...; } | ...`, output process substitutions `>(...)`, `eval`, and single- or multi-line
+    `$(...)`/`<(...)`/`>(...)`/`` `...` ``), and truncating output redirection targets (`>`, `>|`,
+    `&>`; never `<`, `<>`, `>>`, `&>>`, or `>(...)`), while command/process substitutions, append
+    redirections, non-`cat`/`tee` or piped/redirected heredocs, and function/alias overrides stay
+    scanned fail-closed. A harness that stages a real helper script through a data heredoc (such as
+    `test/operations/ci_matrix.sh`'s `cat >"$TMP/contracts.py" <<'PY'`) declares its repository
+    inputs with `# affected-reads:`.
     Fake diagnostics and variable-assigned fixture paths should still use fixture-only names
     (gh-ocannl-2231, gh-ocannl-2292), since variable assignments (`VAR=...`) and non-printing
     commands (`cat`, `grep`, `cp`, function calls) stay scanned fail-closed: synthetic locations sit

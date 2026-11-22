@@ -1815,6 +1815,32 @@ if harness_leg 'harness fixture and heredoc literals'; then
   : >"$hrepo/tools/clib.sh"
   twin_text 'echo hi >(cat tools/sub.sh)'
   fx_reach 'fail-closed: >(cat ...) process substitution inside echo stays scanned' tools/test-a.sh tools/test-c.sh
+  # Round 2 review findings: multiline substitutions, output process substitutions
+  # on cat/tee/echo/printf, and single-/multi-line piped compound commands.
+  twin_text 'code=$(' '  printf '\''bash tools/sub.sh\n'\''' ')' 'bash -c "$code"'
+  fx_reach 'fail-closed: printf inside multiline $(...) substitution stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'code="$(' '  printf '\''bash tools/sub.sh\n'\''' ')"' 'bash -c "$code"'
+  fx_reach 'fail-closed: printf inside double-quoted multiline "$(...)" stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'code=$(' '  cat <<'\''EOF'\''' 'tools/sub.sh' 'EOF' ')'
+  fx_reach 'fail-closed: cat heredoc inside multiline $(...) stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat > >(bash) <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: cat > >(bash) <<SH keeps the heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'tee >(bash) <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: tee >(bash) <<SH keeps the heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'echo '\''bash tools/sub.sh'\'' > >(bash)'
+  fx_reach 'fail-closed: echo redirected into >(bash) keeps its arguments scanned' tools/test-a.sh tools/test-c.sh
+  twin_text '{ printf '\''bash tools/sub.sh\n'\''; } | bash'
+  fx_reach 'fail-closed: { printf ...; } | bash keeps printer arguments scanned' tools/test-a.sh tools/test-c.sh
+  twin_text '( echo '\''bash tools/sub.sh'\'' ) | bash'
+  fx_reach 'fail-closed: ( echo ... ) | bash keeps printer arguments scanned' tools/test-a.sh tools/test-c.sh
+  twin_text '{ cat <<'\''SH'\''; } | bash' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: { cat <<SH; } | bash keeps the heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text '{' '  printf '\''bash tools/sub.sh\n'\''' '} | bash'
+  fx_reach 'fail-closed: multiline { ... } | bash keeps printer arguments scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'if true; then' '  printf '\''bash tools/sub.sh\n'\''' 'fi | bash'
+  fx_reach 'fail-closed: multiline if ... fi | bash keeps printer arguments scanned' tools/test-a.sh tools/test-c.sh
+  twin_text '{' '  cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH' '} > >(bash)'
+  fx_reach 'fail-closed: multiline { cat <<SH; } > >(bash) keeps the heredoc scanned' tools/test-a.sh tools/test-c.sh
   hc_restore
 fi
 
