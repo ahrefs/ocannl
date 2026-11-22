@@ -17,7 +17,8 @@
 #
 # The reader uses a closed grammar. This file uses `pin-flag <option>`, `pin-env <NAME>` and one
 # `owed-record <worktree path>` (lukstafi/ludics#1219). The hook publishes eligible owed-run
-# records from the execution box after a clean, successful main run.
+# records from the execution box after a clean, successful main run. Its status leaves the leg
+# verdict unchanged.
 
 pin-flag --expect-backend
 pin-env OCANNL_BACKEND
