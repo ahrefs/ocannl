@@ -6171,7 +6171,11 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   resolves as a CPU batch. A wedged device may hold a batch for the whole run cap. Set
   `--test-cap N` for a tighter bound and use `plan` to see the selected caps. Sweep keeps the
   watcher on the regular leg of GPU units even with `--slow`. It classifies by the unit's backend,
-  so its cc unit is exempt and its tuf HIP unit keeps the watcher.
+  so its cc unit is exempt and its tuf HIP unit keeps the watcher. On `tuf-amd-linux` (HIP,
+  discrete gfx1102, at `172cc2753`, gh-ocannl-2402), a full `@runtest @train` run completed every
+  training action below the 5th slowest action (220.42 s; slowest overall `padded_conv_cache.exe` at
+  702.75 s), and standalone `--force @test/training/train-transformer_names` ran in 124.07 s, so the
+  1500 s watcher stays on tuf's HIP unit with no `@train` exemption.
 - **A Metal `slow-mnist_conv` or `slow-cifar_conv` in a shared-event wait is usually running
   slowly, not hung; judge by its progress lines (gh-ocannl-2302).** With the library at
   `9023239da` (a step bench beside it), a Metal training step took 1.32 s for `mnist_conv` on
