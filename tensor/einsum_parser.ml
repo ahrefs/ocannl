@@ -84,11 +84,7 @@ let whitespace_separated_axes spec =
   go 0;
   if !found then Some (Buffer.contents buf) else None
 
-(* The single-char lexer buffers the COMMA it emits after an axis; a parse that failed between the
-   two tokens leaves it behind, so every parse starts from an empty buffer. *)
-let run entry spec lexbuf =
-  Lexer.buffered_token := None;
-  entry (Lexer.token (is_multichar spec)) lexbuf
+let run entry spec lexbuf = entry (Lexer.token (is_multichar spec)) lexbuf
 
 let multichar_note ~what ~written =
   Printf.sprintf

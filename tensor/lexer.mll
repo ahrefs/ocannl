@@ -13,9 +13,6 @@ open Parser
 
 exception Syntax_error of string
 
-(* State for single-char mode: buffer for next token *)
-let buffered_token : token option ref = ref None
-
 }
 
 (* Character classes *)
@@ -47,7 +44,7 @@ rule multichar_token = parse
   | eof              { EOF }
   | _ as c           { raise (Syntax_error ("Unexpected character in multichar mode: " ^ String.make 1 c)) }
 
-(* Single-character mode lexer - always emits COMMA after each identifier or fixed index *)
+(* Single-character mode reads one identifier or a whole fixed index at a time. *)
 and single_char_token = parse
   | white+           { single_char_token lexbuf }
   | '|'              { PIPE }
@@ -58,21 +55,9 @@ and single_char_token = parse
   | ".."             { DOT_DOT }
   | '='              { EQUALS }
   | '<'              { LESS_THAN }
-  | digit+ as n      {
-      (* Always buffer COMMA after fixed index - parser handles trailing commas *)
-      buffered_token := Some COMMA;
-      INT (int_of_string n)
-    }
-  | '_'              {
-      (* Always buffer COMMA after identifier - parser handles trailing commas *)
-      buffered_token := Some COMMA;
-      IDENT "_"
-    }
-  | alpha as c       {
-      (* Always buffer COMMA after identifier - parser handles trailing commas *)
-      buffered_token := Some COMMA;
-      IDENT (String.make 1 c)
-    }
+  | digit+ as n      { INT (int_of_string n) }
+  | '_'              { IDENT "_" }
+  | alpha as c       { IDENT (String.make 1 c) }
   | eof              { EOF }
   | _ as c           { raise (Syntax_error ("Unexpected character in single-char mode: " ^ String.make 1 c)) }
 
@@ -94,17 +79,18 @@ let multichar_trigger spec =
 (* Determine if input uses multichar mode *)
 let is_multichar spec = Option.is_some (multichar_trigger spec)
 
-(* Main entry point that switches between modes and handles buffered tokens *)
-let token multichar lexbuf =
-  if multichar then
-    (* Multichar mode: no buffering, just return tokens directly *)
-    multichar_token lexbuf
-  else
-    (* Single-char mode: check for buffered tokens *)
-    match !buffered_token with
-    | Some tok ->
-        buffered_token := None;
-        tok
-    | None ->
-        single_char_token lexbuf
+(* A single-char parser accepts trailing commas, so insert one after every identifier or fixed
+   index. Each parse owns its pending separator, including the probes run after a parse error. *)
+let token = function
+  | true -> multichar_token
+  | false ->
+      let pending_comma = ref false in
+      fun lexbuf ->
+        if !pending_comma then (
+          pending_comma := false;
+          COMMA)
+        else
+          let next = single_char_token lexbuf in
+          (match next with IDENT _ | INT _ -> pending_comma := true | _ -> ());
+          next
 }
