@@ -24,7 +24,20 @@ Low_level.axis_type coverage:
   Unrolled           covered by unroll-annot, decline-sibling-unrolled, rng-unroll
   Vectorized         covered by retype-vectorized, split-then-vectorize-inner, split-then-vectorize-narrow, rng-vectorized, sibling-vectorized, data-guard-vectorized
 every Low_level.axis_type constructor is reached by a member that exists, or exempted with a reason: true
+C_syntax.loop_rendering coverage:
+  Render_serial            covered by serial, decline-data-guard, decline-sibling-statement, split-then-vectorize-narrow
+  Render_vectorize_pragma  out of scope: only for non-accumulating Vectorized loops: every loop-carried accumulation bypasses iteration-independence pragmas and falls back to the localizing peel or serial loop
+  Render_localized_peel    covered by serial, unroll-annot, split-then-vectorize-inner, mixed-guard-workgroup, tile-mma-fallback
+  Render_unrolled          covered by unroll-annot, partition-then-unroll, decline-sibling-unrolled, rng-unroll
+  Render_simd_reduce       covered by retype-vectorized, split-then-vectorize-inner, rng-vectorized
+  Render_simd_elementwise  out of scope: elementwise SIMD rendering requires no loop-carried accumulation; reduction loops dispatch through Render_simd_reduce or the localizing peel
+  Render_warp_shuffle      covered by retype-workgroup-reduce
+  Render_lane_all_reduce   out of scope: online-softmax backward's reassociable scope-local all-reduce (Online_softmax.reassociable_local), pinned by gpu_lane_reduction
+  Render_hardware_binding  covered by mixed-guard-workgroup
+  Render_parallel_grid     out of scope: CPU thread-pool chunking of outermost Grid loops; Grid levels over reductions are out of scope (see axis_coverage)
+every C_syntax.loop_rendering constructor is reached by a member that exists, or exempted with a reason: true
 the Schedule.optop coverage samples cover every constructor exactly once: true
+the C_syntax.loop_rendering coverage samples cover every constructor exactly once: true
 reduction: out[3] = sum of 64 terms, hand-built Low_level, 36 members
   01 serial                      [f32 bf16 f16] over plain                 no schedule ops (the reference rendering)                              -> localized scope
                                  codegen's peel takes one level, unguarded
@@ -50,7 +63,7 @@ reduction: out[3] = sum of 64 terms, hand-built Low_level, 36 members
                                  codegen's peel takes one level, unguarded
   12 retype-vectorized           [f32 bf16 f16] over plain                 Retype the reduction axis to Vectorized                                -> SIMD accumulator grid, or the localized scope where no vector rendering exists
                                  the shared width decision is ceded to the SIMD grid, or codegen's peel takes the reduction level where no vector rendering exists
-  13 split-then-vectorize-inner  [f32 bf16 f16] over plain                 Split, then Retype the INNER half to Vectorized                        -> SIMD accumulator grid, or the localized scope where no vector rendering exists
+  13 split-then-vectorize-inner  [f32 bf16 f16] over plain                 Split, then Retype the INNER half to Vectorized                        -> localized peel + SIMD accumulator grid, or the localized scope where no vector rendering exists
                                  codegen's peel takes 2 levels, unguarded
   14 split-then-vectorize-narrow [f32 bf16 f16] over plain                 Split into a two-wide inner half, then Retype it Vectorized            -> localized scope
                                  codegen's peel takes 2 levels, unguarded
@@ -531,5 +544,3 @@ tile-mma-fallback @ bf16 agrees with its reference value: true
 tile-mma-fallback @ f16 renders the form its composition claims: true
 tile-mma-fallback @ f16: codegen's peel decided what the leg declares: true
 tile-mma-fallback @ f16 agrees with its reference value: true
-a read-modify-write reads as one, in either spelling of its device read: true
-the volatile-cast spelling counts the same node accesses as the plain one: true

@@ -445,6 +445,16 @@ files.
   `test/operations/peel_census.ml` pins the instrument itself, including that a REFUSING report
   never claims an admitted lane-private guard: separation is settled at the base, so a refusal that
   never reached one leaves that guard `Guard_lane_private_unresolved`.
+- **Which codegen arm rendered each loop level and memory store is carried beside the peel census**
+  (gh-ocannl-724): `C_syntax.with_render_census` (bracketed in `Context.compile` into
+  `Context.routine.render`) records every `For_loop`'s `C_syntax.loop_rendering` arm (in pre-order,
+  with `in_peel_scope` distinguishing levels re-rendered inside `Render_localized_peel`, enforced
+  statically by a private `rendered_loop` witness on every branch of `For_loop`) and every memory
+  store's `C_syntax.store_rendering` keyed by `tn_uid`. That captures multi-arm kernels such as
+  `split-then-vectorize-inner` (`Render_localized_peel` enclosing a local-targeted
+  `Render_simd_reduce`), lets `reduction_forms` check codegen's report directly instead of parsing
+  emitted source text, and pins `C_syntax.loop_rendering` exhaustively beside `Schedule.optop` and
+  `Low_level.axis_type`.
 - `Ir.Ops.index_prec ()` is SIGNED (int32; int64 under `large_models`): negative index
   intermediates are well-defined; emit guards in natural signed form. Guard shapes are
   canonicalized to ONE shape per role: upper bounds are strict `Cmplt` (`idx < bound`, the natural

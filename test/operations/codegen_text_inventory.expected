@@ -70,7 +70,6 @@ test/operations/micrograd_demo_logging-multidev_cc-0-0.log.expected [c ll routin
 test/operations/mixed_prec_twin_rounding.expected [derived] beside test/operations/mixed_prec_twin_rounding.ml; re-run by @test/operations/runtest-mixed_prec_twin_rounding
 test/operations/n3_fwd_with_prec-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop; re-run by @test/operations/runtest-n3_fwd_with_prec-unoptimized
 test/operations/online_softmax_block_mma.expected [derived] beside test/operations/online_softmax_block_mma.ml; re-run by @test/operations/runtest-online_softmax_block_mma
-test/operations/reduction_forms.expected [derived] beside test/operations/reduction_forms.ml; re-run by @test/operations/runtest-reduction_forms
 test/operations/scan_loop.expected [ll] markers ll-assign; re-run by @test/operations/runtest-scan_loop
 test/operations/test_ident_blacklist.expected [derived] beside test/operations/test_ident_blacklist.ml; re-run by @test/operations/runtest-test_ident_blacklist
 test/operations/test_log_stmt_format.c.expected [c] extension .c.expected; markers c-decl-banner c-logic-banner c-prec-cast c-restrict ll-assign routine-log; re-run by @test/operations/runtest-test_log_stmt_format
@@ -309,14 +308,6 @@ test/operations/reduction_accumulator_residency.ml [run by @test/operations/runt
     "volatile float*)" ^ ...
     "volatile"
     ... ^ " = "
-test/operations/reduction_forms.ml [run by @test/operations/runtest-reduction_forms; also pins text this scan cannot name: untraced callback, forwarded parameter, unsupplied application, mutation or unseen buffer write]
-    " = "
-    "*)"
-    "Vectorized reduction rendering"
-    "] = "
-    "ocannl_shfl_xor"
-    "volatile "
-    ... ^ "["
 test/operations/reserved_routine_names.ml [run by @test/operations/runtest-reserved_routine_names; also pins text this scan cannot name: untraced callback, opaque aggregate component, unvalidated haystack]
     "arrayjit_threefry4x32__"
     "asm__"
@@ -743,7 +734,6 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-online_softmax_block_mma
 @test/operations/runtest-op_table_compile
 @test/operations/runtest-reduction_accumulator_residency
-@test/operations/runtest-reduction_forms
 @test/operations/runtest-reserved_routine_names
 @test/operations/runtest-runtime_integer_power
 @test/operations/runtest-scan_loop

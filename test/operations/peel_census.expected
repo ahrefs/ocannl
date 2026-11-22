@@ -1,17 +1,22 @@
 plain: the nest computes its reference sum: true
 plain: the routine's census equals the one a bracket around it collects: true
+plain: the routine's rendering census equals the one a bracket around it collects: true
 plain: one censused accumulator per localized peel site: true
 confined guard over a shared cell: the nest computes its reference sum: true
 confined guard over a shared cell: the routine's census equals the one a bracket around it collects: true
+confined guard over a shared cell: the routine's rendering census equals the one a bracket around it collects: true
 confined guard over a shared cell: one censused accumulator per localized peel site: true
 lane-private guard over a per-row cell: the nest computes its reference sum: true
 lane-private guard over a per-row cell: the routine's census equals the one a bracket around it collects: true
+lane-private guard over a per-row cell: the routine's rendering census equals the one a bracket around it collects: true
 lane-private guard over a per-row cell: one censused accumulator per localized peel site: true
 guard fixed for the whole nest: the nest computes its reference sum: true
 guard fixed for the whole nest: the routine's census equals the one a bracket around it collects: true
+guard fixed for the whole nest: the routine's rendering census equals the one a bracket around it collects: true
 guard fixed for the whole nest: one censused accumulator per localized peel site: true
 data-dependent guard: the nest computes its reference sum: true
 data-dependent guard: the routine's census equals the one a bracket around it collects: true
+data-dependent guard: the routine's rendering census equals the one a bracket around it collects: true
 data-dependent guard: one censused accumulator per localized peel site: true
 every localized site of the plain nest peels the reduction level alone, unguarded: true
 every localized site of the shared-cell nest peels BOTH levels through a confined guard: true
@@ -29,6 +34,11 @@ an inner bracket summarizes only its own sites: true
 the enclosing bracket sees both, in emission order: true
 a completed bracket leaves the census global as it found it: true
 collection is off outside every bracket: true
+an inner render-census bracket summarizes only its own entries: true
+the enclosing render-census bracket sees both, in emission order: true
+a completed render-census bracket leaves the loop global as it found it: true
+a completed render-census bracket leaves the store global as it found it: true
+render-census collection is off outside every bracket: true
 a gather from a different fixed first slot is not a cell recurrence: true
 a gather from a different fixed last slot is not a cell recurrence: true
 matching static slots keep a potentially aliasing gather in the census: true

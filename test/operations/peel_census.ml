@@ -203,6 +203,7 @@ let make shape : prog =
 
 type run = {
   summary : Cs.peel_summary;
+  render : Cs.render_summary;
   volatility : Cs.volatility_summary;
   values : float array;
   want : float array;
@@ -210,16 +211,19 @@ type run = {
       (** The census a bracket around the same compile collects. Its agreement with the routine's
           own field is what says the field reports THIS compile rather than a stale or fabricated
           census. *)
+  bracketed_render : Cs.render_summary;
+      (** Same check for {!Context.routine.render} against {!Cs.with_render_census}. *)
 }
 
 let compile_and_run ~name shape =
   let prog = make shape in
   let static_indices = Idx.bound_symbols prog.bindings in
   let o = Ll_test.optimize ~materialized:prog.materialized ~static_indices ~name prog.llc in
-  let (ctx, routine), bracketed =
-    Cs.with_peel_census (fun () ->
-        Context.compile ~name ~prelowered:o (Lazy.force base_ctx) Ir.Assignments.empty_comp
-          prog.bindings)
+  let ((ctx, routine), bracketed), bracketed_render =
+    Cs.with_render_census (fun () ->
+        Cs.with_peel_census (fun () ->
+            Context.compile ~name ~prelowered:o (Lazy.force base_ctx) Ir.Assignments.empty_comp
+              prog.bindings))
   in
   prog.bind routine.Context.bindings;
   (* Every shape accumulates into [out] read-before-write, from zero: seeded, since allocation-time
@@ -229,10 +233,12 @@ let compile_and_run ~name shape =
   let ctx = Context.run ctx routine in
   {
     summary = routine.Context.peel;
+    render = routine.Context.render;
     volatility = routine.Context.volatility;
     values = Context.get_values ctx prog.out;
     want = prog.want;
     bracketed;
+    bracketed_render;
   }
 
 let localized_verdicts summary =
@@ -286,6 +292,11 @@ let () =
         (List.equal
            (fun (_, a) (_, b) -> Cs.equal_peel_site a b)
            run.summary.Cs.sites run.bracketed.Cs.sites);
+      p
+        (Printf.sprintf
+           "%s: the routine's rendering census equals the one a bracket around it collects"
+           (shape_name shape))
+        (Cs.equal_render_summary run.render run.bracketed_render);
       (* The two censuses are collected by different code for different questions, and over these
          nests they must agree on one number: localizing a site is what mints the accumulator the
          volatility census then classifies (gh-ocannl-782). The claim is backend-uniform — on a
@@ -477,7 +488,39 @@ let () =
   Verdict.p_empty "a completed bracket leaves the census global as it found it"
     ~over:outer_summary.Cs.sites
     !(Cs.peel_census ());
-  p "collection is off outside every bracket" (not !(Cs.peel_census_enabled ()))
+  p "collection is off outside every bracket" (not !(Cs.peel_census_enabled ()));
+  (* Same bracket discipline for {!Cs.with_render_census} (gh-ocannl-724). *)
+  let loop_entry kernel rendering =
+    { Cs.kernel; axis = LL.Serial; in_peel_scope = false; rendering }
+  in
+  let store_entry kernel tn_uid rendering = { Cs.kernel; tn_uid; rendering } in
+  let outer_loop = loop_entry "outer_kernel" Cs.Render_serial
+  and inner_loop = loop_entry "inner_kernel" Cs.Render_localized_peel
+  and outer_store = store_entry "outer_kernel" 1 Cs.Store_plain
+  and inner_store = store_entry "inner_kernel" 2 (Cs.Store_rmw { reads_target = 1 }) in
+  let inner_render, outer_render =
+    Cs.with_render_census (fun () ->
+        Cs.render_loop_census () := outer_loop :: !(Cs.render_loop_census ());
+        Cs.render_store_census () := outer_store :: !(Cs.render_store_census ());
+        let (), inner =
+          Cs.with_render_census (fun () ->
+              Cs.render_loop_census () := inner_loop :: !(Cs.render_loop_census ());
+              Cs.render_store_census () := inner_store :: !(Cs.render_store_census ()))
+        in
+        inner)
+  in
+  p "an inner render-census bracket summarizes only its own entries"
+    (Cs.equal_render_summary inner_render { Cs.loops = [ inner_loop ]; stores = [ inner_store ] });
+  p "the enclosing render-census bracket sees both, in emission order"
+    (Cs.equal_render_summary outer_render
+       { Cs.loops = [ outer_loop; inner_loop ]; stores = [ outer_store; inner_store ] });
+  Verdict.p_empty "a completed render-census bracket leaves the loop global as it found it"
+    ~over:outer_render.Cs.loops
+    !(Cs.render_loop_census ());
+  Verdict.p_empty "a completed render-census bracket leaves the store global as it found it"
+    ~over:outer_render.Cs.stores
+    !(Cs.render_store_census ());
+  p "render-census collection is off outside every bracket" (not !(Cs.render_census_enabled ()))
 
 (* The census's recurrence gate distinguishes a disjoint gather from a possible self-read
    (gh-ocannl-960). These are predicate tests: no value transformation or hardware legality decision

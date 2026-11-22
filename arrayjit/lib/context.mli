@@ -132,6 +132,12 @@ type routine = private {
           peels the inner level only, under a lane-private guard the cell separates — and the two
           render the same localized kernel. A test classifying emitted code is therefore green over
           either; this field is what lets it say which code path actually ran. *)
+  render : Ir.C_syntax.render_summary;
+      (** Which codegen rendering arm emitted each [For_loop] level and each memory store of this
+          routine (gh-ocannl-724). Collected beside {!mma} and {!peel} in the same bracket so tests
+          check codegen's own per-level report — including kernels that combine two arms, such as a
+          localized peel enclosing a local-targeted SIMD reduction — rather than parsing generated
+          source text. *)
   volatility : Ir.C_syntax.volatility_summary;
       (** Which of this routine's serial accumulations carry the Metal compiler-bug workaround
           (gh-ocannl-782/820), in which of its two forms, and how many stayed plain because the

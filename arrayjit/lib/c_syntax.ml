@@ -507,6 +507,111 @@ let with_peel_census f =
   restore ();
   (result, summarize_peel_census sites)
 
+(* {2 The per-level rendering census (gh-ocannl-724)}
+
+   Which codegen arm actually rendered each [For_loop] level and each emitted memory store. Paired
+   with {!peel_census} (which records what the peel decided) and {!mma_census} (which records how
+   [Tile_mma] statements rendered), this lets [reduction_forms] check codegen's own per-level report
+   directly — including kernels that combine two arms, such as a localized peel around an inner SIMD
+   reduction — and retire its textual classifier over emitted source files. *)
+
+type loop_rendering =
+  | Render_serial
+  | Render_vectorize_pragma
+  | Render_localized_peel
+  | Render_unrolled of { copies : int }
+  | Render_simd_reduce of { target : [ `Cell | `Local ]; lanes : int; chains : int }
+  | Render_simd_elementwise of { lanes : int }
+  | Render_warp_shuffle of { warps : int }
+  | Render_lane_all_reduce of { warps : int }
+  | Render_hardware_binding of [ `Grid | `Workgroup ]
+  | Render_parallel_grid of { chunks : int }
+[@@deriving sexp_of, equal, variants]
+
+let loop_rendering_constructors = List.map Variants_of_loop_rendering.descriptions ~f:fst
+let loop_rendering_name = Variants_of_loop_rendering.to_name
+
+type loop_render_entry = {
+  kernel : string;
+  axis : Low_level.axis_type;
+  in_peel_scope : bool;
+  rendering : loop_rendering;
+}
+[@@deriving sexp_of, equal]
+
+type store_rendering =
+  | Store_from_scope of {
+      mint : Low_level.scope_mint;
+      peeled : bool;
+      reads_target : int;
+      has_where_update : bool;
+    }
+  | Store_simd_epilogue
+  | Store_warp_epilogue
+  | Store_rmw of { reads_target : int }
+  | Store_plain
+[@@deriving sexp_of, equal]
+
+type store_render_entry = { kernel : string; tn_uid : int; rendering : store_rendering }
+[@@deriving sexp_of, equal]
+
+type render_summary = { loops : loop_render_entry list; stores : store_render_entry list }
+[@@deriving sexp_of, equal]
+
+let render_census_enabled =
+  let key : bool ref Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () -> ref false) in
+  fun () -> Stdlib.Domain.DLS.get key
+
+let render_loop_census =
+  let key : loop_render_entry list ref Stdlib.Domain.DLS.key =
+    Stdlib.Domain.DLS.new_key (fun () -> ref [])
+  in
+  fun () -> Stdlib.Domain.DLS.get key
+
+let render_store_census =
+  let key : store_render_entry list ref Stdlib.Domain.DLS.key =
+    Stdlib.Domain.DLS.new_key (fun () -> ref [])
+  in
+  fun () -> Stdlib.Domain.DLS.get key
+
+let render_summary_string summary =
+  match summary.loops with
+  | [] -> Printf.sprintf "no loops, %d store(s)" (List.length summary.stores)
+  | loops ->
+      let loop_desc e =
+        Printf.sprintf "%s%s->%s"
+          (if e.in_peel_scope then "peel:" else "")
+          (Sexp.to_string (Low_level.sexp_of_axis_type e.axis))
+          (Sexp.to_string (sexp_of_loop_rendering e.rendering))
+      in
+      Printf.sprintf "%d loop(s) [%s], %d store(s)" (List.length loops)
+        (String.concat ~sep:", " (List.map loops ~f:loop_desc))
+        (List.length summary.stores)
+
+let with_render_census f =
+  let saved_enabled = !(render_census_enabled ())
+  and saved_loops = !(render_loop_census ())
+  and saved_stores = !(render_store_census ()) in
+  render_census_enabled () := true;
+  render_loop_census () := [];
+  render_store_census () := [];
+  let restore () =
+    let inner_loops = !(render_loop_census ()) and inner_stores = !(render_store_census ()) in
+    render_census_enabled () := saved_enabled;
+    render_loop_census () := if saved_enabled then inner_loops @ saved_loops else saved_loops;
+    render_store_census () := if saved_enabled then inner_stores @ saved_stores else saved_stores
+  in
+  let result =
+    match f () with
+    | r -> r
+    | exception e ->
+        restore ();
+        raise e
+  in
+  let loops = List.rev !(render_loop_census ()) and stores = List.rev !(render_store_census ()) in
+  restore ();
+  (result, { loops; stores })
+
 (* {2 The volatility census (gh-ocannl-782, gh-ocannl-820)}
 
    Which serial accumulations in a routine carry the {!C_syntax_config.volatile_serial_accumulation}
@@ -4334,6 +4439,11 @@ module C_syntax (B : C_syntax_config) = struct
     volatility_census_enabled : bool ref;
     peel_census : (string * peel_site) list ref;
     peel_census_enabled : bool ref;
+    render_census_enabled : bool ref;
+    render_loop_census : loop_render_entry list ref;
+    render_store_census : store_render_entry list ref;
+    peel_scope_depth : int ref;
+    peeled_scope_ids : int Hash_set.t;
     mma_census : (string * mma_rendering) list ref;
     mma_scope_census : string list ref;
     mma_emitted_census : emitted_mma list ref;
@@ -6489,6 +6599,84 @@ module C_syntax (B : C_syntax_config) = struct
     censusing : bool;
   }
 
+  (* Witness that a [For_loop] arm recorded its {!loop_rendering} in the per-level census before
+     rendering its body: every branch of [For_loop] returns this type, so a new loop rendering arm
+     cannot be added without naming its constructor. *)
+  type rendered_loop = Rendered_loop of PPrint.document
+
+  let record_loop_render ctx (loop : loop_ctx) rendering =
+    if !(ctx.render_census_enabled) then
+      ctx.render_loop_census :=
+        {
+          kernel = ctx.current_kernel_name;
+          axis = loop.axis;
+          in_peel_scope = !(ctx.peel_scope_depth) > 0;
+          rendering;
+        }
+        :: !(ctx.render_loop_census)
+
+  let render_loop ctx loop rendering f =
+    record_loop_render ctx loop rendering;
+    Rendered_loop (f ())
+
+  let record_store_render ctx (tn : Tn.t) rendering =
+    if !(ctx.render_census_enabled) then
+      ctx.render_store_census :=
+        { kernel = ctx.current_kernel_name; tn_uid = tn.Tn.uid; rendering }
+        :: !(ctx.render_store_census)
+
+  let classify_set_store ctx ~(tn : Tn.t) (llsc : Low_level.scalar_t) : store_rendering =
+    let rec count_reads_scalar (s : Low_level.scalar_t) =
+      match s with
+      | Low_level.Get (tn2, _) -> if Tn.equal tn tn2 then 1 else 0
+      | Get_dynamic { tn = tn2; dyn_value = v, _; _ } ->
+          (if Tn.equal tn tn2 then 1 else 0) + count_reads_scalar v
+      | Local_scope { body; _ } -> count_reads_ll body
+      | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> 0
+      | Ternop (_, (a, _), (b, _), (c, _)) ->
+          count_reads_scalar a + count_reads_scalar b + count_reads_scalar c
+      | Binop (_, (a, _), (b, _)) -> count_reads_scalar a + count_reads_scalar b
+      | Unop (_, (a, _)) -> count_reads_scalar a
+    and count_reads_ll (c : Low_level.t) =
+      match c with
+      | Low_level.Seq (a, b) -> count_reads_ll a + count_reads_ll b
+      | For_loop { body; _ } -> count_reads_ll body
+      | Scan_loop { carried; body; _ } ->
+          List.sum (module Int) carried ~f:(fun c -> count_reads_scalar c.Low_level.init)
+          + count_reads_ll body
+      | If { cond = c, _; body } -> count_reads_scalar c + count_reads_ll body
+      | Set { llsc; _ } | Set_local (_, llsc) -> count_reads_scalar llsc
+      | Set_dynamic { dyn_value = v, _; llsc; _ } -> count_reads_scalar v + count_reads_scalar llsc
+      | Set_from_vec { arg = a, _; _ } -> count_reads_scalar a
+      | Tile_mma { fallback; _ } -> count_reads_ll fallback
+      | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier
+        ->
+          0
+    in
+    let rec has_where_update ~scope_id (c : Low_level.t) =
+      match c with
+      | Low_level.Set_local (id, Ternop (Ops.Where, _, _, _)) -> id.Low_level.scope_id = scope_id
+      | Seq (a, b) -> has_where_update ~scope_id a || has_where_update ~scope_id b
+      | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } ->
+          has_where_update ~scope_id body
+      | Tile_mma { fallback; _ } -> has_where_update ~scope_id fallback
+      | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_local _ | Set_dynamic _
+      | Set_from_vec _ | Declare_local _ | Workgroup_barrier ->
+          false
+    in
+    match llsc with
+    | Low_level.Local_scope { id; body; mint; _ } ->
+        Store_from_scope
+          {
+            mint;
+            peeled = Hash_set.mem ctx.peeled_scope_ids id.Low_level.scope_id;
+            reads_target = count_reads_ll body;
+            has_where_update = has_where_update ~scope_id:id.Low_level.scope_id body;
+          }
+    | _ ->
+        let reads_target = count_reads_scalar llsc in
+        if reads_target > 0 then Store_rmw { reads_target } else Store_plain
+
   exception Vectorization_declined
 
   let rec pp_ll ctx ?(in_loop = false) (c : Low_level.t) : PPrint.document =
@@ -6550,7 +6738,7 @@ module C_syntax (B : C_syntax_config) = struct
             if PPrint.is_empty d1 then d2
             else if PPrint.is_empty d2 then d1
             else d1 ^^ hardline ^^ d2)
-    | For_loop { index = i; from_; to_; body; axis } -> (
+    | For_loop { index = i; from_; to_; body; axis } ->
         (* Rendering phase of docs/design/axis-types-for-loops.md (§5): [Serial] loops render as C
            [for] statements; [Grid]/[Workgroup]/[Workgroup_reduce] loops bind their index to the
            backend's hardware register (at the signed [loop_index_type] width, with an explicit cast
@@ -6569,76 +6757,83 @@ module C_syntax (B : C_syntax_config) = struct
             censusing = !(ctx.peel_census_enabled) && Low_level.has_accumulating_cell body;
           }
         in
-        match axis with
-        | Low_level.Serial -> (localize_or_serial ctx loop) ()
-        | Grid when Set.mem !(ctx.current_parallel_grid) i -> (parallel_grid_loop ctx loop) ()
-        | Grid -> (hardware_binding ctx loop) `Grid
-        | Workgroup ->
-            (hardware_binding ctx loop) ~fallback:(localize_or_serial ctx loop) `Workgroup
-        | Workgroup_reduce -> (
-            match (try_lane_all_reduce ctx loop) () with
-            | Some doc -> doc
-            | None -> (
-                match (try_warp_reduce ctx loop) () with
-                | Some doc -> doc
-                | None ->
-                    (hardware_binding ctx loop) ~fallback:(localize_or_serial ctx loop) `Workgroup))
-        | Vectorized -> (
-            match (try_vectorize_reduce ctx loop) () with
-            | Some doc -> doc
-            | None -> (
-                match (try_vectorize ctx loop) () with
-                | Some doc -> doc
-                | None -> (
-                    if
-                      (* gh-ocannl-164: a serial loop annotated with the backend's vectorization
-                         pragmas; without them the plain serial loop is the legal fallback (same
-                         discipline as unbound [Grid]/[Workgroup] axes). The pragmas assert
-                         iteration independence, which a loop-carried accumulation does not satisfy
-                         — an accumulating body that no explicit rendering accepted always falls
-                         back to the plain serial loop (gh-ocannl-468: this is what lets the
-                         autotune menu propose Retype-[Vectorized] over reductions). *)
-                      Low_level.has_accumulation body
-                    then
-                      match (try_localize_serial_reduce ctx loop) () with
-                      | Some doc -> doc
-                      | None -> (serial_loop ctx loop) ()
-                    else
-                      match B.vectorize_pragma with
-                      | [] -> (serial_loop ctx loop) ()
-                      | lines ->
-                          separate_map hardline string lines
-                          ^^ hardline
-                          ^^ (serial_loop ctx loop) ())))
-        | Unrolled -> (
-            (* An [Unrolled] reduction axis holds the wide local across the repeated bodies
-               (gh-ocannl-639): autotune proposes [Unroll] over any small Serial loop, reduction
-               loops included, and without this hook the unrolled candidate would round-trip the
-               accumulator through storage on every repetition while the serial baseline widens —
-               numerics-divergent candidates in one search. *)
-            match (try_localize_serial_reduce ctx loop) () with
-            | Some doc -> doc
-            | None ->
-                separate hardline
-                (* [max 0]: a DEAD level ([to_ < from_]) unrolls to zero repetitions, and rendering
-                   nothing is exactly its access-free meaning. The clamp is load-bearing rather than
-                   defensive — [Base.List.init] RAISES on a negative length, so without it a dead
-                   [Unrolled] level aborts codegen. gh-ocannl-693 widened the reach of that: the
-                   localizer used to peel such a level and never fall through here, and now declines
-                   it (a dead level must not be peeled), so this arm receives what the peel
-                   refused. *)
-                @@ List.init
-                     (max 0 (to_ - from_ + 1))
-                     ~f:(fun k ->
-                       let binding =
-                         string ("const " ^ B.loop_index_type)
-                         ^^ pp_symbol i
-                         ^^ string (" = " ^ Int.to_string (from_ + k) ^ ";")
-                       in
-                       group
-                         (lbrace
-                         ^^ nest 2 (hardline ^^ binding ^^ hardline ^^ (body_doc ctx loop) ())
-                         ^^ hardline ^^ rbrace))))
+        let (Rendered_loop doc) =
+          match axis with
+          | Low_level.Serial -> (localize_or_serial ctx loop) ()
+          | Grid when Set.mem !(ctx.current_parallel_grid) i -> (parallel_grid_loop ctx loop) ()
+          | Grid -> (hardware_binding ctx loop) `Grid
+          | Workgroup ->
+              (hardware_binding ctx loop) ~fallback:(localize_or_serial ctx loop) `Workgroup
+          | Workgroup_reduce -> (
+              match (try_lane_all_reduce ctx loop) () with
+              | Some rendered -> rendered
+              | None -> (
+                  match (try_warp_reduce ctx loop) () with
+                  | Some rendered -> rendered
+                  | None ->
+                      (hardware_binding ctx loop) ~fallback:(localize_or_serial ctx loop) `Workgroup
+                  ))
+          | Vectorized -> (
+              match (try_vectorize_reduce ctx loop) () with
+              | Some rendered -> rendered
+              | None -> (
+                  match (try_vectorize ctx loop) () with
+                  | Some rendered -> rendered
+                  | None -> (
+                      if
+                        (* gh-ocannl-164: a serial loop annotated with the backend's vectorization
+                           pragmas; without them the plain serial loop is the legal fallback (same
+                           discipline as unbound [Grid]/[Workgroup] axes). The pragmas assert
+                           iteration independence, which a loop-carried accumulation does not
+                           satisfy — an accumulating body that no explicit rendering accepted always
+                           falls back to the plain serial loop (gh-ocannl-468: this is what lets the
+                           autotune menu propose Retype-[Vectorized] over reductions). *)
+                        Low_level.has_accumulation body
+                      then
+                        match (try_localize_serial_reduce ctx loop) () with
+                        | Some rendered -> rendered
+                        | None -> (serial_loop ctx loop) ()
+                      else
+                        match B.vectorize_pragma with
+                        | [] -> (serial_loop ctx loop) ()
+                        | lines ->
+                            (serial_loop ctx
+                               ~leading_doc:(separate_map hardline string lines ^^ hardline)
+                               ~rendering:Render_vectorize_pragma loop)
+                              ())))
+          | Unrolled -> (
+              (* An [Unrolled] reduction axis holds the wide local across the repeated bodies
+                 (gh-ocannl-639): autotune proposes [Unroll] over any small Serial loop, reduction
+                 loops included, and without this hook the unrolled candidate would round-trip the
+                 accumulator through storage on every repetition while the serial baseline widens —
+                 numerics-divergent candidates in one search. *)
+              match (try_localize_serial_reduce ctx loop) () with
+              | Some rendered -> rendered
+              | None ->
+                  (* [max 0]: a DEAD level ([to_ < from_]) unrolls to zero repetitions, and
+                     rendering nothing is exactly its access-free meaning. The clamp is load-bearing
+                     rather than defensive — [Base.List.init] RAISES on a negative length, so
+                     without it a dead [Unrolled] level aborts codegen. gh-ocannl-693 widened the
+                     reach of that: the localizer used to peel such a level and never fall through
+                     here, and now declines it (a dead level must not be peeled), so this arm
+                     receives what the peel refused. *)
+                  let copies = max 0 (to_ - from_ + 1) in
+                  render_loop ctx loop
+                    (Render_unrolled { copies })
+                    (fun () ->
+                      separate hardline
+                      @@ List.init copies ~f:(fun k ->
+                          let binding =
+                            string ("const " ^ B.loop_index_type)
+                            ^^ pp_symbol i
+                            ^^ string (" = " ^ Int.to_string (from_ + k) ^ ";")
+                          in
+                          group
+                            (lbrace
+                            ^^ nest 2 (hardline ^^ binding ^^ hardline ^^ (body_doc ctx loop) ())
+                            ^^ hardline ^^ rbrace))))
+        in
+        doc
     | Scan_loop { index = i; from_; to_; direction; carried; body } ->
         (* gh-ocannl-696: the carried state renders as two locals per entry, declared and
            initialized ahead of a serial loop -- counting down for [Backward] -- whose body ends
@@ -6780,8 +6975,12 @@ module C_syntax (B : C_syntax_config) = struct
             | _ -> None
         in
         match async_copy_doc with
-        | Some doc -> doc
+        | Some doc ->
+            record_store_render ctx tn Store_plain;
+            doc
         | None ->
+            if !(ctx.render_census_enabled) then
+              record_store_render ctx tn (classify_set_store ctx ~tn llsc);
             let prec, narrowing = store_precs ~store_prec llsc in
             let (local_defs, val_doc), volatile_read_emitted =
               (with_volatile_accumulation_reads ctx) rmw_volatile_reads (fun () ->
@@ -7817,86 +8016,93 @@ module C_syntax (B : C_syntax_config) = struct
        doc := log_doc ^^ hardline ^^ !doc);
     !doc
 
-  and serial_loop ctx ({ i; from_; to_; body; _ } as loop) () =
+  and serial_loop ctx ?(leading_doc = PPrint.empty) ?(rendering = Render_serial)
+      ({ i; from_; to_; body; _ } as loop) () : rendered_loop =
     let open PPrint in
-    (* gh-490 guard-fusion peephole: a body-wrapping symbolic-extent guard [if (i < s)] (with [s] a
-       kernel parameter, not an enclosing loop index) hoists into the loop header as [i <= to_ && i
-       < s]. The iteration variable is monotone, so once the guard fails it stays false: exiting the
-       loop is equivalent to skipping the remaining iterations. *)
-    let fused =
-      match body with
-      | If
-          {
-            cond =
-              ( Binop
-                  ( Ops.Cmplt,
-                    (Embed_index (Indexing.Iterator i'), _),
-                    (Embed_index (Indexing.Iterator s), _) ),
-                _ );
-            body = inner;
-          }
-        when Indexing.equal_symbol i' i
-             && not (List.mem !(ctx.serial_loop_stack) s ~equal:Indexing.equal_symbol) ->
-          Some (s, inner)
-      | _ -> None
-    in
-    let guard_doc =
-      match fused with
-      | None -> empty
-      | Some (s, _) -> string " && " ^^ pp_symbol i ^^ string " < " ^^ pp_symbol s
-    in
-    let header =
-      string ("for (" ^ B.loop_index_type)
-      ^^ pp_symbol i ^^ string " = " ^^ PPrint.OCaml.int from_ ^^ semi ^^ space ^^ pp_symbol i
-      ^^ string " <= " ^^ PPrint.OCaml.int to_ ^^ guard_doc ^^ semi ^^ space ^^ string "++"
-      ^^ pp_symbol i ^^ string ")"
-    in
-    ctx.serial_loop_stack := i :: !(ctx.serial_loop_stack);
-    let body_ir = body in
-    let body =
-      Exn.protect
-        ~f:(fun () -> (body_doc ctx loop) ?body:(Option.map fused ~f:snd) ())
-        ~finally:(fun () -> ctx.serial_loop_stack := List.tl_exn !(ctx.serial_loop_stack))
-    in
-    (* gh-487 phase 2: the rotor loop of async-staged pipelined tiles opens each iteration with
-       wait-then-barrier — the calling thread's outstanding copies (the prefetch issued one
-       iteration back, or the prologue) complete, then the barrier publishes them to the workgroup
-       before the compute's reads. When the IR body still opens with its own [Workgroup_barrier]
-       (un-elided form), only the wait is prepended; when [Schedule.elide_staged_barriers] dropped
-       that opener against the previous iteration's trailing [Tile_mma] bracket — sound for
-       synchronous stores, which that bracket publishes — the async arm re-inserts it, since a
-       barrier BEFORE the wait publishes nothing (and the intrinsic's leading bracket cannot be
-       relied on: the fragment-scope form opens it once outside the loop, not per iteration). *)
-    let async_prefix =
-      match B.async_copy with
-      | Some ac
-        when Map.existsi !(ctx.current_pipelined) ~f:(fun ~key ~data ->
-                 Set.mem !(ctx.current_async_tiles) key
-                 && Indexing.equal_symbol data.Low_level.pt_rotor i) ->
-          let rec first_real = function
-            | (Low_level.Noop | Low_level.Comment _) :: tl -> first_real tl
-            | hd :: _ -> Some hd
-            | [] -> None
-          in
-          let has_leading_barrier =
-            match first_real (Low_level.flat_lines [ body_ir ]) with
-            | Some Low_level.Workgroup_barrier -> true
-            | _ -> false
-          in
-          string ac.ac_wait_all ^^ hardline
-          ^^
-          if has_leading_barrier then empty
-          else string (Option.value_exn B.barrier_syntax) ^^ hardline
-      | _ -> empty
-    in
-    group
-      (header ^^ space ^^ lbrace ^^ nest 2 (hardline ^^ async_prefix ^^ body) ^^ hardline ^^ rbrace)
+    render_loop ctx loop rendering (fun () ->
+        (* gh-490 guard-fusion peephole: a body-wrapping symbolic-extent guard [if (i < s)] (with
+           [s] a kernel parameter, not an enclosing loop index) hoists into the loop header as [i <=
+           to_ && i < s]. The iteration variable is monotone, so once the guard fails it stays
+           false: exiting the loop is equivalent to skipping the remaining iterations. *)
+        let fused =
+          match body with
+          | If
+              {
+                cond =
+                  ( Binop
+                      ( Ops.Cmplt,
+                        (Embed_index (Indexing.Iterator i'), _),
+                        (Embed_index (Indexing.Iterator s), _) ),
+                    _ );
+                body = inner;
+              }
+            when Indexing.equal_symbol i' i
+                 && not (List.mem !(ctx.serial_loop_stack) s ~equal:Indexing.equal_symbol) ->
+              Some (s, inner)
+          | _ -> None
+        in
+        let guard_doc =
+          match fused with
+          | None -> empty
+          | Some (s, _) -> string " && " ^^ pp_symbol i ^^ string " < " ^^ pp_symbol s
+        in
+        let header =
+          string ("for (" ^ B.loop_index_type)
+          ^^ pp_symbol i ^^ string " = " ^^ PPrint.OCaml.int from_ ^^ semi ^^ space ^^ pp_symbol i
+          ^^ string " <= " ^^ PPrint.OCaml.int to_ ^^ guard_doc ^^ semi ^^ space ^^ string "++"
+          ^^ pp_symbol i ^^ string ")"
+        in
+        ctx.serial_loop_stack := i :: !(ctx.serial_loop_stack);
+        let body_ir = body in
+        let body =
+          Exn.protect
+            ~f:(fun () -> (body_doc ctx loop) ?body:(Option.map fused ~f:snd) ())
+            ~finally:(fun () -> ctx.serial_loop_stack := List.tl_exn !(ctx.serial_loop_stack))
+        in
+        (* gh-487 phase 2: the rotor loop of async-staged pipelined tiles opens each iteration with
+           wait-then-barrier — the calling thread's outstanding copies (the prefetch issued one
+           iteration back, or the prologue) complete, then the barrier publishes them to the
+           workgroup before the compute's reads. When the IR body still opens with its own
+           [Workgroup_barrier] (un-elided form), only the wait is prepended; when
+           [Schedule.elide_staged_barriers] dropped that opener against the previous iteration's
+           trailing [Tile_mma] bracket — sound for synchronous stores, which that bracket publishes
+           — the async arm re-inserts it, since a barrier BEFORE the wait publishes nothing (and the
+           intrinsic's leading bracket cannot be relied on: the fragment-scope form opens it once
+           outside the loop, not per iteration). *)
+        let async_prefix =
+          match B.async_copy with
+          | Some ac
+            when Map.existsi !(ctx.current_pipelined) ~f:(fun ~key ~data ->
+                     Set.mem !(ctx.current_async_tiles) key
+                     && Indexing.equal_symbol data.Low_level.pt_rotor i) ->
+              let rec first_real = function
+                | (Low_level.Noop | Low_level.Comment _) :: tl -> first_real tl
+                | hd :: _ -> Some hd
+                | [] -> None
+              in
+              let has_leading_barrier =
+                match first_real (Low_level.flat_lines [ body_ir ]) with
+                | Some Low_level.Workgroup_barrier -> true
+                | _ -> false
+              in
+              string ac.ac_wait_all ^^ hardline
+              ^^
+              if has_leading_barrier then empty
+              else string (Option.value_exn B.barrier_syntax) ^^ hardline
+          | _ -> empty
+        in
+        leading_doc
+        ^^ group
+             (header ^^ space ^^ lbrace
+             ^^ nest 2 (hardline ^^ async_prefix ^^ body)
+             ^^ hardline ^^ rbrace))
   (* [fallback] renders the loop when the backend binds no hardware register for it — the dispatch
      passes the gh-ocannl-639 widening-then-serial fallback, so a hardware-annotated reduction
      serialized for lack of a hardware index (cc's [Workgroup_reduce] among others) keeps the same
      accumulator width as the [Serial] spelling of the same loop. *)
 
-  and hardware_binding ctx ({ i; _ } as loop) ?(fallback = serial_loop ctx loop) kind =
+  and hardware_binding ctx ({ i; _ } as loop) ?(fallback = serial_loop ctx loop) kind :
+      rendered_loop =
     let open PPrint in
     let axis_info =
       match
@@ -7922,24 +8128,25 @@ module C_syntax (B : C_syntax_config) = struct
     match bound_register { axis_info with ha_kind = kind } with
     | None -> fallback ()
     | Some reg ->
-        let cast = "(" ^ String.strip B.loop_index_type ^ ")" in
-        let expr =
-          match fold with
-          | None | Some (1, None) -> cast ^ reg
-          | Some (stride, cap) ->
-              let e = cast ^ reg in
-              let e = if stride > 1 then e ^ " / " ^ Int.to_string stride else e in
-              Option.value_map cap ~default:e ~f:(fun c -> e ^ " % " ^ Int.to_string c)
-        in
-        let binding =
-          string ("const " ^ B.loop_index_type) ^^ pp_symbol i ^^ string (" = " ^ expr ^ ";")
-        in
-        group
-          (lbrace
-          ^^ nest 2 (hardline ^^ binding ^^ hardline ^^ (body_doc ctx loop) ())
-          ^^ hardline ^^ rbrace)
+        render_loop ctx loop (Render_hardware_binding kind) (fun () ->
+            let cast = "(" ^ String.strip B.loop_index_type ^ ")" in
+            let expr =
+              match fold with
+              | None | Some (1, None) -> cast ^ reg
+              | Some (stride, cap) ->
+                  let e = cast ^ reg in
+                  let e = if stride > 1 then e ^ " / " ^ Int.to_string stride else e in
+                  Option.value_map cap ~default:e ~f:(fun c -> e ^ " % " ^ Int.to_string c)
+            in
+            let binding =
+              string ("const " ^ B.loop_index_type) ^^ pp_symbol i ^^ string (" = " ^ expr ^ ";")
+            in
+            group
+              (lbrace
+              ^^ nest 2 (hardline ^^ binding ^^ hardline ^^ (body_doc ctx loop) ())
+              ^^ hardline ^^ rbrace))
 
-  and parallel_grid_loop ctx ({ i; to_; _ } as loop) () =
+  and parallel_grid_loop ctx ({ i; to_; _ } as loop) () : rendered_loop =
     let open PPrint in
     (* Pool-backed Grid rendering (gh-ocannl-164): contiguous chunks of the grid extent execute on
        the process-global native pool ([dispatch_apply] / OpenMP); [Workgroup] loops and nested
@@ -7949,63 +8156,68 @@ module C_syntax (B : C_syntax_config) = struct
     let target = min B.parallel_grid_chunks extent in
     let grain = (extent + target - 1) / target in
     let nchunks = (extent + grain - 1) / grain in
-    let it = B.loop_index_type in
-    let ident = symbol_ident i in
-    let chunk_d, lo_d, hi_d = grid_chunk_derivations in
-    let chunk = derived_name chunk_d ident
-    and lo = derived_name lo_d ident
-    and hi = derived_name hi_d ident in
-    let decls =
-      string (Printf.sprintf "const %s%s = (%s)(%s * %d);" it lo (String.strip it) chunk grain)
-      ^^ hardline
-      ^^ string
-           (Printf.sprintf "const %s%s = %s + %d <= %d ? %s + %d : %d;" it hi lo grain extent lo
-              grain extent)
-    in
-    (* Locals privatized to this loop (see [parallel_grid_safe]): block-scope arrays inside the
-       chunk body, one copy per chunk -- iterations rewrite them wholly before reading, so per-chunk
-       storage matches the serial semantics. Past the chunk's stack budget they are heap arrays, one
-       allocation per chunk, freed when the chunk ends (gh-ocannl-1669). *)
-    let privatized = Option.value ~default:[] (Map.find !(ctx.current_grid_private) i) in
-    let heap = heap_locals ~budget:chunk_stack_locals_bytes privatized in
-    let decls =
-      let zero_init tn =
-        Hashtbl.find ctx.current_traced_store tn
-        |> Option.value_map ~default:false ~f:(fun node -> node.Low_level.zero_initialized_by_code)
-      in
-      List.fold privatized ~init:decls ~f:(fun acc tn ->
-          acc ^^ hardline ^^ local_array_decl ~heap:(Set.mem heap tn) ~zero_init:(zero_init tn) tn)
-    in
-    let inner =
-      string (Printf.sprintf "for (%s%s = %s; %s < %s; ++%s)" it ident lo ident hi ident)
-      ^^ space ^^ lbrace
-      ^^ nest 2 (hardline ^^ (body_doc ctx loop) ())
-      ^^ hardline ^^ rbrace
-      ^^ concat_map
-           (fun tn -> hardline ^^ heap_local_free tn)
-           (List.filter privatized ~f:(Set.mem heap))
-    in
-    let comment =
-      string
-        (Printf.sprintf "/* Pool-backed Grid rendering: %d chunks of up to %d. */" nchunks grain)
-    in
-    match B.parallel_grid_syntax with
-    | `Dispatch ->
-        comment ^^ hardline
-        ^^ string
-             (Printf.sprintf "dispatch_apply((size_t)%d, DISPATCH_APPLY_AUTO, ^(size_t %s) {"
-                nchunks chunk)
-        ^^ nest 2 (hardline ^^ decls ^^ hardline ^^ inner)
-        ^^ hardline ^^ string "});"
-    | `Openmp ->
-        comment ^^ hardline
-        ^^ string "#pragma omp parallel for schedule(static)"
-        ^^ hardline
-        ^^ string (Printf.sprintf "for (%s%s = 0; %s < %d; ++%s)" it chunk chunk nchunks chunk)
-        ^^ space ^^ lbrace
-        ^^ nest 2 (hardline ^^ decls ^^ hardline ^^ inner)
-        ^^ hardline ^^ rbrace
-    | `None -> assert false
+    render_loop ctx loop
+      (Render_parallel_grid { chunks = nchunks })
+      (fun () ->
+        let it = B.loop_index_type in
+        let ident = symbol_ident i in
+        let chunk_d, lo_d, hi_d = grid_chunk_derivations in
+        let chunk = derived_name chunk_d ident
+        and lo = derived_name lo_d ident
+        and hi = derived_name hi_d ident in
+        let decls =
+          string (Printf.sprintf "const %s%s = (%s)(%s * %d);" it lo (String.strip it) chunk grain)
+          ^^ hardline
+          ^^ string
+               (Printf.sprintf "const %s%s = %s + %d <= %d ? %s + %d : %d;" it hi lo grain extent lo
+                  grain extent)
+        in
+        (* Locals privatized to this loop (see [parallel_grid_safe]): block-scope arrays inside the
+           chunk body, one copy per chunk -- iterations rewrite them wholly before reading, so
+           per-chunk storage matches the serial semantics. Past the chunk's stack budget they are
+           heap arrays, one allocation per chunk, freed when the chunk ends (gh-ocannl-1669). *)
+        let privatized = Option.value ~default:[] (Map.find !(ctx.current_grid_private) i) in
+        let heap = heap_locals ~budget:chunk_stack_locals_bytes privatized in
+        let decls =
+          let zero_init tn =
+            Hashtbl.find ctx.current_traced_store tn
+            |> Option.value_map ~default:false ~f:(fun node ->
+                node.Low_level.zero_initialized_by_code)
+          in
+          List.fold privatized ~init:decls ~f:(fun acc tn ->
+              acc ^^ hardline
+              ^^ local_array_decl ~heap:(Set.mem heap tn) ~zero_init:(zero_init tn) tn)
+        in
+        let inner =
+          string (Printf.sprintf "for (%s%s = %s; %s < %s; ++%s)" it ident lo ident hi ident)
+          ^^ space ^^ lbrace
+          ^^ nest 2 (hardline ^^ (body_doc ctx loop) ())
+          ^^ hardline ^^ rbrace
+          ^^ concat_map
+               (fun tn -> hardline ^^ heap_local_free tn)
+               (List.filter privatized ~f:(Set.mem heap))
+        in
+        let comment =
+          string
+            (Printf.sprintf "/* Pool-backed Grid rendering: %d chunks of up to %d. */" nchunks grain)
+        in
+        match B.parallel_grid_syntax with
+        | `Dispatch ->
+            comment ^^ hardline
+            ^^ string
+                 (Printf.sprintf "dispatch_apply((size_t)%d, DISPATCH_APPLY_AUTO, ^(size_t %s) {"
+                    nchunks chunk)
+            ^^ nest 2 (hardline ^^ decls ^^ hardline ^^ inner)
+            ^^ hardline ^^ string "});"
+        | `Openmp ->
+            comment ^^ hardline
+            ^^ string "#pragma omp parallel for schedule(static)"
+            ^^ hardline
+            ^^ string (Printf.sprintf "for (%s%s = 0; %s < %d; ++%s)" it chunk chunk nchunks chunk)
+            ^^ space ^^ lbrace
+            ^^ nest 2 (hardline ^^ decls ^^ hardline ^^ inner)
+            ^^ hardline ^^ rbrace
+        | `None -> assert false)
   (* --- Shared analysis for the explicit-SIMD ([Vectorized]) and warp-shuffle ([Workgroup_reduce])
      renderings below. --- *)
 
@@ -8293,7 +8505,7 @@ module C_syntax (B : C_syntax_config) = struct
      serial loop. The main loop advances by [lanes]; a serial remainder loop reuses [body_doc].
      Anything else falls back to [vectorize_pragma] / serial. *)
 
-  and try_vectorize ctx ({ i; from_; to_; body; _ } as loop) () : PPrint.document option =
+  and try_vectorize ctx ({ i; from_; to_; body; _ } as loop) () : rendered_loop option =
     let open PPrint in
     try
       if B.vector_file.bytes < 8 || from_ <> 0 || Utils.debug_log_from_routines () then
@@ -8491,21 +8703,25 @@ module C_syntax (B : C_syntax_config) = struct
       let body_vec = separate hardline (List.rev !stmts_docs) in
       note_vector_width ctx ~prec ~lanes;
       Some
-        (string
-           (Printf.sprintf "{ /* Vectorized rendering: %d lanes of %s. */" lanes
-              (B.typ_of_prec prec))
-        ^^ nest 2
-             (hardline ^^ prelude
-             ^^ string (Printf.sprintf "%s%s = 0;" it ivar)
-             ^^ hardline
-             ^^ string
-                  (Printf.sprintf "for (; %s + %d <= %d; %s += %d) {" ivar lanes extent ivar lanes)
-             ^^ nest 2 (hardline ^^ body_vec)
-             ^^ hardline ^^ string "}" ^^ hardline
-             ^^ string (Printf.sprintf "for (; %s <= %d; ++%s) {" ivar to_ ivar)
-             ^^ nest 2 (hardline ^^ (body_doc ctx loop) ())
-             ^^ hardline ^^ string "}")
-        ^^ hardline ^^ string "}")
+        (render_loop ctx loop
+           (Render_simd_elementwise { lanes })
+           (fun () ->
+             string
+               (Printf.sprintf "{ /* Vectorized rendering: %d lanes of %s. */" lanes
+                  (B.typ_of_prec prec))
+             ^^ nest 2
+                  (hardline ^^ prelude
+                  ^^ string (Printf.sprintf "%s%s = 0;" it ivar)
+                  ^^ hardline
+                  ^^ string
+                       (Printf.sprintf "for (; %s + %d <= %d; %s += %d) {" ivar lanes extent ivar
+                          lanes)
+                  ^^ nest 2 (hardline ^^ body_vec)
+                  ^^ hardline ^^ string "}" ^^ hardline
+                  ^^ string (Printf.sprintf "for (; %s <= %d; ++%s) {" ivar to_ ivar)
+                  ^^ nest 2 (hardline ^^ (body_doc ctx loop) ())
+                  ^^ hardline ^^ string "}")
+             ^^ hardline ^^ string "}"))
     with Vectorization_declined -> None
   (* SIMD reduction rendering of a [Vectorized] accumulation loop (gh-ocannl-468; ggml's
      [ggml_vec_dot_f32] pattern, ggml/src/ggml-cpu/vec.h). A recognized accumulation body [acc[idcs]
@@ -8521,7 +8737,7 @@ module C_syntax (B : C_syntax_config) = struct
      [Workgroup_reduce] warp shuffles instead, and a bailed-out accumulation falls back to a plain
      serial loop (never to [vectorize_pragma], which would assert iteration independence). *)
 
-  and try_vectorize_reduce ctx ({ i; from_; to_; body; _ } as loop) () : PPrint.document option =
+  and try_vectorize_reduce ctx ({ i; from_; to_; body; _ } as loop) () : rendered_loop option =
     let open PPrint in
     try
       (match B.vector_style with
@@ -8727,25 +8943,33 @@ module C_syntax (B : C_syntax_config) = struct
          records nothing here. *)
       Option.iter decided ~f:(fun sa -> (record_peel_site ctx loop) (width_site sa));
       note_vector_width ctx ~prec ~lanes;
+      let target = match acc_target with `Cell _ -> `Cell | `Local _ -> `Local in
       Some
-        (string
-           (Printf.sprintf "{ /* Vectorized reduction rendering: %d chain(s) of %d lanes of %s. */"
-              chains lanes (B.typ_of_prec prec))
-        ^^ nest 2
-             (hardline
-             ^^ separate hardline (typedef_doc :: registered_typedefs extra_typedefs)
-             ^^ hardline
-             ^^ string (Printf.sprintf "%s%s = 0;" it ivar)
-             ^^ hardline ^^ separate hardline init_docs ^^ hardline
-             ^^ string
-                  (Printf.sprintf "for (%s = %d; %s + %d <= %d; %s += %d) {" ivar step ivar step
-                     extent ivar step)
-             ^^ nest 2 (hardline ^^ separate hardline update_docs)
-             ^^ hardline ^^ string "}" ^^ hardline ^^ separate hardline folds ^^ hardline
-             ^^ string (Printf.sprintf "for (; %s <= %d; ++%s) {" ivar to_ ivar)
-             ^^ nest 2 (hardline ^^ tail_body)
-             ^^ hardline ^^ string "}" ^^ hardline ^^ store)
-        ^^ hardline ^^ string "}")
+        (render_loop ctx loop
+           (Render_simd_reduce { target; lanes; chains })
+           (fun () ->
+             (match acc_target with
+             | `Cell (tn, _) -> record_store_render ctx tn Store_simd_epilogue
+             | `Local _ -> ());
+             string
+               (Printf.sprintf
+                  "{ /* Vectorized reduction rendering: %d chain(s) of %d lanes of %s. */" chains
+                  lanes (B.typ_of_prec prec))
+             ^^ nest 2
+                  (hardline
+                  ^^ separate hardline (typedef_doc :: registered_typedefs extra_typedefs)
+                  ^^ hardline
+                  ^^ string (Printf.sprintf "%s%s = 0;" it ivar)
+                  ^^ hardline ^^ separate hardline init_docs ^^ hardline
+                  ^^ string
+                       (Printf.sprintf "for (%s = %d; %s + %d <= %d; %s += %d) {" ivar step ivar
+                          step extent ivar step)
+                  ^^ nest 2 (hardline ^^ separate hardline update_docs)
+                  ^^ hardline ^^ string "}" ^^ hardline ^^ separate hardline folds ^^ hardline
+                  ^^ string (Printf.sprintf "for (; %s <= %d; ++%s) {" ivar to_ ivar)
+                  ^^ nest 2 (hardline ^^ tail_body)
+                  ^^ hardline ^^ string "}" ^^ hardline ^^ store)
+             ^^ hardline ^^ string "}"))
     with Vectorization_declined -> None
 
   (* The lane all-reduce (gh-ocannl-1124): a [Workgroup_reduce] loop whose body is ONE accumulation
@@ -8792,7 +9016,7 @@ module C_syntax (B : C_syntax_config) = struct
 
      [None] for any other body or local: those keep [try_warp_reduce]'s cell-target rendering and
      its fallbacks, the hardware binding among them. *)
-  and try_lane_all_reduce ctx ({ i; from_; to_; body; _ } as loop) () : PPrint.document option =
+  and try_lane_all_reduce ctx ({ i; from_; to_; body; _ } as loop) () : rendered_loop option =
     let open PPrint in
     let extent = to_ - from_ + 1 in
     let stmts =
@@ -8868,68 +9092,74 @@ module C_syntax (B : C_syntax_config) = struct
               (match shuffle with
               | None -> (serial_loop ctx loop) ()
               | Some (reg, num_warps) ->
-                  let ident = symbol_ident i in
-                  let ctyp = B.typ_of_prec prec in
-                  let cast = "(" ^ String.strip B.loop_index_type ^ ")" in
-                  let vname = derived_name (fst lane_reduce_derivations) ident in
-                  let combine a b = B.binop_syntax prec op a b in
-                  let shuffle_stage off =
-                    string (vname ^ " = ")
-                    ^^ combine (string vname)
-                         (string (Printf.sprintf "ocannl_shfl_xor(%s, %d)" vname off))
-                    ^^ semi
-                  in
-                  let local_defs, contrib_doc = (pp_scalar ctx) prec contrib in
-                  let local_defs = pp_local_defs ~check:(None, [ (prec, contrib) ]) local_defs in
-                  let binding =
-                    string ("const " ^ B.loop_index_type)
-                    ^^ pp_symbol i
-                    ^^ string (" = " ^ cast ^ reg ^ ";")
-                  in
-                  let warp = B.warp_size in
-                  (* Past one simdgroup: the partials through workgroup-shared memory, between the
-                     two barriers every lane reaches (see the comment above). *)
-                  let across_simdgroups =
-                    if num_warps = 1 then empty
-                    else
-                      let pname = derived_name (snd lane_reduce_derivations) ident in
-                      let barrier = string (Option.value_exn ~here:[%here] B.barrier_syntax) in
+                  render_loop ctx loop
+                    (Render_lane_all_reduce { warps = num_warps })
+                    (fun () ->
+                      let ident = symbol_ident i in
+                      let ctyp = B.typ_of_prec prec in
+                      let cast = "(" ^ String.strip B.loop_index_type ^ ")" in
+                      let vname = derived_name (fst lane_reduce_derivations) ident in
+                      let combine a b = B.binop_syntax prec op a b in
+                      let shuffle_stage off =
+                        string (vname ^ " = ")
+                        ^^ combine (string vname)
+                             (string (Printf.sprintf "ocannl_shfl_xor(%s, %d)" vname off))
+                        ^^ semi
+                      in
+                      let local_defs, contrib_doc = (pp_scalar ctx) prec contrib in
+                      let local_defs =
+                        pp_local_defs ~check:(None, [ (prec, contrib) ]) local_defs
+                      in
+                      let binding =
+                        string ("const " ^ B.loop_index_type)
+                        ^^ pp_symbol i
+                        ^^ string (" = " ^ cast ^ reg ^ ";")
+                      in
+                      let warp = B.warp_size in
+                      (* Past one simdgroup: the partials through workgroup-shared memory, between
+                         the two barriers every lane reaches (see the comment above). *)
+                      let across_simdgroups =
+                        if num_warps = 1 then empty
+                        else
+                          let pname = derived_name (snd lane_reduce_derivations) ident in
+                          let barrier = string (Option.value_exn ~here:[%here] B.barrier_syntax) in
+                          string
+                            (Printf.sprintf "%s%s %s[%d];"
+                               (Option.value_exn ~here:[%here] B.shared_decl_prefix)
+                               ctyp pname num_warps)
+                          ^^ hardline
+                          ^^ string
+                               (Printf.sprintf "if ((%s & %d) == 0) { %s[%s >> %d] = %s; }" ident
+                                  (warp - 1) pname ident (Int.ceil_log2 warp) vname)
+                          ^^ hardline ^^ barrier ^^ hardline
+                          ^^ string (Printf.sprintf "%s = %s[0];" vname pname)
+                          ^^ concat
+                               (List.map (List.range 1 num_warps) ~f:(fun w ->
+                                    hardline
+                                    ^^ string (vname ^ " = ")
+                                    ^^ combine (string vname)
+                                         (string (Printf.sprintf "%s[%d]" pname w))
+                                    ^^ semi))
+                          ^^ hardline ^^ barrier ^^ hardline
+                      in
                       string
-                        (Printf.sprintf "%s%s %s[%d];"
-                           (Option.value_exn ~here:[%here] B.shared_decl_prefix)
-                           ctyp pname num_warps)
-                      ^^ hardline
-                      ^^ string
-                           (Printf.sprintf "if ((%s & %d) == 0) { %s[%s >> %d] = %s; }" ident
-                              (warp - 1) pname ident (Int.ceil_log2 warp) vname)
-                      ^^ hardline ^^ barrier ^^ hardline
-                      ^^ string (Printf.sprintf "%s = %s[0];" vname pname)
-                      ^^ concat
-                           (List.map (List.range 1 num_warps) ~f:(fun w ->
-                                hardline
-                                ^^ string (vname ^ " = ")
-                                ^^ combine (string vname) (string (Printf.sprintf "%s[%d]" pname w))
-                                ^^ semi))
-                      ^^ hardline ^^ barrier ^^ hardline
-                  in
-                  string
-                    (Printf.sprintf
-                       "{ /* Workgroup_reduce lane all-reduce into a scope local: extent %d = %s; \
-                        the total lands in every lane. */"
-                       extent
-                       (if num_warps = 1 then "one simdgroup"
-                        else Printf.sprintf "%d simdgroups of %d" num_warps warp))
-                  ^^ nest 2
-                       (hardline ^^ binding ^^ hardline
-                       ^^ (if PPrint.is_empty local_defs then empty else local_defs ^^ hardline)
-                       ^^ string (ctyp ^ " " ^ vname ^ " = ")
-                       ^^ contrib_doc ^^ semi ^^ hardline
-                       ^^ separate hardline
-                            (List.map (warp_shuffle_stages ~width:warp) ~f:shuffle_stage)
-                       ^^ hardline ^^ across_simdgroups ^^ pp_scope_id id ^^ string " = "
-                       ^^ combine (pp_scope_id id) (string vname)
-                       ^^ semi)
-                  ^^ hardline ^^ rbrace))
+                        (Printf.sprintf
+                           "{ /* Workgroup_reduce lane all-reduce into a scope local: extent %d = \
+                            %s; the total lands in every lane. */"
+                           extent
+                           (if num_warps = 1 then "one simdgroup"
+                            else Printf.sprintf "%d simdgroups of %d" num_warps warp))
+                      ^^ nest 2
+                           (hardline ^^ binding ^^ hardline
+                           ^^ (if PPrint.is_empty local_defs then empty else local_defs ^^ hardline)
+                           ^^ string (ctyp ^ " " ^ vname ^ " = ")
+                           ^^ contrib_doc ^^ semi ^^ hardline
+                           ^^ separate hardline
+                                (List.map (warp_shuffle_stages ~width:warp) ~f:shuffle_stage)
+                           ^^ hardline ^^ across_simdgroups ^^ pp_scope_id id ^^ string " = "
+                           ^^ combine (pp_scope_id id) (string vname)
+                           ^^ semi)
+                      ^^ hardline ^^ rbrace)))
     | _ -> None
   (* Warp-shuffle rendering of a [Workgroup_reduce] accumulation loop (gh-ocannl-462; llm.c's
      [warpReduceSum] / [blockReduce] idiom, llmc/cuda_utils.cuh). Recognizes a body that is a single
@@ -8953,7 +9183,7 @@ module C_syntax (B : C_syntax_config) = struct
      not at workgroup slot 0, ...) raises: binding the index like a plain [Workgroup] axis would
      make every thread race the read-modify-write. *)
 
-  and try_warp_reduce ctx ({ i; from_; to_; body; _ } as loop) () : PPrint.document option =
+  and try_warp_reduce ctx ({ i; from_; to_; body; _ } as loop) () : rendered_loop option =
     let open PPrint in
     if B.warp_size <= 0 then None
     else
@@ -9238,19 +9468,24 @@ module C_syntax (B : C_syntax_config) = struct
              width from. *)
           (record_peel_site ctx loop) (width_site sa);
           Some
-            (string
-               (Printf.sprintf
-                  "{ /* Workgroup_reduce warp-shuffle rendering: extent %d = %d simdgroup(s) of \
-                   %d. */"
-                  extent num_warps warp)
-            ^^ nest 2
-                 (hardline ^^ binding ^^ hardline
-                 ^^ (if PPrint.is_empty local_defs then empty else local_defs ^^ hardline)
-                 ^^ string (ctyp ^ " " ^ vname ^ " = ")
-                 ^^ contrib_doc ^^ semi ^^ hardline
-                 ^^ separate hardline (List.map (warp_shuffle_stages ~width:warp) ~f:shuffle_stage)
-                 ^^ hardline ^^ tail)
-            ^^ hardline ^^ rbrace)
+            (render_loop ctx loop
+               (Render_warp_shuffle { warps = num_warps })
+               (fun () ->
+                 record_store_render ctx tn Store_warp_epilogue;
+                 string
+                   (Printf.sprintf
+                      "{ /* Workgroup_reduce warp-shuffle rendering: extent %d = %d simdgroup(s) \
+                       of %d. */"
+                      extent num_warps warp)
+                 ^^ nest 2
+                      (hardline ^^ binding ^^ hardline
+                      ^^ (if PPrint.is_empty local_defs then empty else local_defs ^^ hardline)
+                      ^^ string (ctyp ^ " " ^ vname ^ " = ")
+                      ^^ contrib_doc ^^ semi ^^ hardline
+                      ^^ separate hardline
+                           (List.map (warp_shuffle_stages ~width:warp) ~f:shuffle_stage)
+                      ^^ hardline ^^ tail)
+                 ^^ hardline ^^ rbrace))
   (* gh-ocannl-639 / gh-ocannl-693: the plain-serial fallback of a reduction nest holds its
      accumulator in a scope LOCAL across the whole nest and stores once, after the nest — the same
      residency as [try_vectorize_reduce]'s epilogue, [try_register_tile]'s C-tile and virtual scopes
@@ -9307,7 +9542,7 @@ module C_syntax (B : C_syntax_config) = struct
      its reads receive the same expression-level cast. *)
 
   and try_localize_serial_reduce ctx ({ i; from_; to_; axis; in_loop; _ } as loop) () :
-      PPrint.document option =
+      rendered_loop option =
     (* The decision is the shared one above (gh-ocannl-754); this arm only renders what it says and
        records it. *)
     match (decide_accum_width ctx loop) () with
@@ -9321,76 +9556,89 @@ module C_syntax (B : C_syntax_config) = struct
         (record_peel_site ctx loop) (Peel_not_attempted skip);
         None
     | Accum_base { tn; idcs; base; debug; rebuild; verdict; pinned = None } ->
-        let doc =
-          let id, update_code =
-            match base with
-            | `Update llsc ->
-                let id = Low_level.get_scope tn in
-                (* Codegen-minted, so the census over [B.procs] never saw it: register the scope as
-                   an accumulator or [scope_prec_of] would resolve it at [comp_prec] and defeat the
-                   widening on the backends where the two differ (gh-ocannl-663). Fresh ids per
-                   mint, so no collision with a censused verdict. *)
-                Hash_set.add ctx.accum_scope_ids id.Low_level.scope_id;
-                (id, Low_level.Set_local (id, Low_level.subst_accum_read ~tn ~idcs ~id llsc))
-            | `Scope (id, rest) ->
-                (* The scope-form base [Sched.Unroll ~materialize:true] minted (or a previous level
-                   of this very rewrite): hoist it through the enclosing reduction levels by moving
-                   its init above them and keeping its updates inside — otherwise a partially
-                   materialized nest would store and narrow the accumulator once per remaining outer
-                   iteration. The scope id is reused, so the rng census's storage-precision marking
-                   still applies; at storage precision the hoist is value-neutral. *)
-                (id, Low_level.unflat_lines rest)
-          in
-          (* The level being rendered is re-wrapped around the rebuilt nest here; the peel never saw
-             its bounds, which is why the dead-level decline is the decision's and not the
-             peel's. *)
-          let rebuild_hook b = Low_level.For_loop { index = i; from_; to_; body = b; axis } in
-          let rec loop_symbols = function
-            | Low_level.For_loop { index; body; _ } | Scan_loop { index; body; _ } ->
-                index :: loop_symbols body
-            | If { body; _ } -> loop_symbols body
-            | Seq (left, right) -> loop_symbols left @ loop_symbols right
-            | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_local _
-            | Set_dynamic _ | Set_from_vec _ | Declare_local _ | Workgroup_barrier | Tile_mma _ ->
-                []
-          in
-          let localized_symbols = i :: loop_symbols (rebuild Low_level.Noop) in
-          let scope_body =
-            let opening =
-              match !(ctx.current_localized_zero_seed) with
-              | Some seed
-                when Tn.equal seed.lzs_tn tn
-                     && Array.equal Indexing.equal_axis_index seed.lzs_idcs idcs ->
-                  if
-                    List.for_all seed.lzs_repeated ~f:(fun repeated ->
-                        List.mem localized_symbols repeated ~equal:Indexing.equal_symbol)
-                  then begin
-                    seed.lzs_consumed <- true;
-                    Low_level.Constant 0.0
-                  end
-                  else Low_level.Get (tn, idcs)
-              | _ -> Low_level.Get (tn, idcs)
-            in
-            Low_level.Seq (Low_level.Set_local (id, opening), rebuild_hook (rebuild update_code))
-          in
-          (without_census ctx) (fun () ->
-              (pp_ll ctx) ~in_loop
-                (Low_level.Set
-                   {
-                     tn;
-                     idcs;
-                     llsc =
-                       Local_scope
-                         { id; body = scope_body; orig_indices = idcs; mint = Schedule_minted };
-                     debug;
-                   }))
+        let rendered =
+          render_loop ctx loop Render_localized_peel (fun () ->
+              let id, update_code =
+                match base with
+                | `Update llsc ->
+                    let id = Low_level.get_scope tn in
+                    (* Codegen-minted, so the census over [B.procs] never saw it: register the scope
+                       as an accumulator or [scope_prec_of] would resolve it at [comp_prec] and
+                       defeat the widening on the backends where the two differ (gh-ocannl-663).
+                       Fresh ids per mint, so no collision with a censused verdict. *)
+                    Hash_set.add ctx.accum_scope_ids id.Low_level.scope_id;
+                    (id, Low_level.Set_local (id, Low_level.subst_accum_read ~tn ~idcs ~id llsc))
+                | `Scope (id, rest) ->
+                    (* The scope-form base [Sched.Unroll ~materialize:true] minted (or a previous
+                       level of this very rewrite): hoist it through the enclosing reduction levels
+                       by moving its init above them and keeping its updates inside — otherwise a
+                       partially materialized nest would store and narrow the accumulator once per
+                       remaining outer iteration. The scope id is reused, so the rng census's
+                       storage-precision marking still applies; at storage precision the hoist is
+                       value-neutral. *)
+                    (id, Low_level.unflat_lines rest)
+              in
+              (* The level being rendered is re-wrapped around the rebuilt nest here; the peel never
+                 saw its bounds, which is why the dead-level decline is the decision's and not the
+                 peel's. *)
+              let rebuild_hook b = Low_level.For_loop { index = i; from_; to_; body = b; axis } in
+              let rec loop_symbols = function
+                | Low_level.For_loop { index; body; _ } | Scan_loop { index; body; _ } ->
+                    index :: loop_symbols body
+                | If { body; _ } -> loop_symbols body
+                | Seq (left, right) -> loop_symbols left @ loop_symbols right
+                | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_local _
+                | Set_dynamic _ | Set_from_vec _ | Declare_local _ | Workgroup_barrier | Tile_mma _
+                  ->
+                    []
+              in
+              let localized_symbols = i :: loop_symbols (rebuild Low_level.Noop) in
+              let scope_body =
+                let opening =
+                  match !(ctx.current_localized_zero_seed) with
+                  | Some seed
+                    when Tn.equal seed.lzs_tn tn
+                         && Array.equal Indexing.equal_axis_index seed.lzs_idcs idcs ->
+                      if
+                        List.for_all seed.lzs_repeated ~f:(fun repeated ->
+                            List.mem localized_symbols repeated ~equal:Indexing.equal_symbol)
+                      then begin
+                        seed.lzs_consumed <- true;
+                        Low_level.Constant 0.0
+                      end
+                      else Low_level.Get (tn, idcs)
+                  | _ -> Low_level.Get (tn, idcs)
+                in
+                Low_level.Seq (Low_level.Set_local (id, opening), rebuild_hook (rebuild update_code))
+              in
+              Hash_set.add ctx.peeled_scope_ids id.Low_level.scope_id;
+              (without_census ctx) (fun () ->
+                  Int.incr ctx.peel_scope_depth;
+                  Exn.protect
+                    ~f:(fun () ->
+                      (pp_ll ctx) ~in_loop
+                        (Low_level.Set
+                           {
+                             tn;
+                             idcs;
+                             llsc =
+                               Local_scope
+                                 {
+                                   id;
+                                   body = scope_body;
+                                   orig_indices = idcs;
+                                   mint = Schedule_minted;
+                                 };
+                             debug;
+                           }))
+                    ~finally:(fun () -> Int.decr ctx.peel_scope_depth)))
         in
         (record_peel_site ctx loop) (Peel_localized verdict);
-        Some doc
+        Some rendered
 
-  and localize_or_serial ctx loop () =
+  and localize_or_serial ctx loop () : rendered_loop =
     match (try_localize_serial_reduce ctx loop) () with
-    | Some doc -> doc
+    | Some rendered -> rendered
     | None -> (serial_loop ctx loop) ()
 
   (* gh-ocannl-2117: every scalar rendering goes through here, so under the test seam
@@ -9761,6 +10009,11 @@ module C_syntax (B : C_syntax_config) = struct
         mma_emitted_census = mma_emitted_census ();
         peel_census_enabled = ref !(peel_census_enabled ());
         peel_census = peel_census ();
+        render_census_enabled = ref !(render_census_enabled ());
+        render_loop_census = render_loop_census ();
+        render_store_census = render_store_census ();
+        peel_scope_depth = ref 0;
+        peeled_scope_ids = Hash_set.create (module Int);
         volatility_census_enabled = ref !(volatility_census_enabled ());
         volatility_census = volatility_census ();
         volatility_requested = volatility_requested ();

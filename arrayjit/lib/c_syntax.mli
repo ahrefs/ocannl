@@ -244,6 +244,111 @@ val peel_summary_string : peel_summary -> string
 val with_peel_census : (unit -> 'a) -> 'a * peel_summary
 (** Run [f] collecting the {!peel_census}, nesting additively; return its result and summary. *)
 
+(** Which codegen arm rendered one [For_loop] level (gh-ocannl-724). *)
+type loop_rendering =
+  | Render_serial
+      (** Plain serial [for] loop: [Serial], an unbound hardware axis, a declined [Vectorized]
+          accumulation or pragma-less [Vectorized] fallback, or a declined lane all-reduce. *)
+  | Render_vectorize_pragma
+      (** Serial [for] loop prefixed with {!C_syntax_config.vectorize_pragma} (a non-accumulating
+          [Vectorized] fallback). *)
+  | Render_localized_peel
+      (** [try_localize_serial_reduce] wrapped the level in a minted [Local_scope]; the peeled
+          levels re-render inside that scope and record their own arms with [in_peel_scope = true].
+      *)
+  | Render_unrolled of { copies : int }
+      (** [Unrolled] loop emitted as [copies] repeated index-bound blocks. *)
+  | Render_simd_reduce of { target : [ `Cell | `Local ]; lanes : int; chains : int }
+      (** [try_vectorize_reduce]: explicit SIMD accumulator grid folding into a memory cell or an
+          enclosing scope local. *)
+  | Render_simd_elementwise of { lanes : int }
+      (** [try_vectorize]: explicit SIMD elementwise loop. *)
+  | Render_warp_shuffle of { warps : int }
+      (** [try_warp_reduce]: [Workgroup_reduce] warp-shuffle tree over [warps] warps. *)
+  | Render_lane_all_reduce of { warps : int }
+      (** [try_lane_all_reduce]: [Workgroup_reduce] butterfly / cross-simdgroup all-reduce into a
+          scope local. *)
+  | Render_hardware_binding of [ `Grid | `Workgroup ]
+      (** [hardware_binding]: bound to a hardware grid or workgroup register. *)
+  | Render_parallel_grid of { chunks : int }
+      (** [parallel_grid_loop]: CPU thread-pool chunked [Grid] loop. *)
+[@@deriving sexp_of, equal]
+
+val loop_rendering_constructors : string list
+(** Every constructor name of {!loop_rendering}, in declaration order, derived by
+    [ppx_variants_conv]. *)
+
+val loop_rendering_name : loop_rendering -> string
+(** The constructor name of a {!loop_rendering} value, derived by [ppx_variants_conv]. *)
+
+type loop_render_entry = {
+  kernel : string;
+  axis : Low_level.axis_type;
+  in_peel_scope : bool;
+      (** [true] when this level was re-rendered inside a scope minted by {!Render_localized_peel}.
+      *)
+  rendering : loop_rendering;
+}
+[@@deriving sexp_of, equal]
+(** One rendered [For_loop] level in the per-level rendering census. *)
+
+(** How one emitted memory store to a tensor node rendered (gh-ocannl-724). *)
+type store_rendering =
+  | Store_from_scope of {
+      mint : Low_level.scope_mint;
+      peeled : bool;
+          (** [true] when [try_localize_serial_reduce] minted or hoisted this closing scope; [false]
+              when the [Local_scope] was already in the IR (virtualization or a schedule mint). *)
+      reads_target : int;
+          (** Direct [Get]/[Get_dynamic] reads of the written node inside the scope body (1 for an
+              opening load of an accumulated cell, 0 for an owned or zero-seeded accumulator). *)
+      has_where_update : bool;
+          (** Whether any [Set_local] to this scope's local inside the body updates through
+              {!Ops.Where}. *)
+    }
+  | Store_simd_epilogue
+      (** Closing fold of a cell-targeted {!Render_simd_reduce} grid into the target cell. *)
+  | Store_warp_epilogue
+      (** Closing lane-0 fold of a {!Render_warp_shuffle} tree into the target cell. *)
+  | Store_rmw of { reads_target : int }
+      (** Direct read-modify-write [Set]: RHS is not a closing [Local_scope] and reads the written
+          node [reads_target >= 1] times. *)
+  | Store_plain
+      (** Plain [Set] (including expanded [Zero_out]) that neither closes a [Local_scope] nor reads
+          the written node. *)
+[@@deriving sexp_of, equal]
+
+type store_render_entry = { kernel : string; tn_uid : int; rendering : store_rendering }
+[@@deriving sexp_of, equal]
+(** One emitted memory store in the per-level rendering census, keyed by the node's {!Tnode.t.uid}.
+*)
+
+type render_summary = {
+  loops : loop_render_entry list;
+      (** Every [For_loop] rendered during this compile, in pre-order emission order. *)
+  stores : store_render_entry list;
+      (** Every memory store ([Set], SIMD-reduce cell epilogue, warp-shuffle epilogue) emitted
+          during this compile, in emission order. *)
+}
+[@@deriving sexp_of, equal]
+(** What a compile's per-level rendering census says about the routine it produced. *)
+
+val render_census_enabled : unit -> bool ref
+(** This domain's switch for collecting the per-level rendering census. *)
+
+val render_loop_census : unit -> loop_render_entry list ref
+(** This domain's per-level loop rendering census, most recent first. *)
+
+val render_store_census : unit -> store_render_entry list ref
+(** This domain's memory store rendering census, most recent first. *)
+
+val render_summary_string : render_summary -> string
+(** The one-line rendering census: rendered loop arms and store count. *)
+
+val with_render_census : (unit -> 'a) -> 'a * render_summary
+(** Run [f] collecting the per-level rendering census, nesting additively; return its result and
+    summary. *)
+
 (** One serial accumulation's volatility-census entry, by the emitted identifier. *)
 type volatility_site =
   | Volatile_accumulation_reads of string
