@@ -15,10 +15,11 @@
    each makes the one before it trustworthy:
 
    - VALUE. A localizing member must agree BITWISE with the serial baseline's execution; a
-   read-modify-write member must agree bitwise with the host's per-step-narrowed reference. Both
-   references are exact, and they differ where it matters. The operands are multiples of 1/8 the
-   storage format holds without rounding, and their PARTIAL SUMS leave the range bf16 and f16 hold
-   without rounding (see {!cells}), so the two references differ at bf16 and f16 — proven here
+   read-modify-write member must agree bitwise with the host's per-step-narrowed reference. A
+   storage-width SIMD grid instead has its own host reference for its chain and lane order. The
+   serial references are exact, and they differ where it matters. The operands are multiples of 1/8
+   the storage format holds without rounding, and their PARTIAL SUMS leave the range bf16 and f16
+   hold without rounding (see {!cells}), so the two references differ at bf16 and f16 — proven here
    rather than assumed, by the "the whole-nest and per-step references differ" claims. At f32 they
    coincide, which is the identity-precision leg gh-ocannl-693 added: there the value claim pins
    substitution and iteration coverage rather than accumulator width. - FORM. The emitted kernel is
@@ -51,9 +52,8 @@
    whose accumulator is pinned to storage; a sibling statement; a data-dependent guard) under each
    retype kind are what pin that agreement: a retype must equal the serial rendering bitwise at a
    narrow storage precision where the residency is wider, which is where a width divergence shows.
-   Two census claims say which way the decision went: {!Widened_elsewhere} (the decision was wide
-   and the grid or the tree took it) and {!Pinned_to_storage} (the decision pinned, and nothing
-   widened).
+   Two census claims say which way the decision went: {!Ceded} (the grid or tree took the resolved
+   width) and {!Pinned_to_storage} (the decision pinned, and nothing widened).
 
    Two points of the space are deliberately absent, and saying so is part of defining the set:
 
@@ -145,9 +145,10 @@ let x_values = Array.init (rows * cols) ~f:(fun n -> cell (n / cols) (n % cols))
    accumulator to zero instead of loading [out[r]] would satisfy every form and every value claim —
    while the same [out[r] += x[r,k]] IR computes the wrong thing for any caller whose destination
    already holds data, which is what an accumulation into a pre-zeroed or previously-written node
-   is. In units of 1/8 these are 100, 107, 114: distinct, well inside bf16's exact range, and in the
-   same units as the operands so the sums stay f32-exact. *)
-let seed_value r = (100. +. (7. *. Float.of_int r)) /. 8.
+   is. In units of 1/8 these are 101, 108, 115: distinct, well inside bf16's exact range, and in the
+   same units as the operands so the sums stay f32-exact. Starting at 101 also separates the
+   half-width SIMD fold from a once-rounded wide sum. With 100 they coincide on NEON. *)
+let seed_value r = (101. +. (7. *. Float.of_int r)) /. 8.
 let out_seed = Array.init rows ~f:seed_value
 
 (* The bitwise premise of the reassociating members' f32 value claims (the note above [reference]):
@@ -222,7 +223,8 @@ let is_loop_rewrite (op : Sched.optop) =
    below, so it is created before the policy is resolved rather than at the first compile. *)
 let base_ctx = lazy (Context.auto ())
 let selected_backend = lazy (Context.backend_name (Lazy.force base_ctx))
-let native_fp16 = lazy (Context.hardware_limits (Lazy.force base_ctx)).native_fp16_arithmetic
+let hardware_limits = lazy (Context.hardware_limits (Lazy.force base_ctx))
+let native_fp16 = lazy (Lazy.force hardware_limits).native_fp16_arithmetic
 
 (* {1 Which reference the backend's policy selects}
 
@@ -758,18 +760,18 @@ type peel_claim =
           it owns its cell and opens from a zero-init rather than from a load of the node, which is
           why nothing here is a self-recurrence through memory. Distinct from {!Minted_upstream},
           where the peel was consulted at a real reduction site and refused. *)
-  | Widened_elsewhere of Cs.peel_verdict
-      (** The shared width decision (gh-ocannl-754) reached the base and said WIDE, deciding exactly
-          this, and the rendering holding the accumulator at that width is not a scope but the SIMD
-          grid or the shuffle tree: the census carries {!Cs.Peel_ceded} with this verdict, and no
-          site localized. What separates it from {!No_localization} is that the width was decided by
-          the same call the serial form consults, not by a recognizer of the rendering's own — which
-          is the whole of what gh-ocannl-754 changed. *)
+  | Ceded of Cs.peel_verdict
+      (** The shared width decision (gh-ocannl-754) reached and accepted the base. The SIMD grid or
+          shuffle tree holds the accumulator at the resolved width: the census carries
+          {!Cs.Peel_ceded} with this verdict, and no site localized. What separates it from
+          {!No_localization} is that the width was decided by the same call the serial form
+          consults, not by a recognizer of the rendering's own — which is the whole of what
+          gh-ocannl-754 changed. *)
   | Pinned_to_storage
       (** The shared width decision reached the base and PINNED it to storage width
           ({!Cs.Skip_accum_pinned}: the RNG carve-out), so no rendering widened: no site localized,
-          none ceded, and at least one recorded the pin. The claim of every RNG-bearing member,
-          whatever retype it is under. *)
+          none ceded, and at least one recorded the pin. A SIMD grid can take the pinned update when
+          its lanes already use storage width. *)
 
 let guard_verdict_name = function
   | LL.Guard_confined -> "a confined guard"
@@ -791,7 +793,7 @@ let peel_claim_name = function
   | Minted_upstream -> "the scope is minted upstream; codegen's peel localizes nothing"
   | No_localization -> "codegen's peel localizes nothing"
   | Never_a_site -> "no cell recurrence at any level: the peel is never consulted"
-  | Widened_elsewhere { Cs.levels; guards } ->
+  | Ceded { Cs.levels; guards } ->
       Printf.sprintf "the shared width decision is wide (%s%s) and the grid or tree holds it"
         (match levels with 1 -> "one level" | n -> Printf.sprintf "%d levels" n)
         (match guards with
@@ -833,7 +835,7 @@ let check_peel ~name ~claim ~statements (peel : Cs.peel_summary) (want : peel_cl
       if not (List.is_empty peel.Cs.sites) then
         Stdio.eprintf "  %s: declared no peel site, got %s\n" name (Cs.peel_summary_string peel);
       Verdict.p_empty claim ~over:statements peel.Cs.sites
-  | Widened_elsewhere want ->
+  | Ceded want ->
       (* Non-emptiness is part of the claim: a rendering that stopped consulting the shared decision
          would leave no ceded site, and "nothing localized" alone would still hold. *)
       let ok =
@@ -1190,15 +1192,19 @@ and scalar_axis_kinds (llsc : LL.scalar_t) : LL.axis_type list =
 
 (* Every value claim is BITWISE, the reassociating compositions included. A swapped split, a
    block-partial reduction and a shuffle tree all change the order of the additions, so they would
-   normally earn a tolerance — but each of them is declared over f32 only (or, for the shuffle,
-   available at f32 only), and there every association of these operands gives the same float. That
-   is not an assumption: the [Ll_test.exact_partials] claim beside {!out_seed} derives it from the
-   operands, for every association, where the "at f32 the whole-nest and per-step references
+   normally earn a tolerance. The swapped split and block partials are declared at f32 only, and a
+   shuffle requires f32 residency. There every association of these operands gives the same float.
+   That is not an assumption: the [Ll_test.exact_partials] claim beside {!out_seed} derives it from
+   the operands, for every association, where the "at f32 the whole-nest and per-step references
    coincide" claim reads only the serial one. A tolerance would have hidden a real narrowing at a
-   seam behind an allowance for a reassociation that cannot cost anything here. *)
+   seam behind an allowance for a reassociation that cannot cost anything here. SIMD can also
+   reassociate at half residency, so those members model its rounding order explicitly. *)
 
 type reference =
-  | Baseline  (** The serial rendering of the plain nest, executed at this precision: 32 terms. *)
+  | Baseline  (** The serial rendering of the plain nest, executed at this precision. *)
+  | Vectorized of int
+      (** The narrow SIMD fold of this inner extent, or the shape's serial baseline when the
+          accumulator widens or SIMD declines. *)
   | Guarded_baseline
       (** The serial rendering of the runtime-extent-GUARDED nest, executed at this precision:
           {!guard_terms} terms. A schedule mint that dropped or broadened the predicate while
@@ -1227,9 +1233,12 @@ type member = {
   what : string;  (** What the composition is, in words. *)
   shape : shape;
   sched : prog -> Sched.schedule;
-  expect : form;  (** The form this backend must reach. *)
+  rendering : Ops.prec -> form * peel_claim;
+      (** The form and peel decision this backend must reach at the given precision. The census pins
+          the peeled levels and guard verdicts because either can change without changing the
+          localized form (gh-ocannl-733). *)
   claimed : string;
-      (** How the form is NAMED in the printed table. Backend-uniform, unlike [expect]: the
+      (** How the form is NAMED in the printed table. Backend-uniform, unlike [rendering]: the
           [.expected] golden is one file for every backend, so a member whose form is
           backend-dependent names both readings here. *)
   reference : reference;
@@ -1280,11 +1289,6 @@ type member = {
           Scoped to those statements rather than searched for in the whole artifact (Codex P2, round
           2): at f16 the kernel pulls in [half_to_float_emulated], whose body is full of unrelated
           ternaries, so [" ? "] anywhere in the source is true whatever the update renders as. *)
-  peel : peel_claim;
-      (** What codegen's reduction peel must have DECIDED while emitting this member's kernel,
-          checked against the routine's peel census. Pinned in full — levels and guard verdicts —
-          because a decision that swallowed one more level, or admitted a guard on the other ground,
-          renders the same localized scope this member's form claim accepts (gh-ocannl-733). *)
   peel_claimed : string;
       (** How that decision is NAMED in the printed table. Backend-uniform, like {!claimed}: the two
           members whose rendering arm is backend-dependent decide differently on a GPU than on the C
@@ -1301,28 +1305,49 @@ type member = {
 
 let no_ops _ = []
 
-(* The [Vectorized] arm has a DEFINED exit on every backend, and skipping the GPUs hid it (Codex P2,
-   round 10): [try_vectorize_reduce] declines the GPU backends' [`Packed_struct] style, and the
-   renderer then routes an accumulating body through [try_localize_serial_reduce] rather than
-   through the pragma'd loop. That fallback is as much a member of this set as the SIMD grid, so the
-   expectation is backend-dependent instead of the leg being marked unavailable. *)
-let simd_or_localized = if on_cpu then Simd else Localized
+(* Predict the layout for these contiguous reductions from the configured host vector file and
+   precision. The value reference and the form claim both use this prediction, so an unexpected
+   decline cannot turn a narrow SIMD value check into serial parity. *)
+let simd_lanes ~extent prec =
+  if not on_cpu then None
+  else
+    let compute = codegen_capabilities.Ir.Backend_intf.compute_prec prec in
+    let accum = codegen_capabilities.Ir.Backend_intf.accum_prec prec in
+    match compute with
+    | (Ops.Single_prec _ | Ops.Double_prec _ | Ops.Half_prec _)
+      when same_prec compute accum && ((not (same_prec compute Ops.half)) || Lazy.force native_fp16)
+      ->
+        let vector_bytes = (Lazy.force hardware_limits).simd_vector.bytes in
+        Ir.Backend_intf.simd_reduce_lanes_for ~vector_bytes ~elt_bytes:(Ops.prec_in_bytes accum)
+          ~extent
+    | _ -> None
+
+let vector_inner = cols / 2
+
+let vectorized_rendering ~extent ~levels prec =
+  let verdict = { Cs.levels; guards = [] } in
+  match simd_lanes ~extent prec with
+  | None -> (Localized, Peeled verdict)
+  | Some _ when levels = 1 -> (Simd, Ceded verdict)
+  | Some _ -> (Simd, Peeled verdict)
+
+let rng_vectorized_rendering prec =
+  let form =
+    match (expected_residency prec, simd_lanes ~extent:cols prec) with
+    | At_storage, Some _ -> Simd
+    | _ -> Rmw
+  in
+  (form, Pinned_to_storage)
+
 let simd_claimed = "SIMD accumulator grid, or the localized scope where no vector rendering exists"
 
-(* And the DECISION behind that exit: where the vector rendering takes the level the accumulator
-   lives in its grid and codegen's peel localizes nothing, while where it declines the peel is what
-   produced the scope (gh-ocannl-733). *)
-let simd_or_localized_peel =
-  if on_cpu then Widened_elsewhere { Cs.levels = 1; guards = [] }
-  else Peeled { Cs.levels = 1; guards = [] }
-
 let simd_peel_claimed =
-  "the shared width decision is wide and the SIMD grid holds it, or codegen's peel takes the \
-   reduction level where no vector rendering exists"
+  "the shared width decision is ceded to the SIMD grid, or codegen's peel takes the reduction \
+   level where no vector rendering exists"
 
 let member ?(shape = Plain) ?(sched = no_ops) ?(expect = Localized) ?claimed ?(reference = Baseline)
     ?(store_sites = 1) ?(rmw_sites = 1) ?(foreign_sites = 0) ?(foreign_accesses = 0) ?expect_axis
-    ?(extra = []) ?(peel = Peeled { Cs.levels = 1; guards = [] }) ?peel_claimed
+    ?(extra = []) ?(peel = Peeled { Cs.levels = 1; guards = [] }) ?peel_claimed ?rendering
     ?(precisions = [ "f32"; "bf16"; "f16" ]) ?(available = fun _ -> true) slug what =
   let claimed = Option.value claimed ~default:(form_name expect) in
   let peel_claimed = Option.value peel_claimed ~default:(peel_claim_name peel) in
@@ -1331,7 +1356,7 @@ let member ?(shape = Plain) ?(sched = no_ops) ?(expect = Localized) ?claimed ?(r
     what;
     shape;
     sched;
-    expect;
+    rendering = Option.value rendering ~default:(fun _ -> (expect, peel));
     claimed;
     reference;
     store_sites;
@@ -1340,7 +1365,6 @@ let member ?(shape = Plain) ?(sched = no_ops) ?(expect = Localized) ?claimed ?(r
     foreign_accesses;
     expect_axis;
     extra;
-    peel;
     peel_claimed;
     precisions;
     available;
@@ -1415,21 +1439,23 @@ let members =
         [ op ]);
     (* --- the [Vectorized] arm: a SIMD accumulator grid plus its scalar tail, and the same
        rendering NESTED inside a surviving serial reduction level. --- *)
-    member "retype-vectorized" "Retype the reduction axis to Vectorized" ~expect:simd_or_localized
-      ~claimed:simd_claimed ~peel:simd_or_localized_peel ~peel_claimed:simd_peel_claimed
+    member "retype-vectorized" "Retype the reduction axis to Vectorized"
+      ~rendering:(vectorized_rendering ~extent:cols ~levels:1)
+      ~reference:(Vectorized cols) ~claimed:simd_claimed ~peel_claimed:simd_peel_claimed
       ~expect_axis:LL.Vectorized ~sched:(fun g ->
         [ Sched.Retype { axis = g.k; ty = LL.Vectorized } ]);
     (* The peel localizes here on EVERY backend, the SIMD one included: a [Vectorized] level rides
        into the scope (the vector rendering folds its chains into the scope local), so the surviving
        outer half is peeled with the inner one inside it. *)
     member "split-then-vectorize-inner" "Split, then Retype the INNER half to Vectorized"
-      ~expect:simd_or_localized ~claimed:simd_claimed
+      ~rendering:(vectorized_rendering ~extent:vector_inner ~levels:2)
+      ~claimed:simd_claimed ~reference:(Vectorized vector_inner)
       ~peel:(Peeled { Cs.levels = 2; guards = [] })
       ~expect_axis:LL.Vectorized
       ~sched:(fun g ->
         (* 32 wide, which every lane ladder a real target has can cover; see {!cols}. *)
         let sp, _outer, inner =
-          Sched.split ~axis:g.k ~factor:32 ~outer:LL.Serial ~inner:LL.Serial
+          Sched.split ~axis:g.k ~factor:vector_inner ~outer:LL.Serial ~inner:LL.Serial
         in
         [ sp; Sched.Retype { axis = inner; ty = LL.Vectorized } ]);
     (* The Vectorized arm's OTHER exit: a loop-carried accumulation that no vector rendering
@@ -1457,7 +1483,7 @@ let members =
       ~available:(fun prec_name -> on_cpu || shuffle_takes prec_name)
       ~peel:
         (if on_cpu then Peeled { Cs.levels = 1; guards = [] }
-         else Widened_elsewhere { Cs.levels = 1; guards = [] })
+         else Ceded { Cs.levels = 1; guards = [] })
       ~peel_claimed:
         "codegen peels the serialized level, or the shared width decision is wide and the shuffle \
          tree holds it"
@@ -1560,11 +1586,13 @@ let members =
       ~sched:(fun g -> [ Sched.Unroll { axis = g.k; materialize = true } ]);
     (* The Vectorized arm over a pinned body: the SIMD grid, which would render the loop-invariant
        draw at compute precision and accumulate its chains wide, takes the shared decision's pin and
-       declines — the third sighting of the genre, had it been left to decide for itself. *)
-    member "rng-vectorized" "the RNG-bearing axis Retyped to Vectorized: the SIMD grid declines"
-      ~shape:Rng_contrib ~expect:Rmw ~peel:Pinned_to_storage ~reference:Rng_baseline
-      ~expect_axis:LL.Vectorized ~precisions:[ "bf16"; "f16" ] ~sched:(fun g ->
-        [ Sched.Retype { axis = g.k; ty = LL.Vectorized } ]);
+       declines where the accumulator would widen. Where the lanes already hold storage width, the
+       pin permits SIMD and the value follows its narrow fold. *)
+    member "rng-vectorized" "the RNG-bearing axis Retyped to Vectorized" ~shape:Rng_contrib
+      ~rendering:rng_vectorized_rendering ~peel:Pinned_to_storage
+      ~claimed:"per-step read-modify-write, or a SIMD grid at storage width"
+      ~reference:(Vectorized cols) ~expect_axis:LL.Vectorized ~precisions:[ "bf16"; "f16" ]
+      ~sched:(fun g -> [ Sched.Retype { axis = g.k; ty = LL.Vectorized } ]);
     (* Where a lane index is bound the shuffle REFUSES a pinned body at a wider residency (loudly:
        [hardware_warp_shuffle]'s RNG leg pins the message), so the member is evaluable only where
        the level serializes. *)
@@ -1839,20 +1867,6 @@ let () =
     (distinct (List.map optop_samples ~f:(fun op -> constructor_name (Sched.sexp_of_optop op)))
     && distinct (List.map axis_samples ~f:(fun ty -> constructor_name (LL.sexp_of_axis_type ty))))
 
-(* The table's VALUE claims follow the numerics policy wherever it goes — that is what
-   {!expected_residency} is for. Its FORM claims do not: whether the SIMD reduction rendering fires
-   for a narrow storage precision is itself policy-dependent (with [narrow_compute_f32] off, a bf16
-   Vectorized reduction declines to the localizing peel instead), and modelling that per member
-   would be a wider claim than this table makes. So the premise is stated rather than assumed: under
-   a non-default policy the forms below are not the ones to expect, and this says so in one line
-   instead of leaving four members to fail obscurely. *)
-let () =
-  let policy = Numerics.get () in
-  p "the numerics policy is the default the member table's forms are stated for"
-    (policy.Numerics.narrow_compute_f32
-    && Numerics.equal_fp16_mode policy.Numerics.fp16_arithmetic Numerics.Fp16_auto
-    && Numerics.equal_bf16_mode policy.Numerics.bf16_arithmetic Numerics.Bf16_auto)
-
 (* The [Tile_mma] fallback's own reduction is a serial nest like any other, and codegen's peel is
    what localizes it — the leg below checks that against the routine's peel census beside the
    [Tile_mma] one. *)
@@ -1884,14 +1898,20 @@ let () =
    that declares "localized" beside "nothing localized" without saying where the scope came from
    fails here rather than on some backend. *)
 let () =
-  Verdict.p_all "every member's peel claim is coherent with the form it claims" members ~f:(fun m ->
-      match m.peel with
+  let readings =
+    List.concat_map members ~f:(fun m ->
+        List.filter_map precs ~f:(fun (name, prec) ->
+            if List.mem m.precisions name ~equal:String.equal then Some (m.rendering prec) else None))
+  in
+  Verdict.p_all "every member's peel claim is coherent with the form it claims" readings
+    ~f:(fun (form, peel) ->
+      match peel with
       | Peeled _ -> true
       | Minted_upstream | Never_a_site ->
-          same_form m.expect Localized || same_form m.expect Partials_combine
-      | No_localization -> not (same_form m.expect Localized)
-      | Widened_elsewhere _ -> same_form m.expect Simd || same_form m.expect Warp
-      | Pinned_to_storage -> same_form m.expect Rmw)
+          same_form form Localized || same_form form Partials_combine
+      | No_localization -> not (same_form form Localized)
+      | Ceded _ -> same_form form Simd || same_form form Warp
+      | Pinned_to_storage -> same_form form Rmw || same_form form Simd)
 
 (* The baselines: the plain nest with no schedule ops, and the runtime-extent-guarded nest with no
    schedule ops, one of each per precision. Every localizing member is compared against one of them,
@@ -2003,6 +2023,48 @@ let single_draw =
   let draw = device_draw ("f32", Ops.single) in
   Stdio.printf "the f32 draw of the RNG members' key: %s\n" (Test_utils.hex_float draw);
   draw
+
+(* Each lane of each chain starts with one term. It adds its strided terms at storage width, then
+   the chains fold lane-wise and the lanes fold in order. A scalar tail extends that partial before
+   it joins the seeded accumulator. An inner split repeats this fold for each block. The RNG
+   member's products seed the lanes rounded, with fused updates thereafter. *)
+let narrow_simd_ref ~extent ~lanes ~rng prec =
+  let chains = Ir.Backend_intf.simd_reduce_chains ~lanes ~extent in
+  let step = chains * lanes in
+  let chunks = extent / step in
+  let draw = if rng then round_down prec single_draw else 1. in
+  let add a b = round prec (a +. b) in
+  Array.init rows ~f:(fun r ->
+      let fold_block start =
+        let product i = cell r (start + i) *. draw in
+        let update acc i = round prec (acc +. product i) in
+        let lanes =
+          Array.init lanes ~f:(fun lane ->
+              let chain_sum chain =
+                let first = (chain * lanes) + lane in
+                let acc = ref (round prec (product first)) in
+                for chunk = 1 to chunks - 1 do
+                  acc := update !acc ((chunk * step) + first)
+                done;
+                !acc
+              in
+              let acc = ref (chain_sum 0) in
+              for chain = 1 to chains - 1 do
+                acc := add !acc (chain_sum chain)
+              done;
+              !acc)
+        in
+        let acc = ref (Array.reduce_exn lanes ~f:add) in
+        for i = chunks * step to extent - 1 do
+          acc := update !acc i
+        done;
+        !acc
+      in
+      let acc = ref (seed_value r) in
+      for block = 0 to (cols / extent) - 1 do
+        acc := add !acc (fold_block (block * extent))
+      done;
+      !acc)
 
 let () =
   List.iter rng_precs ~f:(fun (prec_name, prec) ->
@@ -2175,6 +2237,7 @@ let () =
             (* Built before the availability check: a shape's extra VERIFY claims are printed on the
                skipped path too, and only the program knows what they are. *)
             let prog = make ~prec ~shape:m.shape () in
+            let form, expected_peel = m.rendering prec in
             let leg = Verdict.leg ~when_:(m.available prec_name) ~on:backend_name () in
             let name = Printf.sprintf "rf_%s_%s" (routine_stem m.slug) prec_name in
             let sched = lazy (m.sched prog) in
@@ -2254,7 +2317,7 @@ let () =
                        are identified by what they do to the node in the first place, so the count
                        adds nothing there. *)
                     let sites_ok =
-                      match m.expect with
+                      match form with
                       | Localized ->
                           reading.stores_from_local = m.store_sites
                           && reading.node_accesses <= 2 * m.store_sites
@@ -2309,23 +2372,29 @@ let () =
                         name reading.stores_from_local reading.rmw_statements
                         reading.foreign_local_stores reading.node_accesses m.store_sites m.rmw_sites
                         m.foreign_sites;
-                    if not (same_form rendered m.expect) then
+                    if not (same_form rendered form) then
                       Stdio.eprintf
                         "  %s: rendered %s, claimed %s (node subscripts %d, rmw statements %d, \
                          stores from a local %d, foreign local stores %d)\n"
-                        name (form_name rendered) (form_name m.expect) reading.node_accesses
+                        name (form_name rendered) (form_name form) reading.node_accesses
                         reading.rmw_statements reading.stores_from_local
                         reading.foreign_local_stores;
-                    p label (same_form rendered m.expect && sites_ok && extra_ok));
+                    p label (same_form rendered form && sites_ok && extra_ok));
             in_leg ~leg peel_claim (fun label ->
                 let _, _, _, peel = Lazy.force evidence in
                 let src = Generated.read name in
-                check_peel ~name ~claim:label ~statements:(statements src) peel m.peel);
+                check_peel ~name ~claim:label ~statements:(statements src) peel expected_peel);
             in_leg ~leg value_claim (fun label ->
                 let got, _, _, _ = Lazy.force evidence in
                 let want =
                   match m.reference with
                   | Baseline -> baseline prec_name
+                  | Vectorized extent -> (
+                      let rng = match m.shape with Rng_contrib -> true | _ -> false in
+                      match (form, expected_residency prec, simd_lanes ~extent prec) with
+                      | Simd, At_storage, Some lanes when Ops.is_narrow_float prec ->
+                          narrow_simd_ref ~extent ~lanes ~rng prec
+                      | _ -> if rng then rng_baseline prec_name else baseline prec_name)
                   | Guarded_baseline -> guarded_baseline prec_name
                   | Mixed_baseline -> mixed_baseline prec_name
                   | Per_step -> per_step_ref ~terms:(terms_of_shape m.shape) ~from:seed_value prec

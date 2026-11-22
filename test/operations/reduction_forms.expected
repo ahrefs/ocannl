@@ -23,7 +23,6 @@ Low_level.axis_type coverage:
   Grid               out of scope: its fallback is the plain serial loop and NOT the localizing one — the one arm that serializes without localizing. No schedule op in the tree produces an unbindable, non-parallel-eligible Grid level over a reduction axis, and one that existed would be a cross-thread race rather than a width question
 every Low_level.axis_type constructor is reached by a member that exists, or exempted with a reason: true
 the coverage samples name distinct constructors: true
-the numerics policy is the default the member table's forms are stated for: true
 reduction: out[3] = sum of 64 terms, hand-built Low_level, 36 members
   01 serial                      [f32 bf16 f16] over plain                 no schedule ops (the reference rendering)                              -> localized scope
                                  codegen's peel takes one level, unguarded
@@ -48,7 +47,7 @@ reduction: out[3] = sum of 64 terms, hand-built Low_level, 36 members
   11 split-reduce                [f32         ] over plain                 Split_reduce into four block partials plus a combine nest              -> scoped block partials + combine
                                  codegen's peel takes one level, unguarded
   12 retype-vectorized           [f32 bf16 f16] over plain                 Retype the reduction axis to Vectorized                                -> SIMD accumulator grid, or the localized scope where no vector rendering exists
-                                 the shared width decision is wide and the SIMD grid holds it, or codegen's peel takes the reduction level where no vector rendering exists
+                                 the shared width decision is ceded to the SIMD grid, or codegen's peel takes the reduction level where no vector rendering exists
   13 split-then-vectorize-inner  [f32 bf16 f16] over plain                 Split, then Retype the INNER half to Vectorized                        -> SIMD accumulator grid, or the localized scope where no vector rendering exists
                                  codegen's peel takes 2 levels, unguarded
   14 split-then-vectorize-narrow [f32 bf16 f16] over plain                 Split into a two-wide inner half, then Retype it Vectorized            -> localized scope
@@ -83,7 +82,7 @@ reduction: out[3] = sum of 64 terms, hand-built Low_level, 36 members
                                  the shared width decision pins the accumulator to storage: nothing widens
   29 rng-unroll-mat              [bf16 f16    ] over RNG-bearing contribution the RNG-bearing level Unroll ~materialize (a storage-width scope)      -> localized scope
                                  the scope is minted upstream; codegen's peel localizes nothing
-  30 rng-vectorized              [bf16 f16    ] over RNG-bearing contribution the RNG-bearing axis Retyped to Vectorized: the SIMD grid declines     -> per-step read-modify-write
+  30 rng-vectorized              [bf16 f16    ] over RNG-bearing contribution the RNG-bearing axis Retyped to Vectorized                             -> per-step read-modify-write, or a SIMD grid at storage width
                                  the shared width decision pins the accumulator to storage: nothing widens
   31 rng-workgroup-reduce        [bf16 f16    ] over RNG-bearing contribution the RNG-bearing axis Retyped to Workgroup_reduce (serialized: no lane index bound) -> per-step read-modify-write
                                  the shared width decision pins the accumulator to storage: nothing widens
