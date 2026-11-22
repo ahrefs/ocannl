@@ -589,6 +589,26 @@ module Impl = struct
      ([metal_iokit_stubs.c]); 0 where it has none. *)
   external gpu_core_count : int64 -> int = "ocannl_metal_gpu_core_count"
 
+  let runtime_math_api =
+    (* These instance methods were added in macOS 15. Query the runtime capability rather than the
+       host OS version: this is the capability whose absence matters, and keeps macOS 14 on the
+       legacy safe spelling without ever sending an unavailable selector. The selector vocabulary
+       and all-or-nothing decision live in [Compiler_options.metal_math_api], injectable in its
+       GPU-free test; [Metal_math_api_runtime] owns the one real query shared with the standalone
+       probe. *)
+    lazy (Metal_math_api_runtime.get ())
+
+  (* gh-ocannl-2406: Metal contraction pin, read per call so in-process changes apply to
+     [hardware_limits], [C_syntax_config.compiler_contraction_off] and [render] alike. *)
+  let metal_fp_contract_off () =
+    Compiler_options.metal_fp_contract_off_of_string
+      (Utils.get_global_arg ~default:"auto" ~arg_name:"metal_fp_contract")
+
+  let metal_includes () =
+    Compiler_options.metal_includes ~contraction_off:(metal_fp_contract_off ())
+
+  let contraction_off () = Compiler_options.metal_includes_contraction_off (metal_includes ())
+
   let hardware_limits =
     let limits =
       lazy
@@ -644,12 +664,10 @@ module Impl = struct
            lane_all_reduce_simdgroups = 4;
            online_softmax_auto_block = 16;
            worker_pool_tag = None;
-           (* gh-ocannl-572: no codegen or dispatch knob of this backend is configurable — the
-              kernel source is a function of the lowered code, the device capabilities and the
-              numerics policy, all of which the cache key already covers. What the host's runtime
-              picks is not a knob but is a math regime (gh-ocannl-1457): the legacy option
-              sequence's component, [None] on the default modern one. *)
-           codegen_tag = Compiler_options.metal_regime_tag (Metal_math_api_runtime.get ());
+           (* Recomputed per call below from {!Compiler_options.metal_regime_tag}: both the host's
+              math API regime (gh-ocannl-1457) and [metal_fp_contract] (gh-ocannl-2406), the latter
+              mutable within a process. *)
+           codegen_tag = None;
            (* Advisory roofline envelope (gh-ocannl-491): documented rough constants for the
               Apple-silicon class ([Device.attributes] exposes no throughput numbers). Flops:
               mid-range M-series ~5 fp32 TFLOP/s — the model only ranks, so a class-typical number
@@ -705,7 +723,11 @@ module Impl = struct
            fill_lane_width = None;
          })
     in
-    fun () -> Lazy.force limits
+    let codegen_tag () =
+      Compiler_options.metal_regime_tag ~contraction_off:(contraction_off ())
+        (Lazy.force runtime_math_api)
+    in
+    fun () -> { (Lazy.force limits) with Backend_intf.codegen_tag = codegen_tag () }
 
   let get_global_debug_info () = Sexp.Atom "Metal global debug info NYI"
 
@@ -886,6 +908,7 @@ module Impl = struct
       Some "threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);"
 
     let shared_decl_prefix = Some "threadgroup "
+    let compiler_contraction_off = contraction_off
 
     (* Metal rounds each [threadgroup] array up to 4 bytes (measured on an M4 Max, gh-ocannl-1226:
        two odd-length [half] tiles whose exact sizes total the limit make pipeline creation request
@@ -1860,15 +1883,6 @@ module Impl = struct
     end) in
     C_syntax.codegen_capabilities (module Config)
 
-  let runtime_math_api =
-    (* These instance methods were added in macOS 15. Query the runtime capability rather than the
-       host OS version: this is the capability whose absence matters, and keeps macOS 14 on the
-       legacy safe spelling without ever sending an unavailable selector. The selector vocabulary
-       and all-or-nothing decision live in [Compiler_options.metal_math_api], injectable in its
-       GPU-free test; [Metal_math_api_runtime] owns the one real query shared with the standalone
-       probe. *)
-    lazy (Metal_math_api_runtime.get ())
-
   (* Whether a failed [newLibraryWithSource:] reported a diagnostic the compiler attached to the
      source, as ["program_source:LINE:COL: error: ..."]: the compiler read the generated code and
      rejected it, so the failure is that code's. *)
@@ -1991,9 +2005,6 @@ module Impl = struct
 
   module Compile = C_syntax.Compile_driver (C_syntax_config)
 
-  let metal_includes = {|#include <metal_stdlib>
-using namespace metal;|}
-
   let conditional_includes = [ ("simdgroup_load", "#include <metal_simdgroup_matrix>") ]
 
   (* gh-ocannl-1338: the kernel-name harvest's view of this backend ([tools/vendor_idents.ml]): the
@@ -2005,7 +2016,7 @@ using namespace metal;|}
     end))
     in
     let prelude =
-      String.concat ~sep:"\n" (List.map conditional_includes ~f:snd) ^ "\n" ^ metal_includes
+      String.concat ~sep:"\n" (List.map conditional_includes ~f:snd) ^ "\n" ^ metal_includes ()
     in
     let device = (get_device ~ordinal:0).dev in
     let options = metal_compile_options (metal_option_state ()) in
@@ -2025,7 +2036,7 @@ using namespace metal;|}
     (* Whether or not the cache is enabled: a test gated on this flag must then see reuse fail. *)
     Compile_cost.record_reuse_capable ();
     let r =
-      Compile.render_batch ~names bindings lowereds ~includes:metal_includes
+      Compile.render_batch ~names bindings lowereds ~includes:(metal_includes ())
         ~builtins:Builtins_metal.builtins ~conditional_includes ()
     in
     let n = Array.length r.entries in

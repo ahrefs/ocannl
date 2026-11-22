@@ -109,11 +109,31 @@ val metal_of_run : math_api:metal_math_api -> metal_option list
 
 val render_metal : metal_option list -> string
 
-val metal_regime_tag : metal_math_api -> string option
-(** The Metal backend's schedule-cache regime component (gh-ocannl-1457): [None] for [Modern_split],
-    the default on macOS 15 and later, so its keys stay valid; for [Legacy], the rendered {!metal}
-    sequence, a different arithmetic regime ([fastMathEnabled=false] also makes the math functions
-    precise). *)
+val metal_fp_contract_pragma : string
+(** The MSL header pragma emitted when [metal_fp_contract=off] (gh-ocannl-2406):
+    [#pragma STDC FP_CONTRACT OFF], chosen because macOS 14's {!Legacy} path is unmeasured. *)
+
+val metal_fp_contract_off_of_string : string -> bool
+(** Parses the [metal_fp_contract] setting ([auto] -> [false], [off] -> [true], case-insensitive),
+    raising [Invalid_argument] on any other value. *)
+
+val metal_includes : contraction_off:bool -> string
+(** The MSL header prelude prepended to every Metal kernel: [#include <metal_stdlib>] and
+    [using namespace metal;], followed by {!metal_fp_contract_pragma} when [contraction_off] is
+    [true] (gh-ocannl-2406). *)
+
+val metal_includes_contraction_off : string -> bool
+(** Whether a Metal header prelude built by {!metal_includes} pins contraction off: it carries
+    {!metal_fp_contract_pragma} on its own line (gh-ocannl-2406). [Metal_backend]'s
+    [C_syntax_config.compiler_contraction_off] reads it, matching {!nvrtc_contraction_off} and
+    {!clang_contraction_off}. *)
+
+val metal_regime_tag : contraction_off:bool -> metal_math_api -> string option
+(** The Metal backend's schedule-cache regime component (gh-ocannl-1457, gh-ocannl-2406): [None] for
+    [Modern_split] with [contraction_off = false], the default on macOS 15 and later, so its keys
+    stay valid; for [Legacy], the rendered {!metal} sequence, a different arithmetic regime
+    ([fastMathEnabled=false] also makes the math functions precise); and when [contraction_off] is
+    [true], [metal-fp-contract:off/mma-fallback-unfused] (appended after any [Legacy] component). *)
 
 val render : string list -> string
 (** One line, for diagnostics that have to travel through a log or an exception message: a compile's

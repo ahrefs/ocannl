@@ -63,6 +63,7 @@ type scope =
   | Cuda_hip  (** the CUDA and HIP backends' own tags *)
   | Cuda  (** the CUDA backend's own tag *)
   | Hip  (** the HIP backend's own tag *)
+  | Metal  (** the Metal backend's own tag *)
 
 let in_scope scope backend =
   match scope with
@@ -72,6 +73,7 @@ let in_scope scope backend =
   | Cuda_hip -> List.mem [ "cuda"; "hip" ] (String.lowercase backend) ~equal:String.equal
   | Cuda -> String.equal (String.lowercase backend) "cuda"
   | Hip -> String.equal (String.lowercase backend) "hip"
+  | Metal -> String.equal (String.lowercase backend) "metal"
 
 let scope_name = function
   | Every_backend -> "every backend"
@@ -80,6 +82,7 @@ let scope_name = function
   | Cuda_hip -> "CUDA and HIP"
   | Cuda -> "CUDA"
   | Hip -> "HIP"
+  | Metal -> "Metal"
 
 (* How a flip reaches the reader. *)
 type resolver =
@@ -162,6 +165,7 @@ let keyed_flips =
     ("gpu_graph_capture", config ~scope:Cuda_hip flag);
     ("cuda_fast_math", config ~scope:Cuda flag);
     ("hip_fast_math", config ~scope:Hip flag);
+    ("metal_fp_contract", config ~scope:Metal [ "auto"; "off" ]);
     ("cuda_ptx_target", config ~scope:Cuda [ "floor"; "native" ]);
     ("gpu_elide_covered_zeros", config ~scope:Gpu flag);
     ("gpu_default_seed_narrow_storage", config ~scope:Cuda_hip flag);

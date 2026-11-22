@@ -626,12 +626,13 @@ module type C_syntax_config = sig
 
   val compiler_contraction_off : unit -> bool
   (** Whether this backend's kernel compile is pinned so its compiler never contracts a [a * b + c]
-      into a fused multiply-add on its own (gh-ocannl-1457), derived from the same option builder
-      the compile uses: cc's [cc_backend_fp_contract=off] ([-ffp-contract=off], placed after any
-      [-ffast-math]), CUDA's [--fmad=false] ([cuda_fast_math=false]), HIP's [-ffp-contract=off]
-      ([hip_fast_math=false]). Only an explicit pin counts, never a toolchain default; Metal exposes
-      no contraction switch, so it is [false] there (the {!Pure_C_config} default). Read per call:
-      the settings behind it are mutable within a process.
+      into a fused multiply-add on its own (gh-ocannl-1457), derived from the same option or header
+      builder the compile uses: cc's [cc_backend_fp_contract=off] ([-ffp-contract=off], placed after
+      any [-ffast-math]), CUDA's [--fmad=false] ([cuda_fast_math=false]), HIP's [-ffp-contract=off]
+      ([hip_fast_math=false]), and Metal's [#pragma STDC FP_CONTRACT OFF] kernel-header pragma
+      ([metal_fp_contract=off], gh-ocannl-2406). Only an explicit pin counts, never a toolchain
+      default; {!Pure_C_config} defaults to [false]. Read per call: the settings behind it are
+      mutable within a process.
 
       When [true], a [Tile_mma] fallback renders in the form the contraction licence left it, and
       the register-tiled rendering spells a plain-add fallback as an unfused vector multiply then

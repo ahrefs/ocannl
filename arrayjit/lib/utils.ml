@@ -130,6 +130,7 @@ let known_config_keys =
       "cuda_compile_program_min_kernels";
       "cuda_fast_math";
       "hip_fast_math";
+      "metal_fp_contract";
       "cuda_ptx_target";
       "cc_kernel_cache_mib";
       "cc_kernel_part_weight";
@@ -418,6 +419,12 @@ let config_key_classification : (config_key_class * string * string list) list =
        rendered and compiled, after the lowered code the digest names; the backend's tag carries \
        the math regime as a component derived from those switches",
       [ "cuda_fast_math"; "hip_fast_math" ] );
+    ( Keyed "codegen",
+      "a Metal compile knob (gh-ocannl-2406): when off, the Metal kernel header emits [#pragma \
+       STDC FP_CONTRACT OFF], pinning floating-point contraction off and rendering a [Tile_mma] \
+       fallback unfused, after the lowered code the digest names; Metal's tag carries the \
+       contraction regime and [mma-fallback-unfused] as components derived from the pin",
+      [ "metal_fp_contract" ] );
     ( Keyed "codegen",
       "a CUDA compile knob (gh-ocannl-1705): it picks the nvrtc target arch, the floor that ships \
        or the device's own, when a kernel is compiled, after the lowered code the digest names; \
@@ -1660,6 +1667,13 @@ cuda_fast_math=false
 # hiprtc instead gets -ffp-contract=off and clang's IEEE switches spelled out. Not HIP's
 # default either: under this profile HIP too computes different (more precise) math.
 hip_fast_math=false
+# Metal's contraction counterpart (gh-ocannl-2406): MTLCompileOptions exposes no contraction
+# switch, so off emits `#pragma STDC FP_CONTRACT OFF` in the Metal kernel header (the C
+# standard spelling, since macOS 14's legacy math path is unmeasured). Not Metal's default
+# either (measured 1.02x on a naive 1024^3 f32 matmul and 1.69x on an ALU-bound multiply-add
+# chain on mac-studio): under this profile Metal keeps two roundings for a*b+c and renders a
+# Tile_mma scalar fallback unfused, matching cc, CUDA and HIP above.
+metal_fp_contract=off
 # Explicit SIMD rendering reassociates strict-FP reductions into per-lane accumulator chains,
 # so the summation order would follow the probed vector width. 0 keeps the serial order.
 cc_vector_bytes=0
@@ -1793,12 +1807,14 @@ tune_inline_flips=2
 # seeds them in every profile (gh-ocannl-2195), since a seeded one keeps its result; a sunk one (a
 # bias gradient) keeps its summation order but rounds to storage once instead of after every step.
 gpu_default_seed_narrow_storage=true
-# The GPU compilers' fast math (gh-ocannl-1710, gh-ocannl-1779), stated at the value it already
-# defaults to: the `reproducible` profile turns both off, and stating them here makes an explicit
-# `cuda_fast_math=false` or `hip_fast_math=false` beside this profile a departure the regime
+# The GPU compilers' fast math and Metal's contraction pin (gh-ocannl-1710, gh-ocannl-1779,
+# gh-ocannl-2406), stated at the values they already default to: the `reproducible` profile
+# turns them off, and stating them here makes an explicit `cuda_fast_math=false`,
+# `hip_fast_math=false` or `metal_fp_contract=off` beside this profile a departure the regime
 # report (`Utils.profile_payload_sources`) names, as for every other key of this payload.
 cuda_fast_math=true
 hip_fast_math=true
+metal_fp_contract=auto
 |}
 
 (** The embedded profile payloads, by name. Each is literally a partial [ocannl_config] file: same

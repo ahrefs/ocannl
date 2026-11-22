@@ -100,7 +100,17 @@ let () =
         (match name with
         | "reproducible" -> Some "false"
         | "approximate" -> Some "true"
-        | _ -> None))
+        | _ -> None));
+  (* gh-ocannl-2406: Metal's contraction pin follows the same rule: [reproducible] sets it [off],
+     [approximate] states it at its default [auto] so an explicit [off] beside that profile shows up
+     in the regime report, and [performance] leaves it unstated. *)
+  Verdict.p_all ~min:3
+    "the reproducible profile states metal_fp_contract off, the approximate profile auto, and the \
+     performance profile leaves it unstated"
+    Utils.profile_payloads ~f:(fun (name, _) ->
+      Option.equal String.equal
+        (List.Assoc.find (parsed name) "metal_fp_contract" ~equal:String.equal)
+        (match name with "reproducible" -> Some "off" | "approximate" -> Some "auto" | _ -> None))
 
 (* gh-ocannl-604: a truncated bootstrap source list uses the same walk and provenance formatter.
    These cases distinguish explicit false from absence, and profile selection normalizes each source

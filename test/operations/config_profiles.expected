@@ -39,6 +39,7 @@ Profile "reproducible" sets:
   cc_backend_fast_math=false
   cuda_fast_math=false
   hip_fast_math=false
+  metal_fp_contract=off
   cc_vector_bytes=0
   tf32_matmuls=false
   fp16_arithmetic=auto
@@ -85,10 +86,12 @@ Profile "approximate" sets:
   gpu_default_seed_narrow_storage=true
   cuda_fast_math=true
   hip_fast_math=true
+  metal_fp_contract=auto
 
 every key the performance profile sets, the approximate profile sets to the same value: true
 the approximate profile sets keys the performance profile does not: true
 the reproducible profile states cuda_fast_math and hip_fast_math false, the approximate profile true, and the performance profile neither: true
+the reproducible profile states metal_fp_contract off, the approximate profile auto, and the performance profile leaves it unstated: true
 bootstrap resolution preserves precedence and source descriptions: true
 profile selection normalizes and falls through each source: true
 truncated bootstrap sources report the ordinary default: true

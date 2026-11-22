@@ -226,15 +226,42 @@ let render_metal options =
          | Enable_logging -> "enable-logging=true")
        options)
 
-(* gh-ocannl-1457: the Metal math regime as schedule-cache identity. The two option sequences are
-   two arithmetic regimes (Legacy's [fastMathEnabled=false] also makes the math functions precise),
-   picked by what the running OS's compile options accept, so a crown from one is not evidence for
-   the other. Only the legacy regime adds a component, so every key crowned on macOS 15 or later
-   stays valid; derived from the same builder the compile uses. *)
-let metal_regime_tag math_api =
-  match math_api with
-  | Modern_split -> None
-  | Legacy -> Some ("metal-math:" ^ render_metal (metal ~routine_logging:false ~math_api))
+(* gh-ocannl-2406: MSL's contraction pin. MTLCompileOptions exposes no contraction switch, so
+   [metal_fp_contract=off] emits the C standard pragma in the kernel header (preferred over [#pragma
+   METAL fp contract(off)] because the macOS 14 [Legacy] path is unmeasured; measured on M4 Max and
+   M4 Pro via [tools/metal_contract_probe.swift]). Explicit [fma(...)] calls stay fused under the
+   pragma. *)
+let metal_fp_contract_pragma = "#pragma STDC FP_CONTRACT OFF"
+
+let metal_fp_contract_off_of_string value =
+  match String.lowercase_ascii (String.trim value) with
+  | "auto" -> false
+  | "off" -> true
+  | other -> invalid_arg ("metal_fp_contract: expected auto | off, got " ^ other)
+
+let metal_includes ~contraction_off =
+  let base = "#include <metal_stdlib>\nusing namespace metal;" in
+  if contraction_off then base ^ "\n" ^ metal_fp_contract_pragma else base
+
+let metal_includes_contraction_off includes =
+  List.exists
+    (fun line -> String.equal (String.trim line) metal_fp_contract_pragma)
+    (String.split_on_char '\n' includes)
+
+(* gh-ocannl-1457, gh-ocannl-2406: the Metal math and contraction regime as schedule-cache identity.
+   The two option sequences are two arithmetic regimes (Legacy's [fastMathEnabled=false] also makes
+   the math functions precise), picked by what the running OS's compile options accept, so a crown
+   from one is not evidence for the other. Pinning contraction off adds both the contraction regime
+   and [mma-fallback-unfused] (a [Tile_mma] scalar fallback then renders unfused). The default
+   modern regime with contraction unpinned returns [None], so existing keys stay valid. *)
+let metal_regime_tag ~contraction_off math_api =
+  let parts =
+    (match math_api with
+      | Modern_split -> []
+      | Legacy -> [ "metal-math:" ^ render_metal (metal ~routine_logging:false ~math_api) ])
+    @ if contraction_off then [ "metal-fp-contract:off"; "mma-fallback-unfused" ] else []
+  in
+  match parts with [] -> None | _ -> Some (String.concat "/" parts)
 
 (* One line, for diagnostics that have to travel through a log or an exception message: a compile's
    effective option vector is the state a numeric mismatch is reproducible against, and reading it
