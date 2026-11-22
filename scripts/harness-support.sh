@@ -5,7 +5,18 @@
 # unfinished status 0 becomes exit 1; existing nonzero statuses are preserved.
 # Parse errors before trap installation rely on Bash's own nonzero status.
 
+# Register one value-taking option for the calling harness. Only registered
+# long names accept --name VALUE or --name=VALUE; no abbreviation is read.
+harness_own_option() { # --NAME DESTINATION EMPTY_HINT
+  local i=${harness_own_count:-0}
+  harness_own_name[i]=$1
+  harness_own_destination[i]=$2
+  harness_own_hint[i]=$3
+  harness_own_count=$((i + 1))
+}
+
 harness_args() {
+  local own option value
   KEEP=0 failures=0 skipped=0 harness_finished=0
   harness_only= harness_only_set=0 legs_selected=0 legs_filtered=0
   harness_ran=() harness_skips=() harness_leg_running= harness_leg_current=
@@ -22,7 +33,22 @@ harness_args() {
         harness_only=$2 harness_only_set=1
         shift ;;
       -h|--help) sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-      *) echo "${0##*/}: unknown argument '$1'" >&2; exit 2 ;;
+      *)
+        option=${1%%=*}
+        own=0
+        while [ "$own" -lt "${harness_own_count:-0}" ] &&
+              [ "${harness_own_name[own]}" != "$option" ]; do
+          own=$((own + 1))
+        done
+        [ "$own" -lt "${harness_own_count:-0}" ] ||
+          { echo "${0##*/}: unknown argument '$1'" >&2; exit 2; }
+        case $1 in
+          *=*) value=${1#*=} ;;
+          *) value=${2-}; [ $# -lt 2 ] || shift ;;
+        esac
+        [ -n "$value" ] ||
+          { echo "${0##*/}: $option needs ${harness_own_hint[own]}" >&2; exit 2; }
+        printf -v "${harness_own_destination[own]}" '%s' "$value" ;;
     esac
     shift
   done

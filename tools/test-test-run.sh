@@ -7,6 +7,7 @@
 #   tools/test-test-run.sh --only '^81:'   # the members holding a leg whose name matches
 #   tools/test-test-run.sh --only '#lifecycle'   # one named group of legs, wherever its legs sit
 #   tools/test-test-run.sh --subject FILE --only '^99:'   # test FILE, not tools/test-run.sh
+#   tools/test-test-run.sh --subject-rev REV --only '^99:'   # test the runner from REV
 #   tools/test-test-run.sh --members       # list the members, and run nothing
 #   tools/test-test-run.sh --list-legs     # every member's legs
 #
@@ -32,6 +33,7 @@ only= only_set=0 list_members=0 args=("$@")
 while [ $# -gt 0 ]; do
   case $1 in
     --members) list_members=1 ;;
+    --subject|--subject-rev) [ $# -lt 2 ] || shift ;;
     --only=*) only=${1#--only=} only_set=1 ;;
     --only)
       [ $# -ge 2 ] || { echo "${0##*/}: --only needs a regular expression" >&2; exit 2; }
@@ -64,7 +66,8 @@ if [ "$only_set" = 1 ]; then
       [[ ${leg#LEG  } =~ $only ]] || continue
       holding+=("$member")
       break
-    done < <("${BASH:-bash}" "$here/$member" --list-legs 2>/dev/null)
+    # The census comes from the harness. The selected runner is used when the leg runs.
+    done < <(unset OCANNL_TOOL_HARNESS_SUBJECT; "${BASH:-bash}" "$here/$member" --list-legs 2>/dev/null)
   done
   [ ${#holding[@]} -gt 0 ] ||
     { echo "${0##*/}: --only '$only' selected no leg of any member (${members[*]}): nothing was tested" >&2; exit 2; }

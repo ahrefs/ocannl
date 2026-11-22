@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Exercise the shipping mutation runner and real test-run supervisor in an
 # isolated repository fixture, with a deterministic fake dune on PATH.
-# Usage: tools/test-mutation-run.sh [--keep] [--only REGEX] [--list-legs]
+# Usage: tools/test-mutation-run.sh [--keep] [--only REGEX] [--list-legs] [--subject FILE]
+# The subject replaces tools/mutation-run.sh in every fixture. The harness,
+# test-run.sh, mutant.sh and the sourced helpers come from the checkout.
 # Each leg is a function run by `harness_leg_run_errexit 'N: ...' leg_N`
 # (scripts/harness-support.sh) that starts from its own module, patch and
 # probe mode, so any one passes run alone (tools/harness-legs-alone.sh); the
@@ -17,12 +19,23 @@
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 . "$root/scripts/harness-support.sh"
+subject=
+harness_own_option --subject subject 'a file'
 harness_args "$@"
 harness_require perl git
+src=${subject:-$root/tools/mutation-run.sh}
+[ -f "$src" ] && [ -r "$src" ] || { echo "no $src" >&2; exit 2; }
 harness_scratch mutation-tests
 fixture=$TMP
+mutation_subject=$fixture/mutation-subject.sh
+cp -- "$src" "$mutation_subject"
+chmod +x "$mutation_subject"
+if [ -n "$subject" ]; then
+  printf '  subject: %s\n  digest %s\n' "$subject" "$(cksum <"$mutation_subject")"
+fi
 mkdir -p "$fixture/repo/tools" "$fixture/repo/scripts" "$fixture/stubs" "$fixture/runs"
-cp "$root/tools/mutation-run.sh" "$root/tools/mutant.sh" "$root/tools/test-run.sh" "$fixture/repo/tools/"
+cp "$mutation_subject" "$fixture/repo/tools/mutation-run.sh"
+cp "$root/tools/mutant.sh" "$root/tools/test-run.sh" "$fixture/repo/tools/"
 # Whatever the shipping test-run.sh SOURCES, derived from the script itself
 # rather than listed here: it dies at startup on a file the fixture lacks, and
 # the failure surfaces as this harness's own exit 2 where a 1 was expected --
@@ -311,7 +324,8 @@ harness_leg_restore() {
   local saved owner run
   rm -f "$fixture/stubs/cmp" peer.ml .test-run.lock
   [ ! -d module.ml ] || rm -rf module.ml
-  cp "$root/tools/mutation-run.sh" "$root/tools/test-run.sh" tools/
+  cp "$mutation_subject" tools/mutation-run.sh
+  cp "$root/tools/test-run.sh" tools/
   stage_heads .
   for saved in "$fixture"/runs/lock-*.saved; do
     [ -e "$saved" ] || continue
@@ -1401,7 +1415,8 @@ self=$fixture/self
 rm -rf "$self"
 mkdir -p "$self/tools" "$self/scripts"
 cp "$root/scripts/harness-support.sh" "$self/scripts/"
-cp "$root/tools/mutation-run.sh" "$root/tools/mutant.sh" "$root/tools/test-run.sh" "$self/tools/"
+cp "$mutation_subject" "$self/tools/mutation-run.sh"
+cp "$root/tools/mutant.sh" "$root/tools/test-run.sh" "$self/tools/"
 stage_sources "$self"
 stage_heads "$self"
 self_copy() { # FROM TO [FROM TO]...: the harness, each FROM replaced by its TO, exactly once

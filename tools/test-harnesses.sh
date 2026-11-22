@@ -21,6 +21,8 @@
 # A check needing newer Bash syntax gates on its running BASH_VERSINFO and
 # declares itself not applicable; the dispatcher has no member skip list.
 # --list remains interpreter-independent and runs no members.
+# The aggregate verifies the checkout: it clears any ambient
+# OCANNL_TOOL_HARNESS_SUBJECT before running members.
 # Every selected harness runs after ordinary failures; any failure exits 1.
 # HUP/INT/TERM stop immediately and preserve the interruption status.
 # A member fails if its stderr has a complete English Bash missing
@@ -269,7 +271,7 @@ members() {
   done < <(manifest)
 }
 unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_NO_DUNE \
-  OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD
+  OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD OCANNL_TOOL_HARNESS_SUBJECT
 scratch=()
 # Bound how long serial mode waits for a live relay to finish streaming after a
 # member exits, and how long relay teardown waits after TERM before escalating
