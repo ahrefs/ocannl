@@ -2,27 +2,53 @@
    untuned default reports [Searched_replay_fallback] with its crown fields cleared, rather than
    handing back the discarded timed crown's report under [Searched].
 
-   After the search crowns a winner and commits its cache entry, [Autotune.tune] replays the saved
-   winner into the caller's context before delivering its report. Here [Resource_fault_injection]
-   refuses the first working-pool allocation after [Schedule_cache_before_commit] (the winner
-   replay's link) with [Device_memory_exhausted], forcing the classified-failure fallback that sets
-   [substituted] and ships the untuned default. The search's census counters stay intact while the
-   crown fields are cleared so no caller credits the untuned default with the discarded winner.
+   After the search crowns a winner, [Autotune.tune] replays the saved winner into the caller's
+   context before delivering its report. Here [Resource_fault_injection] arms on
+   [Autotune_before_winner_replay] and refuses the winner replay's first working-pool allocation
+   ([Delta_pool_allocated]) with [Device_memory_exhausted], forcing the classified-failure fallback
+   that sets [substituted] and ships the untuned default, with the disk cache disabled
+   ([cache_dir:""]). The search's census counters stay intact while the crown fields are cleared so
+   no caller credits the untuned default with the discarded winner.
 
-   Controls: (1) the same search without the replay refusal reports [Searched] with a finite
-   [best_ms] and non-empty [best_label]; (2) [Autotune.tune_deferred] with the same refusal during
-   [compile_deferred] still delivers [Searched] before the deferred compile runs and reports the
-   substitution via [Autotune.shipped_substitute]. *)
+   The fixture is a small two-segment elementwise chain (no matmul sites, no sketch families,
+   [seed_block_sizes:[]]) so each search compiles only a handful of candidates while still crowning
+   a fissioned schedule with non-trivial [fissioned], [best_schedule], [best_grid], [best_spread]
+   and [best_steps].
+
+   Controls: (1) the same search without the replay refusal reports [Searched] with those crown
+   fields populated; (2) [Autotune.tune_deferred] with the same refusal during [compile_deferred]
+   still delivers [Searched] before the deferred compile runs and reports the substitution via
+   [Autotune.shipped_substitute]. *)
 
 open Base
+open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 module FI = Ir.Resource_fault_injection
 module SO = Ir.Schedule_outcome
 
-let chain = Fissioned_chain.chain_with_output ()
-let reference = Scripted_search.untuned (fst chain) (snd chain)
-let cache_dir = "autotune_cache_replay_fallback"
+let n = 8
+
+let make_chain () =
+  let a =
+    TDSL.ndarray
+      (Array.init (n * n)
+         ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:7 ~offset:(-3.) ~stride:0.5))
+      ~label:[ "rf_a" ] ~output_dims:[ n; n ] ()
+  in
+  let b =
+    TDSL.ndarray
+      (Array.init (n * n)
+         ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.25))
+      ~label:[ "rf_b" ] ~output_dims:[ n; n ] ()
+  in
+  let%op mid = a + b in
+  Train.set_materialized mid.Tensor.value;
+  let%op out = mid ++ "ij => ji" in
+  (out, Train.forward out)
+
+let out, comp = make_chain ()
+let reference = Scripted_search.untuned out comp
 
 (* Crown a fissioned candidate rather than [baseline] so the control carries non-trivial
    [fissioned], [best_schedule], [best_grid], [best_spread] and [best_steps], making the
@@ -32,15 +58,13 @@ let measure (w : Scripted_search.window) =
   base +. (Float.of_int w.Scripted_search.ordinal /. 64.)
 
 let run_direct ~fail_replay ~tag =
-  Scripted_search.clear_cache_dir cache_dir;
-  let qg, comp = chain in
   let report = ref None in
-  let cache_committed = ref false in
+  let replay_started = ref false in
   let refused = ref 0 in
   let callback (point : FI.point) =
     match point with
-    | FI.Schedule_cache_before_commit -> cache_committed := true
-    | FI.Delta_pool_allocated when fail_replay && !cache_committed && !refused = 0 ->
+    | FI.Autotune_before_winner_replay -> replay_started := true
+    | FI.Delta_pool_allocated when fail_replay && !replay_started && !refused = 0 ->
         Int.incr refused;
         raise
           (SO.Device_memory_exhausted
@@ -59,12 +83,12 @@ let run_direct ~fail_replay ~tag =
               FI.with_callback callback ~f:(fun () ->
                   let ctx, routine =
                     Autotune.tune ~name:tag ~search:true ~beam_width:1 ~rounds:0 ~repeats:1
-                      ~cache_dir ~log:false ~progress:false
+                      ~seed_block_sizes:[] ~cache_dir:"" ~log:false ~progress:false
                       ~report:(fun r -> report := Some r)
                       (Context.cpu ()) comp Ir.Indexing.Empty
                   in
                   let ctx = Context.run ctx routine in
-                  let values = Context.get_values ctx qg.Tensor.value in
+                  let values = Context.get_values ctx out.Tensor.value in
                   Context.release ctx;
                   values))
         in
@@ -127,13 +151,11 @@ let () =
 
   (* --- 3. Deferred control: tune_deferred reports before compile_deferred and exposes substitution
      via shipped_substitute. --- *)
-  Scripted_search.clear_cache_dir cache_dir;
-  let qg, comp = chain in
   let deferred_report = ref None in
   let deferred, _record =
     Scripted_search.scripted ~measure (fun () ->
         Autotune.tune_deferred ~name:"replay_deferred" ~search:true ~beam_width:1 ~rounds:0
-          ~repeats:1 ~cache_dir ~log:false ~progress:false
+          ~repeats:1 ~seed_block_sizes:[] ~cache_dir:"" ~log:false ~progress:false
           ~report:(fun r -> deferred_report := Some r)
           (Context.cpu ()) comp Ir.Indexing.Empty)
   in
@@ -143,11 +165,13 @@ let () =
     && Float.is_finite r_def.Autotune.best_ms
     && (not (String.is_empty r_def.Autotune.best_label))
     && not (Autotune.shipped_substitute deferred));
+  let def_replay_started = ref false in
   let def_refused = ref 0 in
   let def_ctx, def_routine =
     FI.with_callback
       (function
-        | FI.Delta_pool_allocated when !def_refused = 0 ->
+        | FI.Autotune_before_winner_replay -> def_replay_started := true
+        | FI.Delta_pool_allocated when !def_replay_started && !def_refused = 0 ->
             Int.incr def_refused;
             raise
               (SO.Device_memory_exhausted
@@ -161,7 +185,7 @@ let () =
       ~f:(fun () -> Autotune.compile_deferred deferred)
   in
   let def_ctx = Context.run def_ctx def_routine in
-  let def_values = Context.get_values def_ctx qg.Tensor.value in
+  let def_values = Context.get_values def_ctx out.Tensor.value in
   Context.release def_ctx;
   p "deferred: compile_deferred hit the refusal and sets shipped_substitute"
     (!def_refused = 1 && Autotune.shipped_substitute deferred);

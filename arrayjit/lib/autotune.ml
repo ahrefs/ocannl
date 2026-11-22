@@ -12687,6 +12687,8 @@ module Make (D : Driver) = struct
                 release_all_candidates ();
                 fun () ->
                   progress_stage "winner_compile";
+                  Ir.Resource_fault_injection.hit
+                    Ir.Resource_fault_injection.Autotune_before_winner_replay;
                   match compile_spec_real ~label Outcome.Candidate spec with
                   | Ok c when not (shipped_dispatchable ~is_gpu c) ->
                       (* Completes the invariant rather than fixing an observed bug: the winner was
