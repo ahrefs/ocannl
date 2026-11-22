@@ -963,3 +963,23 @@ files.
   at once. HIP reported a size-independent 3 us on tuf and 1 us on minix, so treat
   `hipHostRegister`'s cost as unmeasured there (likely deferred). cudajit 0.8.0 binds neither
   `cuMemHostAlloc` nor `cuMemHostRegister`, so the registration route starts with bindings.
+- **Automatic CUDA host-array registration** (gh-ocannl-1854): `Ir.Host_pinning` tracks recurring
+  caller-owned host `Ndarray.t` values by base address and registers them on their second
+  host-to-device transfer at or above `cuda_host_register_min_bytes` (default 4 MiB, `0` disables).
+  `Cuda_backend.Host_register` binds `cuMemHostRegister_v2` (not unversioned v1, which rejects
+  non-page-aligned `malloc` buffers) with `CU_MEMHOSTREGISTER_PORTABLE` (falling back to `0` on
+  `CUDA_ERROR_NOT_SUPPORTED`) and `cuMemHostUnregister` through `Driver_entry` (`libcuda.so.1` /
+  `nvcuda.dll`), gated on `attributes.host_register_supported && not attributes.integrated`.
+  Unregistration runs from a lock-free `Gc.finalise` callback on the underlying `Bigarray.Genarray`
+  (atomic `Dead` exchange so `unregister` runs at most once even if finalisation races with
+  registration or `at_exit` teardown; retired table entries drain on the next `note_transfer`).
+  Pinned `cuMemcpyHtoDAsync` returns while DMA is still reading host memory, whereas pageable
+  transfers wait until host memory is consumed; `Cuda_backend.from_host` therefore synchronises
+  `dst.device.runner` and pins the source live via `Sys.opaque_identity` whenever `note_transfer`
+  returns `true`, preserving the completion contract for callers that do not await immediately
+  (`Backends.allocate_delta`, immediate host buffer reuse). Interleaved `benchmarks/ab.py` on
+  `rog-nv-linux` (RTX 5070 Ti Laptop, discrete; `test/training/bench_host_feed_step.exe 60`,
+  4 x 24 MiB batches, 12 paired rounds, every cell clean): upload median 1.501 -> 0.6879 ms
+  (ratio 0.455, 12/12 faster, p=0.000488), full training step median 2.252 -> 1.418 ms (ratio
+  0.629, 12/12 faster, p=0.000488). A future cudajit binding for `cuMemHostRegister_v2` /
+  `cuMemHostUnregister` can supersede the `Driver_entry` bindings.
