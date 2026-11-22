@@ -6718,6 +6718,7 @@
   arrayjit.verdict
   gc_witness
   arrayjit.ir
+  arrayjit.utils
   arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))

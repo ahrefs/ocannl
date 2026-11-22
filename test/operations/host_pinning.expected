@@ -6,8 +6,9 @@ dropped registered array: registered on second sighting, reclaimed and unregiste
 dropped once-seen array: never registered and never unregistered: true
 live array remains registered after unrelated drops: true
 declined registration: not retried on third transfer and never unregistered on drop: true
-unregister exception in finaliser: swallowed, counted as failure, live_bytes cleared: true
+unregister failure in finaliser: stays retryable with live_bytes and storage kept until retry succeeds: true
 finaliser reentrancy during register: no deadlock, dead entry unregistered once: true
 unregister_all: releases live entries immediately: true
 unregister_all followed by GC: finaliser does not double-unregister: true
 dynamic disable after registration: already-pinned array stays true, new arrays stay false: true
+overlapping slice then parent: slice evicted on parent upload, parent registers, slices covered without re-registering: true

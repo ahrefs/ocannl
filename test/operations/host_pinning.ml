@@ -19,7 +19,9 @@ let[@inline never] build_registered_and_drop ~hp ~floats =
   let r1 = HP.note_transfer hp nd in
   let r2 = HP.note_transfer hp nd in
   let r3 = HP.note_transfer hp nd in
-  let w = Gc_witness.witness nd in
+  (* Witness the underlying Bigarray.Genarray.t (which owns the C storage and carries the GC
+     finaliser), not the outer Ndarray.t wrapper. *)
+  let w = Nd.apply { f = Gc_witness.witness } nd in
   (w, r1, r2, r3)
 
 let[@inline never] build_once_seen_and_drop ~hp ~floats =
@@ -139,19 +141,31 @@ let () =
     ((not cr1) && (not cr2) && (not cr3) && dec_reclaimed && !dec_reg = 1 && !dec_unreg = 0
    && st_dec.registered = 0 && st_dec.declined = 1 && st_dec.live_bytes = 0);
 
-  (* 5. Unregister failure in GC finaliser is swallowed and counted, and live_bytes still drops. *)
+  (* 5. Unregister failure in GC finaliser keeps token, backing array, and live_bytes retryable;
+     once the driver recovers, retry unregisters cleanly and releases the backing array. *)
+  let should_fail_unreg = ref true in
   let hp_fail =
     HP.create
       ~min_bytes:(fun () -> 4096)
       ~register:(fun ~addr ~bytes -> Some (addr, bytes))
-      ~unregister:(fun _ -> failwith "simulated driver unregister error")
+      ~unregister:(fun _ -> if !should_fail_unreg then failwith "simulated driver unregister error")
   in
   let w_fail, fr1, fr2, _ = build_registered_and_drop ~hp:hp_fail ~floats:2048 in
-  let fail_reclaimed = Gc_witness.reclaimed w_fail in
+  (* Run settle rounds so the finaliser runs once and fails; the retry entry keeps [nd] alive. *)
+  Gc_witness.settle ();
+  Gc_witness.settle ();
   let st_fail = HP.stats hp_fail in
-  p "unregister exception in finaliser: swallowed, counted as failure, live_bytes cleared"
-    ((not fr1) && fr2 && fail_reclaimed && st_fail.registered = 1 && st_fail.unregistered = 0
-   && st_fail.unregister_failures = 1 && st_fail.live_bytes = 0);
+  let kept_while_failed = Gc_witness.kept ~rounds:1 w_fail in
+  should_fail_unreg := false;
+  HP.unregister_all hp_fail;
+  let st_retried = HP.stats hp_fail in
+  let reclaimed_after_retry = Gc_witness.reclaimed w_fail in
+  p
+    "unregister failure in finaliser: stays retryable with live_bytes and storage kept until retry \
+     succeeds"
+    ((not fr1) && fr2 && kept_while_failed && st_fail.registered = 1 && st_fail.unregistered = 0
+   && st_fail.unregister_failures = 1 && st_fail.live_bytes = 8192 && st_retried.unregistered = 1
+   && st_retried.live_bytes = 0 && reclaimed_after_retry);
 
   (* 6. Finaliser reentrancy inside [register]: triggering GC while [note_transfer] holds the lock
      must not deadlock and must unregister the dead entry cleanly. *)
@@ -226,4 +240,56 @@ let () =
   let b2 = HP.note_transfer hp_dyn nd_b in
   p "dynamic disable after registration: already-pinned array stays true, new arrays stay false"
     (a2 && a3 && (not b1) && (not b2) && !dyn_reg = 1);
-  ignore (Stdlib.Sys.opaque_identity (nd_a, nd_b))
+  ignore (Stdlib.Sys.opaque_identity (nd_a, nd_b));
+
+  (* 9. Overlapping views: sub-slice registered first, then parent uploaded -> slice evicted cleanly
+     (no mixed-range copy), parent registered on second upload, then sub-slice covered by parent
+     even when smaller than min_bytes. *)
+  let ov_reg = ref 0 and ov_unreg = ref 0 in
+  let hp_ov =
+    HP.create
+      ~min_bytes:(fun () -> 4096)
+      ~register:(fun ~addr ~bytes ->
+        Int.incr ov_reg;
+        Some (addr, bytes))
+      ~unregister:(fun _ -> Int.incr ov_unreg)
+  in
+  let parent_ba = Bigarray.Genarray.create Bigarray.float32 Bigarray.c_layout [| 4; 1024 |] in
+  let parent_nd = Nd.as_array Ops.Single parent_ba in
+  let slice_ba =
+    Bigarray.Genarray.sub_left parent_ba 1 2
+    (* 8 KiB inside 16 KiB parent *)
+  in
+  let slice_nd = Nd.as_array Ops.Single slice_ba in
+  let tiny_slice_ba =
+    Bigarray.Genarray.sub_left parent_ba 0 1
+    (* 4 KiB = threshold *)
+  in
+  let tiny_half_ba =
+    Bigarray.Genarray.sub_left
+      (Bigarray.reshape_1 tiny_slice_ba 1024 |> Bigarray.genarray_of_array1)
+      0 512
+    (* 2 KiB < threshold *)
+  in
+  let tiny_slice_nd = Nd.as_array Ops.Single tiny_half_ba in
+  let sl1 = HP.note_transfer hp_ov slice_nd in
+  let sl2 = HP.note_transfer hp_ov slice_nd in
+  let st_sl = HP.stats hp_ov in
+  (* First transfer of parent partially overlaps the registered slice: must evict slice first. *)
+  let p1 = HP.note_transfer hp_ov parent_nd in
+  let st_p1 = HP.stats hp_ov in
+  (* Second transfer of parent registers the whole 16 KiB parent. *)
+  let p2 = HP.note_transfer hp_ov parent_nd in
+  let st_p2 = HP.stats hp_ov in
+  (* Sub-slices (both 8 KiB and below-threshold 2 KiB) are now covered by the registered parent. *)
+  let sl3 = HP.note_transfer hp_ov slice_nd in
+  let tiny_cov = HP.note_transfer hp_ov tiny_slice_nd in
+  let st_cov = HP.stats hp_ov in
+  p
+    "overlapping slice then parent: slice evicted on parent upload, parent registers, slices \
+     covered without re-registering"
+    ((not sl1) && sl2 && st_sl.registered = 1 && st_sl.live_bytes = 8192 && (not p1)
+   && !ov_unreg = 1 && st_p1.unregistered = 1 && st_p1.live_bytes = 0 && p2 && !ov_reg = 2
+   && st_p2.registered = 2 && st_p2.live_bytes = 16384 && sl3 && tiny_cov && st_cov.registered = 2
+   && st_cov.unregistered = 1 && st_cov.live_bytes = 16384);
+  ignore (Stdlib.Sys.opaque_identity (parent_nd, slice_nd, tiny_slice_nd))

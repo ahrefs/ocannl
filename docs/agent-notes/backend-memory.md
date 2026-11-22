@@ -971,8 +971,11 @@ files.
   `CUDA_ERROR_NOT_SUPPORTED`) and `cuMemHostUnregister` through `Driver_entry` (`libcuda.so.1` /
   `nvcuda.dll`), gated on `attributes.host_register_supported && not attributes.integrated`.
   Unregistration runs from a lock-free `Gc.finalise` callback on the underlying `Bigarray.Genarray`
-  (atomic `Dead` exchange so `unregister` runs at most once even if finalisation races with
-  registration or `at_exit` teardown; retired table entries drain on the next `note_transfer`).
+  (atomic state transitions so `unregister` runs at most once on success; a failed `unregister`
+  keeps the token, backing storage, and `live_bytes` accounting retryable on subsequent transfers
+  or `at_exit` teardown; transfers partially overlapping an active registration first evict the
+  overlapping range so `cuMemcpyHtoDAsync` never spans mixed registered/unregistered host memory,
+  while transfers contained inside a registered parent reuse its registration).
   Pinned `cuMemcpyHtoDAsync` returns while DMA is still reading host memory, whereas pageable
   transfers wait until host memory is consumed; `Cuda_backend.from_host` therefore synchronises
   `dst.device.runner` and pins the source live via `Sys.opaque_identity` whenever `note_transfer`

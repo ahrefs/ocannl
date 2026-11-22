@@ -183,14 +183,32 @@ let () =
     upload_times.(i) <- u;
     step_times.(i) <- s
   done;
+  (* Post-warmup untimed parity check on batch 0, whose host array is now registered on CUDA:
+     compare the step loss against an independent f64 host reference at the exact post-loop weights,
+     so silent corruption on the registered upload path fails [Bench_out.Passed]. *)
+  let ref_loss_post =
+    host_loss_batch0
+      ~w1:(Context.get_values !ctx_ref w1.Tensor.value)
+      ~b1:(Context.get_values !ctx_ref b1.Tensor.value)
+      ~w2:(Context.get_values !ctx_ref w2.Tensor.value)
+      ~b2:(Context.get_values !ctx_ref b2.Tensor.value)
+  in
+  ignore (run_step ~batch_idx:0 : float * float);
   let final_loss = (Context.get_values !ctx_ref batch_loss.Tensor.value).(0) in
+  let diff_post = Float.abs (final_loss -. ref_loss_post) in
+  let tol_post = Float.max 1e-4 (1e-4 *. Float.abs ref_loss_post) in
   let check =
-    if Float.is_finite got_loss0 && Float.is_finite final_loss && Float.(diff0 <= tol) then
-      Bench_out.Passed
+    if
+      Float.is_finite got_loss0 && Float.is_finite final_loss
+      && Float.(diff0 <= tol)
+      && Float.(diff_post <= tol_post)
+    then Bench_out.Passed
     else
       Bench_out.Failed
-        (Printf.sprintf "step0 loss got=%.6f ref=%.6f diff=%.6g tol=%.6g final=%.6f" got_loss0
-           ref_loss0 diff0 tol final_loss)
+        (Printf.sprintf
+           "step0 loss got=%.6f ref=%.6f diff=%.6g tol=%.6g; post loss got=%.6f ref=%.6f diff=%.6g \
+            tol=%.6g"
+           got_loss0 ref_loss0 diff0 tol final_loss ref_loss_post diff_post tol_post)
   in
   let median arr =
     let sorted = Array.sorted_copy arr ~compare:Float.compare in
