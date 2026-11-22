@@ -51,6 +51,10 @@ let check_sums label products got =
     (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id))) ~f:Float.equal
 let check1 label products got = check_sums label products got
 let check2 label products got = check1 label products got
+let get_stored_values ctx node =
+  match Context.observability ctx node with
+  | Context.Stored -> Context.get_values ctx node
+  | _ -> failwith "expected a stored support value"
 |ocaml}
 
 let cross_module =
@@ -229,6 +233,25 @@ let () =
   check_reference values
 |ocaml},
       false );
+    ( "a support module can validate a stored read from an opaque routine",
+      {ocaml|
+let () =
+  let node = (build ()).Tensor.value in
+  let ctx, routine = opaque_compile (Context.auto ()) node in
+  let ctx = Context.run ctx routine in
+  check_reference (Exact_sums.get_stored_values ctx node)
+|ocaml},
+      true );
+    ( "a rebound support module cannot validate a stored read",
+      {ocaml|
+module Exact_sums = Other_sums
+let () =
+  let node = (build ()).Tensor.value in
+  let ctx, routine = opaque_compile (Context.auto ()) node in
+  let ctx = Context.run ctx routine in
+  check_reference (Exact_sums.get_stored_values ctx node)
+|ocaml},
+      false );
   ]
 
 (* gh-ocannl-2334: a Train.*_once context as the executed reference. *)
@@ -307,9 +330,10 @@ let () =
     |> read
   in
   p "a different products binding cannot cover the premise" (Scan.uncovered other_products = 1);
+  let support = support_of support_source in
   List.iter run_cases ~f:(fun (label, body, want_covered) ->
       p label
-        (match read (run_premise ^ body) with
+        (match read ~support (run_premise ^ body) with
         | [ site ] -> Bool.equal site.covered want_covered
         | _ -> false));
   let host_reference =
@@ -349,7 +373,6 @@ let () =
     ^ String.substr_replace_all protocol ~pattern:"L.operand ~b:[] ~o:[2] ~i:[2]" ~with_:"Fun.id"
   in
   p "an unrelated checked operand cannot cover a site" (Scan.uncovered (read unrelated) = 1);
-  let support = support_of support_source in
   let covered_across = read ~support cross_module in
   p "a premise checked through a support module's reader and comparison is covered"
     (List.length covered_across = 1 && Scan.uncovered covered_across = 0);

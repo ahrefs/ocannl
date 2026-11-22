@@ -22,6 +22,8 @@ a sibling context confers nothing: true
 a runtime storage check validates a read from an opaque routine: true
 a storage check that reads another node confers nothing: true
 a storage check with a returning fallback confers nothing: true
+a support module can validate a stored read from an opaque routine: true
+a rebound support module cannot validate a stored read: true
 host sums cannot impersonate an executed reference: true
 checked reduction, comparison and lazy reference wrappers cover tuple dispatch: true
 reading a context without running it is not an executed reference: true

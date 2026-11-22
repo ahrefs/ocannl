@@ -75,6 +75,7 @@ module Exact_sums : sig
   val check2 : string -> float list list -> float array -> unit
   val check3 : string -> float list list -> float array -> unit
   val self_check : unit -> unit
+  val get_stored_values : Context.t -> node -> float array
 end
 
 module Other_sums : module type of Exact_sums
