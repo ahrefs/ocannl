@@ -1939,6 +1939,11 @@ if harness_leg 'harness fixture and heredoc literals'; then
   twin_text 'code=$(source tools/clib.sh)' 'bash -c "$code"'
   fx_reach 'fail-closed: unredirected printf inside a sourced shell file stays scanned' tools/test-a.sh tools/test-c.sh
   : >"$hrepo/tools/clib.sh"
+  # Round 11 review finding: enclosing double-quote state inside `${...}` recursion.
+  twin_text 'printf '\''%s\n'\'' "${missing:-'\''$(bash tools/sub.sh)'\''}"'
+  fx_reach 'fail-closed: single quotes inside double-quoted ${var:-...} do not suppress $(...)' tools/test-a.sh tools/test-c.sh
+  twin_text 'printf '\''%s\n'\'' "${a:-'\''}$(bash tools/sub.sh)${b:-'\''}"'
+  fx_reach 'fail-closed: unpaired apostrophe inside double-quoted ${...} does not hide following $(...)' tools/test-a.sh tools/test-c.sh
   hc_restore
 fi
 

@@ -724,7 +724,7 @@ sub blank_keep_nl { my ($s) = @_; $s =~ s/[^\n]/ /g; return $s }
 # ($open is '$(', '${', '<(', '>(', or '`'). Returns the end offset just past
 # the closing delimiter, or undef if unbalanced (fail closed).
 sub sh_skip_balanced {
-  my ($s, $i, $open) = @_;
+  my ($s, $i, $open, $in_dq) = @_;
   my $len = length $s;
   if ($open eq '`') {
     my ($j, $esc) = ($i + 1, 0);
@@ -743,8 +743,14 @@ sub sh_skip_balanced {
       my $c = substr($s, $j, 1);
       if ($iesc) { $iesc = 0; $j++; next }
       if ($c eq "\\" && !$isq) { $iesc = 1; $j++; next }
-      if ($c eq "'" && !$idq) { $isq = !$isq; $j++; next }
+      if (!$in_dq && $c eq "'" && !$idq) { $isq = !$isq; $j++; next }
       if ($c eq '"' && !$isq) { $idq = !$idq; $j++; next }
+      if (!$isq && substr($s, $j, 2) eq '$(') {
+        my $nj = sh_skip_balanced($s, $j, '$(');
+        return undef unless defined $nj;
+        $j = $nj;
+        next;
+      }
       if (!$isq && !$idq) {
         if ($c eq "{") { $depth++ }
         elsif ($c eq "}") { $depth-- }
@@ -821,13 +827,13 @@ sub extract_cmdsubs {
       last;
     }
     if (!$sq && $two eq '${') {
-      my $nj = sh_skip_balanced($s, $i, '${');
+      my $nj = sh_skip_balanced($s, $i, '${', (!$respect_sq || $dq) ? 1 : 0);
       if (defined $nj) {
         my $inner = substr($s, $i + 2, $nj - $i - 3);
         if ($inner =~ /\A[A-Za-z_]\w*:?=/) {
           substr($out, $i, $nj - $i) = substr($s, $i, $nj - $i);
         } else {
-          substr($out, $i + 2, length($inner)) = extract_cmdsubs($inner, $respect_sq);
+          substr($out, $i + 2, length($inner)) = extract_cmdsubs($inner, $dq ? 0 : $respect_sq);
         }
         $i = $nj;
         next;
@@ -939,7 +945,7 @@ sub sh_tokenize {
       if ($ch eq '"' && !$sq) { $dq = !$dq; $i++; next }
       my $two = substr($s, $i, 2);
       if (!$sq && ($two eq '${' || $two eq '$(')) {
-        my $nj = sh_skip_balanced($s, $i, $two);
+        my $nj = sh_skip_balanced($s, $i, $two, $dq);
         return undef unless defined $nj;
         $i = $nj;
         next;
@@ -1565,7 +1571,7 @@ sub sh_parse {
           }
           my $two = substr($log, $pos, 2);
           if (!$sq && ($two eq '${' || $two eq '$(')) {
-            my $nj = sh_skip_balanced($log, $pos, $two);
+            my $nj = sh_skip_balanced($log, $pos, $two, $dq);
             if (defined $nj) { $pos = $nj; next }
             $pos += 2;
             next;
@@ -1685,7 +1691,7 @@ sub sh_parse {
           next;
         }
         if (!$msq && $two eq '${') {
-          my $nj = sh_skip_balanced($line, $p, '${');
+          my $nj = sh_skip_balanced($line, $p, '${', $mdq);
           if (defined $nj) { $p = $nj; next }
           $p += 2;
           next;
