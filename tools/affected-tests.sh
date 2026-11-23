@@ -95,6 +95,11 @@
 #     and the targets of every directory holding a `dune` file. A `NAME.exe`
 #     target no stanza there names is a `tests` stanza naming no library,
 #     which neither describe answer lists.
+#   - `dune exec --root . --no-build -- printf '%s\n' 'system=%{system}'`
+#     supplies the current context's system for an otherwise ownerless
+#     module in a directory with literal OS guards. A failed query or an
+#     answer outside the one-line system form leaves ordinary mapping in
+#     force, including its UNMAPPED fallback.
 #   - `dune rules TARGET...`, for each per-test alias's own targets (below),
 #     each generated module file, and every C stub object (`X.o`) and stub
 #     archive (`libNAME_stubs.a`): the
@@ -311,8 +316,10 @@
 #   A changed script no harness reaches is named on stderr.
 #
 # Hand-run shell scripts (gh-ocannl-2413): the harness reader checks every
-# visible regular *.sh file for a single `# harness: none -- REASON` marker,
-# in the uninterrupted column-one comment header following the shebang. The
+# visible regular *.sh file for a single marker. The line consists of a
+# comment introducer, one space and `harness: none -- REASON` in the
+# uninterrupted column-one comment header following the shebang. The marker
+# sentinel is reserved wherever it occurs in script text, including after code. The
 # script path consists of ASCII letters, digits, underscores, periods and
 # hyphens in slash-separated components. The reason is two or more
 # space-separated printable ASCII words. A malformed,
@@ -881,25 +888,27 @@ for my $h (@members) {
 }
 # A marker grants no credit until this read proves it has no named consumer.
 my %hand_run;
+my $marker = "harness:";
+my $sentinel = qr/#[ \t]*harness[ \t]*:/;
 for my $p (grep { /\.sh\z/ && -f } @known) {
   my @lines = split /\r?\n/, raw($p);
   my $in_header = 1;
-  for my $i (1 .. $#lines) {
+  for my $i (0 .. $#lines) {
     my $line = $lines[$i];
-    $in_header = 0 unless $line =~ /^#/;
-    next unless $line =~ /^[ \t]*#[ \t]*harness\s*:/;
+    $in_header = 0 if $i && $line !~ /^#/;
+    my $markers = () = $line =~ /$sentinel/g;
+    next unless $markers;
     my $where = "$p:" . ($i + 1);
+    fail("$where: harness marker must follow the shebang") unless $i;
     fail("$where: harness marker must be in the header of a regular shell script")
       unless $in_header && $lines[0] =~ /^#!/ && !-l $p;
     fail("$where: harness marker requires a shell script path made of letters, digits, underscore, period, hyphen and slash")
       unless $p =~ m{\A[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\.sh\z};
-    fail("$where: expected `# harness: none -- REASON` with a reason of at least two words")
-      unless $line =~ /\A# harness: none -- [!-~]+(?: [!-~]+)+\z/ && (index($line, "harness:", 3) < 0);
-    fail("$where: duplicate harness marker") if $hand_run{$p};
+    fail("$where: duplicate harness marker") if $markers > 1 || $hand_run{$p};
+    fail("$where: expected `# $marker none -- REASON` with a reason of at least two words")
+      unless $line =~ /\A# \Q$marker\E none -- [!-~]+(?: [!-~]+)+\z/;
     $hand_run{$p} = $where;
   }
-  fail("$p:1: harness marker must follow the shebang")
-    if @lines && $lines[0] =~ /^[ \t]*#[ \t]*harness\s*:/;
 }
 for my $p (sort keys %hand_run) {
   for my $h (@members) {

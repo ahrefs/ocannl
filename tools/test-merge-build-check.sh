@@ -1130,12 +1130,14 @@ FAKE
   # Build the fixture names from parts so the reach reader does not mistake
   # this harness's scratch files for the real drivers.
   sh_ext=.sh
+  marker_word=harness
+  marker="# ${marker_word}: none -- exclusive diagnostic session"
   cell=test/metal_probe/run_cells$sh_ext
   cost=benchmarks/gh1529_nvrtc_cost$sh_ext
   for p in "$cell" "$cost"; do printf '%s\n' '#!/bin/sh' ':' >"$R/$p"; done
   commit_on base && git -C "$R" branch -f side HEAD && git -C "$R" checkout -q side || exit 2
   for p in "$cell" "$cost"; do
-    printf '%s\n' '#!/bin/sh' '# harness: none -- exclusive diagnostic session' ':' >"$R/$p"
+    printf '%s\n' '#!/bin/sh' "$marker" ':' >"$R/$p"
   done
   commit_on side && merge_side || exit 2
   plan
@@ -1191,15 +1193,20 @@ FAKE
   if [ "$rc" = 0 ] && has '0 harness command(s) from 1 changed path(s)'; then
     report 0 'a Dune comment and a bulk dependency leave the marker valid'
   else report 1 'a Dune comment and a bulk dependency leave the marker valid' "exit $rc; $(cat "$TMP/out")"; fi
-  printf '%s\n' '#!/bin/sh' ':' '# harness: none -- misplaced marker' >"$R/$cell"
+  printf '%s\n' '#!/bin/sh' ':' "$marker" >"$R/$cell"
   check_markers
   if [ "$rc" = 2 ] && has "$cell:3: harness marker must be in the header"; then
     report 0 'a marker after the header is refused'
   else report 1 'a marker after the header is refused' "exit $rc; $(cat "$TMP/out")"; fi
+  printf '%s\n' '#!/bin/sh' ": $marker" >"$R/$cell"
+  check_markers
+  if [ "$rc" = 2 ] && has "$cell:2: harness marker must be in the header"; then
+    report 0 'an inline marker after shell code is refused'
+  else report 1 'an inline marker after shell code is refused' "exit $rc; $(cat "$TMP/out")"; fi
   git -C "$R" restore "$cell" || exit 2
   git -C "$R" config core.quotePath true || exit 2
   quoted="$R/$(printf 'caf\303\251.sh')"
-  printf '%s\n' '#!/bin/sh' '# harness: none -- exclusive diagnostic session' ':' >"$quoted"
+  printf '%s\n' '#!/bin/sh' "$marker" ':' >"$quoted"
   check_markers
   if [ "$rc" = 2 ] && has 'harness marker requires a shell script path'; then
     report 0 'a marker on a Git-quoted path outside the scanner grammar is refused'

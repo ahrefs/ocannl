@@ -634,7 +634,7 @@ if harness_leg 'OS-gated Metal probe module'; then
   probe=$probe_dir/metal_hang_probe$ml_ext
   mkdir -p "$repo/$probe_dir" || exit 2
   printf 'let () = ()\n' >"$repo/$probe"
-  printf '(executable (name metal_hang_probe) (modules metal_hang_probe) (enabled_if (= %%{system} %s)))\n' \
+  printf '(executable (name metal_hang_probe) (optional) (modules metal_hang_probe) (enabled_if (= %%{system} %s)) (libraries fixture_probe_library_missing_everywhere))\n' \
     "$gate" >"$repo/$probe_dir/dune"
   git_q add -A test && git_q commit -qm os-gated-probe || exit 2
   affected --files "$probe"
