@@ -650,7 +650,18 @@ if harness_leg 'OS-gated Metal probe module'; then
   if alias_reader_completed && [ "$verdict" = incomplete ] && grep -qF "UNMAPPED: $probe" "$err"; then
     report 0 'a directory with mixed enablement keeps the ordinary mapping requirement'
   else report 1 'a directory with mixed enablement keeps the ordinary mapping requirement' "exit $rc; $(cat "$out" "$err")"; fi
-  git_q reset -q --hard HEAD~2 || exit 2
+  # Leave only the false guard in the probe's own file. The enabled
+  # executable comes from a parent include and still makes the directory mixed.
+  git_q restore --source=HEAD~1 "$probe_dir/dune" || exit 2
+  parent=${probe_dir%/*}
+  printf '(include extra.inc)\n' >"$repo/$parent/dune"
+  printf '(subdir metal_probe (executable (name other) (modules other)))\n' >"$repo/$parent/extra.inc"
+  git_q add -A test && git_q commit -qm included-mixed-probe || exit 2
+  affected --files "$probe"
+  if alias_reader_completed && [ "$verdict" = incomplete ] && grep -qF "UNMAPPED: $probe" "$err"; then
+    report 0 'a parent include can make an apparently disabled directory mixed'
+  else report 1 'a parent include can make an apparently disabled directory mixed' "exit $rc; $(cat "$out" "$err")"; fi
+  git_q reset -q --hard HEAD~3 || exit 2
 fi
 
 if harness_leg 'off-build reach'; then

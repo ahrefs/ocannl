@@ -319,7 +319,7 @@
 # duplicate or misplaced declaration refuses. A marker conflicts with any
 # harness reach in the graph above, including declared globs, or a literal
 # script basename in a Dune stanza's atoms (including quoted commands and
-# existing literal include files, across guards). Comments and bulk Dune
+# existing literal stanza and dependency include files, across guards). Comments and bulk Dune
 # glob/source-tree reads do not name a script individually. Generated includes
 # and computed filenames are outside the literal reading. On a successful
 # ask an exact `affected: PATH: verified hand-run harness marker` line on
@@ -328,7 +328,8 @@
 # A directory with only library, executable, test, rule or alias stanzas
 # guarded by false `(= %{system} LITERAL)` comparisons in Dune's current
 # context accounts for an otherwise ownerless module there. Other guards,
-# mixed directories and optional dependency failures keep the UNMAPPED path.
+# mixed directories, ancestor includes and optional dependency failures keep
+# the UNMAPPED path.
 # Concrete reads from elsewhere are still selected.
 #
 # Literal dependencies (gh-ocannl-2304): for each changed `*.sh` path, stderr
@@ -609,9 +610,10 @@ if [ -f tools/test-harnesses.sh ]; then
     die "tools/test-harnesses.sh --list failed:
 $(cat "$tmp/err")"
   if [ "$in_git" = 1 ]; then
-    git ls-files --cached --others --exclude-standard >"$tmp/files" || die "git ls-files failed"
+    git ls-files -z --cached --others --exclude-standard >"$tmp/files" || die "git ls-files failed"
   else
-    find . \( -name _build -o -name .git \) -prune -o -type f -print | sed 's|^\./||' >"$tmp/files"
+    find . \( -name _build -o -name .git \) -prune -o -type f -print0 >"$tmp/files" ||
+      die "cannot list files"
   fi
   cat >"$tmp/harness.pl" <<'HARNESS'
 # harness.pl TMP: the harness legs the changed paths reach (the header's
@@ -634,8 +636,15 @@ my %once;
 my @changed = grep { !$once{$_}++ } lines("$tmp/changed");
 my @members = lines("$tmp/harness-members");
 -f $_ or fail("tools/test-harnesses.sh --list names $_, which is not a file here") for @members;
+sub inventory {
+  open my $fh, "<", "$tmp/files" or fail("cannot read $tmp/files");
+  local $/ = "\0";
+  my @paths = map { chomp; s{\A\./}{}r } <$fh>;
+  close $fh or fail("cannot close $tmp/files");
+  return @paths;
+}
 my %known;
-$known{$_} = 1 for lines("$tmp/files"), @changed, @members;
+$known{$_} = 1 for inventory(), @changed, @members;
 my @known = sort keys %known;
 # The names text may know a path by: itself (holding a `/` or a `.`), its
 # basename (holding a `.`), and `X.exe` for an `X.ml`.
@@ -903,22 +912,26 @@ for my $p (sort keys %hand_run) {
 # Rule names and arguments are atoms, even within a quoted shell command.
 # Compare literal basenames conservatively across directories and OS guards.
 sub check_dune_markers {
-  my ($file, $dir, $items, $by_base, $seen) = @_;
+  my ($file, $dir, $items, $by_base, $seen, $in_deps) = @_;
   for my $item (@$items) {
     if (ref $item) {
       my ($head, $arg) = @$item;
-      if (defined $head && !ref $head && defined $arg && !ref $arg) {
-        if ($head eq "subdir" && $arg !~ /%\{/) {
-          my $sub = norm("$dir/$arg");
-          check_dune_markers($file, $sub, [@$item[2 .. $#$item]], $by_base, $seen) if defined $sub;
-          next;
-        }
-        if ($head eq "include" || $head eq "dynamic_include") {
-          my $path = $arg !~ m{(?:^/|%\{)} ? norm("$dir/$arg") : undef;
-          read_dune_markers($path, $dir, $by_base, $seen) if defined $path && -f $path;
-        }
+      $head = "" if !defined $head || ref $head;
+      next if $head =~ /\A(?:glob_files|glob_files_rec|source_tree)\z/;
+      if ($head eq "subdir" && defined $arg && !ref $arg && $arg !~ /%\{/) {
+        my $sub = norm("$dir/$arg");
+        check_dune_markers($file, $sub, [@$item[2 .. $#$item]], $by_base, $seen, 0) if defined $sub;
+        next;
       }
-      check_dune_markers($file, $dir, $item, $by_base, $seen);
+      if (@$item == 2 && !ref $arg && $arg !~ m{(?:^/|%\{)}
+          && ($head =~ /\A(?:include|dynamic_include)\z/ || ($in_deps && $head eq ":include"))) {
+        # Stanza includes are relative to their source file. A dependency
+        # include is a dependency of the enclosing stanza's directory.
+        my $base = $head eq ":include" ? $dir : dir_of($file);
+        my $path = norm("$base/$arg");
+        read_dune_markers($path, $dir, $by_base, $seen, $head eq ":include") if defined $path && -f $path;
+      }
+      check_dune_markers($file, $dir, $item, $by_base, $seen, $in_deps || $head eq "deps");
       next;
     }
     while ($item =~ m{([A-Za-z0-9_.-]+\.sh)(?![A-Za-z0-9_.-])}g) {
@@ -929,19 +942,19 @@ sub check_dune_markers {
   }
 }
 sub read_dune_markers {
-  my ($file, $dir, $by_base, $seen) = @_;
-  return if $seen->{"$file\0$dir"}++;
+  my ($file, $dir, $by_base, $seen, $in_deps) = @_;
+  return if $seen->{join("\0", $file, $dir, $in_deps)}++;
   open my $fh, "<", $file or fail("cannot read $file to check harness markers");
   my $s = do { local $/; <$fh> // "" };
   close $fh or fail("cannot close $file while checking harness markers");
   my $items = eval { parse_dune($s, $file) } or fail($@ =~ s/\n$//r);
-  check_dune_markers($file, $dir, $items, $by_base, $seen);
+  check_dune_markers($file, $dir, $items, $by_base, $seen, $in_deps);
 }
 if (%hand_run) {
   my %by_base = map { (s{.*/}{}r) => $_ } sort keys %hand_run;
   my %seen;
   for my $file (grep { m{(?:^|/)dune\z} && -f } @known) {
-    read_dune_markers($file, dir_of($file), \%by_base, \%seen);
+    read_dune_markers($file, dir_of($file), \%by_base, \%seen, 0);
   }
 }
 
@@ -2492,14 +2505,19 @@ sub names_literally {   # ALIAS PATH
 # Only a directory wholly gated by literal system comparisons can account for
 # an otherwise ownerless module. Optional libraries with missing dependencies
 # and directories with mixed or opaque guards keep the ordinary UNMAPPED path.
-my %stanzas_here;
-push @{$stanzas_here{$_->{dir}}}, $_ for @dstanzas;
+my (%stanzas_here, %opaque_ancestor);
+for my $s (@dstanzas) {
+  push @{$stanzas_here{$s->{dir}}}, $s;
+  $opaque_ancestor{$s->{dir}} = 1 if $s->{kind} =~ /\A(?:include|dynamic_include|include_subdirs)\z/;
+}
 my ($system, $asked_system, %disabled_here);
 sub disabled_stanzas {
   my ($d) = @_;
   return $disabled_here{$d} if exists $disabled_here{$d};
   my @forms = @{$stanzas_here{$d} // []};
   return $disabled_here{$d} = [] unless @forms;
+  # An ancestor's include can introduce more stanzas through (subdir ...).
+  return $disabled_here{$d} = [] if grep { under($d, $_) } keys %opaque_ancestor;
   my @gates;
   for my $s (@forms) {
     return $disabled_here{$d} = [] unless $s->{kind} =~ /\A(?:library|executables?|tests?|rule|alias)\z/;

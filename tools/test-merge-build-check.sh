@@ -1169,19 +1169,41 @@ FAKE
   if [ "$rc" = 2 ] && has "$cell:2: harness marker conflicts with a literal reference in dune"; then
     report 0 'adding a Dune rule that names a marked script is refused across guards'
   else report 1 'adding a Dune rule that names a marked script is refused across guards' "exit $rc; $(cat "$TMP/out")"; fi
-  printf '; (rule (action (run sh %s)))\n' "$cell" >"$R/dune"
+  mkdir -p "$R/rules" || exit 2
+  printf '(include rules/outer.inc)\n' >"$R/dune"
+  printf '(include inner.inc)\n' >"$R/rules/outer.inc"
+  printf '(rule (alias runtest-probe) (deps %s) (action (progn)))\n' "$cell" >"$R/rules/inner.inc"
+  check_markers
+  if [ "$rc" = 2 ] && has "$cell:2: harness marker conflicts with a literal reference in rules/inner.inc"; then
+    report 0 'a nested Dune include resolves from the file that includes it'
+  else report 1 'a nested Dune include resolves from the file that includes it' "exit $rc; $(cat "$TMP/out")"; fi
+
+  printf '(rule (alias runtest-probe) (deps (:include deps.sexp)) (action (progn)))\n' >"$R/dune"
+  printf '(%s)\n' "$cell" >"$R/deps.sexp"
+  check_markers
+  if [ "$rc" = 2 ] && has "$cell:2: harness marker conflicts with a literal reference in deps.sexp"; then
+    report 0 'a literal reference in a dependency include is refused'
+  else report 1 'a literal reference in a dependency include is refused' "exit $rc; $(cat "$TMP/out")"; fi
+
+  printf '; (rule (action (run sh %s)))\n(rule (alias runtest-probe) (deps (glob_files_rec test/*%s)) (action (progn)))\n' \
+    "$cell" "${cell##*/}" >"$R/dune"
+  check_markers
+  if [ "$rc" = 0 ] && has '0 harness command(s) from 1 changed path(s)'; then
+    report 0 'a Dune comment and a bulk dependency leave the marker valid'
+  else report 1 'a Dune comment and a bulk dependency leave the marker valid' "exit $rc; $(cat "$TMP/out")"; fi
   printf '%s\n' '#!/bin/sh' ':' '# harness: none -- misplaced marker' >"$R/$cell"
   check_markers
   if [ "$rc" = 2 ] && has "$cell:3: harness marker must be in the header"; then
     report 0 'a marker after the header is refused'
   else report 1 'a marker after the header is refused' "exit $rc; $(cat "$TMP/out")"; fi
   git -C "$R" restore "$cell" || exit 2
-  spaced="$R/test/metal_probe/another probe.sh"
-  printf '%s\n' '#!/bin/sh' '# harness: none -- exclusive diagnostic session' ':' >"$spaced"
+  git -C "$R" config core.quotePath true || exit 2
+  quoted="$R/$(printf 'caf\303\251.sh')"
+  printf '%s\n' '#!/bin/sh' '# harness: none -- exclusive diagnostic session' ':' >"$quoted"
   check_markers
   if [ "$rc" = 2 ] && has 'harness marker requires a shell script path'; then
-    report 0 'a marker on a path outside the scanner grammar is refused'
-  else report 1 'a marker on a path outside the scanner grammar is refused' "exit $rc; $(cat "$TMP/out")"; fi
+    report 0 'a marker on a Git-quoted path outside the scanner grammar is refused'
+  else report 1 'a marker on a Git-quoted path outside the scanner grammar is refused' "exit $rc; $(cat "$TMP/out")"; fi
 fi
 
 # A script no member reaches is covered by an alias the tests tier runs whose rule names it
