@@ -1524,11 +1524,14 @@ if harness_leg '--compile-only models #2170 x #2173 through real Dune #compile-o
     git -C "$real_co" merge -q --no-ff --no-edit pr-head >/dev/null
     dune_bin=$(dirname -- "$harness_dune")
     real_co_build=$TMP/real-co-build
-    rm -rf "$real_co_build"
-    rc_compat=0
-    (cd "$real_co" && env -u DUNE_ROOT DUNE_BUILD_DIR="$real_co_build" PATH="$dune_bin:$PATH" \
-      "$BASH" tools/merge-build-check.sh --compile-only) \
-      >"$TMP/real-co-compat" 2>&1 || rc_compat=$?
+    real_co_run() {
+      rm -rf "$real_co_build"
+      rc=0
+      (cd "$real_co" && env -u DUNE_ROOT DUNE_BUILD_DIR="$real_co_build" PATH="$dune_bin:$PATH" \
+        "$BASH" tools/merge-build-check.sh --compile-only) >"$1" 2>&1 || rc=$?
+    }
+    real_co_run "$TMP/real-co-compat"
+    rc_compat=$rc
     if [ "$rc_compat" = 0 ] &&
        grep -qF 'merge-build-check: compile tier passed' "$TMP/real-co-compat" &&
        grep -qF 'merge-build-check: passed' "$TMP/real-co-compat" &&
@@ -1545,19 +1548,13 @@ if harness_leg '--compile-only models #2170 x #2173 through real Dune #compile-o
     printf 'let seed_gate_setting () = `Auto `Delivery\n' >"$gate_dir/gate.ml"
     git -C "$real_co" add -A && git -C "$real_co" commit -q -m 'incompatible base move'
     git -C "$real_co" merge -q --no-ff --no-edit pr-head >/dev/null
-    rm -rf "$real_co_build"
-    rc_union=0
-    (cd "$real_co" && env -u DUNE_ROOT DUNE_BUILD_DIR="$real_co_build" PATH="$dune_bin:$PATH" \
-      "$BASH" tools/merge-build-check.sh --compile-only) \
-      >"$TMP/real-co-union" 2>&1 || rc_union=$?
+    real_co_run "$TMP/real-co-union"
+    rc_union=$rc
     # Base alone (base tip's tree on the merge's two parents, as ship-pr builds it): must pass.
     base_alone_sha=$(git -C "$real_co" commit-tree 'HEAD^1^{tree}' -p 'HEAD^1' -p 'HEAD^2' -m 'base alone') &&
       git -C "$real_co" checkout -q --detach "$base_alone_sha"
-    rm -rf "$real_co_build"
-    rc_base=0
-    (cd "$real_co" && env -u DUNE_ROOT DUNE_BUILD_DIR="$real_co_build" PATH="$dune_bin:$PATH" \
-      "$BASH" tools/merge-build-check.sh --compile-only) \
-      >"$TMP/real-co-base" 2>&1 || rc_base=$?
+    real_co_run "$TMP/real-co-base"
+    rc_base=$rc
     if [ "$rc_union" = 1 ] && [ "$rc_base" = 0 ] &&
        grep -qF 'merge-build-check: compile tier FAILED (dune exit 1)' "$TMP/real-co-union" &&
        grep -qF 'seed_gate_caller.ml' "$TMP/real-co-union" &&
