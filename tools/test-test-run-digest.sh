@@ -15,7 +15,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #repeat (9-25, 38, 83, 85-85e, 84), #digest (35, 36, 87, 68, 69, 71, 72, 73, 80-80c, 92), #fresh (81), #hermetic (70).
+# Groups: #repeat (9-25, 38, 83, 85-85e, 84), #digest (35, 36, 36b, 87, 68, 69, 71, 72, 73, 80-80c, 92), #fresh (81), #hermetic (70).
 #
 # Legs:
 #   9. `repeat` forces and preserves three identical dune runs while holding the
@@ -49,6 +49,9 @@
 #      color them (CLICOLOR_FORCE=1) -- including one whose output opens with
 #      a `dune:` line, and one that prints a complete nested dune refusal and
 #      then goes on (the shape must be alone in the log, not merely first).
+#  36b. a passing action's diagnostic, a chained dependency error and unmarked
+#      output stay in batch context. Short, verbose and redirected command
+#      reports give the failed action ownership of its diagnostic lines.
 #  38. `repeat` stops after a refused first iteration and exits 2 under the
 #      same verdict, while a merely red iteration is still repeated in full.
 #  83. `repeat` has both bounds (gh-ocannl-1252): a test past the per-test cap
@@ -677,7 +680,7 @@ harness_leg_run '35: a dune-refused invocation is INVOCATION REFUSED #digest' le
 leg_36() {
 red_label="a red run still digests as FAIL (exit 1) with its fingerprint"
 red_detail=
-for mode in red red_color dune_prefixed_red nested_usage_red nested_usage_output; do
+for mode in red red_color red_line_only dune_prefixed_red nested_usage_red nested_usage_output; do
   argv_mode=$mode argv_probe "red-$mode" run build @cheap
   case $argv_rc in
     1) ;;
@@ -703,15 +706,12 @@ for mode in red red_color dune_prefixed_red nested_usage_red nested_usage_output
     fi
     continue
   fi
-  # The fingerprint is sorted (`sort -u`), so its two lines are pinned
-  # separately rather than in an order the digest never promised.
+  # Check the location and its compiler diagnostic together.
+  local error='This expression has type int'
+  [ "$mode" != red_line_only ] || error='The implementation does not match the interface'
   case $argv_out in
-    *"fingerprint:"*'File "test/operations/fixture.ml", line 3'*) ;;
-    *) red_detail="$mode: File fingerprint missing: $argv_out"; break ;;
-  esac
-  case $argv_out in
-    *"fingerprint:"*"Error: This expression has type int"*) ;;
-    *) red_detail="$mode: Error fingerprint missing: $argv_out"; break ;;
+    *$'fingerprint:\n  File "test/operations/fixture.ml", line 3\n    Error: '"$error"*) ;;
+    *) red_detail="$mode: located compiler error missing from fingerprint: $argv_out"; break ;;
   esac
   argv_runs=$TMP/argv-runs-red-$mode argv_probe "red-$mode-wait" wait last
   if [ "$argv_rc" != 1 ]; then
@@ -726,6 +726,32 @@ else
 fi
 }
 harness_leg_run '36: a red run still digests as FAIL #digest' leg_36
+
+leg_36_attribution() {
+  local label="the failure fingerprint attributes only diagnostics owned by its failed action"
+  local mode expected actual failed=0
+  for mode in short verbose command quiet chain; do
+    argv_mode=attribution_$mode argv_probe "attribution-$mode" run build @cheap
+    expected=$(printf 'fingerprint:\n  File "fixture/attribution/dune", lines 1-3\n')
+    if [ "$mode" != quiet ]; then
+      expected=$expected$'\n    Error: fixture error from failed action\n    FAIL: fixture failure'
+    fi
+    expected=$expected$'\nbatch context (outside recognized failed actions):\n  Error: unmarked batch prelude'
+    if [ "$mode" = quiet ]; then
+      expected=$expected$'\n  Error: fixture error from failed action\n  FAIL: fixture failure'
+    elif [ "$mode" = chain ]; then
+      expected=$expected$'\n  Error: No rule found for fixture-missing-target'
+    fi
+    expected=$expected$'\n  Fatal error: fixture refusal caught by passing action'
+    actual=$(sed -n '/^fingerprint:$/,$p' <<<"$argv_out")
+    if [ "$argv_rc" != 1 ] || [ "$actual" != "$expected" ]; then
+      report 1 "$label ($mode)" "exit $argv_rc; $argv_out"
+      failed=1
+    fi
+  done
+  [ "$failed" = 1 ] || report 0 "$label"
+}
+harness_leg_run '36b: only a failed action owns its diagnostics #digest' leg_36_attribution
 
 # Leg 87 (gh-ocannl-1281): a red run whose log carries, at a line's start, the
 # line a GPU backend's device-init deadline writes before its process dies by
