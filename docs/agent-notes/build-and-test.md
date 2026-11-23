@@ -330,7 +330,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   4cb442be HEAD` says whether it does. That script always runs the formatter gate, then
   `dune build @check @test/operations/scans`, about 140 s from a fresh tree on mac-studio, then
   the per-test aliases the PR's change reaches (the item after next), and then the shell
-  harnesses that change reaches (the next item). Every path is an input
+  harnesses that change reaches (the next item). When master moves while that build runs, ship-pr's
+  refresh re-runs `plan` (`--plan-merge`) and `recheck tools/merge-build-check.sh --compile-only`
+  (the Dune setup and compile tier alone, gh-ocannl-2398), catching compile and scan conflicts on
+  the new union without repeating format, tests or harnesses. Every path is an input
   because the scans read the repository itself: two notes edits that merge cleanly can still break
   `agent_notes_structure`, push `AGENTS.md` past `agents_md_size`'s cap, or desynchronize a scan
   golden (gh-ocannl-1382). In the month to 2026-10-19, 245 of 474 merges shared a path (166 an OCaml
