@@ -25,10 +25,9 @@ let cotangent ~stride o d =
   let scale = if stride < taps then 1 else 3 in
   Float.of_int (scale * (1 + (((5 * o) + (3 * d)) % 7))) /. 16.
 
-let incoming stride =
-  Array.init (input_extent stride) ~f:(fun i -> Float.of_int (256 + (2 * (i % 3))))
+let incoming ~base stride =
+  Array.init (input_extent stride) ~f:(fun i -> Float.of_int (base + (2 * (i % 3))))
 
-let round = Ir.Ops.round_to_prec bf16
 let same a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
 
 let gradient ~stride prec =
@@ -60,7 +59,7 @@ let gradient ~stride prec =
 
 type schedule = Privatized | Split_privatized | Split_unrolled
 
-let run_fixture ~stride ~tag ?schedule prec =
+let run_fixture ~stride ~initial ~tag ?schedule prec =
   let comp, dx = gradient ~stride prec in
   let ctx = Context.auto () in
   let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
@@ -95,7 +94,7 @@ let run_fixture ~stride ~tag ?schedule prec =
   in
   let name = Printf.sprintf "ncgr_%s_%d" tag stride in
   let ctx, routine = Context.compile ~name ?lowered_transform ctx comp Ir.Indexing.Empty in
-  let ctx = Context.set_values ctx dx (incoming stride) in
+  let ctx = Context.set_values ctx dx initial in
   let ctx = Context.run ctx routine in
   Context.sync ctx;
   let tiles = Hash_set.create (module Tn) in
@@ -112,27 +111,31 @@ let terms ~stride cell =
       if k < 0 || k >= taps then None
       else Some (List.init channels ~f:(fun d -> weight k d *. cotangent ~stride o d)))
 
+let modeled ~stride initial ~step ~window =
+  Array.mapi initial ~f:(fun cell initial ->
+      List.fold (terms ~stride cell) ~init:initial ~f:(fun acc terms ->
+          window (List.fold terms ~init:acc ~f:(fun acc term -> step (acc +. term)))))
+
+let discriminates ~label ~once when_ other =
+  p_exists
+    (Printf.sprintf "%s: rounding %s differs from rounding once per cell" label when_)
+    (List.zip_exn (Array.to_list other) (Array.to_list once))
+    ~f:(fun (a, b) -> not (same a b))
+
 let check stride =
   let label = Printf.sprintf "stride %d" stride in
-  let modeled ~step ~window =
-    Array.mapi (incoming stride) ~f:(fun cell initial ->
-        List.fold (terms ~stride cell) ~init:initial ~f:(fun acc terms ->
-            window (List.fold terms ~init:acc ~f:(fun acc term -> step (acc +. term)))))
-  in
+  let initial = incoming ~base:256 stride in
+  let modeled = modeled ~stride initial in
+  let run_fixture = run_fixture ~stride ~initial in
+  let round = Ir.Ops.round_to_prec bf16 in
   let exact = modeled ~step:Fn.id ~window:Fn.id in
-  let twin, _ = run_fixture ~stride ~tag:"f32" Ir.Ops.single in
-  let narrow, _ = run_fixture ~stride ~tag:"bf16" bf16 in
-  let scheduled, tiles = run_fixture ~stride ~tag:"priv" ~schedule:Privatized bf16 in
+  let twin, _ = run_fixture ~tag:"f32" Ir.Ops.single in
+  let narrow, _ = run_fixture ~tag:"bf16" bf16 in
+  let scheduled, tiles = run_fixture ~tag:"priv" ~schedule:Privatized bf16 in
   let once = Array.map twin ~f:round in
-  let discriminates when_ other =
-    p_exists
-      (Printf.sprintf "%s: rounding %s differs from rounding once per cell" label when_)
-      (List.zip_exn (Array.to_list other) (Array.to_list once))
-      ~f:(fun (a, b) -> not (same a b))
-  in
   pf_all2 "%s: the materialized f32 gradient equals the host sums" label twin exact ~f:same;
-  discriminates "per step" (modeled ~step:round ~window:Fn.id);
-  if stride < taps then discriminates "per window" (modeled ~step:Fn.id ~window:round);
+  discriminates ~label ~once "per step" (modeled ~step:round ~window:Fn.id);
+  if stride < taps then discriminates ~label ~once "per window" (modeled ~step:Fn.id ~window:round);
   pf_all2 "%s: the bf16 gradient equals the f32 gradient rounded once per cell" label narrow once
     ~f:same;
   p_all (Printf.sprintf "%s: the input gradient's accumulator tiles are f32" label) tiles
@@ -140,12 +143,12 @@ let check stride =
   pf_all2 "%s: the privatized gradient equals the f32 gradient rounded once per cell" label
     scheduled once ~f:same;
   if stride = 2 then (
-    let split, tiles = run_fixture ~stride ~tag:"split" ~schedule:Split_privatized bf16 in
+    let split, tiles = run_fixture ~tag:"split" ~schedule:Split_privatized bf16 in
     p "the split residue with ambiguous entry provenance stays a serial accumulation"
       (List.length tiles = 1);
     p_all2 "the split owner's tail guard preserves once-rounded parity across both residues" split
       once ~f:same;
-    let unrolled, _ = run_fixture ~stride ~tag:"unrolled" ~schedule:Split_unrolled bf16 in
+    let unrolled, _ = run_fixture ~tag:"unrolled" ~schedule:Split_unrolled bf16 in
     p_all2 "materializing the unrolled reduction under the tail guard preserves parity" unrolled
       once ~f:same)
 
@@ -153,6 +156,26 @@ let () =
   Test_utils.with_policy
     (fun policy -> { policy with Ir.Numerics.bf16_arithmetic = Ir.Numerics.Bf16_wide })
     (fun () -> List.iter [ 1; 2; 6 ] ~f:check)
+
+let check_fp16 stride =
+  let label = Printf.sprintf "FP16 stride %d" stride in
+  (* At 2048, adjacent FP16 values are two apart, as in BF16 at 256. The same window contributions
+     can expose early rounding in either format. *)
+  let initial = incoming ~base:2048 stride in
+  let round = Ir.Ops.round_to_prec Ir.Ops.half in
+  let exact = modeled ~stride initial ~step:Fn.id ~window:Fn.id in
+  let per_window = modeled ~stride initial ~step:Fn.id ~window:round in
+  let twin, _ = run_fixture ~stride ~initial ~tag:"fp16_f32" Ir.Ops.single in
+  let narrow, _ = run_fixture ~stride ~initial ~tag:"fp16" Ir.Ops.half in
+  let once = Array.map twin ~f:round in
+  pf_all2 "%s: the materialized f32 gradient equals the host sums" label twin exact ~f:same;
+  discriminates ~label ~once "per window" per_window;
+  pf_all2 "%s: the gradient equals the f32 gradient rounded once per cell" label narrow once ~f:same
+
+let () =
+  Test_utils.with_policy
+    (fun policy -> { policy with Ir.Numerics.fp16_arithmetic = Ir.Numerics.Fp16_wide })
+    (fun () -> List.iter [ 1; 2 ] ~f:check_fp16)
 
 let () =
   let open Ll_test in

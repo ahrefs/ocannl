@@ -773,7 +773,9 @@ files.
   by statement identity. If the surviving entry width is ambiguous, the candidate declines.
   Multiple affine pairs and dynamic scatters keep per-step rounding. The affine path is pinned by
   `narrow_conv_grad_residency`, including a split tail, a disjoint window with gaps, and the
-  once-rounded f32 twin. The plain path is pinned by
+  once-rounded f32 twin. Its overlapping FP16 fixture selects `Fp16_wide` explicitly and starts at
+  2048 to match the BF16 fixture's spacing of two at 256, so the same window contributions expose
+  per-window rounding in both formats. The plain path is pinned by
   `lowered_nest_order`'s narrow legs and `narrow_grad_residency` (a bf16 dense layer's three
   gradients onto nonzero incoming values equal an f32 twin's exact sums narrowed once on the default,
   the privatized preset and the seeded CUDA/HIP default, whose shipped `acc` tiles are f32).
