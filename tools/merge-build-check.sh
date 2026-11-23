@@ -2,7 +2,7 @@
 # Check a merge commit: the command `.github/ship-pr-merge-build` gives ship-pr's merge build,
 # which runs it at the root of the PR head merged with master's tip, before the merge call.
 # Run it by hand the same way, at the root of a checkout whose HEAD is a merge you built.
-# Usage: tools/merge-build-check.sh [--plan [--base REV] | --plan-merge] [--all]
+# Usage: tools/merge-build-check.sh [--plan [--base REV] | --plan-merge] [--all] | --compile-only
 #
 # HEAD is read as the merge to judge: first parent the base, second parent the PR head (the
 # order `git merge` and ship-pr's `commit-tree -p <base tip> -p <head>` give). Four tiers, run in
@@ -124,6 +124,12 @@
 # The only extra affected text read is one anchored, printable `affected: CROSS-CUTTING reason:`
 # line from the full-list ask. It is display-only; a missing, duplicate or malformed reason
 # contributes nothing. The trailers, exit statuses and existing list protocol still govern.
+# --compile-only runs the existing Dune setup and the compile tier alone (`dune build --root .
+# @check @test/operations/scans` at the root of the merged tree), with the same command contract,
+# timing-free output and exit statuses as the full run, skipping format, tests, owed-run record
+# reads and harnesses. Configured as `.github/ship-pr-merge-build`'s `recheck` for a moved-base
+# refresh (ship-pr re-runs `plan` before `recheck`, advisory on no-verdict fallback). Cannot be
+# combined with `--plan`, `--plan-merge`, `--base` or `--all` (exit 2).
 #
 # Toolchain: a non-interactive shell can lack the profile that puts the opam switch on PATH
 # (on mac-studio `zsh -c` resolves opam but not dune). When `dune` does not resolve, this sources
@@ -135,11 +141,12 @@
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 me=merge-build-check
-plan=0 all=0 plan_base= plan_merge=0
+plan=0 all=0 plan_base= plan_merge=0 compile_only=0
 while [ $# -gt 0 ]; do
   case $1 in
     --plan) plan=1 ;;
     --plan-merge) plan_merge=1 ;;
+    --compile-only) compile_only=1 ;;
     --base)
       if [ -z "${2:-}" ] || [ -n "$plan_base" ]; then
         echo "$me: --base requires one revision" >&2; exit 2
@@ -152,6 +159,11 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+if [ "$compile_only" = 1 ] &&
+   { [ "$plan" = 1 ] || [ "$plan_merge" = 1 ] || [ -n "$plan_base" ] || [ "$all" = 1 ]; }; then
+  echo "$me: --compile-only cannot be combined with --plan, --plan-merge, --base or --all" >&2
+  exit 2
+fi
 [ -z "$plan_base" ] || { [ "$plan" = 1 ] && [ "$plan_merge" = 0 ]; } ||
   { echo "$me: --base requires --plan" >&2; exit 2; }
 SHELL_GLOB='*.sh'
@@ -541,6 +553,16 @@ find_dune() {
   fi
 }
 
+run_compile_tier() {
+  local rc
+  dune build --root . @check @test/operations/scans || {
+    rc=$?
+    echo "$me: compile tier FAILED (dune exit $rc)" >&2
+    exit 1
+  }
+  echo "$me: compile tier passed"
+}
+
 read_tests() {
   ask_tests
   if [ "$tests" = unread ]; then
@@ -672,6 +694,15 @@ if [ "$plan_merge" = 1 ]; then
   merged_plan
   exit $?
 fi
+if [ "$compile_only" = 1 ]; then
+  read_parents
+  echo "$me: compile tier: dune build @check @test/operations/scans (--compile-only)"
+  find_dune
+  cd "$root" || exit 1
+  run_compile_tier
+  echo "$me: passed"
+  exit 0
+fi
 read_parents
 select_tiers
 show_tiers
@@ -685,12 +716,7 @@ OCANNL_TOOL_FMT_CHECK_SCANS=0 tools/fmt-check.sh </dev/null || {
   exit 1
 }
 echo "$me: format tier passed"
-dune build --root . @check @test/operations/scans || {
-  rc=$?
-  echo "$me: compile tier FAILED (dune exit $rc)" >&2
-  exit 1
-}
-echo "$me: compile tier passed"
+run_compile_tier
 tests_dir=$(mktemp -d "${TMPDIR:-/tmp}/merge-build-check.XXXXXX") || {
   echo "$me: tests tier FAILED (cannot make a scratch directory)" >&2
   exit 1

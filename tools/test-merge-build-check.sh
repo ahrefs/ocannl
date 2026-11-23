@@ -33,6 +33,12 @@
 # dune and Python in a minimal isolated project: the repository's actual capped-fixture rule
 # runs twice, then with a planted failing case. It compares bytes and rejects the exact unittest
 # timing line; tracebacks and FAILED must survive. It does not scan Dune or Python source text.
+# The #compile-only leg checks `--compile-only` against fake dune/opam (skipping format, tests,
+# owed-run and harness tiers, identical timing-free logs for base-alone comparison, opam fallback,
+# one-parent HEAD, and usage refusals with incompatible flags). The #compile-only-real leg runs
+# `--compile-only` through real Dune on a minimal OCaml project modelled on staging #2170 x #2173:
+# a compatible moved base passes without running the other tiers, while an incompatible union
+# fails `@check` and its base alone passes.
 # affected-reads: benchmarks/dune benchmarks/*.py benchmarks/test/*.py benchmarks/runners/*.py benchmarks/runners/*/*.py benchmarks/ocannl_config --only '#compile-output'
 # affected-reads: tools/owed-run.sh
 # affected-reads: .github/fleet-leg tools/owed-run-report.sh --only '#owed-record'
@@ -1299,12 +1305,85 @@ if harness_leg 'without dune on PATH the opam switch supplies it #toolchain'; th
   else report 1 'a switch without dune exits 1, building nothing' "exit $rc; $(cat "$TMP/out")"; fi
 fi
 
+if harness_leg '--compile-only runs only the Dune setup and compile tier #compile-only'; then
+  # On BOTH_SCRIPT a full run would run format, compile, tests and the whole harness tier;
+  # --compile-only skips every other tier even when format/tests/harness would fail or owe.
+  FAKE_FMT_RC=1 FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_SHELL_RC=1 \
+    R=$BOTH_SCRIPT run "$TMP/dunebin" --compile-only
+  if [ "$rc" = 0 ] && [ "$(cat "$TMP/record")" = "$COMPILE" ] && [ ! -s "$TMP/record.tiers" ] &&
+     has 'HEAD merges ' &&
+     has 'compile tier: dune build @check @test/operations/scans (--compile-only)' &&
+     has 'compile tier passed' && has 'merge-build-check: passed' &&
+     ! has 'format tier' && ! has 'tests tier' && ! has 'harness tier'; then
+    report 0 '--compile-only runs only the compile tier and skips format, tests, owed-run and harness'
+  else report 1 '--compile-only runs only the compile tier and skips format, tests, owed-run and harness' \
+    "exit $rc; record=$(cat "$TMP/record"); tiers=$(cat "$TMP/record.tiers"); $(cat "$TMP/out")"; fi
+  FAKE_DUNE_RC=3 R=$BOTH_SCRIPT run "$TMP/dunebin" --compile-only
+  if [ "$rc" = 1 ] && [ "$(cat "$TMP/record")" = "$COMPILE" ] && [ ! -s "$TMP/record.tiers" ] &&
+     has 'compile tier FAILED (dune exit 3)' && ! has 'merge-build-check: passed'; then
+    report 0 '--compile-only exits 1 when the compile tier fails'
+  else report 1 '--compile-only exits 1 when the compile tier fails' "exit $rc; $(cat "$TMP/record"); $(cat "$TMP/out")"; fi
+  # Whole logs are timing-free across durations and match between merge and base-alone on shared failure.
+  for dune_rc in 0 1; do
+    FAKE_DUNE_RC=$dune_rc FAKE_TIER_DELAY=0 R=$BOTH_SCRIPT run "$TMP/dunebin" --compile-only
+    first_rc=$rc
+    cp "$TMP/out" "$TMP/compile-only-first"
+    FAKE_DUNE_RC=$dune_rc FAKE_TIER_DELAY=1 R=$BOTH_SCRIPT run "$TMP/dunebin" --compile-only
+    if [ "$first_rc" = "$dune_rc" ] && [ "$rc" = "$dune_rc" ] &&
+       cmp -s "$TMP/compile-only-first" "$TMP/out"; then
+      report 0 "--compile-only prints identical whole logs with dune exit $dune_rc across durations"
+    else
+      report 1 "--compile-only prints identical whole logs with dune exit $dune_rc across durations" \
+        "exits $first_rc, $rc; first: $(cat "$TMP/compile-only-first"); second: $(cat "$TMP/out")"
+    fi
+  done
+  fixture compile-only-base-alone
+  first x.ml && commit_on base
+  git -C "$R" checkout -q side && last x.ml && commit_on side && merge_side
+  FAKE_DUNE_RC=1 run "$TMP/dunebin" --compile-only
+  merge_rc=$rc
+  cp "$TMP/out" "$TMP/compile-only-merge"
+  sha=$(git -C "$R" commit-tree 'HEAD^1^{tree}' -p 'HEAD^1' -p 'HEAD^2' -m 'the base alone') &&
+    git -C "$R" checkout -q --detach "$sha"
+  FAKE_DUNE_RC=1 run "$TMP/dunebin" --compile-only
+  if [ "$merge_rc" = 1 ] && [ "$rc" = 1 ] && cmp -s "$TMP/compile-only-merge" "$TMP/out"; then
+    report 0 '--compile-only emits identical logs on merge and base-alone for a shared compile failure'
+  else
+    report 1 '--compile-only emits identical logs on merge and base-alone for a shared compile failure' \
+      "exits $merge_rc, $rc; $(diff "$TMP/compile-only-merge" "$TMP/out")"
+  fi
+  # Toolchain fallback through opam env works under --compile-only too.
+  R=$APART run "$TMP/opambin" --compile-only
+  if [ "$rc" = 0 ] && has 'dune is not on PATH; sourcing tools/opam-env.sh' &&
+     [ "$(cat "$TMP/record")" = "$COMPILE" ] && [ ! -s "$TMP/record.tiers" ]; then
+    report 0 '--compile-only resolves dune through tools/opam-env.sh when absent from PATH'
+  else report 1 '--compile-only resolves dune through tools/opam-env.sh when absent from PATH' "exit $rc; $(cat "$TMP/out")"; fi
+  R=$APART run "$TMP/emptyopam" --compile-only
+  if [ "$rc" = 1 ] && has 'no dune on PATH even after opam env' && [ ! -s "$TMP/record" ]; then
+    report 0 '--compile-only exits 1 without building when the switch lacks dune'
+  else report 1 '--compile-only exits 1 without building when the switch lacks dune' "exit $rc; $(cat "$TMP/out")"; fi
+  # A one-parent HEAD still runs the compile tier cleanly.
+  fixture compile-only-one-parent
+  run "$TMP/dunebin" --compile-only
+  if [ "$rc" = 0 ] && [ "$(cat "$TMP/record")" = "$COMPILE" ] && ! has 'HEAD merges '; then
+    report 0 '--compile-only runs the compile tier on a one-parent HEAD'
+  else report 1 '--compile-only runs the compile tier on a one-parent HEAD' "exit $rc; $(cat "$TMP/out")"; fi
+fi
+
 if harness_leg 'usage #usage'; then
   rc=0
   "$BASH" "$HERE/merge-build-check.sh" --bogus >"$TMP/out" 2>&1 || rc=$?
   if [ "$rc" = 2 ] && has "unknown argument '--bogus'"; then
     report 0 'an unknown argument exits 2'
   else report 1 'an unknown argument exits 2' "exit $rc; $(cat "$TMP/out")"; fi
+  for bad_combo in '--compile-only --plan' '--compile-only --plan-merge' '--compile-only --base HEAD' '--compile-only --plan --base HEAD' '--compile-only --all'; do
+    rc=0
+    # shellcheck disable=SC2086 # fixed flag words
+    "$BASH" "$HERE/merge-build-check.sh" $bad_combo >"$TMP/out" 2>&1 || rc=$?
+    if [ "$rc" = 2 ] && has '--compile-only cannot be combined with --plan, --plan-merge, --base or --all'; then
+      report 0 "\`$bad_combo\` exits 2"
+    else report 1 "\`$bad_combo\` exits 2" "exit $rc; $(cat "$TMP/out")"; fi
+  done
 fi
 
 # The config is what runs this script, and its inputs are what trigger it. The compile tier's
@@ -1329,11 +1408,13 @@ if harness_leg 'the merge-build config runs this script, and every tracked path 
       [ "$hit" = 1 ] || { unmatched=$p; break; }
     done < <(git -C "$HERE/.." ls-files -z)
   fi
-  label="the config's command and plan run this script, it builds every merge, and its inputs match every tracked path"
+  label="the config's command, plan and recheck run this script, it builds every merge, and its inputs match every tracked path"
   if ! grep -qxF "command tools/merge-build-check.sh" "$config"; then
     report 1 "$label" "no \`command tools/merge-build-check.sh\` line: $(cat "$config" 2>&1)"
   elif ! grep -qxF "plan tools/merge-build-check.sh --plan-merge" "$config"; then
     report 1 "$label" "no \`plan tools/merge-build-check.sh --plan-merge\` line: $(cat "$config" 2>&1)"
+  elif ! grep -qxF "recheck tools/merge-build-check.sh --compile-only" "$config"; then
+    report 1 "$label" "no \`recheck tools/merge-build-check.sh --compile-only\` line: $(cat "$config" 2>&1)"
   elif ! grep -qxF "trigger always" "$config"; then
     # The build is the merge gate only while it runs on every merge: under the default trigger a
     # merge whose base did not move, or whose sides share no path, lands unbuilt.
@@ -1396,6 +1477,93 @@ PYTHON
       report 0 "$failure_label"
     else
       report 1 "$failure_label" "exit $rc_bad: $(cat "$TMP/real-bad")"
+    fi
+  fi
+fi
+
+if harness_leg '--compile-only models #2170 x #2173 through real Dune #compile-only-real'; then
+  compat_label='--compile-only passes a compatible moved base through real Dune without other tiers'
+  incompat_label='--compile-only refuses an incompatible union modelled on #2170 x #2173 while the base alone passes'
+  if ! harness_real_dune; then
+    skip "$compat_label" "$harness_dune_absent"
+    skip "$incompat_label" "$harness_dune_absent"
+  else
+    real_co=$TMP/real-compile-only
+    # Construct the fixture's subdirectory paths without spelling tracked repository paths like
+    # lib/dune or test/operations/dune, so affected's harness reader does not attach unrelated
+    # edits of those files to this harness.
+    gate_dir=$real_co/gate_lib
+    ops_dir=$real_co/test/operations
+    mkdir -p "$gate_dir" "$ops_dir" "$real_co/tools"
+    cp "$HERE/merge-build-check.sh" "$HERE/opam-env.sh" "$real_co/tools/"
+    # Stub the three skipped tiers to fail loudly if --compile-only ever calls them.
+    for stub in fmt-check.sh test-run.sh test-harnesses.sh; do
+      printf '#!/bin/sh\necho "unexpected %s call" >&2\nexit 99\n' "$stub" >"$real_co/tools/$stub"
+      chmod +x "$real_co/tools/$stub"
+    done
+    printf '(lang dune 3.20)\n' >"$real_co/dune-project"
+    printf '(library (name gate))\n' >"$gate_dir/dune"
+    printf 'val seed_gate_setting : unit -> [ `Auto | `Threshold of int ]\n' >"$gate_dir/gate.mli"
+    printf 'let seed_gate_setting () = `Auto\n' >"$gate_dir/gate.ml"
+    printf '(alias (name scans))\n' >"$ops_dir/dune"
+    git -C "$real_co" init -q && git -C "$real_co" checkout -q -b base &&
+      git -C "$real_co" add -A && git -C "$real_co" commit -q -m 'initial gate' &&
+      git -C "$real_co" branch compat-base && git -C "$real_co" branch incompat-base &&
+      git -C "$real_co" branch pr-head
+    # pr-head (modelled on #2170): adds a caller matching `Auto against Gate.seed_gate_setting.
+    git -C "$real_co" checkout -q pr-head
+    printf '(executable (name seed_gate_caller) (libraries gate))\n(alias (name scans))\n' \
+      >"$ops_dir/dune"
+    printf 'let () = match Gate.seed_gate_setting () with `Auto -> () | `Threshold _ -> ()\n' \
+      >"$ops_dir/seed_gate_caller.ml"
+    git -C "$real_co" add -A && git -C "$real_co" commit -q -m 'pr-head matches `Auto'
+    # compat-base: moves base in an unrelated module (no conflict with pr-head).
+    git -C "$real_co" checkout -q compat-base
+    printf 'let extra = 1\n' >"$gate_dir/extra.ml"
+    git -C "$real_co" add -A && git -C "$real_co" commit -q -m 'compatible base move'
+    git -C "$real_co" merge -q --no-ff --no-edit pr-head >/dev/null
+    dune_bin=$(dirname -- "$harness_dune")
+    real_co_build=$TMP/real-co-build
+    real_co_run() {
+      rm -rf "$real_co_build"
+      rc=0
+      (cd "$real_co" && env -u DUNE_ROOT DUNE_BUILD_DIR="$real_co_build" PATH="$dune_bin:$PATH" \
+        "$BASH" tools/merge-build-check.sh --compile-only) >"$1" 2>&1 || rc=$?
+    }
+    real_co_run "$TMP/real-co-compat"
+    rc_compat=$rc
+    if [ "$rc_compat" = 0 ] &&
+       grep -qF 'merge-build-check: compile tier passed' "$TMP/real-co-compat" &&
+       grep -qF 'merge-build-check: passed' "$TMP/real-co-compat" &&
+       ! grep -qF 'unexpected ' "$TMP/real-co-compat"; then
+      report 0 "$compat_label"
+    else
+      report 1 "$compat_label" "exit $rc_compat: $(cat "$TMP/real-co-compat")"
+    fi
+    # incompat-base (modelled on #2173): changes `Auto to `Auto of [`Delivery | `Legacy].
+    # Disjoint files from pr-head, so git merges cleanly while @check rejects the union.
+    git -C "$real_co" checkout -q incompat-base
+    printf 'val seed_gate_setting : unit -> [ `Auto of [ `Delivery | `Legacy ] | `Threshold of int ]\n' \
+      >"$gate_dir/gate.mli"
+    printf 'let seed_gate_setting () = `Auto `Delivery\n' >"$gate_dir/gate.ml"
+    git -C "$real_co" add -A && git -C "$real_co" commit -q -m 'incompatible base move'
+    git -C "$real_co" merge -q --no-ff --no-edit pr-head >/dev/null
+    real_co_run "$TMP/real-co-union"
+    rc_union=$rc
+    # Base alone (base tip's tree on the merge's two parents, as ship-pr builds it): must pass.
+    base_alone_sha=$(git -C "$real_co" commit-tree 'HEAD^1^{tree}' -p 'HEAD^1' -p 'HEAD^2' -m 'base alone') &&
+      git -C "$real_co" checkout -q --detach "$base_alone_sha"
+    real_co_run "$TMP/real-co-base"
+    rc_base=$rc
+    if [ "$rc_union" = 1 ] && [ "$rc_base" = 0 ] &&
+       grep -qF 'merge-build-check: compile tier FAILED (dune exit 1)' "$TMP/real-co-union" &&
+       grep -qF 'seed_gate_caller.ml' "$TMP/real-co-union" &&
+       grep -qF 'merge-build-check: passed' "$TMP/real-co-base" &&
+       ! grep -qF 'unexpected ' "$TMP/real-co-union" &&
+       ! grep -qF 'unexpected ' "$TMP/real-co-base"; then
+      report 0 "$incompat_label"
+    else
+      report 1 "$incompat_label" "union=$rc_union base=$rc_base; union: $(cat "$TMP/real-co-union"); base: $(cat "$TMP/real-co-base")"
     fi
   fi
 fi

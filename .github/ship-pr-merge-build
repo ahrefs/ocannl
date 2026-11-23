@@ -80,12 +80,22 @@
 # cross-cutting candidate (`arrayjit/lib/low_level.ml`, two `affected` asks plus `dune show
 # aliases`) took 113-133 s across three runs on macbook-pro under wave load.
 #
+# Recheck. `recheck tools/merge-build-check.sh --compile-only` replaces `command` when master moves
+# while the initial merge build runs (lukstafi/ludics#1241, gh-ocannl-2398). On a refresh, ship-pr
+# re-runs `plan` (advisory on no-verdict fallback) and substitutes `recheck` for the build, running
+# the compile tier alone (`dune build @check @test/operations/scans`) under the same `timeout`,
+# skipping format, tests and harnesses. Every merging box's skills checkout carried a reader past
+# `97b292ae` (`7cea8c06` on 2026-11-23, when this line was added); an older reader refuses `recheck`
+# with exit 2. `lease fleet` (lukstafi/ludics#1269) is left off until in-flight merges are drained
+# and shared anchor and state resolution is verified across every merging box.
+#
 # Trust. The command is this repository's own code, trusted as a developer's build is: the
 # scratch repository is a place to build, not a sandbox. It runs from whatever environment
 # `merge` has; tools/merge-build-check.sh states its tiers, what selects them, their measured
 # cost and how it finds dune when that environment lacks the opam switch.
 command tools/merge-build-check.sh
 plan tools/merge-build-check.sh --plan-merge
+recheck tools/merge-build-check.sh --compile-only
 input *
 trigger always
 timeout 1800

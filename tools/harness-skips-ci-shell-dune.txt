@@ -26,3 +26,6 @@ tools/test-test-run-bisect.sh	bisect aborts on backend-disabled targets, for pas
 # The compile-tier output guard runs the actual Python rule through real Dune (gh-ocannl-2217).
 tools/test-merge-build-check.sh	the actual compile-tier rule emits identical timing-free logs twice
 tools/test-merge-build-check.sh	the actual compile-tier rule retains the failing traceback, summary and status
+# The compile-only refresh check models #2170 x #2173 through real Dune (gh-ocannl-2398).
+tools/test-merge-build-check.sh	--compile-only passes a compatible moved base through real Dune without other tiers
+tools/test-merge-build-check.sh	--compile-only refuses an incompatible union modelled on #2170 x #2173 while the base alone passes
