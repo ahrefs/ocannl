@@ -1841,6 +1841,27 @@ if harness_leg 'harness fixture and heredoc literals'; then
   fx_reach 'fail-closed: multiline if ... fi | bash keeps printer arguments scanned' tools/test-a.sh tools/test-c.sh
   twin_text '{' '  cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH' '} > >(bash)'
   fx_reach 'fail-closed: multiline { cat <<SH; } > >(bash) keeps the heredoc scanned' tools/test-a.sh tools/test-c.sh
+  # Round 3 review findings: unredirected printers/heredocs inside shell functions,
+  # multiline quoted `cat <<EOF` not opening a bogus heredoc, and sourced cat/tee
+  # overrides propagated into loads_of discovery.
+  twin_text 'emit() { printf '\''bash tools/sub.sh\n'\''; }' 'emit | bash'
+  fx_reach 'fail-closed: unredirected printf inside a single-line function stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'emit() {' '  printf '\''bash tools/sub.sh\n'\''' '}' 'emit | bash'
+  fx_reach 'fail-closed: unredirected printf inside a multiline function stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'function emit {' '  cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH' '}' 'emit | bash'
+  fx_reach 'fail-closed: unredirected cat heredoc inside a function stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'emit() { printf '\''bash tools/sub.sh\n'\'' 2>/dev/null; }' 'emit | bash'
+  fx_reach 'fail-closed: stderr-only redirection inside a function still leaves stdout scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'make_fx() {' '  cat >"$TMP/fixture.txt" <<'\''EOF'\''' 'tools/sub.sh' 'EOF' '  printf '\''tools/sub.sh\n'\'' >"$TMP/fx2.txt"' '}'
+  fx_reach 'a file-redirected fixture heredoc and printf inside a function remain excluded' tools/test-a.sh
+  twin_text 'text='\''' 'cat <<EOF' ''\''' 'bash tools/sub.sh' ': '\''' 'EOF' ''\'''
+  fx_reach 'fail-closed: cat <<EOF inside a multiline quoted string does not open a heredoc' tools/test-a.sh tools/test-c.sh
+  printf '%s\n' 'cat() { eval "$(/bin/cat)"; }' >"$hrepo/tools/clib.sh"
+  printf '%s\n' 'bash tools/sub.sh' >"$hrepo/tools/dyn.sh"
+  twin_text '. tools/clib.sh' 'cat <<'\''SH'\''' 'source tools/dyn.sh' 'SH'
+  fx_reach 'fail-closed: sourced cat override propagates into loads_of for executable heredocs' tools/test-a.sh tools/test-c.sh
+  : >"$hrepo/tools/clib.sh"
+  : >"$hrepo/tools/dyn.sh"
   hc_restore
 fi
 
@@ -1929,6 +1950,12 @@ if harness_leg 'harness python __file__ placement'; then
   py_twin_reach 'fail-closed: an annotated reassignment inside a single-line suite keeps every tied owner' "${twins[@]}"
   py_text 'from pathlib import Path' 'HERE = Path(__file__).parent' 'if d[1:2]: HERE = other_dir' 'p = HERE / "twin.py"'
   py_twin_reach 'fail-closed: a single-line suite with a slice colon (if d[1:2]: HERE = ...) keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' '[HERE] = ["data"]' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: list-unpacking reassignment ([HERE] = ...) keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'a, [b, *HERE] = [1, [2, "data"]]' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: nested/starred unpacking reassignment keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'for [HERE] in [["data"]]:' '    p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: list-unpacking for target keeps every tied owner' "${twins[@]}"
   py_text 'import os' '__file__ = "data/driver.py"' 'p = os.path.join(os.path.dirname(__file__), "twin.py")'
   py_twin_reach 'fail-closed: a rebound __file__ keeps every tied owner' "${twins[@]}"
   py_harness_teardown

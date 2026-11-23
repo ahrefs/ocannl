@@ -271,14 +271,17 @@
 #     outside it stays scanned, fail-closed):
 #       * Unpiped `cat`/`tee` data heredoc bodies (`<<DELIM` / `<<-DELIM`,
 #         never `<<<` here-strings): excluded ONLY when the opener logical
-#         command parses cleanly (not inside a single- or multi-line `$(...)`/
-#         `<(...)`/`>(...)`/`` `...` `` substitution or a piped compound
-#         block), its owning stage has command head literally `cat` or `tee`
-#         (ignoring leading `VAR=val` assignments and `env`/`command`/`nice`/
-#         `exec`/`nohup`/`builtin`, not overridden by a function or alias in
-#         the harness's program unless called via `builtin`/`command`), has no
-#         output process substitution (`>(...)`), AND is the last stage of its
-#         pipeline (no downstream pipe stage or trailing `|`). A
+#         command parses cleanly (not inside a single- or multi-line quote,
+#         `$(...)`/`<(...)`/`>(...)`/`` `...` `` substitution, or piped
+#         compound block), its owning stage has command head literally `cat`
+#         or `tee` (ignoring leading `VAR=val` assignments and `env`/`command`/
+#         `nice`/`exec`/`nohup`/`builtin`, not overridden by a function or
+#         alias in the harness's program unless called via `builtin`/`command`),
+#         has no output process substitution (`>(...)`), is the last stage of
+#         its pipeline (no downstream pipe stage or trailing `|`), AND when
+#         inside a shell function body redirects stdout to a file (`>`, `>|`,
+#         `1>`, `1>|`, `&>`, not `/dev/stdout` or `/dev/fd/...` and not later
+#         redirected via `>&N`). A
 #         quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) skips the whole
 #         body; an unquoted delimiter (`<<EOF`) skips literal body text while
 #         still scanning `$(...)` and `` `...` `` command substitutions inside
@@ -286,7 +289,8 @@
 #         `python3`/`perl`/`awk`, `source /dev/stdin`, `while read ...; done`,
 #         wrappers like `timeout`/`sudo`, variable commands, any piped
 #         `cat <<'EOF' | ...` or `{ cat <<'EOF'; } | ...`, `cat > >(bash)`,
-#         `tee >(bash)`, or an unclosed heredoc) stays scanned fail-closed. A
+#         `tee >(bash)`, unredirected `cat`/`tee` inside a function body, or an
+#         unclosed heredoc) stays scanned fail-closed. A
 #         harness that writes a real helper script through a data heredoc
 #         (e.g. `cat >"$TMP/helper.py" <<'PY'`) declares its repository inputs
 #         with `# affected-reads:`.
@@ -294,7 +298,8 @@
 #         (excluded ONLY when `echo`/`printf` is the last stage of its
 #         pipeline with no downstream stage, trailing `|`, enclosing piped
 #         compound command such as `{ printf ...; } | ...`, or output process
-#         substitution `>(...)`, not `printf -v`, not overridden by an
+#         substitution `>(...)`, when inside a shell function body redirects
+#         stdout to a file as above, not `printf -v`, not overridden by an
 #         `echo`/`printf` function or alias in the harness's program unless
 #         called via `builtin`/`command`, and not inside `eval`, a single- or
 #         multi-line `$(...)`/`<(...)`/`>(...)`/`` `...` `` substitution, or a
@@ -942,6 +947,32 @@ sub stage_has_out_procsub {
   }
   return 0;
 }
+# True if $stage redirects stdout (fd 1) directly to a plain file (not /dev/stdout,
+# /dev/stderr, /dev/fd/..., >(...), or a later fd dup like >&2 / 1>&2 / >&3).
+sub stage_has_file_stdout_redir {
+  my ($stage) = @_;
+  my $to_file = 0;
+  for my $it (@$stage) {
+    if ($it->[0] eq "redir_fd") {
+      my $op = $it->[1][3];
+      $to_file = 0 if $op =~ /\A(?:1?>&|>&)/;
+    } elsif ($it->[0] eq "redir_out") {
+      next unless defined $it->[2];
+      my $op = $it->[1][3];
+      next unless $op =~ /\A(?:&>|1?>\|?)\z/;
+      my $t = sh_unquote($it->[2][3]);
+      if ($t ne "" && $t !~ m{\A/dev/(?:stdout|stderr|fd/)} && !word_has_out_procsub($it->[2][3])) {
+        $to_file = 1;
+      } else {
+        $to_file = 0;
+      }
+    } elsif ($it->[0] eq "redir_append" && defined $it->[2]) {
+      my $op = $it->[1][3];
+      $to_file = 0 if $op =~ /\A(?:&>>|1?>>)\z/;
+    }
+  }
+  return $to_file;
+}
 # True if the tokens immediately following a closed compound command at $close_idx
 # pipe its output onward (`|` / `|&`) or redirect it into an output process substitution `>(...)`.
 sub after_group_is_piped {
@@ -964,29 +995,33 @@ sub after_group_is_piped {
   return 0;
 }
 # Walk compound-command delimiters (`{`/`}`, `(`/`)`, `if`/`fi`, `for`/`while`/`until`/`done`,
-# `case`/`esac`) across $toks using stack $stk; invoke $on_piped->($start_ln, $start_ti, $end_ln, $end_ti)
-# whenever a closed compound command is piped onward or redirected to `>(...)`.
+# `case`/`esac`) and function headers (`name() {`, `function name {`, `name() (`) across $toks
+# using stack $stk and scalar ref $pending_fn. Invokes $on_piped when a closed compound command
+# is piped onward or redirected to `>(...)`, and $on_fn when a function body closes.
 sub sh_walk_groups {
-  my ($toks, $stk, $line_idx, $on_piped) = @_;
+  my ($toks, $stk, $pending_fn, $line_idx, $on_piped, $on_fn) = @_;
   my $cmd_pos = 1;
   my $ti = 0;
   while ($ti < @$toks) {
     my $t = $toks->[$ti];
     my ($tp, $w) = ($t->[0], $t->[3]);
     if ($tp eq "comment" || $tp eq "redir_fd") { $ti++; next }
-    if ($tp eq "sep" || $tp eq "pipe") { $cmd_pos = 1; $ti++; next }
+    if ($tp eq "sep" || $tp eq "pipe") { $cmd_pos = 1; $$pending_fn = 0; $ti++; next }
     if ($tp =~ /\Aredir_(?:out|append|in|hd|herestr)\z/) {
       $ti++ if $ti + 1 < @$toks && $toks->[$ti + 1][0] eq "word";
       $ti++;
       next;
     }
     if ($tp eq "open_grp") {
-      push @$stk, [$w, $line_idx, $ti];
+      my $is_fn = $$pending_fn ? 1 : 0;
+      $$pending_fn = 0;
+      push @$stk, [$w, $line_idx, $ti, $is_fn];
       $cmd_pos = 1;
       $ti++;
       next;
     }
     if ($tp eq "close_grp") {
+      $$pending_fn = 0;
       if ($w eq ")" && @$stk && $stk->[-1][0] eq "case") {
         $cmd_pos = 1;
         $ti++;
@@ -995,6 +1030,7 @@ sub sh_walk_groups {
       my $want = $w eq "}" ? "{" : "(";
       if (@$stk && $stk->[-1][0] eq $want) {
         my $top = pop @$stk;
+        $on_fn->($top->[1], $top->[2], $line_idx, $ti) if $top->[3] && $on_fn;
         $on_piped->($top->[1], $top->[2], $line_idx, $ti) if after_group_is_piped($toks, $ti);
       }
       $cmd_pos = 0;
@@ -1003,10 +1039,26 @@ sub sh_walk_groups {
     }
     if ($tp eq "word") {
       if ($cmd_pos) {
+        if ($w eq "function" && $ti + 1 < @$toks && $toks->[$ti + 1][0] eq "word") {
+          $ti += 2;
+          if ($ti + 1 < @$toks && $toks->[$ti][0] eq "open_grp" && $toks->[$ti][3] eq "(" &&
+              $toks->[$ti + 1][0] eq "close_grp" && $toks->[$ti + 1][3] eq ")") {
+            $ti += 2;
+          }
+          $$pending_fn = 1;
+          next;
+        }
+        if ($ti + 2 < @$toks && $toks->[$ti + 1][0] eq "open_grp" && $toks->[$ti + 1][3] eq "(" &&
+            $toks->[$ti + 2][0] eq "close_grp" && $toks->[$ti + 2][3] eq ")") {
+          $ti += 3;
+          $$pending_fn = 1;
+          next;
+        }
+        $$pending_fn = 0;
         if ($w =~ /\A[A-Za-z_]\w*\+?=/) { $ti++; next }
-        if ($w eq "if") { push @$stk, ["if", $line_idx, $ti]; $ti++; next }
-        if ($w eq "for" || $w eq "while" || $w eq "until") { push @$stk, ["loop", $line_idx, $ti]; $cmd_pos = 0; $ti++; next }
-        if ($w eq "case") { push @$stk, ["case", $line_idx, $ti]; $cmd_pos = 0; $ti++; next }
+        if ($w eq "if") { push @$stk, ["if", $line_idx, $ti, 0]; $ti++; next }
+        if ($w eq "for" || $w eq "while" || $w eq "until") { push @$stk, ["loop", $line_idx, $ti, 0]; $cmd_pos = 0; $ti++; next }
+        if ($w eq "case") { push @$stk, ["case", $line_idx, $ti, 0]; $cmd_pos = 0; $ti++; next }
         if ($w eq "then" || $w eq "else" || $w eq "elif" || $w eq "do" || $w eq "!" || $w eq "time") { $ti++; next }
         if ($w eq "fi" || $w eq "done" || $w eq "esac") {
           my $want = $w eq "fi" ? "if" : $w eq "done" ? "loop" : "case";
@@ -1018,6 +1070,8 @@ sub sh_walk_groups {
           $ti++;
           next;
         }
+      } else {
+        $$pending_fn = 0;
       }
       $cmd_pos = 0;
     }
@@ -1026,20 +1080,26 @@ sub sh_walk_groups {
 }
 # Split a token list into pipelines -> stages -> [tokens] (redirections bound to
 # their target word as [redir_type, op_tok, target_tok]). Pipelines inside a
-# piped compound command (`{ ...; } | ...`, `( ... ) | ...`, `if ... fi | ...`)
-# carry a trailing_pipe sentinel so their stages are never treated as unpiped.
+# piped compound command carry a trailing_pipe sentinel; stages inside a
+# single-line function body carry an in_fn sentinel.
 sub sh_pipelines {
   my ($toks) = @_;
   my @piped_tok = (0) x scalar(@$toks);
+  my @fn_tok    = (0) x scalar(@$toks);
   my @gstk;
-  sh_walk_groups($toks, \@gstk, 0, sub {
-    my (undef, $sti, undef, $eti) = @_;
-    $piped_tok[$_] = 1 for $sti .. $eti;
-  });
+  my $pfn = 0;
+  sh_walk_groups($toks, \@gstk, \$pfn, 0,
+    sub { my (undef, $sti, undef, $eti) = @_; $piped_tok[$_] = 1 for $sti .. $eti },
+    sub { my (undef, $sti, undef, $eti) = @_; $fn_tok[$_]    = 1 for $sti .. $eti });
   my (@pipes, @cur_pipe, @cur_stage);
-  my ($saw_pipe, $grp_piped) = (0, 0);
+  my ($saw_pipe, $grp_piped, $stage_fn) = (0, 0, 0);
   my $flush_stage = sub {
-    if (@cur_stage) { push @cur_pipe, [@cur_stage]; @cur_stage = () }
+    if (@cur_stage) {
+      push @cur_stage, ["in_fn"] if $stage_fn;
+      push @cur_pipe, [@cur_stage];
+      @cur_stage = ();
+      $stage_fn = 0;
+    }
   };
   my $flush_pipe = sub {
     $flush_stage->();
@@ -1056,13 +1116,18 @@ sub sh_pipelines {
     if ($t->[0] eq "pipe") { $flush_stage->(); $saw_pipe = 1; $i++; next }
     $saw_pipe = 0;
     $grp_piped = 1 if $piped_tok[$i];
+    $stage_fn  = 1 if $fn_tok[$i];
     if ($t->[0] =~ /\Aredir_(?:out|append|in|hd|herestr)\z/) {
       my $target = ($i + 1 < @$toks && $toks->[$i + 1][0] eq "word") ? $toks->[++$i] : undef;
       push @cur_stage, [$t->[0], $t, $target];
       $i++;
       next;
     }
-    if ($t->[0] eq "redir_fd") { $i++; next }
+    if ($t->[0] eq "redir_fd") {
+      push @cur_stage, ["redir_fd", $t, undef];
+      $i++;
+      next;
+    }
     # Leading shell keywords start a new command segment.
     if (!@cur_stage && $t->[0] eq "word" && $sh_kw{$t->[3]}) { $i++; next }
     push @cur_stage, $t;
@@ -1079,7 +1144,7 @@ sub stage_command_head {
   while ($i < @$stage) {
     my $it = $stage->[$i];
     return (undef, undef, 0) if $it->[0] eq "trailing_pipe";
-    if ($it->[0] =~ /\Aredir_/) { $i++; next }
+    if ($it->[0] =~ /\Aredir_/ || $it->[0] eq "in_fn") { $i++; next }
     my $w = $it->[3];
     if ($sh_kw{$w}) { $i++; next }
     if ($w =~ /\A[A-Za-z_]\w*\+?=/) { $i++; next }
@@ -1121,10 +1186,11 @@ sub stage_command_head {
 # Closed allowlist for data heredocs: return 1 ONLY when the heredoc at byte
 # offset $hd_pos on opener logical command $line belongs to an unpiped `cat` or
 # `tee` (the last stage of its pipeline, with no output process substitution
-# `>(...)`, and not overridden by a function/alias unless via `builtin`/`command`).
+# `>(...)`, redirecting stdout to a file if inside a shell function body, and
+# not overridden by a function/alias unless via `builtin`/`command`).
 # Everything else returns 0 (fail closed).
 sub heredoc_is_data {
-  my ($line, $hd_pos, $overridden) = @_;
+  my ($line, $hd_pos, $overridden, $in_fn) = @_;
   my $toks = sh_tokenize($line);
   return 0 unless $toks;   # unparseable or inside unclosed $( -> fail closed
   my $pipes = sh_pipelines($toks);
@@ -1141,8 +1207,11 @@ sub heredoc_is_data {
     }
     next if $owner < 0;
     return 0 if $owner != $#$pipe;   # piped, trailing `|`, or piped compound group -> fail closed
-    return 0 if stage_has_out_procsub($pipe->[$owner]);   # > >(cmd) or tee >(cmd) -> fail closed
-    my (undef, $head, $bypass_fn) = stage_command_head($pipe->[$owner]);
+    my $stage = $pipe->[$owner];
+    return 0 if stage_has_out_procsub($stage);   # > >(cmd) or tee >(cmd) -> fail closed
+    my $stage_fn = $in_fn || (grep { $_->[0] eq "in_fn" } @$stage) ? 1 : 0;
+    return 0 if $stage_fn && !stage_has_file_stdout_redir($stage);
+    my (undef, $head, $bypass_fn) = stage_command_head($stage);
     return 0 unless defined $head;
     my $hu = sh_unquote($head);
     return 0 unless $hu eq "cat" || $hu eq "tee";
@@ -1154,9 +1223,10 @@ sub heredoc_is_data {
 # Filter one logical shell line (possibly spanning multiple lines via `\` or a
 # multiline quoted string, preserving `\n`): blank truncating output redirection
 # targets (`>`, `>|`, `&>`), heredoc delimiters, and literal arguments of
-# unpiped top-level echo/printf (unless overridden by a function/alias).
+# unpiped top-level echo/printf (unless overridden by a function/alias, or
+# inside a function body without a file stdout redirection).
 sub filter_sh_logical {
-  my ($s, $overridden) = @_;
+  my ($s, $overridden, $in_fn) = @_;
   my $toks = sh_tokenize($s);
   return $s unless $toks;   # unbalanced -> fail closed
   my $out = $s;
@@ -1177,20 +1247,23 @@ sub filter_sh_logical {
       }
       # 2. Blank literal arguments of unpiped echo / printf (closed allowlist:
       #    must be the last stage of its pipeline, not inside a piped compound
-      #    group, no output process substitution `>(...)`, not printf -v, and
-      #    not overridden by a function/alias unless via `builtin`/`command`).
+      #    group, no output process substitution `>(...)`, if inside a function
+      #    body must redirect stdout to a file, not printf -v, and not
+      #    overridden by a function/alias unless via `builtin`/`command`).
       my ($hidx, $hraw, $bypass_fn) = stage_command_head($stage);
       next unless defined $hidx;
       my $hu = sh_unquote($hraw);
       next unless $hu eq "echo" || $hu eq "printf";
       next if $k != $#$pipe;
       next if stage_has_out_procsub($stage);
+      my $stage_fn = $in_fn || (grep { $_->[0] eq "in_fn" } @$stage) ? 1 : 0;
+      next if $stage_fn && !stage_has_file_stdout_redir($stage);
       next if !$bypass_fn && $overridden && $overridden->{$hu};
       if ($hu eq "printf") {
         my $has_v = 0;
         for my $j ($hidx + 1 .. $#$stage) {
           my $it = $stage->[$j];
-          next if $it->[0] =~ /\Aredir_/;
+          next if $it->[0] =~ /\Aredir_/ || $it->[0] eq "in_fn";
           my $au = sh_unquote($it->[3]);
           last if $au eq "--" || $au !~ /\A-/;
           if ($au =~ /\A-v/) { $has_v = 1; last }
@@ -1199,7 +1272,7 @@ sub filter_sh_logical {
       }
       for my $j ($hidx + 1 .. $#$stage) {
         my $it = $stage->[$j];
-        next if $it->[0] =~ /\Aredir_/;
+        next if $it->[0] =~ /\Aredir_/ || $it->[0] eq "in_fn";
         my ($st, $en, $w) = ($it->[1], $it->[2], $it->[3]);
         substr($out, $st, $en - $st) = extract_cmdsubs($w, 1);
       }
@@ -1216,16 +1289,20 @@ sub sh_parse {
   return $sh_parsed{$ckey} if $sh_parsed{$ckey};
   my @l = split /\n/, raw($f), -1;
   my $ov_hd = ($overridden && ($overridden->{cat} || $overridden->{tee})) ? 1 : 0;
-  my ($kinds_ref, $funcs_ref, $unq_ref, $unfilt_ref);
+  my ($kinds_ref, $funcs_ref, $unq_ref, $unfilt_ref, $infn_ref);
   if (!$ov_hd && $sh_parsed{"$f\0"}) {
     $kinds_ref  = $sh_parsed{"$f\0"}{kinds};
     $funcs_ref  = $sh_parsed{"$f\0"}{funcs};
     $unq_ref    = $sh_parsed{"$f\0"}{unq};
     $unfilt_ref = $sh_parsed{"$f\0"}{unfilt};
+    $infn_ref   = $sh_parsed{"$f\0"}{in_fn};
   } else {
     my @kind = ("code") x scalar(@l);
     my (@queue, @closed_hds, @unq_spans);
-    # Pass 1a: identify heredoc line spans (opener, body, closing delimiter).
+    # Pass 1a: identify heredoc line spans (opener, body, closing delimiter),
+    # carrying multiline quote state across physical lines so quoted text such
+    # as `text='\ncat <<EOF\n'` never opens a bogus heredoc.
+    my ($sq, $dq) = (0, 0);
     for my $i (0 .. $#l) {
       my $line = $l[$i];
       if (@queue) {
@@ -1242,22 +1319,24 @@ sub sh_parse {
         }
         next;
       }
-      next if $line =~ /^\s*#/;
+      next if !$sq && !$dq && $line =~ /^\s*#/;
       # Build logical opener prefix if preceding code line(s) continued with `\`.
       my ($op_prefix, $op_off) = ("", 0);
-      my $prev = $i - 1;
-      my @pre_lines;
-      while ($prev >= 0 && $kind[$prev] eq "code" && $l[$prev] !~ /^\s*#/ && $l[$prev] =~ /(?<!\\)(?:\\\\)*\\\z/) {
-        my $pl = $l[$prev];
-        $pl =~ s/\\\z/ /;
-        unshift @pre_lines, $pl;
-        $prev--;
+      if (!$sq && !$dq) {
+        my $prev = $i - 1;
+        my @pre_lines;
+        while ($prev >= 0 && $kind[$prev] eq "code" && $l[$prev] !~ /^\s*#/ && $l[$prev] =~ /(?<!\\)(?:\\\\)*\\\z/) {
+          my $pl = $l[$prev];
+          $pl =~ s/\\\z/ /;
+          unshift @pre_lines, $pl;
+          $prev--;
+        }
+        if (@pre_lines) {
+          $op_prefix = join("\n", @pre_lines) . "\n";
+          $op_off = length $op_prefix;
+        }
       }
-      if (@pre_lines) {
-        $op_prefix = join("\n", @pre_lines) . "\n";
-        $op_off = length $op_prefix;
-      }
-      my ($sq, $dq, $esc, $pos, $len) = (0, 0, 0, 0, length $line);
+      my ($esc, $pos, $len) = (0, 0, length $line);
       while ($pos < $len) {
         my $ch = substr($line, $pos, 1);
         if ($esc) { $esc = 0; $pos++; next }
@@ -1265,7 +1344,20 @@ sub sh_parse {
         if ($ch eq "'" && !$dq) { $sq = !$sq; $pos++; next }
         if ($ch eq '"' && !$sq) { $dq = !$dq; $pos++; next }
         if (!$sq && !$dq && $ch eq "#" && ($pos == 0 || substr($line, $pos - 1, 1) =~ /[\s;|&(]/)) { last }
-        if (!$sq && !$dq && substr($line, $pos, 2) eq "<<") {
+        my $two = substr($line, $pos, 2);
+        if (!$sq && ($two eq '${' || $two eq '$(')) {
+          my $nj = sh_skip_balanced($line, $pos, $two);
+          if (defined $nj) { $pos = $nj; next }
+          $pos += 2;
+          next;
+        }
+        if (!$sq && $ch eq '`') {
+          my $nj = sh_skip_balanced($line, $pos, '`');
+          if (defined $nj) { $pos = $nj; next }
+          $pos++;
+          next;
+        }
+        if (!$sq && !$dq && $two eq "<<") {
           if (substr($line, $pos, 3) eq "<<<") {
             $pos++ while $pos < $len && substr($line, $pos, 1) eq "<";
             next;
@@ -1299,14 +1391,16 @@ sub sh_parse {
       }
     }
     # Pass 1b: track multiline substitutions ($(...), <(...), >(...), `...`),
-    # multiline piped compound blocks ({ ... } | ..., ( ... ) | ..., if/for/while/case ... | ...),
-    # and function/alias overrides across code lines.
+    # multiline piped compound blocks, multiline shell function bodies, and
+    # function/alias overrides across code lines.
     my @unfilt = (0) x scalar(@l);
+    my @in_fn  = (0) x scalar(@l);
     my (%funcs, @blk_stk, @sub_stk);
-    my ($msq, $mdq, $in_bt) = (0, 0, 0);
+    my ($msq, $mdq, $in_bt, $pending_fn) = (0, 0, 0, 0);
     for my $i (0 .. $#l) {
       next if $kind[$i] ne "code";
       my $line = $l[$i];
+      $in_fn[$i] = 1 if grep { $_->[3] } @blk_stk;
       if (!$msq && !$mdq && !@sub_stk && !$in_bt) {
         next if $line =~ /^\s*#/;
         $funcs{$1} = 1 while $line =~ /(?:^|[;&|({])\s*(?:function\s+)?(echo|printf|cat|tee)\s*\(\s*\)/g;
@@ -1314,10 +1408,11 @@ sub sh_parse {
         $funcs{$1} = 1 while $line =~ /(?:^|[;&|({])\s*alias\s+(?:--\s+)?(echo|printf|cat|tee)=/g;
         my $toks = sh_tokenize($line);
         if ($toks) {
-          sh_walk_groups($toks, \@blk_stk, $i, sub {
-            my ($sln, undef, $eln, undef) = @_;
-            if ($sln < $eln) { $unfilt[$_] = 1 for $sln .. $eln }
-          });
+          sh_walk_groups($toks, \@blk_stk, \$pending_fn, $i,
+            sub {
+              my ($sln, undef, $eln, undef) = @_;
+              if ($sln < $eln) { $unfilt[$_] = 1 for $sln .. $eln }
+            });
           next;
         }
       } else {
@@ -1380,9 +1475,9 @@ sub sh_parse {
         $p++;
       }
     }
-    # Pass 1c: classify every closed heredoc now that multiline sub/block state is known.
+    # Pass 1c: classify every closed heredoc now that multiline sub/block/fn state is known.
     for my $hd (@closed_hds) {
-      my $is_data = !$unfilt[$hd->{opener}] && heredoc_is_data($hd->{op_text}, $hd->{op_pos}, $overridden);
+      my $is_data = !$unfilt[$hd->{opener}] && heredoc_is_data($hd->{op_text}, $hd->{op_pos}, $overridden, $in_fn[$hd->{opener}]);
       if ($is_data) {
         my $bk = $hd->{quoted} ? "hd_quoted" : "hd_unquoted";
         $kind[$_] = $bk for @{$hd->{body}};
@@ -1395,6 +1490,7 @@ sub sh_parse {
     $funcs_ref  = \%funcs;
     $unq_ref    = \@unq_spans;
     $unfilt_ref = \@unfilt;
+    $infn_ref   = \@in_fn;
   }
   my @kind = @$kinds_ref;
   my @scan = @l;
@@ -1438,7 +1534,8 @@ sub sh_parse {
     }
     if (!$lsq && !$ldq) {
       my $joined = join "\n", @parts;
-      my @fl = split /\n/, filter_sh_logical($joined, $overridden), -1;
+      my $blk_fn = (grep { $infn_ref->[$_] } $i .. $j) ? 1 : 0;
+      my @fl = split /\n/, filter_sh_logical($joined, $overridden, $blk_fn), -1;
       for my $k (0 .. $#fl) { $scan[$i + $k] = $fl[$k] }
       $i = $j + 1;
     } else {
@@ -1446,7 +1543,7 @@ sub sh_parse {
       $i++;
     }
   }
-  return $sh_parsed{$ckey} = { kinds => $kinds_ref, scan => \@scan, funcs => $funcs_ref, unq => $unq_ref, unfilt => $unfilt_ref };
+  return $sh_parsed{$ckey} = { kinds => $kinds_ref, scan => \@scan, funcs => $funcs_ref, unq => $unq_ref, unfilt => $unfilt_ref, in_fn => $infn_ref };
 }
 sub assigns {   # FILE -> {V => how many writes of V it may hold}
   my ($f) = @_;
@@ -1621,7 +1718,8 @@ sub py_analyze {
     # Assignment targets at statement start or after `;` (and after a leading
     # compound-statement header such as `if flag: HERE = ...` or `if d[1:2]: ...`,
     # without splitting type annotations like `HERE: str = ...`), including
-    # chained assignments, unpacking, augmented, annotated, and walrus.
+    # chained assignments, tuple/list/starred unpacking (`[HERE] = ...`,
+    # `(a, [b, *HERE]) = ...`), augmented, annotated, and walrus.
     for my $seg (split /;/, $code) {
       my $stmt = $seg;
       if ($stmt =~ /\A\s*(?:async\s+)?(?:if|elif|else|for|while|with|try|except|finally|match|case)\b/) {
@@ -1635,13 +1733,44 @@ sub py_analyze {
         }
         $stmt = $colon >= 0 ? substr($stmt, $colon + 1) : "";
       }
-      while ($stmt =~ s/\A\s*\(?\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*\)?\s*(?::[^=]+)?(?:\+|-|\*|\/|%|&|\||\^|<<|>>|\*\*|\/\/)?=(?!=)//) {
-        $note_bind->($_) for $1 =~ /([A-Za-z_]\w*)/g;
+      # Split $stmt on bracket-depth-0 binding `=` (not `==`, `!=`, `<=`, `>=`, `:=`).
+      my @lhs_parts;
+      my ($p, $depth, $slen, $start) = (0, 0, length($stmt), 0);
+      while ($p < $slen) {
+        my $c = substr($stmt, $p, 1);
+        if ($c =~ /[\(\[\{]/) { $depth++ }
+        elsif ($c =~ /[\)\]\}]/) { $depth-- }
+        elsif ($c eq "=" && $depth == 0) {
+          my $prev = $p > 0 ? substr($stmt, $p - 1, 1) : "";
+          my $next = $p + 1 < $slen ? substr($stmt, $p + 1, 1) : "";
+          if ($next eq "=") { $p += 2; next }
+          if ($prev eq "!" || $prev eq "<" || $prev eq ">" || $prev eq ":") { $p++; next }
+          push @lhs_parts, substr($stmt, $start, $p - $start);
+          $start = $p + 1;
+        }
+        $p++;
+      }
+      for my $lhs (@lhs_parts) {
+        # Strip trailing augmented-assignment operator and top-level `: annotation`.
+        $lhs =~ s/(?:\+|-|\*|\/|%|&|\||\^|<<|>>|\*\*|\/\/)\s*\z//;
+        my ($lp, $ld, $llen, $lcolon) = (0, 0, length($lhs), -1);
+        while ($lp < $llen) {
+          my $lc = substr($lhs, $lp, 1);
+          if ($lc =~ /[\(\[\{]/) { $ld++ }
+          elsif ($lc =~ /[\)\]\}]/) { $ld-- }
+          elsif ($lc eq ":" && $ld == 0) { $lcolon = $lp; last }
+          $lp++;
+        }
+        $lhs = substr($lhs, 0, $lcolon) if $lcolon >= 0;
+        next unless $lhs =~ /\A[\sA-Za-z0-9_,\(\)\[\]\*]+\z/;
+        next if $lhs =~ /[A-Za-z_]\w*\s*[\(\[]/;
+        $note_bind->($_) for $lhs =~ /\b([A-Za-z_]\w*)\b/g;
       }
     }
     $note_bind->($_) for $code =~ /([A-Za-z_]\w*)\s*:=/g;
-    for my $for_vars ($code =~ /\bfor\s+\(?\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*\)?\s+in\b/g) {
-      $note_bind->($_) for $for_vars =~ /([A-Za-z_]\w*)/g;
+    for my $for_vars ($code =~ /\bfor\s+([\sA-Za-z0-9_,\(\)\[\]\*]+?)\s+in\b/g) {
+      next if $for_vars =~ /[A-Za-z_]\w*\s*[\(\[]/;
+      $note_bind->($_) for $for_vars =~ /\b([A-Za-z_]\w*)\b/g;
     }
     $note_bind->($_) for $code =~ /\bas\s+([A-Za-z_]\w*)/g;
     $note_bind->($_) for $code =~ /\b(?:def|class)\s+([A-Za-z_]\w*)/g;
@@ -1870,15 +1999,18 @@ sub names_of {
   }
   return $names{"$f\0$h"} = \%r;
 }
-sub loads_of {   # FILE -> {SCRIPT => [LINE, RUN, OWNERS]}, as names_of, for what it loads
-  my ($f) = @_;
-  return $loads{$f} if $loads{$f};
+sub loads_of {   # (FILE [, OVERRIDES]) -> {SCRIPT => [LINE, RUN, OWNERS]}, as names_of, for what it loads
+  my ($f, $ov) = @_;
+  my $okey = $ov ? join(",", sort grep { $ov->{$_} } keys %$ov) : "";
+  my $ckey = "$f\0$okey";
+  return $loads{$ckey} if $loads{$ckey};
   my %r;
   my @l = split /\n/, raw($f);
   my $sh_p;
   if ($f =~ /\.sh\z/) {
     my $base = sh_parse($f);
-    $sh_p = %{$base->{funcs}} ? sh_parse($f, $base->{funcs}) : $base;
+    my %eff = (%{$base->{funcs}}, $ov ? %$ov : ());
+    $sh_p = %eff ? sh_parse($f, \%eff) : $base;
   }
   for my $i (0 .. $#l) {
     my $line = $l[$i];
@@ -1910,7 +2042,35 @@ sub loads_of {   # FILE -> {SCRIPT => [LINE, RUN, OWNERS]}, as names_of, for wha
       $r{$_} //= [$i + 1, $run->[0], scalar @p] for grep { is_script($_) } @p;
     }
   }
-  return $loads{$f} = \%r;
+  return $loads{$ckey} = \%r;
+}
+# Expand a worklist of scripts by `loads_of` to a fixpoint, propagating shell
+# command overrides (`cat`/`tee`/`echo`/`printf`) discovered in any loaded `.sh`
+# file back across the whole worklist.
+sub expand_loads {
+  my ($list, $par) = @_;
+  my %ov;
+  my $changed = 1;
+  while ($changed) {
+    $changed = 0;
+    for (my $i = 0; $i < @$list; $i++) {
+      my $sf = $list->[$i];
+      next unless is_script($sf);
+      if ($sf =~ /\.sh\z/) {
+        my $funcs = sh_parse($sf)->{funcs};
+        for my $fn (keys %$funcs) {
+          if (!$ov{$fn}) { $ov{$fn} = 1; $changed = 1 }
+        }
+      }
+      my $ld = loads_of($sf, \%ov);
+      for my $l (sort keys %$ld) {
+        next if exists $par->{$l};
+        $par->{$l} = [$sf, "loads", @{$ld->{$l}}];
+        push @$list, $l;
+        $changed = 1;
+      }
+    }
+  }
 }
 # Each harness's reach, with the step that reached each path: its program (it
 # and what it loads), what that names, and the program of each script named.
@@ -1919,19 +2079,27 @@ my %reach;
 for my $h (@members) {
   my %par = ($h => undef);
   my @prog = ($h);
-  for (my $i = 0; $i < @prog; $i++) {
-    my $ld = loads_of($prog[$i]);
-    for my $l (sort keys %$ld) { next if exists $par{$l}; $par{$l} = [$prog[$i], "loads", @{$ld->{$l}}]; push @prog, $l }
-  }
+  expand_loads(\@prog, \%par);
   my @named;
   for my $x (@prog) {
     my $nm = names_of($x, $h, \@prog);
     for my $z (sort keys %$nm) { next if exists $par{$z}; $par{$z} = [$x, "names", @{$nm->{$z}}]; push @named, $z }
   }
-  for (my $i = 0; $i < @named; $i++) {
-    next unless is_script($named[$i]);
-    my $ld = loads_of($named[$i]);
-    for my $l (sort keys %$ld) { next if exists $par{$l}; $par{$l} = [$named[$i], "loads", @{$ld->{$l}}]; push @named, $l }
+  my %named_ov;
+  my $n_changed = 1;
+  while ($n_changed) {
+    $n_changed = 0;
+    for (my $i = 0; $i < @named; $i++) {
+      next unless is_script($named[$i]);
+      if ($named[$i] =~ /\.sh\z/) {
+        my $funcs = sh_parse($named[$i])->{funcs};
+        for my $fn (keys %$funcs) {
+          if (!$named_ov{$fn}) { $named_ov{$fn} = 1; $n_changed = 1 }
+        }
+      }
+      my $ld = loads_of($named[$i], \%named_ov);
+      for my $l (sort keys %$ld) { next if exists $par{$l}; $par{$l} = [$named[$i], "loads", @{$ld->{$l}}]; push @named, $l; $n_changed = 1 }
+    }
   }
   $reach{$h} = \%par;
 }
