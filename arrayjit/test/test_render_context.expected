@@ -13,3 +13,13 @@ a main-domain census excludes a child domain's renderings: true
 main-domain attribution survives overlapping collection brackets: true
 a nested census counts its own persistent-fragment scopes, and the enclosing one counts them too: true
 suspending the outer peel census does not suspend a nested compile: true
+Set_dynamic records its store entry and source read: true
+Set_from_vec records its store entry: true
+try_vectorize records its packed main-loop store beside Render_simd_elementwise: true
+discarded Arg1 operand is excluded from store read counts: true
+unconsumed zero seed records the zero clear before the SIMD reduction epilogue: true
+discarded debug_float Get_dynamic definitions do not duplicate loop census entries: true
+peel provenance is scoped to the closing store, not leaked to later uses of the same scope_id: true
+create_render_ctx before with_render_census still records compile_main inside the bracket: true
+compile_main after with_render_census closes appends nothing to the loop global: true
+compile_main after with_render_census closes appends nothing to the store global: true

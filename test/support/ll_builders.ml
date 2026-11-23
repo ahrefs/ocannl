@@ -157,8 +157,8 @@ let scope ?(orig_indices = [||]) ?id tn v : LL.scalar_t =
 
 (** [scope_of id body] is the inlined computation over [id] (see {!scope}) with its body spelled
     out, for a body that is not a single assignment. *)
-let scope_of ?(orig_indices = [||]) id body : LL.scalar_t =
-  LL.Local_scope { id; body; orig_indices; mint = LL.Inlined_computation }
+let scope_of ?(orig_indices = [||]) ?(mint = LL.Inlined_computation) id body : LL.scalar_t =
+  LL.Local_scope { id; body; orig_indices; mint }
 
 (** {2 Dynamic indexing}
 

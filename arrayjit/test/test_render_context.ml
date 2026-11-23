@@ -178,3 +178,182 @@ let () =
           (!(Syntax.peel_census_enabled inner) && not !(Syntax.peel_census_enabled outer)))
   in
   ()
+
+(* gh-ocannl-724: emission-level invariants of {!Cs.render_summary} — every tensor-write emitter
+   records its store, discarded projection operands are excluded from reads, unconsumed zero-seeds
+   preserve emission order, discarded [debug_float] renders do not duplicate loops, peel provenance
+   is scoped to the closing store occurrence, and [render_census_enabled] is read live at emission
+   time for body-only [compile_main] callers. *)
+let () =
+  let module Ops = Ir.Ops in
+  let prec = Ops.single in
+  let render_pure ?(vec_bytes = 0) ~name ~nodes llc =
+    let opt = optimized llc nodes in
+    let module S = Cs.C_syntax (struct
+      include Cs.Pure_C_config (struct
+        let procs = [| opt.LL.llc |]
+        let full_printf_support = true
+      end)
+
+      let vector_file = { Ir.Vector_file.bytes = vec_bytes; registers = 16 }
+    end) in
+    let _, summary = Cs.with_render_census (fun () -> ignore (S.compile_proc ~name [] opt)) in
+    summary
+  in
+  let rnode = B.node_factory ~first_id:724_100_000 ~dims:[| 16 |] () in
+  let r_out = rnode "rc_out"
+  and r_src = rnode "rc_src"
+  and r_idx = B.node_factory ~first_id:724_100_100 ~dims:[| 4 |] () "rc_idx" in
+  List.iter [ r_out; r_src; r_idx ] ~f:B.materialize;
+  let ri = B.sym () in
+  (* 1. Set_dynamic, Set_from_vec, and try_vectorize packed stores all record store entries. *)
+  let dyn_summary =
+    render_pure ~name:"rc_set_dynamic" ~nodes:[ r_out; r_src ]
+      (B.scatter ~tn:r_out
+         ~idcs:[| B.fixed 0 |]
+         ~dyn_axis:0
+         ~dyn_value:(LL.Embed_index (B.fixed 1), B.iprec ())
+         (B.get r_src [| B.fixed 0 |]))
+  in
+  p "Set_dynamic records its store entry and source read"
+    (match dyn_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_plain; reads; _ } ] ->
+        tn_uid = r_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads [ (r_src.Tn.uid, 1) ]
+    | _ -> false);
+  let vec_unop_summary =
+    render_pure ~name:"rc_set_from_vec" ~nodes:[ r_out ]
+      (B.set_from_vec ~length:4 ~vec_unop:Ops.Uint4x32_to_prec_uniform r_out
+         [| B.fixed 0 |]
+         (LL.Constant_bits 0L, Ops.uint4x32))
+  in
+  p "Set_from_vec records its store entry"
+    (match vec_unop_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_plain; _ } ] -> tn_uid = r_out.Tn.uid
+    | _ -> false);
+  let packed_summary =
+    render_pure ~vec_bytes:16 ~name:"rc_try_vectorize" ~nodes:[ r_out; r_src ]
+      (B.loop ~upto:15 ~axis:LL.Vectorized ri
+         (B.set r_out [| B.iter ri |] (B.get r_src [| B.iter ri |])))
+  in
+  p "try_vectorize records its packed main-loop store beside Render_simd_elementwise"
+    ((match packed_summary.Cs.loops with
+       | [ { Cs.rendering = Cs.Render_simd_elementwise { lanes = 4 }; _ } ] -> true
+       | _ -> false)
+    && List.count packed_summary.Cs.stores ~f:(fun e ->
+           e.Cs.tn_uid = r_out.Tn.uid && Cs.equal_store_rendering e.Cs.rendering Cs.Store_plain)
+       >= 2);
+  (* 2. Discarded projection operand (Arg1) does not turn a plain store into Store_rmw. *)
+  let proj_summary =
+    render_pure ~name:"rc_arg1_proj" ~nodes:[ r_out ]
+      (B.set r_out
+         [| B.fixed 0 |]
+         (LL.Binop (Ops.Arg1, (LL.Constant 1.0, prec), (B.get r_out [| B.fixed 0 |], prec))))
+  in
+  p "discarded Arg1 operand is excluded from store read counts"
+    (match proj_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_plain; reads = []; _ } ] -> tn_uid = r_out.Tn.uid
+    | _ -> false);
+  (* 3. Unconsumed zero seed preserves emission order: zero store appears before SIMD epilogue. *)
+  let z_out = B.node_factory ~first_id:724_100_200 ~dims:[| 1 |] () "rc_zout" in
+  B.materialize z_out;
+  let z_i = B.sym () in
+  let z_summary =
+    render_pure ~vec_bytes:16 ~name:"rc_unconsumed_zero" ~nodes:[ z_out; r_src ]
+      (B.seq (B.zero z_out)
+         (B.loop ~upto:15 ~axis:LL.Vectorized z_i
+            (B.set z_out
+               [| B.fixed 0 |]
+               (B.add (B.get z_out [| B.fixed 0 |]) (B.get r_src [| B.iter z_i |])))))
+  in
+  p "unconsumed zero seed records the zero clear before the SIMD reduction epilogue"
+    (match z_summary.Cs.stores with
+    | [
+     { Cs.tn_uid = u1; rendering = Cs.Store_plain; _ };
+     { Cs.tn_uid = u2; rendering = Cs.Store_simd_epilogue; _ };
+    ] ->
+        u1 = z_out.Tn.uid && u2 = z_out.Tn.uid
+    | _ -> false);
+  (* 4. Discarded debug_float rendering of a Get_dynamic index Local_scope does not duplicate
+     loops. *)
+  let dbg_i = B.sym () in
+  let dbg_sid = { LL.tn = r_idx; scope_id = 72401 } in
+  let dbg_idx_scope =
+    B.scope_of dbg_sid
+      (B.seq
+         (LL.Set_local (dbg_sid, LL.Constant 0.0))
+         (B.loop ~upto:1 dbg_i (LL.Set_local (dbg_sid, LL.Constant 1.0))))
+  in
+  let dbg_llc =
+    B.set r_out
+      [| B.fixed 0 |]
+      (B.gather ~tn:r_src ~idcs:[| B.fixed 0 |] ~dyn_axis:0 ~dyn_value:(dbg_idx_scope, prec))
+  in
+  let saved_dbg = Utils.settings.debug_log_from_routines and saved_lvl = Utils.settings.log_level in
+  let dbg_summary =
+    Exn.protect
+      ~f:(fun () ->
+        Utils.settings.debug_log_from_routines <- true;
+        Utils.settings.log_level <- 2;
+        render_pure ~name:"rc_debug_gather_scope" ~nodes:[ r_out; r_src ] dbg_llc)
+      ~finally:(fun () ->
+        Utils.settings.debug_log_from_routines <- saved_dbg;
+        Utils.settings.log_level <- saved_lvl)
+  in
+  p "discarded debug_float Get_dynamic definitions do not duplicate loop census entries"
+    (List.length dbg_summary.Cs.loops = 1);
+  (* 5. Peel provenance is scoped to the closing store occurrence: a later unpeeled Local_scope
+     reusing the same scope_id reports peeled = false. *)
+  let p_out = B.node_factory ~first_id:724_100_300 ~dims:[| 2 |] () "rc_pout" in
+  B.materialize p_out;
+  let p_k = B.sym () in
+  let shared_sid = { LL.tn = p_out; scope_id = 72402 } in
+  let hoisted_scope =
+    B.scope_of
+      ~orig_indices:[| B.fixed 0 |]
+      ~mint:LL.Schedule_minted shared_sid
+      (B.seq
+         (LL.Set_local (shared_sid, B.get p_out [| B.fixed 0 |]))
+         (LL.Set_local (shared_sid, B.add (LL.Get_local shared_sid) (B.get r_src [| B.iter p_k |]))))
+  in
+  let unpeeled_scope =
+    B.scope_of
+      ~orig_indices:[| B.fixed 1 |]
+      ~mint:LL.Schedule_minted shared_sid
+      (LL.Set_local (shared_sid, LL.Constant 2.0))
+  in
+  let reuse_summary =
+    render_pure ~name:"rc_scope_reuse" ~nodes:[ p_out; r_src ]
+      (B.seq
+         (B.loop ~upto:3 p_k (B.set p_out [| B.fixed 0 |] hoisted_scope))
+         (B.set p_out [| B.fixed 1 |] unpeeled_scope))
+  in
+  p "peel provenance is scoped to the closing store, not leaked to later uses of the same scope_id"
+    (match reuse_summary.Cs.stores with
+    | [
+     { Cs.rendering = Cs.Store_from_scope { peeled = true; _ }; _ };
+     { Cs.rendering = Cs.Store_from_scope { peeled = false; _ }; _ };
+    ] ->
+        true
+    | _ -> false);
+  (* 6. Body-only compile_main reads render_census_enabled live at emission time. *)
+  let live_llc = B.loop ~upto:1 ri (B.set r_out [| B.iter ri |] (LL.Constant 3.0)) in
+  let live_opt = optimized live_llc [ r_out ] in
+  let module Live_syntax = Cs.C_syntax (Cs.Pure_C_config (struct
+    let procs = [| live_opt.LL.llc |]
+    let full_printf_support = true
+  end))
+  in
+  let pre_ctx = Live_syntax.create_render_ctx ~name:"rc_live_switch" live_opt in
+  let (), inside_summary =
+    Cs.with_render_census (fun () -> ignore (Live_syntax.compile_main pre_ctx live_opt.LL.llc))
+  in
+  ignore (Live_syntax.compile_main pre_ctx live_opt.LL.llc);
+  p "create_render_ctx before with_render_census still records compile_main inside the bracket"
+    (List.length inside_summary.Cs.loops = 1 && List.length inside_summary.Cs.stores = 1);
+  Verdict.p_empty "compile_main after with_render_census closes appends nothing to the loop global"
+    ~over:inside_summary.Cs.loops
+    !(Cs.render_loop_census ());
+  Verdict.p_empty "compile_main after with_render_census closes appends nothing to the store global"
+    ~over:inside_summary.Cs.stores
+    !(Cs.render_store_census ())

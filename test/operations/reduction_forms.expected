@@ -29,7 +29,7 @@ C_syntax.loop_rendering coverage:
   Render_vectorize_pragma  out of scope: only for non-accumulating Vectorized loops: every loop-carried accumulation bypasses iteration-independence pragmas and falls back to the localizing peel or serial loop
   Render_localized_peel    covered by serial, unroll-annot, split-then-vectorize-inner, mixed-guard-workgroup, tile-mma-fallback
   Render_unrolled          covered by unroll-annot, partition-then-unroll, decline-sibling-unrolled, rng-unroll
-  Render_simd_reduce       covered by retype-vectorized, split-then-vectorize-inner, rng-vectorized
+  Render_simd_reduce       covered by retype-vectorized, split-then-vectorize-inner
   Render_simd_elementwise  out of scope: elementwise SIMD rendering requires no loop-carried accumulation; reduction loops dispatch through Render_simd_reduce or the localizing peel
   Render_warp_shuffle      covered by retype-workgroup-reduce
   Render_lane_all_reduce   out of scope: online-softmax backward's reassociable scope-local all-reduce (Online_softmax.reassociable_local), pinned by gpu_lane_reduction
@@ -544,3 +544,9 @@ tile-mma-fallback @ bf16 agrees with its reference value: true
 tile-mma-fallback @ f16 renders the form its composition claims: true
 tile-mma-fallback @ f16: codegen's peel decided what the leg declares: true
 tile-mma-fallback @ f16 agrees with its reference value: true
+every executed member credited with C_syntax.Render_serial actually emitted that rendering arm: true
+every executed member credited with C_syntax.Render_localized_peel actually emitted that rendering arm: true
+every executed member credited with C_syntax.Render_unrolled actually emitted that rendering arm: true
+every executed member credited with C_syntax.Render_simd_reduce actually emitted that rendering arm: true
+every executed member credited with C_syntax.Render_warp_shuffle actually emitted that rendering arm: true
+every executed member credited with C_syntax.Render_hardware_binding actually emitted that rendering arm: true

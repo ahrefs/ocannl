@@ -310,15 +310,27 @@ type store_rendering =
       (** Closing fold of a cell-targeted {!Render_simd_reduce} grid into the target cell. *)
   | Store_warp_epilogue
       (** Closing lane-0 fold of a {!Render_warp_shuffle} tree into the target cell. *)
+  | Store_mma
+      (** Non-fallback {!Low_level.Tile_mma} tile store (register-tiled, hardware MMA intrinsic, or
+          persistent MMA fragment-scope closing store). *)
   | Store_rmw of { reads_target : int }
-      (** Direct read-modify-write [Set]: RHS is not a closing [Local_scope] and reads the written
-          node [reads_target >= 1] times. *)
+      (** Direct read-modify-write store ([Set], [Set_dynamic], [Set_from_vec], or packed
+          [try_vectorize] store): RHS is not a closing [Local_scope] and evaluates
+          [reads_target >= 1] reads of the written node. *)
   | Store_plain
-      (** Plain [Set] (including expanded [Zero_out]) that neither closes a [Local_scope] nor reads
-          the written node. *)
+      (** Plain store ([Set], [Set_dynamic], [Set_from_vec], packed [try_vectorize] store, or
+          expanded [Zero_out]) that neither closes a [Local_scope] nor reads the written node. *)
 [@@deriving sexp_of, equal]
 
-type store_render_entry = { kernel : string; tn_uid : int; rendering : store_rendering }
+type store_render_entry = {
+  kernel : string;
+  tn_uid : int;
+  rendering : store_rendering;
+  reads : (int * int) list;
+      (** Per-UID read counts (sorted by UID) of tensor nodes evaluated by this store (respecting
+          {!Ops.binop_conditionality} and {!Ops.ternop_conditionality}; includes the dynamic index
+          expression for [Set_dynamic]). *)
+}
 [@@deriving sexp_of, equal]
 (** One emitted memory store in the per-level rendering census, keyed by the node's {!Tnode.t.uid}.
 *)
@@ -327,7 +339,8 @@ type render_summary = {
   loops : loop_render_entry list;
       (** Every [For_loop] rendered during this compile, in pre-order emission order. *)
   stores : store_render_entry list;
-      (** Every memory store ([Set], SIMD-reduce cell epilogue, warp-shuffle epilogue) emitted
+      (** Every tensor write ([Set], [Set_dynamic], [Set_from_vec], packed [try_vectorize] stores,
+          SIMD-reduce cell epilogue, warp-shuffle epilogue, non-fallback [Tile_mma] store) emitted
           during this compile, in emission order. *)
 }
 [@@deriving sexp_of, equal]

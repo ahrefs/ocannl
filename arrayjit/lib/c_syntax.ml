@@ -548,11 +548,17 @@ type store_rendering =
     }
   | Store_simd_epilogue
   | Store_warp_epilogue
+  | Store_mma
   | Store_rmw of { reads_target : int }
   | Store_plain
 [@@deriving sexp_of, equal]
 
-type store_render_entry = { kernel : string; tn_uid : int; rendering : store_rendering }
+type store_render_entry = {
+  kernel : string;
+  tn_uid : int;
+  rendering : store_rendering;
+  reads : (int * int) list;
+}
 [@@deriving sexp_of, equal]
 
 type render_summary = { loops : loop_render_entry list; stores : store_render_entry list }
@@ -4421,7 +4427,7 @@ module C_syntax (B : C_syntax_config) = struct
 
   type active_mma_accumulator =
     | Active_fragment of Tn.t * string
-    | Active_target of Tn.t * mma_operand
+    | Active_target of Tn.t * Tn.t * mma_operand
 
   type localized_zero_seed = {
     lzs_tn : Tn.t;
@@ -6447,6 +6453,18 @@ module C_syntax (B : C_syntax_config) = struct
                  Schedule.pipeline_violation_cause ~site:"C_syntax"
                    (Schedule.Read_outside_rotor { tile = tn; rotor = pt_rotor }) ))
 
+  let record_store_render ctx (tn : Tn.t) ~reads rendering =
+    if !(ctx.render_census_enabled) then
+      ctx.render_store_census :=
+        { kernel = ctx.current_kernel_name; tn_uid = tn.Tn.uid; rendering; reads }
+        :: !(ctx.render_store_census)
+
+  let reads_of_uids uids : (int * int) list =
+    let counts = Hashtbl.create (module Int) in
+    List.iter uids ~f:(fun uid ->
+        Hashtbl.update counts uid ~f:(function None -> 1 | Some n -> n + 1));
+    Hashtbl.to_alist counts |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+
   (* Recognize the exact scalar fallback region synthesized by
      [Schedule.contract_tensorized_accumulator]:
 
@@ -6557,13 +6575,17 @@ module C_syntax (B : C_syntax_config) = struct
                       match
                         emit ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~d:target_op ~a:a_src ~b:b_src
                       with
-                      | Some _ -> Some (render_with (Active_target (fragment, target_op)))
+                      | Some _ -> Some (render_with (Active_target (fragment, target, target_op)))
                       | None -> None)
             in
             if Option.is_some fragment_doc then (
               ctx.emitted_mma_triples := (d_prec, a_prec, b_prec) :: !(ctx.emitted_mma_triples);
               if !(ctx.mma_census_enabled) then
-                ctx.mma_scope_census := ctx.current_kernel_name :: !(ctx.mma_scope_census));
+                ctx.mma_scope_census := ctx.current_kernel_name :: !(ctx.mma_scope_census);
+              if !(ctx.render_census_enabled) then
+                record_store_render ctx target
+                  ~reads:(reads_of_uids [ target.Tn.uid; (fst a).Tn.uid; (fst b).Tn.uid ])
+                  Store_mma);
             match rendered with
             | Some doc ->
                 ctx.rendered_simdgroup_fragments :=
@@ -6619,40 +6641,82 @@ module C_syntax (B : C_syntax_config) = struct
     record_loop_render ctx loop rendering;
     Rendered_loop (f ())
 
-  let record_store_render ctx (tn : Tn.t) rendering =
-    if !(ctx.render_census_enabled) then
-      ctx.render_store_census :=
-        { kernel = ctx.current_kernel_name; tn_uid = tn.Tn.uid; rendering }
-        :: !(ctx.render_store_census)
+  let without_render_census ctx f =
+    let saved = !(ctx.render_census_enabled) in
+    ctx.render_census_enabled := false;
+    Exn.protect ~f ~finally:(fun () -> ctx.render_census_enabled := saved)
 
-  let classify_set_store ctx ~(tn : Tn.t) (llsc : Low_level.scalar_t) : store_rendering =
-    let rec count_reads_scalar (s : Low_level.scalar_t) =
+  let capture_render_census ctx f =
+    let saved_loops = !(ctx.render_loop_census) and saved_stores = !(ctx.render_store_census) in
+    ctx.render_loop_census := [];
+    ctx.render_store_census := [];
+    match f () with
+    | result ->
+        let captured_loops = !(ctx.render_loop_census)
+        and captured_stores = !(ctx.render_store_census) in
+        ctx.render_loop_census := saved_loops;
+        ctx.render_store_census := saved_stores;
+        (result, captured_loops, captured_stores)
+    | exception e ->
+        ctx.render_loop_census := !(ctx.render_loop_census) @ saved_loops;
+        ctx.render_store_census := !(ctx.render_store_census) @ saved_stores;
+        raise e
+
+  let collect_reads_from ~scalars ~lls : (int * int) list =
+    let counts = Hashtbl.create (module Int) in
+    let bump uid = Hashtbl.update counts uid ~f:(function None -> 1 | Some n -> n + 1) in
+    let rec walk_scalar (s : Low_level.scalar_t) =
       match s with
-      | Low_level.Get (tn2, _) -> if Tn.equal tn tn2 then 1 else 0
+      | Low_level.Get (tn2, _) -> bump tn2.Tn.uid
       | Get_dynamic { tn = tn2; dyn_value = v, _; _ } ->
-          (if Tn.equal tn tn2 then 1 else 0) + count_reads_scalar v
-      | Local_scope { body; _ } -> count_reads_ll body
-      | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> 0
-      | Ternop (_, (a, _), (b, _), (c, _)) ->
-          count_reads_scalar a + count_reads_scalar b + count_reads_scalar c
-      | Binop (_, (a, _), (b, _)) -> count_reads_scalar a + count_reads_scalar b
-      | Unop (_, (a, _)) -> count_reads_scalar a
-    and count_reads_ll (c : Low_level.t) =
+          bump tn2.Tn.uid;
+          walk_scalar v
+      | Local_scope { body; _ } -> walk_ll body
+      | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
+      | Ternop (op, (a, _), (b, _), (c, _)) -> (
+          match Ops.ternop_conditionality op with
+          | Ops.All_three | Ops.Cond_and_one_arm ->
+              walk_scalar a;
+              walk_scalar b;
+              walk_scalar c)
+      | Binop (op, (a, _), (b, _)) -> (
+          match Ops.binop_conditionality op with
+          | Ops.Only_first -> walk_scalar a
+          | Ops.Only_second -> walk_scalar b
+          | Ops.Both_operands | Ops.Gated_second ->
+              walk_scalar a;
+              walk_scalar b)
+      | Unop (_, (a, _)) -> walk_scalar a
+    and walk_ll (c : Low_level.t) =
       match c with
-      | Low_level.Seq (a, b) -> count_reads_ll a + count_reads_ll b
-      | For_loop { body; _ } -> count_reads_ll body
+      | Low_level.Seq (a, b) ->
+          walk_ll a;
+          walk_ll b
+      | For_loop { body; _ } -> walk_ll body
       | Scan_loop { carried; body; _ } ->
-          List.sum (module Int) carried ~f:(fun c -> count_reads_scalar c.Low_level.init)
-          + count_reads_ll body
-      | If { cond = c, _; body } -> count_reads_scalar c + count_reads_ll body
-      | Set { llsc; _ } | Set_local (_, llsc) -> count_reads_scalar llsc
-      | Set_dynamic { dyn_value = v, _; llsc; _ } -> count_reads_scalar v + count_reads_scalar llsc
-      | Set_from_vec { arg = a, _; _ } -> count_reads_scalar a
-      | Tile_mma { fallback; _ } -> count_reads_ll fallback
+          List.iter carried ~f:(fun c -> walk_scalar c.Low_level.init);
+          walk_ll body
+      | If { cond = c, _; body } ->
+          walk_scalar c;
+          walk_ll body
+      | Set { llsc; _ } | Set_local (_, llsc) -> walk_scalar llsc
+      | Set_dynamic { dyn_value = v, _; llsc; _ } ->
+          walk_scalar v;
+          walk_scalar llsc
+      | Set_from_vec { arg = a, _; _ } -> walk_scalar a
+      | Tile_mma { fallback; _ } -> walk_ll fallback
       | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier
         ->
-          0
+          ()
     in
+    List.iter scalars ~f:walk_scalar;
+    List.iter lls ~f:walk_ll;
+    Hashtbl.to_alist counts |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+
+  let classify_set_store ctx ~(tn : Tn.t) ?(extra_scalars = []) (llsc : Low_level.scalar_t) :
+      store_rendering * (int * int) list =
+    let reads = collect_reads_from ~scalars:(llsc :: extra_scalars) ~lls:[] in
+    let reads_target = Option.value (List.Assoc.find reads ~equal:Int.equal tn.Tn.uid) ~default:0 in
     let rec has_where_update ~scope_id (c : Low_level.t) =
       match c with
       | Low_level.Set_local (id, Ternop (Ops.Where, _, _, _)) -> id.Low_level.scope_id = scope_id
@@ -6664,18 +6728,24 @@ module C_syntax (B : C_syntax_config) = struct
       | Set_from_vec _ | Declare_local _ | Workgroup_barrier ->
           false
     in
-    match llsc with
-    | Low_level.Local_scope { id; body; mint; _ } ->
-        Store_from_scope
-          {
-            mint;
-            peeled = Hash_set.mem ctx.peeled_scope_ids id.Low_level.scope_id;
-            reads_target = count_reads_ll body;
-            has_where_update = has_where_update ~scope_id:id.Low_level.scope_id body;
-          }
-    | _ ->
-        let reads_target = count_reads_scalar llsc in
-        if reads_target > 0 then Store_rmw { reads_target } else Store_plain
+    let rendering =
+      match llsc with
+      | Low_level.Local_scope { id; body; mint; _ } ->
+          Store_from_scope
+            {
+              mint;
+              peeled = Hash_set.mem ctx.peeled_scope_ids id.Low_level.scope_id;
+              reads_target;
+              has_where_update = has_where_update ~scope_id:id.Low_level.scope_id body;
+            }
+      | _ -> if reads_target > 0 then Store_rmw { reads_target } else Store_plain
+    in
+    (rendering, reads)
+
+  let record_classified_store ctx ~tn ?extra_scalars llsc =
+    if !(ctx.render_census_enabled) then
+      let rendering, reads = classify_set_store ctx ~tn ?extra_scalars llsc in
+      record_store_render ctx tn ~reads rendering
 
   exception Vectorization_declined
 
@@ -6709,10 +6779,11 @@ module C_syntax (B : C_syntax_config) = struct
                   | Some seed ->
                       let saved = !(ctx.current_localized_zero_seed) in
                       ctx.current_localized_zero_seed := Some seed;
-                      let next_doc =
-                        Exn.protect
-                          ~f:(fun () -> (pp_ll ctx) ~in_loop next)
-                          ~finally:(fun () -> ctx.current_localized_zero_seed := saved)
+                      let next_doc, next_loops, next_stores =
+                        capture_render_census ctx (fun () ->
+                            Exn.protect
+                              ~f:(fun () -> (pp_ll ctx) ~in_loop next)
+                              ~finally:(fun () -> ctx.current_localized_zero_seed := saved))
                       in
                       let zero_doc =
                         if seed.lzs_consumed then begin
@@ -6723,6 +6794,11 @@ module C_syntax (B : C_syntax_config) = struct
                         end
                         else (pp_ll ctx) ~in_loop c1
                       in
+                      (* Append [next]'s buffered census events AFTER [c1]'s so that when [c1] is
+                         not consumed, the census reflects actual emission order ([c1] before
+                         [next]). *)
+                      ctx.render_loop_census := next_loops @ !(ctx.render_loop_census);
+                      ctx.render_store_census := next_stores @ !(ctx.render_store_census);
                       let rest_doc =
                         Option.value_map rest ~default:empty ~f:((pp_ll ctx) ~in_loop)
                       in
@@ -6968,19 +7044,18 @@ module C_syntax (B : C_syntax_config) = struct
                 in
                 let src_offset_doc = (pp_tn_offset ctx) src (src_idcs, Lazy.force src.Tn.dims) in
                 Some
-                  (ac.ac_copy
-                     ~dst:(string "&" ^^ ident_doc ^^ brackets offset_doc)
-                     ~src:(string "&" ^^ string (get_ident src) ^^ brackets src_offset_doc)
-                     ~bytes:(Ops.prec_in_bytes store_prec))
+                  ( (fun () -> record_store_render ctx tn ~reads:[ (src.Tn.uid, 1) ] Store_plain),
+                    ac.ac_copy
+                      ~dst:(string "&" ^^ ident_doc ^^ brackets offset_doc)
+                      ~src:(string "&" ^^ string (get_ident src) ^^ brackets src_offset_doc)
+                      ~bytes:(Ops.prec_in_bytes store_prec) )
             | _ -> None
         in
         match async_copy_doc with
-        | Some doc ->
-            record_store_render ctx tn Store_plain;
+        | Some (record_async, doc) ->
+            record_async ();
             doc
         | None ->
-            if !(ctx.render_census_enabled) then
-              record_store_render ctx tn (classify_set_store ctx ~tn llsc);
             let prec, narrowing = store_precs ~store_prec llsc in
             let (local_defs, val_doc), volatile_read_emitted =
               (with_volatile_accumulation_reads ctx) rmw_volatile_reads (fun () ->
@@ -6988,6 +7063,7 @@ module C_syntax (B : C_syntax_config) = struct
             in
             let val_doc = wrap_conversion narrowing val_doc in
             let local_defs = pp_local_defs ~check:(Some c, [ (prec, llsc) ]) local_defs in
+            record_classified_store ctx ~tn llsc;
             let offset_doc =
               (pp_pipelined_rotation ctx) ~is_write:true tn ^^ (pp_tn_offset ctx) tn (idcs, dims)
             in
@@ -7075,6 +7151,7 @@ module C_syntax (B : C_syntax_config) = struct
         let local_defs =
           pp_local_defs ~check:(Some c, [ (iprec, iv); (prec, llsc) ]) (dyn_defs @ val_defs)
         in
+        record_classified_store ctx ~tn ~extra_scalars:[ iv ] llsc;
         let assignment =
           group
             (ident_doc ^^ brackets offset_doc ^^ string " ="
@@ -7152,6 +7229,7 @@ module C_syntax (B : C_syntax_config) = struct
         in
         let local_defs, arg_doc = (pp_scalar ctx) arg_prec arg in
         let local_defs = pp_local_defs ~check:(Some c, [ (arg_prec, arg) ]) local_defs in
+        record_classified_store ctx ~tn arg;
         (* Generate the function call *)
         let result_doc = B.vec_unop_syntax prec vec_unop arg_doc in
         (* The vector temporary always has the full 128-bit block width: a tail store ([length] <
@@ -7372,9 +7450,22 @@ module C_syntax (B : C_syntax_config) = struct
         in
         let fragment_is_active =
           match !(ctx.active_mma_accumulator) with
-          | Some (Active_fragment (fragment, _)) | Some (Active_target (fragment, _)) ->
+          | Some (Active_fragment (fragment, _)) | Some (Active_target (fragment, _, _)) ->
               Tn.equal d_tn fragment
           | None -> false
+        in
+        let memory_target_tn () =
+          match !(ctx.active_mma_accumulator) with
+          | Some (Active_fragment (fragment, _)) when Tn.equal d_tn fragment -> None
+          | Some (Active_target (fragment, target, _)) when Tn.equal d_tn fragment -> Some target
+          | _ -> Some d_tn
+        in
+        let record_mma_store () =
+          if !(ctx.render_census_enabled) then
+            Option.iter (memory_target_tn ()) ~f:(fun dst ->
+                record_store_render ctx dst
+                  ~reads:(reads_of_uids [ dst.Tn.uid; (fst a).Tn.uid; (fst b).Tn.uid ])
+                  Store_mma)
         in
         if Set.mem !(ctx.current_simdgroup_fragments) d_tn && not fragment_is_active then (
           (* [Schedule.op_legality] refuses the moves that leave such a statement (gh-ocannl-1342,
@@ -7394,7 +7485,7 @@ module C_syntax (B : C_syntax_config) = struct
             match !(ctx.active_mma_accumulator) with
             | Some (Active_fragment (fragment, name)) when Tn.equal tn fragment ->
                 (string name, ld, `Fragment name, `Plain)
-            | Some (Active_target (fragment, (ptr, target_ld, space, layout)))
+            | Some (Active_target (fragment, _, (ptr, target_ld, space, layout)))
               when Tn.equal tn fragment ->
                 (ptr, target_ld, space, (layout :> [ mma_layout | `Decline of string ]))
             | _ ->
@@ -7867,6 +7958,7 @@ module C_syntax (B : C_syntax_config) = struct
           match try_register_tile () with
           | Some doc ->
               record Mma_register_tiled;
+              record_mma_store ();
               lane0_guarded doc
           | None ->
               (declinef ctx) "Tile_mma renders the lane-0 scalar fallback: %s" (describe ());
@@ -7933,6 +8025,7 @@ module C_syntax (B : C_syntax_config) = struct
                       | _ -> false
                     in
                     record (if uses_ldmatrix then Mma_intrinsics_ldmatrix else Mma_intrinsics);
+                    record_mma_store ();
                     (if !(ctx.mma_census_enabled) then
                        let mma_accum_prec =
                          match B.mma_arm ~a_prec ~b_prec ~d_prec ~scope with
@@ -8706,6 +8799,7 @@ module C_syntax (B : C_syntax_config) = struct
         (render_loop ctx loop
            (Render_simd_elementwise { lanes })
            (fun () ->
+             List.iter sets ~f:(fun (tn, _, llsc) -> record_classified_store ctx ~tn llsc);
              string
                (Printf.sprintf "{ /* Vectorized rendering: %d lanes of %s. */" lanes
                   (B.typ_of_prec prec))
@@ -8949,7 +9043,12 @@ module C_syntax (B : C_syntax_config) = struct
            (Render_simd_reduce { target; lanes; chains })
            (fun () ->
              (match acc_target with
-             | `Cell (tn, _) -> record_store_render ctx tn Store_simd_epilogue
+             | `Cell (tn, _) ->
+                 let reads =
+                   if !(ctx.render_census_enabled) then collect_reads_from ~scalars:[] ~lls:[ body ]
+                   else []
+                 in
+                 record_store_render ctx tn ~reads Store_simd_epilogue
              | `Local _ -> ());
              string
                (Printf.sprintf
@@ -9455,12 +9554,6 @@ module C_syntax (B : C_syntax_config) = struct
                    ^^ hardline ^^ rbrace)
               ^^ hardline ^^ barrier
           in
-          (* The contribution renders at the residency, deliberately: operand widenings are exact,
-             so a narrow-times-narrow product is exact at [prec] — the same
-             full-precision-product-into-f32 semantics the serial legs and the tensor cores apply
-             (gh-ocannl-663's note in [Cuda_backend.accum_prec]). *)
-          let local_defs, contrib_doc = (pp_scalar ctx) prec contrib in
-          let local_defs = pp_local_defs ~check:(None, [ (prec, contrib) ]) local_defs in
           let binding =
             string ("const " ^ B.loop_index_type) ^^ pp_symbol i ^^ string (" = " ^ cast ^ reg ^ ";")
           in
@@ -9471,7 +9564,18 @@ module C_syntax (B : C_syntax_config) = struct
             (render_loop ctx loop
                (Render_warp_shuffle { warps = num_warps })
                (fun () ->
-                 record_store_render ctx tn Store_warp_epilogue;
+                 (* The contribution renders at the residency, deliberately: operand widenings are
+                    exact, so a narrow-times-narrow product is exact at [prec] — the same
+                    full-precision-product-into-f32 semantics the serial legs and the tensor cores
+                    apply (gh-ocannl-663's note in [Cuda_backend.accum_prec]). *)
+                 let local_defs, contrib_doc = (pp_scalar ctx) prec contrib in
+                 let local_defs = pp_local_defs ~check:(None, [ (prec, contrib) ]) local_defs in
+                 let reads =
+                   if !(ctx.render_census_enabled) then
+                     collect_reads_from ~scalars:[ Low_level.Get (tn, idcs); contrib ] ~lls:[]
+                   else []
+                 in
+                 record_store_render ctx tn ~reads Store_warp_epilogue;
                  string
                    (Printf.sprintf
                       "{ /* Workgroup_reduce warp-shuffle rendering: extent %d = %d simdgroup(s) \
@@ -9611,6 +9715,7 @@ module C_syntax (B : C_syntax_config) = struct
                 in
                 Low_level.Seq (Low_level.Set_local (id, opening), rebuild_hook (rebuild update_code))
               in
+              let already_peeled = Hash_set.mem ctx.peeled_scope_ids id.Low_level.scope_id in
               Hash_set.add ctx.peeled_scope_ids id.Low_level.scope_id;
               (without_census ctx) (fun () ->
                   Int.incr ctx.peel_scope_depth;
@@ -9631,7 +9736,10 @@ module C_syntax (B : C_syntax_config) = struct
                                  };
                              debug;
                            }))
-                    ~finally:(fun () -> Int.decr ctx.peel_scope_depth)))
+                    ~finally:(fun () ->
+                      Int.decr ctx.peel_scope_depth;
+                      if not already_peeled then
+                        Hash_set.remove ctx.peeled_scope_ids id.Low_level.scope_id)))
         in
         (record_peel_site ctx loop) (Peel_localized verdict);
         Some rendered
@@ -9857,7 +9965,7 @@ module C_syntax (B : C_syntax_config) = struct
            computed index) shows it as a [single], not as a converted [uint4x32] block. *)
         let shown_prec = match prec with Uint4x32_prec _ -> Ops.single | _ -> prec in
         let prefix, postfix = B.convert_precision ~from:iprec ~to_:shown_prec in
-        let _defs, idx_e = (pp_scalar ctx) iprec iv in
+        let _defs, idx_e = without_render_census ctx (fun () -> (pp_scalar ctx) iprec iv) in
         let idx_doc = string prefix ^^ idx_e ^^ string postfix in
         let label = string (get_code_ident tn ^ "@dyn_idx") in
         (label ^^ value_conv shown_prec, log_value_args shown_prec idx_doc)
@@ -9892,7 +10000,9 @@ module C_syntax (B : C_syntax_config) = struct
                  [!cond], each AND-composed with any enclosing [guard] so nested/triangular range
                  guards compose. [cond_c] is rendered twice -- via [pp_scalar] for the real C guard
                  expression here, and via [debug_float] for the annotated display below. *)
-              let _cond_defs, cond_c = (pp_scalar ctx) v1_prec v1 in
+              let _cond_defs, cond_c =
+                without_render_census ctx (fun () -> (pp_scalar ctx) v1_prec v1)
+              in
               (* Conditions reaching a Where here are pure index/value comparisons (range guards,
                  in_range) with no Local_scope, so [_cond_defs] is empty. Even if a future condition
                  inlined a Local_scope, dropping the redundant re-definition is safe: the local is
@@ -10009,7 +10119,7 @@ module C_syntax (B : C_syntax_config) = struct
         mma_emitted_census = mma_emitted_census ();
         peel_census_enabled = ref !(peel_census_enabled ());
         peel_census = peel_census ();
-        render_census_enabled = ref !(render_census_enabled ());
+        render_census_enabled = render_census_enabled ();
         render_loop_census = render_loop_census ();
         render_store_census = render_store_census ();
         peel_scope_depth = ref 0;

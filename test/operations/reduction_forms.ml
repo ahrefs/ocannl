@@ -863,8 +863,8 @@ let check_peel ~name ~claim ~expected_sites ~rendered_loops (peel : Cs.peel_summ
 (* Checking a member's form claim directly against codegen's per-level rendering census
    ({!Context.routine.render}, gh-ocannl-724). *)
 let check_render ~name ~target_uid ~form ~expected_peel ~shape ~store_sites ~rmw_sites
-    ~foreign_sites ~expect_where_update ~expect_unrolled ~expect_workgroup_bind
-    ?(max_target_plain = 0) (render : Cs.render_summary) =
+    ~foreign_sites ~foreign_accesses:expected_foreign_accesses ~expect_where_update ~expect_unrolled
+    ~expect_workgroup_bind ?(max_target_plain = 0) (render : Cs.render_summary) =
   let target_stores, foreign_stores =
     List.partition_tf render.Cs.stores ~f:(fun e -> e.Cs.tn_uid = target_uid)
   in
@@ -888,21 +888,37 @@ let check_render ~name ~target_uid ~form ~expected_peel ~shape ~store_sites ~rmw
   let target_warp_epilogues =
     count_store target_stores (function Cs.Store_warp_epilogue -> true | _ -> false)
   in
+  let target_mma = count_store target_stores (function Cs.Store_mma -> true | _ -> false) in
   let target_plain = count_store target_stores (function Cs.Store_plain -> true | _ -> false) in
   let foreign_scopes = scope_stores foreign_stores in
   let foreign_scoped_uids =
     List.map foreign_scopes ~f:(fun (uid, _, _, _, _) -> uid) |> Set.of_list (module Int)
   in
   (* Catch a regression that kept one localized closing store into a partials node while routing
-     another segment through direct read-modify-writes of that same node (Codex P2, round 13). *)
+     another segment through direct read-modify-writes of that same node, or added an extra clear
+     (Codex P2, round 13 & gh-ocannl-724 local review). *)
   let foreign_rmw_on_scoped =
     List.count foreign_stores ~f:(fun e ->
         Set.mem foreign_scoped_uids e.Cs.tn_uid
         && match e.Cs.rendering with Cs.Store_rmw _ -> true | _ -> false)
   in
+  let foreign_accesses =
+    List.sum
+      (module Int)
+      render.Cs.stores
+      ~f:(fun e ->
+        let write = if Set.mem foreign_scoped_uids e.Cs.tn_uid then 1 else 0 in
+        let reads =
+          List.sum
+            (module Int)
+            e.Cs.reads
+            ~f:(fun (uid, count) -> if Set.mem foreign_scoped_uids uid then count else 0)
+        in
+        write + reads)
+  in
   let foreign_epilogues =
     count_store foreign_stores (function
-      | Cs.Store_simd_epilogue | Cs.Store_warp_epilogue -> true
+      | Cs.Store_simd_epilogue | Cs.Store_warp_epilogue | Cs.Store_mma -> true
       | _ -> false)
   in
   let count_loops p = List.count render.Cs.loops ~f:p in
@@ -946,7 +962,10 @@ let check_render ~name ~target_uid ~form ~expected_peel ~shape ~store_sites ~rmw
     match shape with Virtual_acc -> (LL.Inlined_computation, 0) | _ -> (LL.Schedule_minted, 1)
   in
   let all_count ~want xs ~f = want > 0 && List.length xs = want && List.count xs ~f = want in
-  let common_ok = pragma_loops = 0 && foreign_epilogues = 0 && target_plain <= max_target_plain in
+  let common_ok =
+    pragma_loops = 0 && foreign_epilogues = 0 && target_mma = 0 && target_plain <= max_target_plain
+    && foreign_accesses = expected_foreign_accesses
+  in
   let form_ok =
     match form with
     | Localized | Mma_fallback ->
@@ -1023,12 +1042,13 @@ let check_render ~name ~target_uid ~form ~expected_peel ~shape ~store_sites ~rmw
   if not ok then
     Stdio.eprintf
       "  %s: render census mismatch for %s -- %s (target scopes=%d rmw=%d simd_ep=%d warp_ep=%d \
-       plain=%d; foreign scopes=%d rmw_on_scoped=%d; peel_loops=%d simd_cell=%d simd_local=%d \
-       warp=%d pragma=%d hw_wg=%d)\n"
+       mma=%d plain=%d; foreign scopes=%d rmw_on_scoped=%d accesses=%d/%d; peel_loops=%d \
+       simd_cell=%d simd_local=%d warp=%d pragma=%d hw_wg=%d)\n"
       name (form_name form) (Cs.render_summary_string render) (List.length target_scopes)
-      (List.length target_rmws) target_simd_epilogues target_warp_epilogues target_plain
-      (List.length foreign_scopes) foreign_rmw_on_scoped peel_loops simd_cell_loops
-      (List.length simd_local_loops) warp_loops pragma_loops hw_workgroup_loops;
+      (List.length target_rmws) target_simd_epilogues target_warp_epilogues target_mma target_plain
+      (List.length foreign_scopes) foreign_rmw_on_scoped foreign_accesses expected_foreign_accesses
+      peel_loops simd_cell_loops (List.length simd_local_loops) warp_loops pragma_loops
+      hw_workgroup_loops;
   ok
 
 (* {1 Executing a member} *)
@@ -1194,6 +1214,10 @@ type member = {
       (** For a member claiming {!Partials_combine}: how many closing stores into a node OTHER than
           the target the composition emits — one per textual copy of the block loop's body, which
           [Split_reduce] leaves at one. *)
+  foreign_accesses : int;
+      (** For {!Partials_combine}: total writes plus reads across {!Cs.render_summary.stores}
+          targeting any foreign-scoped partials node (clear write + opening scope read + closing
+          scope write + combine reads). Zero for every other form. *)
   rmw_sites : int;
       (** For a member claiming {!Rmw}: how many read-modify-write statements the composition emits
           — one per repetition where the level is [Unrolled], one where it is a serial loop. *)
@@ -1274,8 +1298,8 @@ let simd_peel_claimed =
 let fixed_rendering ?(form = Localized) peel _ = (form, peel)
 
 let member ?(shape = Plain) ?(sched = no_ops) ?claimed ?(reference = Baseline) ?(store_sites = 1)
-    ?(rmw_sites = 1) ?(foreign_sites = 0) ?expect_axis ?(expect_where_update = false)
-    ?expect_unrolled ?(expect_workgroup_bind = false) ?peel_claimed
+    ?(rmw_sites = 1) ?(foreign_sites = 0) ?(foreign_accesses = 0) ?expect_axis
+    ?(expect_where_update = false) ?expect_unrolled ?(expect_workgroup_bind = false) ?peel_claimed
     ?(rendering = fixed_rendering (Peeled { Cs.levels = 1; guards = [] }))
     ?(precisions = [ "f32"; "bf16"; "f16" ]) ?(available = fun _ -> true) slug what =
   (* Members whose rendering varies across backends or precisions name those alternatives
@@ -1294,6 +1318,7 @@ let member ?(shape = Plain) ?(sched = no_ops) ?claimed ?(reference = Baseline) ?
     store_sites;
     rmw_sites;
     foreign_sites;
+    foreign_accesses;
     expect_axis;
     expect_where_update;
     expect_unrolled;
@@ -1362,7 +1387,7 @@ let members =
        exact. --- *)
     member "split-reduce" "Split_reduce into four block partials plus a combine nest"
       ~rendering:(fixed_rendering ~form:Partials_combine (Peeled { Cs.levels = 1; guards = [] }))
-      ~foreign_sites:1 ~precisions:[ "f32" ]
+      ~foreign_sites:1 ~foreign_accesses:7 ~precisions:[ "f32" ]
       ~sched:(fun g ->
         let op, _b, _i, _c = Sched.split_reduce ~axis:g.k ~target:g.out ~num_blocks:4 in
         [ op ]);
@@ -1751,8 +1776,7 @@ let loop_rendering_coverage (r : Cs.loop_rendering) : coverage =
         ]
   | Cs.Render_unrolled _ ->
       Covered [ "unroll-annot"; "partition-then-unroll"; "decline-sibling-unrolled"; "rng-unroll" ]
-  | Cs.Render_simd_reduce _ ->
-      Covered [ "retype-vectorized"; "split-then-vectorize-inner"; "rng-vectorized" ]
+  | Cs.Render_simd_reduce _ -> Covered [ "retype-vectorized"; "split-then-vectorize-inner" ]
   | Cs.Render_warp_shuffle _ -> Covered [ "retype-workgroup-reduce" ]
   | Cs.Render_hardware_binding _ -> Covered [ "mixed-guard-workgroup" ]
   | Cs.Render_vectorize_pragma ->
@@ -1812,6 +1836,20 @@ let routine_stem slug = String.tr slug ~target:'-' ~replacement:'_'
 (* The coverage tables, printed and asserted: every constructor is reached by a member that EXISTS,
    or exempted with a reason. A slug naming no member fails the claim, so renaming a member without
    updating its coverage entry is a failure rather than a quiet gap. *)
+(* Observed {!Cs.loop_rendering} constructor names per executed member slug, used at the end of the
+   run to pin {!loop_rendering_coverage} against actual {!Context.routine.render.loops} entries
+   rather than member existence alone (gh-ocannl-724). *)
+let observed_renderings : (string, Set.M(String).t) Hashtbl.t = Hashtbl.create (module String)
+
+let record_observed ~slug (render : Cs.render_summary) =
+  let names =
+    List.map render.Cs.loops ~f:(fun e -> Cs.loop_rendering_name e.Cs.rendering)
+    |> Set.of_list (module String)
+  in
+  Hashtbl.update observed_renderings slug ~f:(function
+    | None -> names
+    | Some prev -> Set.union prev names)
+
 let () =
   let slugs =
     "tile-mma-fallback" :: List.map members ~f:(fun m -> m.slug) |> Set.of_list (module String)
@@ -2301,11 +2339,12 @@ let () =
                     p label false);
             in_leg ~leg form_claim (fun label ->
                 let _, _, _, _, render = Lazy.force evidence in
+                record_observed ~slug:m.slug render;
                 p label
                   (check_render ~name ~target_uid:prog.out.Tn.uid ~form ~expected_peel
                      ~shape:m.shape ~store_sites:m.store_sites ~rmw_sites:m.rmw_sites
-                     ~foreign_sites:m.foreign_sites ~expect_where_update:m.expect_where_update
-                     ~expect_unrolled:m.expect_unrolled
+                     ~foreign_sites:m.foreign_sites ~foreign_accesses:m.foreign_accesses
+                     ~expect_where_update:m.expect_where_update ~expect_unrolled:m.expect_unrolled
                      ~expect_workgroup_bind:m.expect_workgroup_bind render));
             in_leg ~leg peel_claim (fun label ->
                 let _, _, _, peel, render = Lazy.force evidence in
@@ -2439,11 +2478,12 @@ let () =
            (* The [mma] census says every [Tile_mma] statement declined; [render] says the nested
               fallback reduction localized into [tiled.Tensor.value] with one peeled closing store,
               zero RMWs and zero foreign closing stores (beside the [Expand_zero] plain store). *)
+           record_observed ~slug:"tile-mma-fallback" render;
            let localized =
              check_render ~name:("rf_mma_fallback_" ^ prec_name)
                ~target_uid:tiled.Tensor.value.Tn.uid ~form:Mma_fallback
                ~expected_peel:mma_fallback_peel ~shape:Plain ~store_sites:1 ~rmw_sites:0
-               ~foreign_sites:0 ~expect_where_update:false ~expect_unrolled:None
+               ~foreign_sites:0 ~foreign_accesses:0 ~expect_where_update:false ~expect_unrolled:None
                ~expect_workgroup_bind:false ~max_target_plain:1 render
            in
            (want, got, census, peel, render, localized))
@@ -2467,4 +2507,54 @@ let () =
           if not ok then
             Stdio.eprintf "  rf_mma_fallback_%s: got [%s] want [%s]\n" prec_name (show got)
               (show want);
-          p label ok))
+          p label ok));
+  (* Pin {!loop_rendering_coverage} against observed {!Context.routine.render.loops} entries across
+     every executed member, accounting for backend-specific alternatives (gh-ocannl-724). *)
+  let has_simd = Option.is_some (simd_lanes ~extent:vector_inner Ops.single) in
+  let check_arm_observed ~arm_name ~expected_arm =
+    let claim =
+      Printf.sprintf
+        "every executed member credited with C_syntax.%s actually emitted that rendering arm"
+        arm_name
+    in
+    let observed_for slug =
+      match Hashtbl.find observed_renderings slug with
+      | Some seen when Set.mem seen expected_arm -> true
+      | Some seen ->
+          Stdio.eprintf "  coverage mismatch for %s: member %s emitted [%s], missing %s\n" arm_name
+            slug
+            (String.concat ~sep:", " (Set.to_list seen))
+            expected_arm;
+          false
+      | None ->
+          Stdio.eprintf "  coverage mismatch for %s: member %s never recorded any render census\n"
+            arm_name slug;
+          false
+    in
+    (claim, observed_for)
+  in
+  List.iter loop_rendering_samples ~f:(fun sample ->
+      let arm_name = Cs.loop_rendering_name sample in
+      match loop_rendering_coverage sample with
+      | Out_of_scope _ -> ()
+      | Covered members_of -> (
+          let claim, observed_for = check_arm_observed ~arm_name ~expected_arm:arm_name in
+          match sample with
+          | Cs.Render_serial | Cs.Render_unrolled _ ->
+              Verdict.p_all ~min:1 claim members_of ~f:observed_for
+          | Cs.Render_localized_peel ->
+              let applicable =
+                List.filter members_of ~f:(fun s ->
+                    on_cpu || not (String.equal s "tile-mma-fallback"))
+              in
+              Verdict.p_all ~min:4 claim applicable ~f:observed_for
+          | Cs.Render_simd_reduce _ ->
+              let leg = Verdict.leg ~when_:has_simd ~on:backend_name () in
+              in_leg ~leg claim (fun label -> Verdict.p_all ~min:1 label members_of ~f:observed_for)
+          | Cs.Render_warp_shuffle _ | Cs.Render_hardware_binding _ ->
+              let leg = Verdict.leg ~when_:(not on_cpu) ~on:backend_name () in
+              in_leg ~leg claim (fun label -> Verdict.p_all ~min:1 label members_of ~f:observed_for)
+          | Cs.Render_vectorize_pragma | Cs.Render_simd_elementwise _ | Cs.Render_lane_all_reduce _
+          | Cs.Render_parallel_grid _ ->
+              (* Exhaustive over {!Cs.loop_rendering}; these arms are [Out_of_scope] above. *)
+              assert false))

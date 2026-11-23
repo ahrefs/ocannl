@@ -493,7 +493,7 @@ let () =
   let loop_entry kernel rendering =
     { Cs.kernel; axis = LL.Serial; in_peel_scope = false; rendering }
   in
-  let store_entry kernel tn_uid rendering = { Cs.kernel; tn_uid; rendering } in
+  let store_entry kernel tn_uid rendering = { Cs.kernel; tn_uid; rendering; reads = [] } in
   let outer_loop = loop_entry "outer_kernel" Cs.Render_serial
   and inner_loop = loop_entry "inner_kernel" Cs.Render_localized_peel
   and outer_store = store_entry "outer_kernel" 1 Cs.Store_plain
