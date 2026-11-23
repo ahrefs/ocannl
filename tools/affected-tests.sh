@@ -1204,17 +1204,31 @@ sub stage_command_head {
     if ($u eq "command") {
       $bypass_fn = 1;
       $i++;
-      while ($i < @$stage && $stage->[$i][0] eq "word" && $stage->[$i][3] =~ /\A-(?:p|-)\z/) {
-        my $fl = $stage->[$i][3]; $i++; last if $fl eq "--";
+      while ($i < @$stage && $stage->[$i][0] eq "word") {
+        my $fl = sh_unquote($stage->[$i][3]);
+        if ($fl eq "--") { $i++; last }
+        if ($fl eq "-p") { $i++; next }
+        return (undef, undef, 0) if $fl =~ /\A-/;
+        last;
       }
       next;
     }
     if ($u eq "env") {
       $i++;
       while ($i < @$stage && $stage->[$i][0] eq "word") {
-        my $nw = $stage->[$i][3];
-        if ($nw eq "-u") { $i += 2; next }
-        if ($nw =~ /\A-/ || $nw =~ /\A[A-Za-z_]\w*=/) { $i++; next }
+        my $nw = sh_unquote($stage->[$i][3]);
+        if ($nw eq "--" || $nw eq "-") { $i++; last }
+        if ($nw eq "-u" || $nw eq "--unset" || $nw eq "-C" || $nw eq "--chdir" || $nw eq "-S" || $nw eq "--split-string") {
+          $i += 2;
+          next;
+        }
+        if ($nw eq "-i" || $nw eq "-0" || $nw eq "--ignore-environment" || $nw eq "--null" ||
+            $nw =~ /\A--(?:unset|chdir|split-string)=/ || $nw =~ /\A[A-Za-z_]\w*=/) {
+          $i++;
+          next;
+        }
+        # Unknown env option (might consume the next word as its operand): fail closed.
+        return (undef, undef, 0) if $nw =~ /\A-/;
         last;
       }
       next;
@@ -1222,9 +1236,11 @@ sub stage_command_head {
     if ($u eq "nice") {
       $i++;
       while ($i < @$stage && $stage->[$i][0] eq "word") {
-        my $nw = $stage->[$i][3];
-        if ($nw eq "-n") { $i += 2; next }
-        if ($nw =~ /\A-/) { $i++; next }
+        my $nw = sh_unquote($stage->[$i][3]);
+        if ($nw eq "--") { $i++; last }
+        if ($nw eq "-n" || $nw eq "--adjustment") { $i += 2; next }
+        if ($nw =~ /\A(?:-n\S+|--adjustment=\S+|-\d+)\z/) { $i++; next }
+        return (undef, undef, 0) if $nw =~ /\A-/;
         last;
       }
       next;
@@ -1249,11 +1265,11 @@ sub word_has_expansion {
   }
   return 0;
 }
-# True if $stage redirects stdout into a custom fd >= 3 (`>&3`, `1>&4`, ...).
+# True if $stage redirects stdout into any custom fd > 2 (`>&3`, `>&10`, `1>&12`, ...).
 sub stage_has_custom_fd_out {
   my ($stage) = @_;
   for my $it (@$stage) {
-    return 1 if $it->[0] eq "redir_fd" && $it->[1][3] =~ /\A(?:1?>&|>&)[3-9]\d*\z/;
+    return 1 if $it->[0] eq "redir_fd" && $it->[1][3] =~ /\A(?:1?>&|>&)(\d+)\z/ && $1 > 2;
   }
   return 0;
 }
@@ -1520,20 +1536,33 @@ sub sh_parse {
     my @in_fn  = (0) x scalar(@l);
     my (%funcs, @blk_stk, @sub_stk);
     my ($msq, $mdq, $in_bt, $pending_fn) = (0, 0, 0, 0);
-    for my $i (0 .. $#l) {
-      next if $kind[$i] ne "code";
+    my $i = 0;
+    while ($i <= $#l) {
+      if ($kind[$i] ne "code") { $i++; next }
       my $line = $l[$i];
       $in_fn[$i] = 1 if grep { $_->[3] } @blk_stk;
       if (!$msq && !$mdq && !@sub_stk && !$in_bt) {
-        next if $line =~ /^\s*#/;
-        my $toks = sh_tokenize($line);
-        sh_scan_overrides($line, \%funcs, $toks);
+        if ($line =~ /^\s*#/) { $i++; next }
+        # Join explicit backslash-newline continuations into one logical command
+        # before discovering overrides (`alias \\\n  cat=bash`, `exec \\\n > >(bash)`)
+        # and walking compound groups.
+        my $j = $i;
+        my $log = $line;
+        while ($j < $#l && $kind[$j + 1] eq "code" && $log =~ /(?<!\\)(?:\\\\)*\\\z/) {
+          $log =~ s/\\\z/ /;
+          $j++;
+          $in_fn[$j] = 1 if grep { $_->[3] } @blk_stk;
+          $log .= $l[$j];
+        }
+        my $toks = sh_tokenize($log);
+        sh_scan_overrides($log, \%funcs, $toks);
         if ($toks) {
           sh_walk_groups($toks, \@blk_stk, \$pending_fn, $i,
             sub {
               my ($sln, undef, $eln, undef) = @_;
               if ($sln < $eln) { $unfilt[$_] = 1 for $sln .. $eln }
             });
+          $i = $j + 1;
           next;
         }
       } else {
@@ -1595,6 +1624,7 @@ sub sh_parse {
         }
         $p++;
       }
+      $i++;
     }
     # Pass 1c: classify every closed heredoc (and scan executable heredocs for
     # command overrides, iterating to a fixpoint if `hd_exec` defines `cat`/`tee`).
@@ -1733,22 +1763,25 @@ sub selfdirs {
 }
 # Python __file__-relative path helpers (gh-ocannl-2380).
 # Single-pass scan of a `.py` source: returns
-#   ($whole_code_no_strings, \@no_comment_lines, \@in_triple)
+#   ($whole_code_no_strings, \@no_comment_lines, \@in_triple, \@fstr_exprs)
 # where $whole_code_no_strings blanks strings and `#` comments (preserving `\n`),
-# @no_comment_lines strips only `#` comments (keeping strings intact), and
-# $in_triple->[$i] is 1 when physical line $i begins inside a triple-quoted string.
+# @no_comment_lines strips only `#` comments (keeping strings intact),
+# $in_triple->[$i] is 1 when physical line $i begins inside a triple-quoted string,
+# and @fstr_exprs holds the raw `{...}` replacement fields extracted from f-strings
+# so walrus bindings like `f'{(HERE := "data")}'` are never hidden.
 sub py_strip_file {
   my ($s) = @_;
   my ($out, $nc, $i, $len, $ln) = ("", "", 0, length($s), 0);
-  my ($q, $triple, $esc) = ("", 0, 0);
+  my ($q, $triple, $esc, $is_fstr) = ("", 0, 0, 0);
   my @in_triple = (0);
+  my @fstr_exprs;
   while ($i < $len) {
     my $c = substr($s, $i, 1);
     if ($c eq "\n") {
       $out .= "\n";
       $nc  .= "\n";
       $esc = 0;
-      $q = "" if !$triple;
+      if (!$triple) { $q = ""; $is_fstr = 0 }
       $ln++;
       $in_triple[$ln] = $triple ? 1 : 0;
       $i++;
@@ -1757,14 +1790,42 @@ sub py_strip_file {
     if ($q ne "") {
       if ($esc) { $esc = 0; $out .= " "; $nc .= $c; $i++; next }
       if ($c eq "\\") { $esc = 1; $out .= " "; $nc .= $c; $i++; next }
+      if ($is_fstr && $c eq "{") {
+        if (substr($s, $i, 2) eq "{{") {
+          $out .= "  "; $nc .= "{{"; $i += 2; next;
+        }
+        $out .= " "; $nc .= "{";
+        my ($j, $bdepth, $fsq, $fdq, $fesc) = ($i + 1, 1, 0, 0, 0);
+        while ($j < $len && $bdepth > 0) {
+          my $fc = substr($s, $j, 1);
+          if ($fc eq "\n") {
+            $out .= "\n"; $nc .= "\n"; $fesc = 0; $ln++;
+            $in_triple[$ln] = $triple ? 1 : 0;
+            $j++; next;
+          }
+          $out .= " "; $nc .= $fc;
+          if ($fesc) { $fesc = 0; $j++; next }
+          if ($fc eq "\\" && ($fsq || $fdq)) { $fesc = 1; $j++; next }
+          if ($fc eq "'" && !$fdq) { $fsq = !$fsq; $j++; next }
+          if ($fc eq '"' && !$fsq) { $fdq = !$fdq; $j++; next }
+          if (!$fsq && !$fdq) {
+            if ($fc eq "{") { $bdepth++ }
+            elsif ($fc eq "}") { $bdepth-- }
+          }
+          $j++;
+        }
+        push @fstr_exprs, substr($s, $i + 1, $j - $i - ($bdepth == 0 ? 2 : 1));
+        $i = $j;
+        next;
+      }
       if ($triple && substr($s, $i, 3) eq ($q x 3)) {
         $out .= "   ";
         $nc  .= $q x 3;
-        $q = ""; $triple = 0;
+        $q = ""; $triple = 0; $is_fstr = 0;
         $i += 3;
         next;
       }
-      if (!$triple && $c eq $q) { $out .= " "; $nc .= $c; $q = ""; $i++; next }
+      if (!$triple && $c eq $q) { $out .= " "; $nc .= $c; $q = ""; $is_fstr = 0; $i++; next }
       $out .= " ";
       $nc  .= $c;
       $i++;
@@ -1780,6 +1841,8 @@ sub py_strip_file {
       next;
     }
     if ($c eq "'" || $c eq '"') {
+      my $pre = substr($s, $i > 3 ? $i - 3 : 0, $i > 3 ? 3 : $i);
+      $is_fstr = ($pre =~ /(?:^|[^\w])[rRfF]*[fF][rRfF]*\z/) ? 1 : 0;
       if (substr($s, $i, 3) eq ($c x 3)) {
         $q = $c; $triple = 1;
         $out .= "   ";
@@ -1797,7 +1860,7 @@ sub py_strip_file {
     $nc  .= $c;
     $i++;
   }
-  return ($out, [split /\n/, $nc, -1], \@in_triple);
+  return ($out, [split /\n/, $nc, -1], \@in_triple, \@fstr_exprs);
 }
 # Parse a Python self-directory expression -> UPS (>= 0) or undef.
 sub py_self_dir_ups {
@@ -1839,7 +1902,10 @@ sub py_analyze {
     $rebound{$v} = 1 if $special{$v};
   };
   my $src = raw($f);
-  my ($whole_code, $no_comment, $in_triple) = py_strip_file($src);
+  my ($whole_code, $no_comment, $in_triple, $fstr_exprs) = py_strip_file($src);
+  for my $fe (@$fstr_exprs) {
+    $note_bind->($_) for $fe =~ /([A-Za-z_]\w*)\s*:=/g;
+  }
   my @l = split /\n/, $src, -1;
   # Join physical lines into logical Python lines across open (), [], {} or trailing `\`.
   my (@logical, $buf, $bdepth);

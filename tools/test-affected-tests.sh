@@ -1905,6 +1905,14 @@ if harness_leg 'harness fixture and heredoc literals'; then
   twin_text 'printf '\''%s\n'\'' "$(source tools/dyn.sh)"'
   fx_reach 'fail-closed: $(source ...) inside printf preserves command boundary for loads_of' tools/test-a.sh tools/test-c.sh
   : >"$hrepo/tools/dyn.sh"
+  # Round 8 review findings: custom fds >= 10, env option operands, and
+  # backslash-continued alias declarations.
+  twin_text 'exec 10> >(bash)' 'printf '\''bash tools/sub.sh\n'\'' >&10'
+  fx_reach 'fail-closed: custom-fd redirect >&10 keeps printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'env --unset printf bash tools/sub.sh'
+  fx_reach 'fail-closed: env --unset printf consumes operand and keeps bash tools/sub.sh scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'alias \' '  cat=bash' 'cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: backslash-continued alias declaration keeps cat heredoc scanned' tools/test-a.sh tools/test-c.sh
   hc_restore
 fi
 
@@ -2013,6 +2021,8 @@ if harness_leg 'harness python __file__ placement'; then
   py_twin_reach 'fail-closed: tuple-unpacked with-as rebinding HERE keeps every tied owner' "${twins[@]}"
   py_text 'import os' 'HERE = os.path.dirname(__file__)' 'def read_twin(): HERE = "data"; return os.path.join(HERE, "twin.py")'
   py_twin_reach 'fail-closed: single-line def suite rebinding HERE keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'msg = f'\''{(HERE := "data")}'\''' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: walrus binding inside an f-string keeps every tied owner' "${twins[@]}"
   py_text 'import os' '__file__ = "data/driver.py"' 'p = os.path.join(os.path.dirname(__file__), "twin.py")'
   py_twin_reach 'fail-closed: a rebound __file__ keeps every tied owner' "${twins[@]}"
   py_harness_teardown
