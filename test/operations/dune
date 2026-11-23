@@ -5314,7 +5314,6 @@
   base
   stdio
   test_scan
-  test_utils
   fresh_process
   emitter_frontier
   arrayjit.verdict))
@@ -5422,7 +5421,7 @@
  (package neural_nets_lib)
  (deps ocannl_config codegen_text_inventory.ml)
  (modules codegen_text_scan_cases)
- (libraries base stdio test_scan test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 ; gh-ocannl-1748: no rule spawns a command line Windows cannot start (gh-ocannl-1720's class). The
 ; scanner reads every dune file in the declared source tree, bounds each spawned command line from
@@ -5680,7 +5679,7 @@
    %{test}
    %{dep:digest_completeness.exe}
    %{dep:test_config_consistency.exe}))
- (libraries base stdio test_scan test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 ; gh-ocannl-2354: a key a test states in process (Utils.state_config) is the value it reads,
 ; whatever the caller exported. The commandline below picks a profile and states the key the
@@ -6886,12 +6885,16 @@
   stdio
   arrayjit.verdict
   cuda_wmma_floor_claims
-  test_utils
-  ll_test
   (select
    cuda_wmma_floor.ml
    from
-   (cudajit.nvrtc cudajit.cuda ctypes -> cuda_wmma_floor.real.ml)
+   (cudajit.nvrtc
+    cudajit.cuda
+    ctypes
+    test_utils
+    ll_test
+    ->
+    cuda_wmma_floor.real.ml)
    (-> cuda_wmma_floor.missing.ml))
   arrayjit.context
   arrayjit.utils)
@@ -7730,14 +7733,7 @@
 (executable
  (name env_var_deps)
  (modules env_var_deps)
- (libraries
-  base
-  stdio
-  unix
-  arrayjit.utils
-  test_scan
-  test_utils
-  arrayjit.verdict))
+ (libraries base stdio unix arrayjit.utils test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads dune files and OCaml sources as text.
@@ -9048,7 +9044,7 @@
 (executable
  (name generated_lock_scan)
  (modules generated_lock_scan)
- (libraries base stdio test_scan test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads dune files and OCaml sources as text.
@@ -11157,9 +11153,8 @@
   (select
    metal_gpu_core_count.ml
    from
-   (metal -> metal_gpu_core_count.real.ml)
+   (metal arrayjit.verdict -> metal_gpu_core_count.real.ml)
    (-> metal_gpu_core_count.missing.ml))
-  arrayjit.verdict
   arrayjit.context
   arrayjit.autotune
   arrayjit.ir))
@@ -13458,7 +13453,7 @@
  (name provenance_tag_scan_cases)
  (package neural_nets_lib)
  (modules provenance_tag_scan_cases)
- (libraries base stdio unix ppxlib test_scan test_utils arrayjit.verdict)
+ (libraries base stdio unix ppxlib test_scan arrayjit.verdict)
  (deps ocannl_config provenance_tag_inventory.exe)
  (action
   (run %{test} %{dep:provenance_tag_inventory.exe})))
@@ -16809,14 +16804,7 @@
  (name tensorized_census_scan_cases)
  (package neural_nets_lib)
  (modules tensorized_census_scan_cases)
- (libraries
-  base
-  stdio
-  unix
-  fresh_process
-  test_scan
-  test_utils
-  arrayjit.verdict)
+ (libraries base stdio unix fresh_process test_scan arrayjit.verdict)
  (deps ocannl_config tensorized_census_ratchet.exe)
  (action
   (run %{test} %{dep:tensorized_census_ratchet.exe})))
@@ -17008,9 +16996,8 @@
   (select
    test_cuda_pool_offset.ml
    from
-   (cudajit.cuda -> test_cuda_pool_offset.real.ml)
+   (cudajit.cuda arrayjit.verdict -> test_cuda_pool_offset.real.ml)
    (-> test_cuda_pool_offset.missing.ml))
-  arrayjit.verdict
   arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
@@ -17191,13 +17178,15 @@
   stdio
   ocannl
   arrayjit.utils
-  test_utils
   (select
    test_metal_guarded_gather_codegen.ml
    from
-   (metal -> test_metal_guarded_gather_codegen.real.ml)
+   (metal
+    test_utils
+    arrayjit.verdict
+    ->
+    test_metal_guarded_gather_codegen.real.ml)
    (-> test_metal_guarded_gather_codegen.missing.ml))
-  arrayjit.verdict
   arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
@@ -17216,9 +17205,8 @@
   (select
    test_metal_pool_bindings.ml
    from
-   (metal -> test_metal_pool_bindings.real.ml)
+   (metal arrayjit.verdict -> test_metal_pool_bindings.real.ml)
    (-> test_metal_pool_bindings.missing.ml))
-  arrayjit.verdict
   arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
@@ -17236,13 +17224,11 @@
   stdio
   ocannl
   arrayjit.utils
-  test_utils
   (select
    test_metal_pool_slot_width.ml
    from
-   (metal -> test_metal_pool_slot_width.real.ml)
+   (metal test_utils arrayjit.verdict -> test_metal_pool_slot_width.real.ml)
    (-> test_metal_pool_slot_width.missing.ml))
-  arrayjit.verdict
   arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
@@ -18497,11 +18483,11 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; gh-ocannl-2118: no stanza declares a compiler-reaching library its compiled modules never
-; reference. It reads the dune files, the workspace description (`dune describe`, run by the check
-; against the source root with a private build directory) and the typed trees `@check` writes, so it
-; depends on the whole workspace's `@check`: in the merge build, which builds `@check` in the same
-; invocation, that costs nothing more. Its controls are `unused_compiler_deps_fixtures/`.
+; gh-ocannl-2118, gh-ocannl-2387: no stanza declares a compiler-reaching or test-support library its
+; compiled modules never reference. It reads the dune files, the workspace description
+; (`dune describe`, run against the source root with a private build directory) and the typed trees
+; the workspace's `@check` writes. The merge build runs `@check` in the same invocation.
+; The controls are in `unused_compiler_deps_fixtures/`.
 
 (executable
  (name unused_compiler_deps)

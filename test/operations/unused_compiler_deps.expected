@@ -38,9 +38,10 @@ the synthetic tool calls leave action stderr empty: true
 the workspace description names compiler-libs.common: true
 every dune file and the workspace description lie within the recognised forms: true
 every exemption row is still earned: its stanza declares the library and uses none of it: true
-no stanza declares a compiler-reaching library its modules never reference: true
+no stanza declares a compiler-reaching or test-support library its modules never reference: true
 the fixture table names exactly the fixture directory's stanzas: true
 every fixture library the check must report is derived as compiler-reaching: true
+every test-support fixture finding exercises the test-support population: true
   ucd_flag_unused_test_scan: reported for test_scan
   ucd_flag_ppxlib_beside_test_scan: reported for ppxlib
   ucd_flag_select_arm_unused: reported for test_scan
@@ -57,6 +58,8 @@ every fixture library the check must report is derived as compiler-reaching: tru
   ucd_pass_re_export: reported for nothing
   ucd_pass_rewriter_registration: reported for nothing
   ucd_gap_shared_directory: reported for compiler-libs.toplevel
+  ucd_flag_unused_test_support: reported for arrayjit.verdict, ll_test
+  ucd_pass_used_test_support: reported for nothing
 every fixture stanza is read and reported for exactly its expected libraries: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
@@ -131,9 +134,10 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:22c08112ff7b660af6dab49542313b14] compiler-libs.common
   [scanner-refusal:5c6002f7f040eddc8696d03b9a9bb9e2] the workspace description
   [scanner-refusal:448291c7f6134ac8fadedd8e1a4f787a] declares the library
-  [scanner-refusal:65e4156ccb9f193200c80820a12c6408] compiler-reaching library its
+  [scanner-refusal:348bd3c284e68555c5d779b004a5cb5f] compiler-reaching or test-support
   [scanner-refusal:76d536378a6e503a67ce436cfd76938d] fixture directory's stanzas
   [scanner-refusal:67a884b3a6347974dc0b1b43122c4c21] derived as compiler-reaching
+  [scanner-refusal:a0a5de6bdc283aef59519729356595e4] test-support fixture finding
   [scanner-refusal:4a372cdf7b39da35fd50d7a96957b75f] its expected libraries
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
   [scanner-refusal:1262ba0367f56ab63b0ef45185bb1257] control stanza must

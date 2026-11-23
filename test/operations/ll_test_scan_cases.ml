@@ -361,6 +361,15 @@ let () =
     ~message:"test/choice.real.ml: requires ll_test" missing_select_harness;
   check "the off-platform select arm is checked independently too" ~exit:1
     ~message:"test/choice.missing.ml: requires ll_test" missing_select_harness;
+  write "test/dune"
+    (base_stanza ^ "(test (name choice) (modules choice) (libraries"
+   ^ " (select choice.ml from (backend ll_test -> choice.real.ml)"
+   ^ " (!ll_test -> choice.missing.ml))))");
+  let ((_, _, arm_stderr) as arm_local_harness) = run () in
+  check "the fallback still needs its own harness declaration" ~exit:1
+    ~message:"test/choice.missing.ml: requires ll_test" arm_local_harness;
+  p "a select arm can link its own harness"
+    (not (String.is_substring arm_stderr ~substring:"test/choice.real.ml: requires ll_test"));
   write "test/dune" (base_stanza ^ selection ~modules:"(modules (:standard \\ choice))" ());
   check "select target exclusion prevents harness ownership" ~exit:1
     ~message:"test/choice.real.ml: requires ll_test" (run ());

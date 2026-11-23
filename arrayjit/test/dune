@@ -347,11 +347,15 @@
  (libraries
   base
   stdio
-  arrayjit.verdict
   (select
    test_metal_alloc.ml
    from
-   (metal arrayjit.metal_backend arrayjit.ir -> test_metal_alloc.real.ml)
+   (metal
+    arrayjit.metal_backend
+    arrayjit.ir
+    arrayjit.verdict
+    ->
+    test_metal_alloc.real.ml)
    (-> test_metal_alloc.missing.ml))
   arrayjit.utils))
 

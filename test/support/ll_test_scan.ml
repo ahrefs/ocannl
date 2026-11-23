@@ -5,7 +5,9 @@ open Base
     are separate: one record construction or one recursive binding inspecting at least two distinct
     IR constructors warrants the harness. Quoted fixtures and comments are not AST nodes. Adoption
     is linking the harness AND calling into its IR surface ({!surface}); linking it for an operand
-    helper alone adopts nothing (gh-ocannl-1052). This does not ban test-specific match arms.
+    helper alone adopts nothing (gh-ocannl-1052). This does not ban test-specific match arms. For
+    selected sources, the owning stanza's direct library names and the source's own positive arm
+    conditions can earn the link. The other arms are checked with their own conditions.
 
     Beside that refusing census, a census-only column counts private traversals of [Assignments.t]
     ({!assignments_census}), by the constructors recursive in that type's own declaration: one such
@@ -448,21 +450,19 @@ let stanza_owns ~directory_modules ~module_name ~stanzas stanza =
   && List.exists (Dune.modules_of ~directory_modules stanzas stanza) ~f:(fun name ->
       String.Caseless.equal name module_name)
 
+let harness_library name = List.mem [ "ll_test"; "arrayjit.ll_builders" ] name ~equal:String.equal
+
 let links_harness stanza =
   Option.value_map (Dune.field stanza "libraries") ~default:false ~f:(fun libraries ->
-      List.exists [ "ll_test"; "arrayjit.ll_builders" ] ~f:(fun name ->
-          List.mem libraries (Sexp.Atom name) ~equal:Sexp.equal))
+      List.exists libraries ~f:(function
+        | Sexp.Atom name -> harness_library name
+        | Sexp.List _ -> false))
 
 let stanza_links ~directory_modules ~module_name ~stanzas stanza =
   stanza_owns ~directory_modules ~module_name ~stanzas stanza && links_harness stanza
 
 let linked ~directory_modules ~module_name stanzas =
   List.exists stanzas ~f:(stanza_links ~directory_modules ~module_name ~stanzas)
-
-(** A select arm is source for the generated target module, never a module named *.real or
-    *.missing. Keep the owning stanza with the relationship: another stanza linking ll_test cannot
-    cover it, and every owner of a reused arm must adopt the harness. *)
-let select_arms = Dune.select_arms
 
 (** Fold physical dune files and parent subdir blocks into the same directory groups before
     resolving defaults. Directory-spanning ownership modes remain explicit refusals, as in
@@ -525,13 +525,15 @@ let ownership ~sources ~dune_files =
               | _ -> None)
         else [])
   in
+  (* A select arm supplies the owning stanza's generated target module. Retain its conditions
+     because a reused source must earn adoption from each owner and arm independently. *)
   let selections =
     Map.to_alist groups
     |> List.concat_map ~f:(fun (dir, stanzas) ->
         List.concat_map stanzas ~f:(fun stanza ->
-            select_arms stanza
-            |> List.map ~f:(fun (target, arm) ->
-                (dir, stanza, target, Dune.normalize_path (Dune.in_subdir dir arm)))))
+            Dune.select_choices stanza
+            |> List.map ~f:(fun (target, condition, arm) ->
+                (dir, stanza, target, Dune.normalize_path (Dune.in_subdir dir arm), condition))))
   in
   let copy_errors = ref [] in
   let copies =
@@ -551,7 +553,7 @@ let ownership ~sources ~dune_files =
   in
   let inputs =
     copies
-    @ List.map selections ~f:(fun (dir, _, target, arm) ->
+    @ List.map selections ~f:(fun (dir, _, target, arm, _) ->
         (arm, Dune.normalize_path (Dune.in_subdir dir target)))
   in
   let rec declared_origin seen path =
@@ -577,10 +579,10 @@ let ownership ~sources ~dune_files =
       ~f:(fun source ->
         if
           String.equal (Stdlib.Filename.dirname source) dir
-          && not (List.exists selections ~f:(fun (_, _, _, arm) -> String.equal source arm))
+          && not (List.exists selections ~f:(fun (_, _, _, arm, _) -> String.equal source arm))
         then Some (module_name source)
         else None)
-    @ List.filter_map selections ~f:(fun (owner_dir, _, target, _) ->
+    @ List.filter_map selections ~f:(fun (owner_dir, _, target, _, _) ->
         Option.some_if (String.equal owner_dir dir) (module_name target))
     |> List.dedup_and_sort ~compare:String.compare
   in
@@ -590,7 +592,7 @@ let ownership ~sources ~dune_files =
     else
       let seen = path :: seen in
       let direct =
-        match List.filter selections ~f:(fun (_, _, _, arm) -> String.equal path arm) with
+        match List.filter selections ~f:(fun (_, _, _, arm, _) -> String.equal path arm) with
         | [] ->
             if not (test_source path) then []
             else
@@ -601,9 +603,10 @@ let ownership ~sources ~dune_files =
                      ~module_name:(module_name path) ~stanzas:(stanzas_at dir))
               |> List.map ~f:links_harness
         | selected ->
-            List.concat_map selected ~f:(fun (dir, stanza, target, _) ->
-                stanza_links ~directory_modules:(directory_modules dir)
-                  ~module_name:(module_name target) ~stanzas:(stanzas_at dir) stanza
+            List.concat_map selected ~f:(fun (dir, stanza, target, _, condition) ->
+                (stanza_owns ~directory_modules:(directory_modules dir)
+                   ~module_name:(module_name target) ~stanzas:(stanzas_at dir) stanza
+                && (links_harness stanza || List.exists condition ~f:harness_library))
                 :: copied_owners seen (Dune.normalize_path (Dune.in_subdir dir target)))
       in
       direct @ copied_owners seen path

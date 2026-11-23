@@ -2822,8 +2822,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 - The declared-but-unused direction is `unused_compiler_deps` (a `scans` member,
   gh-ocannl-2118): no stanza of
   the workspace declares a compiler-reaching library -- one whose dependency closure holds
-  `compiler-libs.common`, derived from `dune describe`, never listed -- that none of its compiled
-  modules references. Use is read from the typed trees of the stanza's `.cmt`/`.cmti` files
+  `compiler-libs.common`, derived from `dune describe`, never listed -- or a library defined
+  under `test/support` (gh-ocannl-2387) that none of its compiled modules references. Both
+  populations use Dune's resolved library identities, including public names such as
+  `arrayjit.verdict`. Use is read from the typed trees of the stanza's `.cmt`/`.cmti` files
   (`test/support/cmt_references.ml`), so a ppx-generated, generated-module or `select`-chosen
   reference counts and a reference that only another library's interface loads does not: a direct
   `ppxlib` beside a used `test_scan` is reported. A library with its own include directory owns its
@@ -2848,9 +2850,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   covered by it like every stanza;
   it stays outside `test_utils_linkage`'s probe, since it links `ocannl`, so a USED
   compiler-reaching dependency added there is not refused by either check. A library declared
-  only for a side effect -- an external deriver linked so it registers -- takes an exact row in the
-  check's `exemptions` (a local `(kind ppx_rewriter)` library is exempt by form); a row whose
-  declaration is gone or now used fails. The rule runs `dune describe` itself against the source
+  for link-time behavior -- an external deriver registering or `test_utils_linkage` probing a
+  helper's native linkage -- takes an exact row in the check's `exemptions` (a local
+  `(kind ppx_rewriter)` library is exempt by form). A row whose declaration is gone or now used
+  fails. Put a dependency used only by a selected source in that source's `select` arm so the
+  fallback carries only the dependencies it uses. The rule runs `dune describe` against the source
   root with a private `--build-dir`, and depends on the workspace's `@check` for the typed trees:
   on mac-studio its own action takes about 2 s on a warm tree, and from a build directory with no
   `@check` built the full `@test/operations/scans` took 34 s beyond the 162 s its other members
@@ -7489,7 +7493,8 @@ box.
   stale. The canonical harness is explicitly permanent rather than a migration quota. Tuple and
   nullary constructions remain outside this record-literal ratchet's detection boundary.
   Both selected source arms are checked regardless of host availability, against their generated
-  target module and actual owning stanza; shared arms require every owner to link the harness.
+  target module and actual owning stanza. A positive library condition links the harness for its
+  own arm. Shared arms require every owner to link the harness.
   Literal `copy_files` / `copy_files#` relationships carry ownership through destination modules
   and copy chains; a linked original cannot cover an unlinked copied consumer. Unsupported copy
   globs/dynamic inputs and inputs outside the declared test corpus are refused explicitly. Documented
