@@ -1892,6 +1892,19 @@ if harness_leg 'harness fixture and heredoc literals'; then
   fx_reach 'fail-closed: bare-variable redirect inside a function keeps printer scanned' tools/test-a.sh tools/test-c.sh
   twin_text 'code=$(case x in x) printf '\''bash tools/sub.sh\n'\'';; esac)' 'bash -c "$code"'
   fx_reach 'fail-closed: case-pattern ) inside $(...) does not expose nested printf' tools/test-a.sh tools/test-c.sh
+  # Round 7 review findings: persistent `exec` stdout redirects, expanded printf
+  # options (`printf "$option" ...`), and command boundaries around extracted
+  # substitutions (`printf '%s\n' "$(source ...)"`).
+  twin_text 'exec > >(bash)' 'printf '\''bash tools/sub.sh\n'\'''
+  fx_reach 'fail-closed: persistent exec > >(bash) keeps subsequent printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 3> >(bash)' 'printf '\''bash tools/sub.sh\n'\'' >&3'
+  fx_reach 'fail-closed: custom-fd redirect >&3 keeps printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'option=-v' 'printf "$option" code '\''bash tools/sub.sh'\''' 'bash -c "$code"'
+  fx_reach 'fail-closed: expanded printf option position keeps arguments scanned' tools/test-a.sh tools/test-c.sh
+  printf '%s\n' 'bash tools/sub.sh' >"$hrepo/tools/dyn.sh"
+  twin_text 'printf '\''%s\n'\'' "$(source tools/dyn.sh)"'
+  fx_reach 'fail-closed: $(source ...) inside printf preserves command boundary for loads_of' tools/test-a.sh tools/test-c.sh
+  : >"$hrepo/tools/dyn.sh"
   hc_restore
 fi
 
@@ -1998,6 +2011,8 @@ if harness_leg 'harness python __file__ placement'; then
   py_twin_reach 'fail-closed: shadowed str wrapper keeps every tied owner' "${twins[@]}"
   py_text 'import os' 'HERE = os.path.dirname(__file__)' 'with ctx() as (HERE, _): pass' 'p = os.path.join(HERE, "twin.py")'
   py_twin_reach 'fail-closed: tuple-unpacked with-as rebinding HERE keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'def read_twin(): HERE = "data"; return os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: single-line def suite rebinding HERE keeps every tied owner' "${twins[@]}"
   py_text 'import os' '__file__ = "data/driver.py"' 'p = os.path.join(os.path.dirname(__file__), "twin.py")'
   py_twin_reach 'fail-closed: a rebound __file__ keeps every tied owner' "${twins[@]}"
   py_harness_teardown

@@ -809,8 +809,9 @@ sub extract_cmdsubs {
     if ((!$sq && $two eq '$(') || ($respect_sq && !$sq && !$dq && ($two eq '<(' || $two eq '>('))) {
       my $nj = sh_skip_balanced($s, $i, $two);
       if (defined $nj) {
-        my $inner = substr($s, $i + 2, $nj - $i - 3);
-        substr($out, $i + 2, length($inner)) = $inner;
+        # Keep the substitution delimiters ($(...), <(...), >(...)) so `loads_of`
+        # still sees a command boundary before `source`/`.` inside the substitution.
+        substr($out, $i, $nj - $i) = substr($s, $i, $nj - $i);
         $i = $nj;
         next;
       }
@@ -823,7 +824,7 @@ sub extract_cmdsubs {
       if (defined $nj) {
         my $inner = substr($s, $i + 2, $nj - $i - 3);
         if ($inner =~ /\A[A-Za-z_]\w*:?=/) {
-          substr($out, $i + 2, length($inner)) = $inner;
+          substr($out, $i, $nj - $i) = substr($s, $i, $nj - $i);
         } else {
           substr($out, $i + 2, length($inner)) = extract_cmdsubs($inner, $respect_sq);
         }
@@ -836,8 +837,7 @@ sub extract_cmdsubs {
     if (!$sq && $ch eq '`') {
       my $nj = sh_skip_balanced($s, $i, '`');
       if (defined $nj) {
-        my $inner = substr($s, $i + 1, $nj - $i - 2);
-        substr($out, $i + 1, length($inner)) = $inner;
+        substr($out, $i, $nj - $i) = substr($s, $i, $nj - $i);
         $i = $nj;
         next;
       }
@@ -1233,11 +1233,36 @@ sub stage_command_head {
   }
   return (undef, undef, 0);
 }
+# True if shell word $w contains an unescaped `$` or `` ` `` outside single quotes.
+sub word_has_expansion {
+  my ($w) = @_;
+  return 0 unless $w =~ /[\$`]/;
+  my ($sq, $dq, $esc, $i, $len) = (0, 0, 0, 0, length $w);
+  while ($i < $len) {
+    my $c = substr($w, $i, 1);
+    if ($esc) { $esc = 0; $i++; next }
+    if ($c eq "\\" && !$sq) { $esc = 1; $i++; next }
+    if ($c eq "'" && !$dq) { $sq = !$sq; $i++; next }
+    if ($c eq '"' && !$sq) { $dq = !$dq; $i++; next }
+    return 1 if !$sq && ($c eq '$' || $c eq '`');
+    $i++;
+  }
+  return 0;
+}
+# True if $stage redirects stdout into a custom fd >= 3 (`>&3`, `1>&4`, ...).
+sub stage_has_custom_fd_out {
+  my ($stage) = @_;
+  for my $it (@$stage) {
+    return 1 if $it->[0] eq "redir_fd" && $it->[1][3] =~ /\A(?:1?>&|>&)[3-9]\d*\z/;
+  }
+  return 0;
+}
 # Closed allowlist for data heredocs: return 1 ONLY when the heredoc at byte
 # offset $hd_pos on opener logical command $line belongs to an unpiped `cat` or
 # `tee` (the last stage of its pipeline, with no output process substitution
-# `>(...)`, redirecting stdout to a file if inside a shell function body, and
-# not overridden by a function/alias unless via `builtin`/`command`).
+# `>(...)` or custom-fd redirect, redirecting stdout to a file if inside a
+# shell function body or after a persistent `exec` stdout redirect, and not
+# overridden by a function/alias unless via `builtin`/`command`).
 # Everything else returns 0 (fail closed).
 sub heredoc_is_data {
   my ($line, $hd_pos, $overridden, $in_fn) = @_;
@@ -1258,8 +1283,8 @@ sub heredoc_is_data {
     next if $owner < 0;
     return 0 if $owner != $#$pipe;   # piped, trailing `|`, or piped compound group -> fail closed
     my $stage = $pipe->[$owner];
-    return 0 if stage_has_out_procsub($stage);   # > >(cmd) or tee >(cmd) -> fail closed
-    my $stage_fn = $in_fn || (grep { $_->[0] eq "in_fn" } @$stage) ? 1 : 0;
+    return 0 if stage_has_out_procsub($stage) || stage_has_custom_fd_out($stage);
+    my $stage_fn = $in_fn || (grep { $_->[0] eq "in_fn" } @$stage) || ($overridden && $overridden->{"\0exec_stdout"}) ? 1 : 0;
     return 0 if $stage_fn && !stage_has_file_stdout_redir($stage);
     my (undef, $head, $bypass_fn) = stage_command_head($stage);
     return 0 unless defined $head;
@@ -1274,7 +1299,8 @@ sub heredoc_is_data {
 # multiline quoted string, preserving `\n`): blank truncating output redirection
 # targets (`>`, `>|`, `&>`), heredoc delimiters, and literal arguments of
 # unpiped top-level echo/printf (unless overridden by a function/alias, or
-# inside a function body without a file stdout redirection).
+# inside a function body / after persistent `exec` stdout redirect without a
+# per-command file stdout redirection).
 sub filter_sh_logical {
   my ($s, $overridden, $in_fn) = @_;
   my $toks = sh_tokenize($s);
@@ -1297,16 +1323,17 @@ sub filter_sh_logical {
       }
       # 2. Blank literal arguments of unpiped echo / printf (closed allowlist:
       #    must be the last stage of its pipeline, not inside a piped compound
-      #    group, no output process substitution `>(...)`, if inside a function
-      #    body must redirect stdout to a file, not printf -v, and not
-      #    overridden by a function/alias unless via `builtin`/`command`).
+      #    group, no output process substitution `>(...)` or custom-fd redirect,
+      #    if inside a function body or after persistent `exec` stdout redirect
+      #    must redirect stdout to a file, not printf -v or expanded option,
+      #    and not overridden by a function/alias unless via `builtin`/`command`).
       my ($hidx, $hraw, $bypass_fn) = stage_command_head($stage);
       next unless defined $hidx;
       my $hu = sh_unquote($hraw);
       next unless $hu eq "echo" || $hu eq "printf";
       next if $k != $#$pipe;
-      next if stage_has_out_procsub($stage);
-      my $stage_fn = $in_fn || (grep { $_->[0] eq "in_fn" } @$stage) ? 1 : 0;
+      next if stage_has_out_procsub($stage) || stage_has_custom_fd_out($stage);
+      my $stage_fn = $in_fn || (grep { $_->[0] eq "in_fn" } @$stage) || ($overridden && $overridden->{"\0exec_stdout"}) ? 1 : 0;
       next if $stage_fn && !stage_has_file_stdout_redir($stage);
       next if !$bypass_fn && $overridden && $overridden->{$hu};
       if ($hu eq "printf") {
@@ -1314,9 +1341,11 @@ sub filter_sh_logical {
         for my $j ($hidx + 1 .. $#$stage) {
           my $it = $stage->[$j];
           next if $it->[0] =~ /\Aredir_/ || $it->[0] eq "in_fn";
-          my $au = sh_unquote($it->[3]);
-          last if $au eq "--" || $au !~ /\A-/;
-          if ($au =~ /\A-v/) { $has_v = 1; last }
+          my $raw_a = $it->[3];
+          my $au = sh_unquote($raw_a);
+          last if $au eq "--";
+          if ($au =~ /\A-v/ || word_has_expansion($raw_a)) { $has_v = 1; last }
+          last if $au !~ /\A-/;
         }
         next if $has_v;
       }
@@ -1330,7 +1359,9 @@ sub filter_sh_logical {
   }
   return $out;
 }
-# Detect function or alias overrides of echo / printf / cat / tee on a shell line.
+# Detect function/alias overrides of echo / printf / cat / tee and persistent
+# stdout-redirecting bare `exec` statements (`exec > >(bash)`, `exec >&3`, ...)
+# on a shell line.
 sub sh_scan_overrides {
   my ($line, $funcs_ref, $toks) = @_;
   return if $line =~ /^\s*#/;
@@ -1341,16 +1372,26 @@ sub sh_scan_overrides {
     for my $pipe (@{sh_pipelines($toks)}) {
       for my $stage (@$pipe) {
         my ($hidx, $hraw) = stage_command_head($stage);
-        next unless defined $hidx && sh_unquote($hraw) eq "alias";
-        my $end_opts = 0;
-        for my $j ($hidx + 1 .. $#$stage) {
-          my $it = $stage->[$j];
-          next if $it->[0] =~ /\Aredir_/ || $it->[0] eq "in_fn";
-          my $au = sh_unquote($it->[3]);
-          if (!$end_opts && $au eq "--") { $end_opts = 1; next }
-          next if !$end_opts && $au =~ /\A-/;
-          $end_opts = 1;
-          $funcs_ref->{$1} = 1 if $au =~ /\A(echo|printf|cat|tee)=/;
+        if (defined $hidx && sh_unquote($hraw) eq "alias") {
+          my $end_opts = 0;
+          for my $j ($hidx + 1 .. $#$stage) {
+            my $it = $stage->[$j];
+            next if $it->[0] =~ /\Aredir_/ || $it->[0] eq "in_fn";
+            my $au = sh_unquote($it->[3]);
+            if (!$end_opts && $au eq "--") { $end_opts = 1; next }
+            next if !$end_opts && $au =~ /\A-/;
+            $end_opts = 1;
+            $funcs_ref->{$1} = 1 if $au =~ /\A(echo|printf|cat|tee)=/;
+          }
+        } elsif (!defined $hidx) {
+          my ($has_exec, $has_stdout_redir) = (0, 0);
+          for my $it (@$stage) {
+            if ($it->[0] eq "word" && sh_unquote($it->[3]) eq "exec") { $has_exec = 1 }
+            elsif ($it->[0] eq "redir_out" && $it->[1][3] =~ /\A(?:&>|1?>\|?)\z/) { $has_stdout_redir = 1 }
+            elsif ($it->[0] eq "redir_append" && $it->[1][3] =~ /\A(?:&>>|1?>>)\z/) { $has_stdout_redir = 1 }
+            elsif ($it->[0] eq "redir_fd" && $it->[1][3] =~ /\A(?:1?>&|>&)/) { $has_stdout_redir = 1 }
+          }
+          $funcs_ref->{"\0exec_stdout"} = 1 if $has_exec && $has_stdout_redir;
         }
       }
     }
@@ -1359,6 +1400,7 @@ sub sh_scan_overrides {
       my $args = $1;
       $funcs_ref->{$1} = 1 while $args =~ /(?:^|\s)['"]?(echo|printf|cat|tee)=/g;
     }
+    $funcs_ref->{"\0exec_stdout"} = 1 if $line =~ /(?:^|[;&|({])\s*exec\s+(?:&>|1?>|&>>|1?>>|>&)/;
   }
 }
 # Classify a `.sh` file's heredocs and build its filtered scan lines.
@@ -1369,7 +1411,7 @@ sub sh_parse {
   my $ckey = "$f\0$okey";
   return $sh_parsed{$ckey} if $sh_parsed{$ckey};
   my @l = split /\n/, raw($f), -1;
-  my $ov_hd = ($overridden && ($overridden->{cat} || $overridden->{tee})) ? 1 : 0;
+  my $ov_hd = ($overridden && ($overridden->{cat} || $overridden->{tee} || $overridden->{"\0exec_stdout"})) ? 1 : 0;
   my ($kinds_ref, $funcs_ref, $unq_ref, $unfilt_ref, $infn_ref);
   if (!$ov_hd && $sh_parsed{"$f\0"}) {
     $kinds_ref  = $sh_parsed{"$f\0"}{kinds};
@@ -1576,7 +1618,7 @@ sub sh_parse {
               $funcs{$fn} = 1;
               if (!$eff_ov{$fn}) {
                 $eff_ov{$fn} = 1;
-                $hd_changed = 1 if $fn eq "cat" || $fn eq "tee";
+                $hd_changed = 1 if $fn eq "cat" || $fn eq "tee" || $fn eq "\0exec_stdout";
               }
             }
           }
@@ -1636,7 +1678,8 @@ sub sh_parse {
     if (!$lsq && !$ldq && !$split_sub) {
       my $joined = join "\n", @parts;
       my $blk_fn = (grep { $infn_ref->[$_] } $i .. $j) ? 1 : 0;
-      my @fl = split /\n/, filter_sh_logical($joined, $overridden, $blk_fn), -1;
+      my %eff_scan = (%$funcs_ref, $overridden ? %$overridden : ());
+      my @fl = split /\n/, filter_sh_logical($joined, \%eff_scan, $blk_fn), -1;
       for my $k (0 .. $#fl) { $scan[$i + $k] = $fl[$k] }
       $i = $j + 1;
     } else {
@@ -1825,7 +1868,7 @@ sub py_analyze {
     # analyze every statement).
     for my $seg (split /;/, $code) {
       my $stmt = $seg;
-      if ($stmt =~ /\A\s*(?:async\s+)?(if|elif|else|for|while|with|try|except|finally|match|case)\b/) {
+      if ($stmt =~ /\A\s*(?:async\s+)?(if|elif|else|for|while|with|try|except|finally|match|case|def|class)\b/) {
         my $kw = $1;
         my ($p, $depth, $slen, $colon) = (0, 0, length($stmt), -1);
         while ($p < $slen) {
@@ -2164,13 +2207,13 @@ sub loads_of {   # (FILE [, OVERRIDES]) -> {SCRIPT => [LINE, RUN, OWNERS]}, as n
         # Follow `.` / `source` executed inside $(...) / `...` of an unquoted heredoc,
         # never literal body text or fixture `# shellcheck source=` lines.
         my $scan = $sh_p->{scan}[$i];
-        push @words, $1 if $scan =~ /(?:^|[;&|({]|\bthen|\belse|\bdo)\s*(?:\.|source)\s+(.*)/;
+        push @words, $1 if $scan =~ /(?:^|[;&|({`]|\bthen|\belse|\bdo)\s*(?:\.|source)\s+(.*)/;
       } elsif ($line =~ /^\s*#\s*shellcheck\s.*\bsource=(\S+)/) {
         push @words, $1;
       } elsif ($line !~ /^\s*#/) {
         my $scan = $sh_p->{scan}[$i];
         # A `.` or `source` command: the rest of its line names what it loads.
-        push @words, $1 if $scan =~ /(?:^|[;&|({]|\bthen|\belse|\bdo)\s*(?:\.|source)\s+(.*)/;
+        push @words, $1 if $scan =~ /(?:^|[;&|({`]|\bthen|\belse|\bdo)\s*(?:\.|source)\s+(.*)/;
       }
     } elsif ($line =~ /^\s*import\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)/) {
       push @words, map { (s/\s.*//sr =~ tr{.}{/}r) . ".py" } split /\s*,\s*/, $1;
