@@ -759,7 +759,8 @@ sub sh_skip_balanced {
   return $depth == 0 ? $j : undef;
 }
 # Extract only executed command/process substitutions ($(...), `...`, and when
-# $respect_sq is true, <(...) / >(...)) from an excluded shell literal region,
+# $respect_sq is true, <(...) / >(...)) plus assignment-bearing parameter
+# expansions (${var:=word} / ${var=word}) from an excluded shell literal region,
 # replacing everything else (except `\n`) with spaces. When $respect_sq is true
 # (shell words, not unquoted heredoc bodies), single-quoted spans suppress
 # substitution. Unbalanced delimiters fail closed.
@@ -784,6 +785,21 @@ sub extract_cmdsubs {
         next;
       }
       # Unbalanced substitution: fail closed on the remainder.
+      substr($out, $i) = substr($s, $i);
+      last;
+    }
+    if (!$sq && $two eq '${') {
+      my $nj = sh_skip_balanced($s, $i, '${');
+      if (defined $nj) {
+        my $inner = substr($s, $i + 2, $nj - $i - 3);
+        if ($inner =~ /\A[A-Za-z_]\w*:?=/) {
+          substr($out, $i + 2, length($inner)) = $inner;
+        } else {
+          substr($out, $i + 2, length($inner)) = extract_cmdsubs($inner, $respect_sq);
+        }
+        $i = $nj;
+        next;
+      }
       substr($out, $i) = substr($s, $i);
       last;
     }
@@ -1405,15 +1421,34 @@ sub sh_parse {
         next if $line =~ /^\s*#/;
         $funcs{$1} = 1 while $line =~ /(?:^|[;&|({])\s*(?:function\s+)?(echo|printf|cat|tee)\s*\(\s*\)/g;
         $funcs{$1} = 1 while $line =~ /(?:^|[;&|({])\s*function\s+(echo|printf|cat|tee)\b/g;
-        $funcs{$1} = 1 while $line =~ /(?:^|[;&|({])\s*alias\s+(?:--\s+)?(echo|printf|cat|tee)=/g;
         my $toks = sh_tokenize($line);
         if ($toks) {
+          for my $pipe (@{sh_pipelines($toks)}) {
+            for my $stage (@$pipe) {
+              my ($hidx, $hraw) = stage_command_head($stage);
+              next unless defined $hidx && sh_unquote($hraw) eq "alias";
+              my $end_opts = 0;
+              for my $j ($hidx + 1 .. $#$stage) {
+                my $it = $stage->[$j];
+                next if $it->[0] =~ /\Aredir_/ || $it->[0] eq "in_fn";
+                my $au = sh_unquote($it->[3]);
+                if (!$end_opts && $au eq "--") { $end_opts = 1; next }
+                next if !$end_opts && $au =~ /\A-/;
+                $end_opts = 1;
+                $funcs{$1} = 1 if $au =~ /\A(echo|printf|cat|tee)=/;
+              }
+            }
+          }
           sh_walk_groups($toks, \@blk_stk, \$pending_fn, $i,
             sub {
               my ($sln, undef, $eln, undef) = @_;
               if ($sln < $eln) { $unfilt[$_] = 1 for $sln .. $eln }
             });
           next;
+        }
+        while ($line =~ /(?:^|[;&|({])\s*alias\b([^;&|)]*)/g) {
+          my $args = $1;
+          $funcs{$1} = 1 while $args =~ /(?:^|\s)['"]?(echo|printf|cat|tee)=/g;
         }
       } else {
         $unfilt[$i] = 1 if @sub_stk || $in_bt;
@@ -1545,42 +1580,47 @@ sub sh_parse {
   }
   return $sh_parsed{$ckey} = { kinds => $kinds_ref, scan => \@scan, funcs => $funcs_ref, unq => $unq_ref, unfilt => $unfilt_ref, in_fn => $infn_ref };
 }
-sub assigns {   # FILE -> {V => how many writes of V it may hold}
-  my ($f) = @_;
-  return $assigns{$f} if $assigns{$f};
+sub assigns {   # (FILE [, OVERRIDES]) -> {V => how many writes of V it may hold}
+  my ($f, $ov) = @_;
+  my $okey = $ov ? join(",", sort grep { $ov->{$_} } keys %$ov) : "";
+  my $ckey = "$f\0$okey";
+  return $assigns{$ckey} if $assigns{$ckey};
   my %n;
   my @l = split /\n/, raw($f);
-  my $kinds = $f =~ /\.sh\z/ ? sh_parse($f)->{kinds} : undef;
+  my $sh_p = $f =~ /\.sh\z/ ? sh_parse($f, $ov) : undef;
   for my $i (0 .. $#l) {
-    next if $kinds && $kinds->[$i] ne "code";
-    my $line = $l[$i];
-    next if $line =~ /^\s*#/;
-    $n{$_}++ for $line =~ /(?:\A|[\s;&|(`])(?:(?:local|export|readonly|declare|typeset)(?:\s+-\w+)*\s+)?([A-Za-z_]\w*)\+?=/g;
+    my $k = $sh_p ? $sh_p->{kinds}[$i] : "code";
+    next if $k eq "hd_quoted" || $k eq "hd_delim";
+    my $line = $k eq "hd_unquoted" ? $sh_p->{scan}[$i] : $l[$i];
+    next if $k ne "hd_unquoted" && $line =~ /^\s*#/;
+    $n{$_}++ for $line =~ /(?:\A|[\s;&|(`\{])(?:(?:local|export|readonly|declare|typeset)(?:\s+-\w+)*\s+)?([A-Za-z_]\w*)(?:\+|:)?=/g;
     $n{$_}++ for $line =~ /\bfor\s+([A-Za-z_]\w*)\s/g;
     if ($line =~ /\b(?:read|readarray|mapfile|getopts|unset|printf\s+-v)\b/) { my %v = map { $_ => 1 } $line =~ /([A-Za-z_]\w*)/g; $n{$_}++ for keys %v }
   }
-  return $assigns{$f} = \%n;
+  return $assigns{$ckey} = \%n;
 }
 # FILE -> {V => [`0` or `S`, UPS]} for each V its one assignment sets to the
 # self-directory form, UPS `/..` above it.
 my $self_dir = qr{\$\((?:CDPATH=\s*)?cd\s+(?:--\s+)?"\$\(dirname\s+(?:--\s+)?($self_arg)\)((?:/\.\.)*)"(?:\s*2>\s*/dev/null)?\s*&&\s*pwd(?:\s+-P)?\)};
 sub selfdirs {
-  my ($f) = @_;
-  return $selfdirs{$f} if $selfdirs{$f};
+  my ($f, $ov) = @_;
+  my $okey = $ov ? join(",", sort grep { $ov->{$_} } keys %$ov) : "";
+  my $ckey = "$f\0$okey";
+  return $selfdirs{$ckey} if $selfdirs{$ckey};
   my %r;
   if ($f =~ /\.sh\z/) {
     my @l = split /\n/, raw($f);
-    my $kinds = sh_parse($f)->{kinds};
+    my $kinds = sh_parse($f, $ov)->{kinds};
     for my $i (0 .. $#l) {
       next if $kinds->[$i] ne "code";
       my $line = $l[$i];
       next if $line =~ /^\s*#/;
       next unless $line =~ /\A\s*(?:(?:local|export|readonly)\s+)?([A-Za-z_]\w*)=("?)$self_dir\2\s*(?:\|\|.*)?\z/;
       my ($v, $arg, $ups) = ($1, $3, length($4) / 3);
-      $r{$v} = [$arg =~ /BASH_SOURCE/ ? "S" : "0", $ups] if assigns($f)->{$v} == 1;
+      $r{$v} = [$arg =~ /BASH_SOURCE/ ? "S" : "0", $ups] if assigns($f, $ov)->{$v} == 1;
     }
   }
-  return $selfdirs{$f} = \%r;
+  return $selfdirs{$ckey} = \%r;
 }
 # Python __file__-relative path helpers (gh-ocannl-2380).
 # Single-pass scan of a `.py` source: returns
@@ -1688,8 +1728,24 @@ sub py_analyze {
   my $src = raw($f);
   my ($whole_code, $no_comment, $in_triple) = py_strip_file($src);
   my @l = split /\n/, $src, -1;
-  my @cl = split /\n/, $whole_code, -1;
-  for my $code (@cl) {
+  # Join physical lines into logical Python lines across open (), [], {} or trailing `\`.
+  my (@logical, $buf, $bdepth);
+  ($buf, $bdepth) = ("", 0);
+  for my $raw_cl (split /\n/, $whole_code, -1) {
+    my $cont = ($raw_cl =~ /\\\s*\z/) ? 1 : 0;
+    my $piece = $raw_cl;
+    $piece =~ s/\\\s*\z/ / if $cont;
+    $buf .= ($buf eq "" ? "" : " ") . $piece;
+    $bdepth += () = $piece =~ /[\(\[\{]/g;
+    $bdepth -= () = $piece =~ /[\)\]\}]/g;
+    $bdepth = 0 if $bdepth < 0;
+    if ($bdepth == 0 && !$cont) {
+      push @logical, $buf;
+      $buf = "";
+    }
+  }
+  push @logical, $buf if $buf =~ /\S/;
+  for my $code (@logical) {
     next unless $code =~ /\S/;
     # Track non-standard bindings of os, pathlib, Path, __file__.
     if ($code =~ /\A\s*import\s+(.+)/) {
@@ -1943,10 +1999,8 @@ sub py_placed_runs {
 sub names_of {
   my ($f, $h, $prog) = @_;
   return $names{"$f\0$h"} if $names{"$f\0$h"};
-  my $sd = selfdirs($f);
-  my ($sh_p, $sh_scan);
+  my ($sh_p, $sh_scan, %ov);
   if ($f =~ /\.sh\z/) {
-    my %ov;
     for my $pf (@$prog) {
       next unless $pf =~ /\.sh\z/;
       my $pf_funcs = sh_parse($pf)->{funcs};
@@ -1955,6 +2009,7 @@ sub names_of {
     $sh_p = sh_parse($f, \%ov);
     $sh_scan = $sh_p->{scan};
   }
+  my $sd = selfdirs($f, \%ov);
   my $py_p = $f =~ /\.py\z/ ? py_analyze($f) : undef;
   my %r;
   my @l = split /\n/, raw($f);
@@ -1966,7 +2021,7 @@ sub names_of {
         my $at;
         if (defined $a) {
           my $form = $a eq '$0' ? ["0", 0] : $a eq '$BASH_SOURCE' ? ["S", 0]
-            : $sd->{$a} && !(grep { $_ ne $f && assigns($_)->{$a} } @$prog) ? $sd->{$a} : undef;
+            : $sd->{$a} && !(grep { $_ ne $f && assigns($_, \%ov)->{$a} } @$prog) ? $sd->{$a} : undef;
           $at = norm(join "/", dir_of($form->[0] eq "S" ? $f : $h), ("..") x $form->[1]) if $form;
         }
         my @p = resolve($t, $frag, $at);
@@ -1990,7 +2045,7 @@ sub names_of {
       my $at;
       if (defined $a && $f =~ /\.sh\z/) {
         my $form = $a eq '$0' ? ["0", 0] : $a eq '$BASH_SOURCE' ? ["S", 0]
-          : $sd->{$a} && !(grep { $_ ne $f && assigns($_)->{$a} } @$prog) ? $sd->{$a} : undef;
+          : $sd->{$a} && !(grep { $_ ne $f && assigns($_, \%ov)->{$a} } @$prog) ? $sd->{$a} : undef;
         $at = norm(join "/", dir_of($form->[0] eq "S" ? $f : $h), ("..") x $form->[1]) if $form;
       }
       my @p = resolve($t, $frag, $at);

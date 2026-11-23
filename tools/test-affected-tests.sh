@@ -1862,6 +1862,18 @@ if harness_leg 'harness fixture and heredoc literals'; then
   fx_reach 'fail-closed: sourced cat override propagates into loads_of for executable heredocs' tools/test-a.sh tools/test-c.sh
   : >"$hrepo/tools/clib.sh"
   : >"$hrepo/tools/dyn.sh"
+  # Round 4 review findings: multi-argument alias overrides, ${var:=word}
+  # assignments in printer args, and variable writes inside executable heredocs.
+  twin_text 'alias unused=true cat=bash' 'cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: multi-argument alias override (alias unused=true cat=bash) keeps heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'printf '\''%s\n'\'' "${helper:=tools/sub.sh}"' 'bash "$helper"'
+  fx_reach 'fail-closed: ${var:=word} assignment inside printf argument stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'printf '\''%s\n'\'' "${x:-${helper=tools/sub.sh}}"' 'bash "$helper"'
+  fx_reach 'fail-closed: nested ${var=word} assignment inside printf argument stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_setup
+  twin_text "$self0" 'source /dev/stdin <<'\''SH'\''' 'here=data' 'SH' 'python3 "$here/twin.py"'
+  twin_reach 'fail-closed: assignment inside an executable heredoc invalidates outer $here' "${twins[@]}"
+  twin_teardown
   hc_restore
 fi
 
@@ -1956,6 +1968,10 @@ if harness_leg 'harness python __file__ placement'; then
   py_twin_reach 'fail-closed: nested/starred unpacking reassignment keeps every tied owner' "${twins[@]}"
   py_text 'import os' 'HERE = os.path.dirname(__file__)' 'for [HERE] in [["data"]]:' '    p = os.path.join(HERE, "twin.py")'
   py_twin_reach 'fail-closed: list-unpacking for target keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' '(HERE,' ' other) = ("data", 1)' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: multiline tuple unpacking reassignment keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' '[' '  HERE,' '] = ["data"]' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: multiline list unpacking reassignment keeps every tied owner' "${twins[@]}"
   py_text 'import os' '__file__ = "data/driver.py"' 'p = os.path.join(os.path.dirname(__file__), "twin.py")'
   py_twin_reach 'fail-closed: a rebound __file__ keeps every tied owner' "${twins[@]}"
   py_harness_teardown
