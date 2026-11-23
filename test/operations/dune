@@ -1786,6 +1786,8 @@
     (diff autotune_mma_companion.expected autotune_mma_companion-tf32.actual)))))
 
 (test
+ ; cc-vector-width: independent -- on cc the driver admits only the baseline or no candidate,
+ ; and the reductions sum exact dyadic values.
  (name autotune_nothing_timed)
  (package neural_nets_lib)
  (deps
@@ -9836,6 +9838,7 @@
 ; `hip_scratch_budget` — HIP-meaningful, and it runs a (small) autotune search.
 
 (executable
+ ; cc-vector-width: independent -- no matmul site for the width to reshape, and its sums are exact.
  (name hip_scratch_tune_survives)
  (modules hip_scratch_tune_survives)
  (libraries
@@ -11201,6 +11204,7 @@
 ; and the search still ends. The hang is the typed report injected at one candidate's timing sync
 ; through a wrapped Autotune.Context_driver, classified by the production Metal classifier; a Metal
 ; leg checks the backend's own classifier on the same report.
+; The injected hang and finals claims need candidates past the baseline on cc.
 
 (test
  (name metal_hang_declines)
@@ -11218,6 +11222,14 @@
   scripted_search
   arrayjit.autotune
   arrayjit.context)
+ (action
+  (setenv
+   OCANNL_CC_VECTOR_BYTES
+   16
+   (setenv
+    OCANNL_CC_VECTOR_REGISTERS
+    32
+    (run %{test}))))
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -11308,6 +11320,7 @@
 ; bound's 60 s where the OS does not kill.
 
 (executable
+ ; cc-vector-width: independent -- the searches are inside Metal-only legs.
  (name metal_wait_bound_real_hang)
  (modules metal_wait_bound_real_hang)
  (libraries
@@ -19074,6 +19087,7 @@
 (test
  (name wait_bound_declines)
  (package neural_nets_lib)
+ ; The injected expiry needs a candidate past the baseline on cc.
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
@@ -19087,6 +19101,14 @@
   scripted_search
   arrayjit.autotune
   arrayjit.context)
+ (action
+  (setenv
+   OCANNL_CC_VECTOR_BYTES
+   16
+   (setenv
+    OCANNL_CC_VECTOR_REGISTERS
+    32
+    (run %{test}))))
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
