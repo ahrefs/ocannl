@@ -25,3 +25,5 @@ compile_main after with_render_census closes appends nothing to the loop global:
 compile_main after with_render_census closes appends nothing to the store global: true
 sibling Local_scope operands record loop census entries in Scope_order emission order: true
 shared Local_scope referenced twice in one statement counts its reads once: true
+two-copy Unrolled loop inside a Local_scope records two emitted source reads: true
+dead Unrolled loop inside a Local_scope records zero emitted source reads: true

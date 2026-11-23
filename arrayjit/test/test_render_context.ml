@@ -398,4 +398,41 @@ let () =
     | [ { Cs.tn_uid; rendering = Cs.Store_plain; reads; _ } ] ->
         tn_uid = r_out.Tn.uid
         && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads [ (r_src.Tn.uid, 1) ]
+    | _ -> false);
+  (* 9. Unrolled loops inside a stored Local_scope count reads per emitted copy (2 for a 2-iteration
+     unrolled loop, 0 for a dead unrolled loop). *)
+  let u_sid = { LL.tn = r_idx; scope_id = 72413 } and u_i = B.sym () in
+  let unrolled_scope =
+    B.scope_of u_sid
+      (B.seq
+         (LL.Set_local (u_sid, LL.Constant 0.0))
+         (B.loop ~upto:1 ~axis:LL.Unrolled u_i
+            (LL.Set_local (u_sid, B.add (LL.Get_local u_sid) (B.get r_src [| B.iter u_i |])))))
+  in
+  let unrolled_summary =
+    render_pure ~name:"rc_unrolled_scope_reads" ~nodes:[ r_out; r_src ]
+      (B.set r_out [| B.fixed 0 |] unrolled_scope)
+  in
+  p "two-copy Unrolled loop inside a Local_scope records two emitted source reads"
+    (match unrolled_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_from_scope { reads_target = 0; _ }; reads; _ } ] ->
+        tn_uid = r_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads [ (r_src.Tn.uid, 2) ]
+    | _ -> false);
+  let dead_sid = { LL.tn = r_idx; scope_id = 72414 } and dead_i = B.sym () in
+  let dead_unrolled_scope =
+    B.scope_of dead_sid
+      (B.seq
+         (LL.Set_local (dead_sid, LL.Constant 0.0))
+         (B.loop ~from_:1 ~upto:0 ~axis:LL.Unrolled dead_i
+            (LL.Set_local (dead_sid, B.add (LL.Get_local dead_sid) (B.get r_src [| B.iter dead_i |])))))
+  in
+  let dead_unrolled_summary =
+    render_pure ~name:"rc_dead_unrolled_scope_reads" ~nodes:[ r_out; r_src ]
+      (B.set r_out [| B.fixed 0 |] dead_unrolled_scope)
+  in
+  p "dead Unrolled loop inside a Local_scope records zero emitted source reads"
+    (match dead_unrolled_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_from_scope { reads_target = 0; _ }; reads = []; _ } ] ->
+        tn_uid = r_out.Tn.uid
     | _ -> false)
