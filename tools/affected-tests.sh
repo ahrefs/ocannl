@@ -766,6 +766,9 @@ sub sh_skip_balanced {
 # substitution. Unbalanced delimiters fail closed.
 sub extract_cmdsubs {
   my ($s, $respect_sq) = @_;
+  # An unescaped backslash-newline inside an unquoted heredoc or double-quoted
+  # span can split a substitution opener (`$\` + `(cmd)`); fail closed.
+  return $s if $s =~ /(?<!\\)(?:\\\\)*\\\n/;
   my $len = length $s;
   my $out = blank_keep_nl($s);
   my ($sq, $dq, $esc, $i) = (0, 0, 0, 0);
@@ -1296,6 +1299,37 @@ sub filter_sh_logical {
   }
   return $out;
 }
+# Detect function or alias overrides of echo / printf / cat / tee on a shell line.
+sub sh_scan_overrides {
+  my ($line, $funcs_ref, $toks) = @_;
+  return if $line =~ /^\s*#/;
+  $funcs_ref->{$1} = 1 while $line =~ /(?:^|[;&|({])\s*(?:function\s+)?(echo|printf|cat|tee)\s*\(\s*\)/g;
+  $funcs_ref->{$1} = 1 while $line =~ /(?:^|[;&|({])\s*function\s+(echo|printf|cat|tee)\b/g;
+  $toks //= sh_tokenize($line);
+  if ($toks) {
+    for my $pipe (@{sh_pipelines($toks)}) {
+      for my $stage (@$pipe) {
+        my ($hidx, $hraw) = stage_command_head($stage);
+        next unless defined $hidx && sh_unquote($hraw) eq "alias";
+        my $end_opts = 0;
+        for my $j ($hidx + 1 .. $#$stage) {
+          my $it = $stage->[$j];
+          next if $it->[0] =~ /\Aredir_/ || $it->[0] eq "in_fn";
+          my $au = sh_unquote($it->[3]);
+          if (!$end_opts && $au eq "--") { $end_opts = 1; next }
+          next if !$end_opts && $au =~ /\A-/;
+          $end_opts = 1;
+          $funcs_ref->{$1} = 1 if $au =~ /\A(echo|printf|cat|tee)=/;
+        }
+      }
+    }
+  } else {
+    while ($line =~ /(?:^|[;&|({])\s*alias\b([^;&|)]*)/g) {
+      my $args = $1;
+      $funcs_ref->{$1} = 1 while $args =~ /(?:^|\s)['"]?(echo|printf|cat|tee)=/g;
+    }
+  }
+}
 # Classify a `.sh` file's heredocs and build its filtered scan lines.
 # Cached per ($f, overridden-command key); most files share the empty-override entry.
 sub sh_parse {
@@ -1419,36 +1453,15 @@ sub sh_parse {
       $in_fn[$i] = 1 if grep { $_->[3] } @blk_stk;
       if (!$msq && !$mdq && !@sub_stk && !$in_bt) {
         next if $line =~ /^\s*#/;
-        $funcs{$1} = 1 while $line =~ /(?:^|[;&|({])\s*(?:function\s+)?(echo|printf|cat|tee)\s*\(\s*\)/g;
-        $funcs{$1} = 1 while $line =~ /(?:^|[;&|({])\s*function\s+(echo|printf|cat|tee)\b/g;
         my $toks = sh_tokenize($line);
+        sh_scan_overrides($line, \%funcs, $toks);
         if ($toks) {
-          for my $pipe (@{sh_pipelines($toks)}) {
-            for my $stage (@$pipe) {
-              my ($hidx, $hraw) = stage_command_head($stage);
-              next unless defined $hidx && sh_unquote($hraw) eq "alias";
-              my $end_opts = 0;
-              for my $j ($hidx + 1 .. $#$stage) {
-                my $it = $stage->[$j];
-                next if $it->[0] =~ /\Aredir_/ || $it->[0] eq "in_fn";
-                my $au = sh_unquote($it->[3]);
-                if (!$end_opts && $au eq "--") { $end_opts = 1; next }
-                next if !$end_opts && $au =~ /\A-/;
-                $end_opts = 1;
-                $funcs{$1} = 1 if $au =~ /\A(echo|printf|cat|tee)=/;
-              }
-            }
-          }
           sh_walk_groups($toks, \@blk_stk, \$pending_fn, $i,
             sub {
               my ($sln, undef, $eln, undef) = @_;
               if ($sln < $eln) { $unfilt[$_] = 1 for $sln .. $eln }
             });
           next;
-        }
-        while ($line =~ /(?:^|[;&|({])\s*alias\b([^;&|)]*)/g) {
-          my $args = $1;
-          $funcs{$1} = 1 while $args =~ /(?:^|\s)['"]?(echo|printf|cat|tee)=/g;
         }
       } else {
         $unfilt[$i] = 1 if @sub_stk || $in_bt;
@@ -1510,15 +1523,33 @@ sub sh_parse {
         $p++;
       }
     }
-    # Pass 1c: classify every closed heredoc now that multiline sub/block/fn state is known.
-    for my $hd (@closed_hds) {
-      my $is_data = !$unfilt[$hd->{opener}] && heredoc_is_data($hd->{op_text}, $hd->{op_pos}, $overridden, $in_fn[$hd->{opener}]);
-      if ($is_data) {
-        my $bk = $hd->{quoted} ? "hd_quoted" : "hd_unquoted";
-        $kind[$_] = $bk for @{$hd->{body}};
-        push @unq_spans, [@{$hd->{body}}] if !$hd->{quoted} && @{$hd->{body}};
-      } else {
-        $kind[$_] = "hd_exec" for @{$hd->{body}};
+    # Pass 1c: classify every closed heredoc (and scan executable heredocs for
+    # command overrides, iterating to a fixpoint if `hd_exec` defines `cat`/`tee`).
+    my %eff_ov = (%funcs, $overridden ? %$overridden : ());
+    my $hd_changed = 1;
+    while ($hd_changed) {
+      $hd_changed = 0;
+      @unq_spans = ();
+      for my $hd (@closed_hds) {
+        my $is_data = !$unfilt[$hd->{opener}] && heredoc_is_data($hd->{op_text}, $hd->{op_pos}, \%eff_ov, $in_fn[$hd->{opener}]);
+        if ($is_data) {
+          my $bk = $hd->{quoted} ? "hd_quoted" : "hd_unquoted";
+          $kind[$_] = $bk for @{$hd->{body}};
+          push @unq_spans, [@{$hd->{body}}] if !$hd->{quoted} && @{$hd->{body}};
+        } else {
+          $kind[$_] = "hd_exec" for @{$hd->{body}};
+          for my $bi (@{$hd->{body}}) {
+            my %bf;
+            sh_scan_overrides($l[$bi], \%bf);
+            for my $fn (keys %bf) {
+              $funcs{$fn} = 1;
+              if (!$eff_ov{$fn}) {
+                $eff_ov{$fn} = 1;
+                $hd_changed = 1 if $fn eq "cat" || $fn eq "tee";
+              }
+            }
+          }
+        }
       }
     }
     $kinds_ref  = \@kind;
@@ -1542,10 +1573,11 @@ sub sh_parse {
     if ($kind[$i] ne "code" || $unfilt_ref->[$i]) { $i++; next }
     if ($l[$i] =~ /^\s*#/) { $i++; next }
     # Gather a logical shell line across trailing `\` or an open multiline quote
-    # in O(line length), failing closed if quotes never close or hit an unfiltered region.
+    # in O(line length), failing closed if quotes never close, hit an unfiltered
+    # region, or split a substitution opener across `\`-newline (`$\` + `(`).
     my $j = $i;
     my @parts = ($l[$i]);
-    my ($lsq, $ldq) = (0, 0);
+    my ($lsq, $ldq, $split_sub) = (0, 0, 0);
     my $scan_q = sub {
       my ($str) = @_;
       my ($esc, $p, $len) = (0, 0, length $str);
@@ -1562,20 +1594,23 @@ sub sh_parse {
     };
     my $trail_esc = $scan_q->($parts[0]);
     while ($j < $#l && $kind[$j + 1] eq "code" && !$unfilt_ref->[$j + 1] && ($lsq || $ldq || $trail_esc)) {
-      if ($trail_esc && !$lsq && !$ldq) { $parts[-1] =~ s/\\\z/ / }
+      if ($trail_esc && !$lsq && !$ldq) {
+        $split_sub = 1 if $parts[-1] =~ /[\$<>]\\\z/;
+        $parts[-1] =~ s/\\\z/ /;
+      }
       $j++;
       push @parts, $l[$j];
       $trail_esc = $scan_q->($parts[-1]);
     }
-    if (!$lsq && !$ldq) {
+    if (!$lsq && !$ldq && !$split_sub) {
       my $joined = join "\n", @parts;
       my $blk_fn = (grep { $infn_ref->[$_] } $i .. $j) ? 1 : 0;
       my @fl = split /\n/, filter_sh_logical($joined, $overridden, $blk_fn), -1;
       for my $k (0 .. $#fl) { $scan[$i + $k] = $fl[$k] }
       $i = $j + 1;
     } else {
-      # Unclosed quote across the rest of the code block: leave line $i raw (fail closed).
-      $i++;
+      # Unclosed quote or split substitution opener: leave lines raw (fail closed).
+      $i = $split_sub ? $j + 1 : $i + 1;
     }
   }
   return $sh_parsed{$ckey} = { kinds => $kinds_ref, scan => \@scan, funcs => $funcs_ref, unq => $unq_ref, unfilt => $unfilt_ref, in_fn => $infn_ref };
@@ -1747,35 +1782,10 @@ sub py_analyze {
   push @logical, $buf if $buf =~ /\S/;
   for my $code (@logical) {
     next unless $code =~ /\S/;
-    # Track non-standard bindings of os, pathlib, Path, __file__.
-    if ($code =~ /\A\s*import\s+(.+)/) {
-      for my $part (split /,/, $1) {
-        if ($part =~ /\b([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+as\s+([A-Za-z_]\w*)/) {
-          $note_bind->($2);
-        } elsif ($part =~ /\A\s*([A-Za-z_]\w*)/) {
-          $note_bind->($1) unless $1 eq "os" || $1 eq "pathlib";
-        }
-      }
-      next;
-    }
-    if ($code =~ /\A\s*from\s+(\S+)\s+import\s+(.+)/) {
-      my ($mod, $rest) = ($1, $2);
-      $rest =~ s/[()]//g;
-      for my $part (split /,/, $rest) {
-        if ($part =~ /\b([A-Za-z_]\w*)\s+as\s+([A-Za-z_]\w*)/) {
-          $note_bind->($2);
-        } elsif ($part =~ /\A\s*([A-Za-z_]\w*)/) {
-          $note_bind->($1) unless $mod eq "pathlib" && $1 eq "Path";
-        }
-      }
-      next;
-    }
     $rebound{os} = 1 if $code =~ /\bos\.path\s*=(?!=)/;
-    # Assignment targets at statement start or after `;` (and after a leading
-    # compound-statement header such as `if flag: HERE = ...` or `if d[1:2]: ...`,
-    # without splitting type annotations like `HERE: str = ...`), including
-    # chained assignments, tuple/list/starred unpacking (`[HERE] = ...`,
-    # `(a, [b, *HERE]) = ...`), augmented, annotated, and walrus.
+    # Split each logical line on `;` before handling imports and assignment targets
+    # (so `import sys; HERE = 'data'` and `if flag: import fake as os; HERE = ...`
+    # analyze every statement).
     for my $seg (split /;/, $code) {
       my $stmt = $seg;
       if ($stmt =~ /\A\s*(?:async\s+)?(?:if|elif|else|for|while|with|try|except|finally|match|case)\b/) {
@@ -1788,6 +1798,29 @@ sub py_analyze {
           $p++;
         }
         $stmt = $colon >= 0 ? substr($stmt, $colon + 1) : "";
+      }
+      # Track non-standard bindings of os, pathlib, Path, __file__.
+      if ($stmt =~ /\A\s*import\s+(.+)/) {
+        for my $part (split /,/, $1) {
+          if ($part =~ /\b([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+as\s+([A-Za-z_]\w*)/) {
+            $note_bind->($2);
+          } elsif ($part =~ /\A\s*([A-Za-z_]\w*)/) {
+            $note_bind->($1) unless $1 eq "os" || $1 eq "pathlib";
+          }
+        }
+        next;
+      }
+      if ($stmt =~ /\A\s*from\s+(\S+)\s+import\s+(.+)/) {
+        my ($mod, $rest) = ($1, $2);
+        $rest =~ s/[()]//g;
+        for my $part (split /,/, $rest) {
+          if ($part =~ /\b([A-Za-z_]\w*)\s+as\s+([A-Za-z_]\w*)/) {
+            $note_bind->($2);
+          } elsif ($part =~ /\A\s*([A-Za-z_]\w*)/) {
+            $note_bind->($1) unless $mod eq "pathlib" && $1 eq "Path";
+          }
+        }
+        next;
       }
       # Split $stmt on bracket-depth-0 binding `=` (not `==`, `!=`, `<=`, `>=`, `:=`).
       my @lhs_parts;

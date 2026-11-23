@@ -1874,6 +1874,16 @@ if harness_leg 'harness fixture and heredoc literals'; then
   twin_text "$self0" 'source /dev/stdin <<'\''SH'\''' 'here=data' 'SH' 'python3 "$here/twin.py"'
   twin_reach 'fail-closed: assignment inside an executable heredoc invalidates outer $here' "${twins[@]}"
   twin_teardown
+  # Round 5 review findings: command overrides inside executable heredocs and
+  # backslash-newline continuations splitting substitution openers.
+  twin_text 'source /dev/stdin <<'\''SH'\''' 'cat() { bash; }' 'SH' 'cat <<'\''SH2'\''' 'bash tools/sub.sh' 'SH2'
+  fx_reach 'fail-closed: cat() override defined inside an executable heredoc keeps subsequent cat heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat <<SH' '$\' '(bash tools/sub.sh)' 'SH'
+  fx_reach 'fail-closed: backslash-newline splitting $(...) inside an unquoted heredoc stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'printf '\''%s\n'\'' "$\' '(bash tools/sub.sh)"'
+  fx_reach 'fail-closed: backslash-newline splitting $(...) inside double-quoted printf stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'printf '\''%s\n'\'' $\' '(bash tools/sub.sh)'
+  fx_reach 'fail-closed: backslash-newline splitting unquoted $(...) on printf stays scanned' tools/test-a.sh tools/test-c.sh
   hc_restore
 fi
 
@@ -1972,6 +1982,8 @@ if harness_leg 'harness python __file__ placement'; then
   py_twin_reach 'fail-closed: multiline tuple unpacking reassignment keeps every tied owner' "${twins[@]}"
   py_text 'import os' 'HERE = os.path.dirname(__file__)' '[' '  HERE,' '] = ["data"]' 'p = os.path.join(HERE, "twin.py")'
   py_twin_reach 'fail-closed: multiline list unpacking reassignment keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'import sys; HERE = "data"' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: assignment after semicolon following import keeps every tied owner' "${twins[@]}"
   py_text 'import os' '__file__ = "data/driver.py"' 'p = os.path.join(os.path.dirname(__file__), "twin.py")'
   py_twin_reach 'fail-closed: a rebound __file__ keeps every tied owner' "${twins[@]}"
   py_harness_teardown
