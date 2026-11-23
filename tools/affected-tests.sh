@@ -830,7 +830,7 @@ sub extract_cmdsubs {
       my $nj = sh_skip_balanced($s, $i, '${', (!$respect_sq || $dq) ? 1 : 0);
       if (defined $nj) {
         my $inner = substr($s, $i + 2, $nj - $i - 3);
-        if ($inner =~ /\A[A-Za-z_]\w*:?=/) {
+        if ($inner =~ /\A[A-Za-z_]\w*(?:\[[^\]]*\])?:?=/) {
           substr($out, $i, $nj - $i) = substr($s, $i, $nj - $i);
         } else {
           substr($out, $i + 2, length($inner)) = extract_cmdsubs($inner, $dq ? 0 : $respect_sq);
@@ -1150,16 +1150,18 @@ sub sh_walk_groups {
           $$pending_fn = 1;
           next;
         }
+        my $is_fn = $$pending_fn ? 1 : 0;
         $$pending_fn = 0;
         if ($w =~ /\A[A-Za-z_]\w*\+?=/) { $ti++; next }
-        if ($w eq "if") { push @$stk, ["if", $line_idx, $ti, 0]; $ti++; next }
-        if ($w eq "for" || $w eq "while" || $w eq "until") { push @$stk, ["loop", $line_idx, $ti, 0]; $cmd_pos = 0; $ti++; next }
-        if ($w eq "case") { push @$stk, ["case", $line_idx, $ti, 0]; $cmd_pos = 0; $ti++; next }
+        if ($w eq "if") { push @$stk, ["if", $line_idx, $ti, $is_fn]; $ti++; next }
+        if ($w eq "for" || $w eq "while" || $w eq "until" || $w eq "select") { push @$stk, ["loop", $line_idx, $ti, $is_fn]; $cmd_pos = 0; $ti++; next }
+        if ($w eq "case") { push @$stk, ["case", $line_idx, $ti, $is_fn]; $cmd_pos = 0; $ti++; next }
         if ($w eq "then" || $w eq "else" || $w eq "elif" || $w eq "do" || $w eq "!" || $w eq "time") { $ti++; next }
         if ($w eq "fi" || $w eq "done" || $w eq "esac") {
           my $want = $w eq "fi" ? "if" : $w eq "done" ? "loop" : "case";
           if (@$stk && $stk->[-1][0] eq $want) {
             my $top = pop @$stk;
+            $on_fn->($top->[1], $top->[2], $line_idx, $ti) if $top->[3] && $on_fn;
             $on_piped->($top->[1], $top->[2], $line_idx, $ti) if after_group_is_piped($toks, $ti);
           }
           $cmd_pos = 0;
@@ -1319,8 +1321,8 @@ sub stage_has_custom_fd_out {
     my $dst = sh_unquote($raw);
     next if $dst eq "-" || $dst eq "1";
     return 1 if $dst !~ /\A\d+\z/;
-    return 1 if $dst > 2;
-    return 1 if $dst == 2 && $overridden && $overridden->{"\0exec_stderr"};
+    return 1 if $dst != 2;
+    return 1 if $overridden && $overridden->{"\0exec_stderr"};
   }
   return 0;
 }

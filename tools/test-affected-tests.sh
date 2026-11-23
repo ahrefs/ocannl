@@ -1944,6 +1944,14 @@ if harness_leg 'harness fixture and heredoc literals'; then
   fx_reach 'fail-closed: single quotes inside double-quoted ${var:-...} do not suppress $(...)' tools/test-a.sh tools/test-c.sh
   twin_text 'printf '\''%s\n'\'' "${a:-'\''}$(bash tools/sub.sh)${b:-'\''}"'
   fx_reach 'fail-closed: unpaired apostrophe inside double-quoted ${...} does not hide following $(...)' tools/test-a.sh tools/test-c.sh
+  # Round 12 review findings: array-element parameter-expansion assignments,
+  # descriptor 0 output duplication (`>&0`), and non-brace function bodies.
+  twin_text 'printf '\''%s\n'\'' "${helpers[0]:=tools/sub.sh}"' 'bash "${helpers[0]}"'
+  fx_reach 'fail-closed: array-element ${arr[0]:=word} assignment inside printf stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 0> >(bash)' 'printf '\''bash tools/sub.sh\n'\'' >&0'
+  fx_reach 'fail-closed: descriptor-0 output duplication (>&0) keeps printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'emit() if true; then printf '\''bash tools/sub.sh\n'\''; fi' 'emit | bash'
+  fx_reach 'fail-closed: non-brace function body (if ... fi) keeps unredirected printf scanned' tools/test-a.sh tools/test-c.sh
   hc_restore
 fi
 
