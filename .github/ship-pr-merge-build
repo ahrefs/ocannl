@@ -86,8 +86,14 @@
 # the compile tier alone (`dune build @check @test/operations/scans`) under the same `timeout`,
 # skipping format, tests and harnesses. Every merging box's skills checkout carried a reader past
 # `97b292ae` (`7cea8c06` on 2026-11-23, when this line was added); an older reader refuses `recheck`
-# with exit 2. `lease fleet` (lukstafi/ludics#1269) is left off until in-flight merges are drained
-# and shared anchor and state resolution is verified across every merging box.
+# with exit 2.
+#
+# Lease. `lease fleet` serializes the final checks, refreshes and merge call across boxes under
+# one fleet merge lease. Initial builds still run in parallel (lukstafi/ludics#1269). Every box
+# that merges here needs a skills checkout that accepts `lease fleet` and resolves the shared
+# anchor and state directory. Older readers refuse with exit 2. On 2026-11-23, after in-flight
+# merges drained, mac-studio, macbook-pro, rog-nv-linux, minix-amd-linux and tuf-amd-linux all
+# accepted the line at `7cea8c06` and resolved the same state on mac-studio (gh-ocannl-2398).
 #
 # Trust. The command is this repository's own code, trusted as a developer's build is: the
 # scratch repository is a place to build, not a sandbox. It runs from whatever environment
@@ -98,4 +104,5 @@ plan tools/merge-build-check.sh --plan-merge
 recheck tools/merge-build-check.sh --compile-only
 input *
 trigger always
+lease fleet
 timeout 1800
