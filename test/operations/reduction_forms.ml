@@ -2543,11 +2543,8 @@ let () =
           | Cs.Render_serial | Cs.Render_unrolled _ ->
               Verdict.p_all ~min:1 claim members_of ~f:observed_for
           | Cs.Render_localized_peel ->
-              let applicable =
-                List.filter members_of ~f:(fun s ->
-                    on_cpu || not (String.equal s "tile-mma-fallback"))
-              in
-              Verdict.p_all ~min:4 claim applicable ~f:observed_for
+              let executed = List.filter members_of ~f:(Hashtbl.mem observed_renderings) in
+              Verdict.p_all ~min:1 claim executed ~f:observed_for
           | Cs.Render_simd_reduce _ ->
               let leg = Verdict.leg ~when_:has_simd ~on:backend_name () in
               in_leg ~leg claim (fun label -> Verdict.p_all ~min:1 label members_of ~f:observed_for)

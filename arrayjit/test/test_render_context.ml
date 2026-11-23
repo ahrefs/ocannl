@@ -356,4 +356,34 @@ let () =
     !(Cs.render_loop_census ());
   Verdict.p_empty "compile_main after with_render_census closes appends nothing to the store global"
     ~over:inside_summary.Cs.stores
-    !(Cs.render_store_census ())
+    !(Cs.render_store_census ());
+  (* 7. Sibling Local_scope operands emitted in Scope_order.plan order (sorted by scope_id) report
+     their loop census entries in emission order, not operand traversal order. *)
+  let sid_hi = { LL.tn = r_idx; scope_id = 72412 }
+  and sid_lo = { LL.tn = r_idx; scope_id = 72411 } in
+  let l_hi = B.sym () and l_lo = B.sym () in
+  let scope_hi =
+    B.scope_of sid_hi
+      (B.seq
+         (LL.Set_local (sid_hi, LL.Constant 0.0))
+         (B.loop ~upto:1 ~axis:LL.Unrolled l_hi
+            (LL.Set_local (sid_hi, B.add (LL.Get_local sid_hi) (B.get r_src [| B.iter l_hi |])))))
+  in
+  let scope_lo =
+    B.scope_of sid_lo
+      (B.seq
+         (LL.Set_local (sid_lo, LL.Constant 0.0))
+         (B.loop ~upto:2 ~axis:LL.Serial l_lo
+            (LL.Set_local (sid_lo, B.add (LL.Get_local sid_lo) (B.get r_src [| B.iter l_lo |])))))
+  in
+  let sibling_summary =
+    render_pure ~name:"rc_sibling_scope_order" ~nodes:[ r_out; r_src ]
+      (B.set r_out [| B.fixed 0 |] (B.add scope_hi scope_lo))
+  in
+  p "sibling Local_scope operands record loop census entries in Scope_order emission order"
+    (match sibling_summary.Cs.loops with
+    | [
+     { Cs.rendering = Cs.Render_serial; _ }; { Cs.rendering = Cs.Render_unrolled { copies = 2 }; _ };
+    ] ->
+        true
+    | _ -> false)

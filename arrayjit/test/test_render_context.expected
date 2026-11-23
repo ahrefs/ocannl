@@ -23,3 +23,4 @@ peel provenance is scoped to the closing store, not leaked to later uses of the 
 create_render_ctx before with_render_census still records compile_main inside the bracket: true
 compile_main after with_render_census closes appends nothing to the loop global: true
 compile_main after with_render_census closes appends nothing to the store global: true
+sibling Local_scope operands record loop census entries in Scope_order emission order: true

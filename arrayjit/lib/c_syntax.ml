@@ -3576,6 +3576,12 @@ type scope_def = {
       (** The declaration initialized to zero, emitted for a definition under a condition: a
           discarded arm's local then holds a defined value for the routine log. *)
   body : PPrint.document;
+  render_loops : loop_render_entry list;
+      (** Per-level loop census entries captured while rendering [body] (reverse emission order),
+          published by {!C_syntax.pp_local_defs} when the ordered definition is emitted. *)
+  render_stores : store_render_entry list;
+      (** Store census entries captured while rendering [body] (reverse emission order), published
+          by {!C_syntax.pp_local_defs} when the ordered definition is emitted. *)
 }
 
 type local_def = (PPrint.document, scope_def) Low_level.Scope_order.entry
@@ -5088,13 +5094,23 @@ module C_syntax (B : C_syntax_config) = struct
               "C_syntax.pp_local_defs: scope_order_oracle's root precisions differ from the ones \
                rendered (gh-ocannl-2213)"))
 
-  let pp_local_defs ?check (local_defs : local_def list) =
+  let pp_local_defs ctx ?check (local_defs : local_def list) =
     let open PPrint in
     let plan =
       Low_level.Scope_order.plan ~same:same_test ~reads:(fun d -> Lazy.force d.reads) local_defs
     in
     Option.iter check ~f:(fun (stmt, roots) -> (check_scope_order ~stmt ~roots) plan);
-    let root = List.map plan.unconditional ~f:(fun (_, def) -> def.decl ^^ hardline ^^ def.body) in
+    let publish_def (def : scope_def) =
+      if !(ctx.render_census_enabled) then begin
+        ctx.render_loop_census := def.render_loops @ !(ctx.render_loop_census);
+        ctx.render_store_census := def.render_stores @ !(ctx.render_store_census)
+      end
+    in
+    let root =
+      List.map plan.unconditional ~f:(fun (_, def) ->
+          publish_def def;
+          def.decl ^^ hardline ^^ def.body)
+    in
     let block doc = lbrace ^^ nest 2 (hardline ^^ doc) ^^ hardline ^^ rbrace in
     let literal ~alone (l : guard_lit) =
       if not l.holds then string "!" ^^ parens l.payload
@@ -5115,7 +5131,11 @@ module C_syntax (B : C_syntax_config) = struct
         List.map plan.conditional ~f:(fun (_, def) -> def.zeroed_decl)
         @ List.map plan.groups ~f:(fun (paths, defs) ->
             string "if (" ^^ test paths ^^ string ") "
-            ^^ block (separate hardline (List.map defs ~f:(fun (_, def) -> def.body))))
+            ^^ block
+                 (separate hardline
+                    (List.map defs ~f:(fun (_, def) ->
+                         publish_def def;
+                         def.body))))
     in
     separate hardline (root @ conditional_docs)
 
@@ -7062,7 +7082,7 @@ module C_syntax (B : C_syntax_config) = struct
                   (pp_scalar ctx) prec llsc)
             in
             let val_doc = wrap_conversion narrowing val_doc in
-            let local_defs = pp_local_defs ~check:(Some c, [ (prec, llsc) ]) local_defs in
+            let local_defs = pp_local_defs ctx ~check:(Some c, [ (prec, llsc) ]) local_defs in
             record_classified_store ctx ~tn llsc;
             let offset_doc =
               (pp_pipelined_rotation ctx) ~is_write:true tn ^^ (pp_tn_offset ctx) tn (idcs, dims)
@@ -7149,7 +7169,7 @@ module C_syntax (B : C_syntax_config) = struct
         let val_defs, val_doc = (pp_scalar ctx) prec llsc in
         let val_doc = wrap_conversion narrowing val_doc in
         let local_defs =
-          pp_local_defs ~check:(Some c, [ (iprec, iv); (prec, llsc) ]) (dyn_defs @ val_defs)
+          pp_local_defs ctx ~check:(Some c, [ (iprec, iv); (prec, llsc) ]) (dyn_defs @ val_defs)
         in
         record_classified_store ctx ~tn ~extra_scalars:[ iv ] llsc;
         let assignment =
@@ -7228,7 +7248,7 @@ module C_syntax (B : C_syntax_config) = struct
           else arg_prec
         in
         let local_defs, arg_doc = (pp_scalar ctx) arg_prec arg in
-        let local_defs = pp_local_defs ~check:(Some c, [ (arg_prec, arg) ]) local_defs in
+        let local_defs = pp_local_defs ctx ~check:(Some c, [ (arg_prec, arg) ]) local_defs in
         record_classified_store ctx ~tn arg;
         (* Generate the function call *)
         let result_doc = B.vec_unop_syntax prec vec_unop arg_doc in
@@ -7361,7 +7381,7 @@ module C_syntax (B : C_syntax_config) = struct
           && not (Hash_set.mem accum_scope_ids id.Low_level.scope_id)
         in
         let local_defs =
-          pp_local_defs
+          pp_local_defs ctx
             ~check:((if minted then None else Some c), [ (value_prec, value) ])
             local_defs
         in
@@ -8066,7 +8086,7 @@ module C_syntax (B : C_syntax_config) = struct
             (fun () -> (pp_scalar ctx) (comp_prec cprec) c)
         in
         let local_defs =
-          pp_local_defs
+          pp_local_defs ctx
             ~check:(Some (Low_level.If { cond = (c, cprec); body }), [ (comp_prec cprec, c) ])
             local_defs
         in
@@ -9012,7 +9032,6 @@ module C_syntax (B : C_syntax_config) = struct
               dc,
               string total ^^ string " = " ^^ B.binop_syntax prec op (string total) ec ^^ semi )
       in
-      let tail_body = pp_local_defs ~check:(None, tail_roots) tail_defs ^^ tail_update in
       let store =
         match acc_target with
         | `Cell (tn, idcs) ->
@@ -9042,6 +9061,7 @@ module C_syntax (B : C_syntax_config) = struct
         (render_loop ctx loop
            (Render_simd_reduce { target; lanes; chains })
            (fun () ->
+             let tail_body = pp_local_defs ctx ~check:(None, tail_roots) tail_defs ^^ tail_update in
              (match acc_target with
              | `Cell (tn, _) ->
                  let reads =
@@ -9207,7 +9227,7 @@ module C_syntax (B : C_syntax_config) = struct
                       in
                       let local_defs, contrib_doc = (pp_scalar ctx) prec contrib in
                       let local_defs =
-                        pp_local_defs ~check:(None, [ (prec, contrib) ]) local_defs
+                        pp_local_defs ctx ~check:(None, [ (prec, contrib) ]) local_defs
                       in
                       let binding =
                         string ("const " ^ B.loop_index_type)
@@ -9569,7 +9589,7 @@ module C_syntax (B : C_syntax_config) = struct
                     full-precision-product-into-f32 semantics the serial legs and the tensor cores
                     apply (gh-ocannl-663's note in [Cuda_backend.accum_prec]). *)
                  let local_defs, contrib_doc = (pp_scalar ctx) prec contrib in
-                 let local_defs = pp_local_defs ~check:(None, [ (prec, contrib) ]) local_defs in
+                 let local_defs = pp_local_defs ctx ~check:(None, [ (prec, contrib) ]) local_defs in
                  let reads =
                    if !(ctx.render_census_enabled) then
                      collect_reads_from ~scalars:[ Low_level.Get (tn, idcs); contrib ] ~lls:[]
@@ -9794,11 +9814,20 @@ module C_syntax (B : C_syntax_config) = struct
            quietly; initializing above also makes the trace's old-value read well-defined.
            Renderings that drop the definitions ([debug_float]'s display) or refuse them
            ([uniform_scalar]) are unaffected, and the SIMD and warp paths decline under logging. *)
-        let body_doc = (pp_ll ctx) ~in_loop:true body in
+        let body_doc, render_loops, render_stores =
+          capture_render_census ctx (fun () -> (pp_ll ctx) ~in_loop:true body)
+        in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let expr = string prefix ^^ pp_scope_id id ^^ string postfix in
         let def =
-          { reads = lazy (Low_level.local_reads body); decl; zeroed_decl; body = body_doc }
+          {
+            reads = lazy (Low_level.local_reads body);
+            decl;
+            zeroed_decl;
+            body = body_doc;
+            render_loops;
+            render_stores;
+          }
         in
         ([ { Low_level.Scope_order.scope = scope_id; guard = []; def = Some def } ], expr)
     | Get_local id ->
