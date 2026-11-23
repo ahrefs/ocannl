@@ -31,6 +31,21 @@
 # `bg-run.sh wait` form. `wait last` is only for a run launched without --bg;
 # the wave brief supplies the run record and readiness boundary for --bg runs.
 #
+# Failure digest boundary (gh-ocannl-2345): the last 10 MB of the run log,
+# with Dune's color and CRLF stripped. Reads column-one Dune File locations
+# and their excerpts, the location's opening compiler error (including
+# promoted warnings and alerts), and action output delimited by Dune's short,
+# verbose or (cd ... && ...) reports (also with redirections). A dependency
+# chain can identify a locationless Dune
+# error as batch context. Only a chain joins wrapped error lines. Ordinary
+# multiline errors contribute their diagnostic head.
+# Quiet output without a command marker, locationless errors without a failed
+# command report, and text before the first recognized block have no action
+# owner. Diagnostic-looking lines there or in passing blocks are batch
+# context. Each section displays up to 40 lines. The raw log holds the rest.
+# A child replaying complete Dune report syntax is indistinguishable from
+# Dune in a flat log.
+#
 # Usage:
 #   tools/test-run.sh run   [--cap N] [--test-cap N] [--expect-backend B]... [--targets-file FILE]...
 #                           [DUNE ARGS...]             # foreground; digest; dune's status (2: refused)
@@ -4093,6 +4108,118 @@ prepush_scan_alert() { # run dir; at most one notice per queried run
   esac
 }
 
+failure_diagnostics() {
+  LC_ALL=C awk '
+    BEGIN {
+      sgr = sprintf("%c", 27) "\\[[0-9;]*m"
+      location = "^File \"[^\"]+\", lines? [0-9]+(-[0-9]+)?"
+      error_head = "^Error( \\((warning|alert) [^)]*\\))?:"
+      short_target = "(alias )?[^[:space:]]+"
+      short_status = " \\((exit -?[0-9]+|got signal [[:alnum:]]+|had unexpected output on [^)]+)\\)$"
+      line_limit = 40
+    }
+    function add(line,   owner) {
+      owner = active ? block : 0
+      if ((active && nf >= line_limit) || (!active && nc >= line_limit)) return
+      line = substr(line, 1, 300)
+      if (seen[owner, line]++) return
+      if (active) fingerprint[++nf] = "    " line
+      else context[++nc] = "  " line
+    }
+    function start_failure(site) {
+      block++
+      if (nf < line_limit) fingerprint[++nf] = "  " substr(site, 1, 300)
+    }
+    {
+      gsub(sgr, "")
+      sub(/\r$/, "")
+      located = $0 ~ (location "(, characters [0-9]+-[0-9]+)?:$")
+
+      # Dune pads the short display program to at least twelve columns.
+      short = match($0, /^ *[[:alnum:]_.+-]+ /) && RLENGTH >= 13 &&
+              substr($0, RLENGTH + 1) ~ ("^" short_target "( \\[[^]]+\\])?(" short_status "|$)")
+      verbose_fail = /^Command \[[0-9]+\] (exited with code -?[0-9]+|got signal [[:alnum:]]+):$/
+      short_fail = short && $0 ~ short_status
+      command = /^\(cd .+ && .+\)( (<|>|2>|&>) .+)?$/
+      chained = /^-> required by /
+      boundary = short || command || chained ||
+                 /^(Output\[[0-9]+\]:|Running\[[0-9]+\]:|exit: |=== |test-run: |(Entering|Leaving) directory )/
+      error = $0 ~ error_head
+      diagnostic = error || /^(Fatal error:|Exception([ :]|$)|FAIL(ED)?:)/
+
+      # A locationless Dune error can wrap before its dependency chain.
+      # Until that chain arrives, its opening line could be action output.
+      if (pending != "") {
+        if (chained) {
+          active = 0
+          add(wrapped)
+          pending = ""
+          next
+        }
+        if (wrap_lines < 8 && !located && !verbose_fail && !boundary && !diagnostic && /[^[:space:]]/) {
+          wrapped = substr(wrapped " " $0, 1, 300)
+          wrap_lines++
+          next
+        }
+        add(pending)
+        pending = ""
+      }
+      if (located) {
+        if (site != "") start_failure(site)
+        # A suppressed diff can have a location without any body to own.
+        diff_site = $0 ~ /\.expected",|, characters 0-0:$/
+        compiler = !diff_site && $0 !~ /["\/]dune(-project)?",/
+        match($0, location)
+        site = substr($0, 1, RLENGTH)
+        active = short_command = 0
+        next
+      }
+      if (site != "" && /^( *[0-9]+ \|( |$)| *\^+ *$|\.\.\.+$)/) next
+
+      if (site != "") {
+        if (!/^(Warning|Alert)([ :]|$)/) {
+          start_failure(site)
+          active = verbose_fail || short_fail || (command && !diff_site)
+          short_command = short_fail
+          if (!active && compiler && error) {
+            active = 1
+            add($0)
+            active = 0
+            site = ""
+            next
+          }
+        }
+        site = ""
+        if (active) next
+      }
+      if (verbose_fail || short_fail) {
+        start_failure($0)
+        active = 1
+        short_command = short_fail
+        next
+      }
+      if (command && short_command) { short_command = 0; next }
+      short_command = 0
+      if (boundary) {
+        active = 0
+        next
+      }
+      if (active && error) {
+        pending = wrapped = substr($0, 1, 300)
+        wrap_lines = 0
+      } else if (diagnostic) add($0)
+    }
+    END {
+      if (pending != "") add(pending)
+      if (site != "") start_failure(site)
+      if (nf) print "fingerprint:"
+      for (i = 1; i <= nf; i++) print fingerprint[i]
+      if (nc) print "batch context (outside recognized failed actions):"
+      for (i = 1; i <= nc; i++) print context[i]
+    }
+  '
+}
+
 digest_rc=
 digest() {
   local dir=$1 rc verdict fp complaint= refusal_src prelude_bytes
@@ -4386,14 +4513,9 @@ digest() {
     echo "action failed (no diff) -- nothing to promote; read the failure below"
   fi
   if [ "$rc" != 0 ]; then
-    # A forced color (CLICOLOR_FORCE=1) wraps dune's locations and `Error`
-    # tags in SGR escapes, which go before the match (gh-ocannl-1591).
-    fp=$({ scan_log | perl -pe 's/\e\[[0-9;]*m//g' | grep -oE '^File "[^"]+", lines? [0-9]+(-[0-9]+)?'
-           scan_log | perl -pe 's/\e\[[0-9;]*m//g' | grep -oE '^(Error|Fatal error|Exception)[^,]*'
-         } 2>/dev/null | sort -u | head -40)
+    fp=$(scan_log | failure_diagnostics)
     if [ -n "$fp" ]; then
-      echo "fingerprint:"
-      printf '%s\n' "$fp" | sed 's/^/  /'
+      printf '%s\n' "$fp"
     else
       echo "no Error/File lines matched; log tail:"
       # Byte-capped BEFORE the line cap: a giant newline-free record would

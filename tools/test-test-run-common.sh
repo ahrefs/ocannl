@@ -872,6 +872,15 @@ case $REPEAT_TEST_MODE in
   red_color)
     printf '\033[1mFile "test/operations/fixture.ml", line 3, characters 4-9\033[0m:\n\033[1;31mError\033[0m: This expression has type int but an expression was expected of type float\n' >&2
     exit 1 ;;
+  red_line_only)
+    printf 'File "test/operations/fixture.ml", line 3:\nError: The implementation does not match the interface\n' >&2
+    exit 1 ;;
+  red_warning_error)
+    printf 'File "test/operations/fixture.ml", line 3, characters 4-9:\nError (warning 32 [unused-value-declaration]): unused value fixture.\n' >&2
+    exit 1 ;;
+  red_alert_error)
+    printf 'File "test/operations/fixture.ml", line 3, characters 4-9:\nError (alert deprecated): Fixture.legacy\n' >&2
+    exit 1 ;;
   dune_prefixed_red)
     printf 'dune: is what this test prints first\n'
     printf 'File "test/operations/fixture.ml", line 3, characters 4-9:\nError: This expression has type int but an expression was expected of type float\n' >&2
@@ -887,6 +896,27 @@ case $REPEAT_TEST_MODE in
   nested_usage_output)
     printf "dune: unknown option '--frobnicate'.\nUsage: dune build [OPTION]… [TARGET]…\nTry 'dune build --help' or 'dune --help' for more information.\n" >&2
     printf 'the program went on to print this and then failed\n'
+    exit 1 ;;
+  attribution_*)
+    printf 'Error: unmarked batch prelude\n' >&2
+    printf 'File "fixture/attribution/dune", lines 1-3, characters 0-64:\n1 | (rule\n2 |  (alias runtest-fixture-fail)\n3 |  (action (run fail-fixture)))\n' >&2
+    case $REPEAT_TEST_MODE in
+      attribution_short | attribution_chain) printf '    fail-job alias runtest-fixture-fail (exit 1)\n' ;;
+      attribution_verbose) printf 'Command [2] exited with code 1:\n$ (cd _fixture/default && ./fail-fixture)\n' ;;
+      attribution_command) printf '(cd _fixture/default && ./fail-fixture) > fail-fixture.out\n' ;;
+    esac >&2
+    printf 'Error: fixture error from failed action\n' >&2
+    printf 'a continuation from the action\n' >&2
+    printf 'FAIL: fixture failure\n' >&2
+    if [ "$REPEAT_TEST_MODE" = attribution_chain ]; then
+      printf 'Error: No rule found for\nfixture-missing-target\n-> required by alias runtest-fixture-dependency\n' >&2
+    fi
+    case $REPEAT_TEST_MODE in
+      attribution_short | attribution_chain) printf '    pass-job alias runtest-fixture-pass\n' ;;
+      attribution_verbose) printf 'Output[1]:\n' ;;
+      attribution_command) printf '(cd _fixture/default && ./pass-fixture) < pass-fixture.in > pass-fixture.out\n' ;;
+    esac >&2
+    printf 'Fatal error: fixture refusal caught by passing action\n' >&2
     exit 1 ;;
   # gh-ocannl-1055. A rule whose action failed before its diff ran: dune
   # quotes the stanza -- naming the `.corrected` file its `diff?` would read --
