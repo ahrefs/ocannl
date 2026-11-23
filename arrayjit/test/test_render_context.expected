@@ -28,3 +28,6 @@ shared Local_scope referenced twice in one statement counts its reads once: true
 two-copy Unrolled loop inside a Local_scope records two emitted source reads: true
 dead Unrolled loop inside a Local_scope records zero emitted source reads: true
 declined SIMD reduction inside a Local_scope rolls back speculative uniform_scalar reads: true
+short-circuiting Where with a hoisted Local_scope counts condition reads replayed in the guard: true
+short-circuiting Where with no hoisted Local_scope counts condition reads once: true
+gated Relu_gate with a hoisted Local_scope counts condition reads replayed in gate_entries: true

@@ -3564,10 +3564,17 @@ let with_compiler_options ~compiler ~options ~enrich compile =
     let exn = Option.value (enrich exn ~suffix) ~default:exn in
     Stdlib.Printexc.raise_with_backtrace exn backtrace
 
-type guard_lit = PPrint.document Low_level.Scope_order.lit
+type guard_doc = {
+  doc : PPrint.document;
+  reads : int list;
+      (** Tensor-node UIDs read by [doc] each time {!C_syntax.pp_local_defs} emits it in a hoisted
+          guard test. *)
+}
+
+type guard_lit = guard_doc Low_level.Scope_order.lit
 (** One condition a scope definition's execution is under (gh-ocannl-2145): a short-circuiting
     [Where]'s or gate's, keyed by IR ({!Low_level.Scope_order.key}, gh-ocannl-2213), with its
-    rendered test as the payload. *)
+    rendered test and read metadata as the payload. *)
 
 type scope_def = {
   reads : int list Lazy.t;  (** The locals the body reads. *)
@@ -3587,7 +3594,7 @@ type scope_def = {
           per emitted definition so shared scopes and unrolled loops match emitted reads. *)
 }
 
-type local_def = (PPrint.document, scope_def) Low_level.Scope_order.entry
+type local_def = (guard_doc, scope_def) Low_level.Scope_order.entry
 (** A scope's definition, emitted ahead of the statement reading it ({!C_syntax.pp_local_defs}), or
     with [def = None] a read of the local at operand position ([Get_local]): the local's [scope] id,
     and the conditions this occurrence is evaluated under, outermost first. A definition runs under
@@ -3601,10 +3608,10 @@ type local_def = (PPrint.document, scope_def) Low_level.Scope_order.entry
 let same_test (x : guard_lit) (y : guard_lit) =
   let text (l : guard_lit) =
     let buf = Buffer.create 64 in
-    PPrint.ToBuffer.compact buf l.payload;
+    PPrint.ToBuffer.compact buf l.payload.doc;
     Buffer.contents buf
   in
-  phys_equal x.payload y.payload || String.equal (text x) (text y)
+  phys_equal x.payload.doc y.payload.doc || String.equal (text x) (text y)
 
 let has_definitions (defs : local_def list) =
   List.exists defs ~f:(fun (d : local_def) -> Option.is_some d.def)
@@ -3924,30 +3931,60 @@ module C_syntax (B : C_syntax_config) = struct
         | _, None -> group (B.binop_syntax prec op e1 e2))
     | _ -> group (B.binop_syntax prec op e1 e2)
 
+  let repeat_reads n reads =
+    if n <= 0 || List.is_empty reads then [] else List.concat (List.init n ~f:(fun _ -> reads))
+
+  (* How many times [B.binop_syntax prec op] splices its first operand document (e.g. 2 for MSL's
+     [Satur01_gate], 1 for C's statement-expression form and every other binop). Computed once per
+     [(prec, op)] via a unique placeholder so [gate_entries] and [pp_scalar_op] charge the exact
+     number of emitted reads. *)
+  let binop_arg1_uses =
+    let cache = Hashtbl.create (module String) in
+    let placeholder = "__ocannl_arg1_probe__" in
+    let p1 = PPrint.string placeholder and p2 = PPrint.string "__ocannl_arg2_probe__" in
+    fun prec op ->
+      let key = Ops.prec_string prec ^ ":" ^ Ops.binop_cd_fallback_syntax op in
+      Hashtbl.find_or_add cache key ~default:(fun () ->
+          try
+            let buf = Buffer.create 128 in
+            PPrint.ToBuffer.pretty 1.0 1_000_000 buf (B.binop_syntax prec op p1 p2);
+            let s = Buffer.contents buf in
+            let plen = String.length placeholder in
+            let rec count pos acc =
+              match String.substr_index s ~pos ~pattern:placeholder with
+              | None -> acc
+              | Some idx -> count (idx + plen) (acc + 1)
+            in
+            Int.max 1 (count 0 0)
+          with _ -> 1)
+
   (* gh-ocannl-2145: a short-circuiting gated operator ([Ops.Gated_second]: the gates, [&&], [||])
      evaluates its second operand only where its own test selects it. The definitions there that run
      under a [Where]'s condition keep that condition behind the operator's test -- that the second
      operand at [1] and at [0] give different results, spelled in the dialect's own syntax -- so the
      [Where]'s condition is never tested where the operator skipped it. Its other definitions still
      run ahead of the statement. *)
-  let gate_entries prec op ~v1 ~first_prec ~d1 e1 d2 =
+  let gate_entries prec op ~v1 ~first_prec ~d1 ~r1 e1 d2 =
     let payload () =
       let open PPrint in
       let lit c = string (B.constant_literal prec c) in
-      parens (B.binop_syntax prec op e1 (lit 1.))
-      ^^ string " != "
-      ^^ parens (B.binop_syntax prec op e1 (lit 0.))
+      let doc =
+        parens (B.binop_syntax prec op e1 (lit 1.))
+        ^^ string " != "
+        ^^ parens (B.binop_syntax prec op e1 (lit 0.))
+      in
+      { doc; reads = repeat_reads (2 * binop_arg1_uses prec op) r1 }
     in
     Low_level.Scope_order.gate
       ~key:(Gate { op; prec; first = v1; first_prec })
       ~payload ~v1 ~cond_defs:d1 d2
 
-  (* gh-ocannl-2145: a short-circuiting select's arm definitions run under its condition [e1],
+  (* gh-ocannl-2145: a short-circuiting select's arm definitions run under its condition [cond],
      rendered at [cond_prec]. *)
-  let guard_arms ?(unconverted = false) ~cond:e1 ~cond_prec ~v1 ~cond_defs d2 d3 =
+  let guard_arms ?(unconverted = false) ~cond ~cond_prec ~v1 ~cond_defs d2 d3 =
     Low_level.Scope_order.arms
       ~key:(Select { cond = v1; prec = cond_prec; unconverted })
-      ~payload:e1 ~v1 ~cond_defs d2 d3
+      ~payload:cond ~v1 ~cond_defs d2 d3
 
   (* gh-ocannl-2213: whether a [Where] or a blendable gate at [prec] short-circuits -- the one
      decision [pp_scalar_op_at] renders by and {!scope_order_oracle} hands the scope emission
@@ -3960,8 +3997,8 @@ module C_syntax (B : C_syntax_config) = struct
         Option.is_none (blend_for prec ~cond:v1 ~arms:[ (v2, prec) ])
     | _ -> true
 
-  let pp_scalar_op_at ~operand (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
-      local_def list * PPrint.document =
+  let pp_scalar_op_at ~operand ~capture_reads ~charge_reads (prec : Ops.prec)
+      (vcomp : Low_level.scalar_t) : local_def list * PPrint.document =
     let open PPrint in
     match vcomp with
     | Ternop (Ops.FMA, _, _, _) when not (Ops.is_float prec) ->
@@ -3978,7 +4015,11 @@ module C_syntax (B : C_syntax_config) = struct
           Low_level.operand_eval_precisions ~eval:prec (Ops.Ternop op)
             (Array.map [| v1_prec; v2_prec; v3_prec |] ~f:comp_prec)
         in
-        let d1, e1 = operand ps.(0) v1 in
+        let (d1, e1), r1 =
+          match op with
+          | Ops.Where when short_circuits ~prec vcomp -> capture_reads (fun () -> operand ps.(0) v1)
+          | _ -> (operand ps.(0) v1, [])
+        in
         let d2, e2 = operand ps.(1) v2 in
         let d3, e3 = operand ps.(2) v3 in
         (* gh-ocannl-2145: a short-circuiting select's arm definitions run under its condition; a
@@ -3986,7 +4027,8 @@ module C_syntax (B : C_syntax_config) = struct
         let defs =
           match op with
           | Ops.Where when short_circuits ~prec vcomp ->
-              d1 @ guard_arms ~cond:e1 ~cond_prec:ps.(0) ~v1 ~cond_defs:d1 d2 d3
+              d1
+              @ guard_arms ~cond:{ doc = e1; reads = r1 } ~cond_prec:ps.(0) ~v1 ~cond_defs:d1 d2 d3
           | _ -> List.concat [ d1; d2; d3 ]
         in
         let expr = ternop_expr prec op ~v1 ~v2 ~v3 e1 e2 e3 in
@@ -4007,17 +4049,36 @@ module C_syntax (B : C_syntax_config) = struct
               Low_level.operand_eval_precisions ~eval:prec (Ops.Binop op)
                 (Array.map [| v1_prec; v2_prec |] ~f:comp_prec)
             in
-            let d1, e1 = operand ps.(0) v1 in
-            let d2, e2 = operand ps.(1) v2 in
             let blended =
               match op with
               | Ops.Relu_gate | Ops.Satur01_gate -> not (short_circuits ~prec vcomp)
               | _ -> false
             in
+            let extra_arg1_uses =
+              match
+                (op, if blended then blend_for prec ~cond:v1 ~arms:[ (v2, prec) ] else None)
+              with
+              | (Ops.Relu_gate | Ops.Satur01_gate), Some (Blend_truth _) -> 0
+              | _ -> binop_arg1_uses prec op - 1
+            in
+            let needs_r1 =
+              extra_arg1_uses > 0
+              || (not blended)
+                 &&
+                 match Ops.binop_conditionality op with
+                 | Ops.Gated_second -> true
+                 | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> false
+            in
+            let (d1, e1), r1 =
+              if needs_r1 then capture_reads (fun () -> operand ps.(0) v1)
+              else (operand ps.(0) v1, [])
+            in
+            if extra_arg1_uses > 0 then charge_reads (repeat_reads extra_arg1_uses r1);
+            let d2, e2 = operand ps.(1) v2 in
             let defs =
               match Ops.binop_conditionality op with
               | Ops.Gated_second when not blended ->
-                  d1 @ gate_entries prec op ~v1 ~first_prec:ps.(0) ~d1 e1 d2
+                  d1 @ gate_entries prec op ~v1 ~first_prec:ps.(0) ~d1 ~r1 e1 d2
               | _ -> List.concat [ d1; d2 ]
             in
             let expr = binop_expr prec op ~v1 ~v2 e1 e2 in
@@ -4061,7 +4122,8 @@ module C_syntax (B : C_syntax_config) = struct
      ([blend_for]), and this one is an integer. An operator with no float-valued operand renders
      through the integer tables as it always did, so the integer tables only ever meet integer
      operands. *)
-  let rec integer_op ~operand p (vcomp : Low_level.scalar_t) : local_def list * PPrint.document =
+  let rec integer_op ~operand ~capture_reads ~charge_reads p (vcomp : Low_level.scalar_t) :
+      local_def list * PPrint.document =
     let f = int_math_prec in
     let fv = Low_level.float_valued in
     let is_op : Low_level.scalar_t -> bool = function
@@ -4069,7 +4131,9 @@ module C_syntax (B : C_syntax_config) = struct
       | _ -> false
     in
     (* A homogeneous operand at [p], left unconverted: typed [f] exactly when it is float-valued. *)
-    let sub v = if is_op v then integer_op ~operand p v else operand p v in
+    let sub v =
+      if is_op v then integer_op ~operand ~capture_reads ~charge_reads p v else operand p v
+    in
     let widen v =
       let d, e = sub v in
       if fv v then (d, e) else (d, convert_doc ~from:p ~to_:f e)
@@ -4078,7 +4142,7 @@ module C_syntax (B : C_syntax_config) = struct
       let d, e = sub v in
       if fv v then (d, convert_doc ~from:f ~to_:p e) else (d, e)
     in
-    let table () = pp_scalar_op_at ~operand p vcomp in
+    let table () = pp_scalar_op_at ~operand ~capture_reads ~charge_reads p vcomp in
     match vcomp with
     | Unop (op, (v, _)) -> (
         match Ops.unop_integer_valuation op with
@@ -4095,10 +4159,21 @@ module C_syntax (B : C_syntax_config) = struct
     | Binop (op, (v1, _), (v2, _)) -> (
         let any = fv v1 || fv v2 in
         let both ~at render =
-          let d1, e1 = render v1 in
+          let extra_arg1_uses = binop_arg1_uses at op - 1 in
+          let needs_r1 =
+            extra_arg1_uses > 0
+            ||
+            match Ops.binop_conditionality op with
+            | Ops.Gated_second -> true
+            | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> false
+          in
+          let (d1, e1), r1 =
+            if needs_r1 then capture_reads (fun () -> render v1) else (render v1, [])
+          in
+          if extra_arg1_uses > 0 then charge_reads (repeat_reads extra_arg1_uses r1);
           let d2, e2 = render v2 in
           match Ops.binop_conditionality op with
-          | Ops.Gated_second -> (d1 @ gate_entries at op ~v1 ~first_prec:p ~d1 e1 d2, e1, e2)
+          | Ops.Gated_second -> (d1 @ gate_entries at op ~v1 ~first_prec:p ~d1 ~r1 e1 d2, e1, e2)
           | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> (d1 @ d2, e1, e2)
         in
         match Ops.binop_integer_valuation op with
@@ -4126,9 +4201,11 @@ module C_syntax (B : C_syntax_config) = struct
             (* The condition at its own precision, unconverted: C tests a float-valued condition
                against zero as it stands. *)
             let v1_prec = comp_prec v1_prec in
-            let d1, e1 =
-              if Ops.is_integer v1_prec && is_op v1 then integer_op ~operand v1_prec v1
-              else operand v1_prec v1
+            let (d1, e1), r1 =
+              capture_reads (fun () ->
+                  if Ops.is_integer v1_prec && is_op v1 then
+                    integer_op ~operand ~capture_reads ~charge_reads v1_prec v1
+                  else operand v1_prec v1)
             in
             let arms_prec, render = if fv v2 || fv v3 then (f, widen) else (p, sub) in
             let d2, e2 = render v2 in
@@ -4137,7 +4214,7 @@ module C_syntax (B : C_syntax_config) = struct
             ( d1
               @ guard_arms
                   ~unconverted:(Ops.is_integer v1_prec && is_op v1 && fv v1)
-                  ~cond:e1 ~cond_prec:v1_prec ~v1 ~cond_defs:d1 d2 d3,
+                  ~cond:{ doc = e1; reads = r1 } ~cond_prec:v1_prec ~v1 ~cond_defs:d1 d2 d3,
               ternop_expr ~blend:false arms_prec op ~v1 ~v2 ~v3 e1 e2 e3 )
         | Follows_operands, _ when fv v1 || fv v2 || fv v3 ->
             let d1, e1 = widen v1 in
@@ -4152,13 +4229,13 @@ module C_syntax (B : C_syntax_config) = struct
 
   (* The operator arms of [pp_scalar]: at an integer compute precision through {!integer_op},
      converting a float-valued result to the precision once, here. *)
-  let pp_scalar_op ~operand (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
-      local_def list * PPrint.document =
+  let pp_scalar_op ?(capture_reads = fun f -> (f (), [])) ?(charge_reads = fun _ -> ()) ~operand
+      (prec : Ops.prec) (vcomp : Low_level.scalar_t) : local_def list * PPrint.document =
     if Ops.is_integer prec then
-      let defs, doc = integer_op ~operand prec vcomp in
+      let defs, doc = integer_op ~operand ~capture_reads ~charge_reads prec vcomp in
       if Low_level.float_valued vcomp then (defs, convert_doc ~from:int_math_prec ~to_:prec doc)
       else (defs, doc)
-    else pp_scalar_op_at ~operand prec vcomp
+    else pp_scalar_op_at ~operand ~capture_reads ~charge_reads prec vcomp
 
   (* The signature's coupling contract: an accumulator resides at least as wide as the arithmetic
      that feeds it. The failure mode this catches is an [include]-time stale pairing — a backend
@@ -5104,13 +5181,15 @@ module C_syntax (B : C_syntax_config) = struct
       Low_level.Scope_order.plan ~same:same_test ~reads:(fun d -> Lazy.force d.reads) local_defs
     in
     Option.iter check ~f:(fun (stmt, roots) -> (check_scope_order ~stmt ~roots) plan);
+    let charge_reads reads =
+      if !(ctx.render_census_enabled) && not (List.is_empty reads) then
+        match !(ctx.render_stmt_reads) with Some acc -> acc := reads @ !acc | None -> ()
+    in
     let publish_def (def : scope_def) =
       if !(ctx.render_census_enabled) then begin
         ctx.render_loop_census := def.render_loops @ !(ctx.render_loop_census);
         ctx.render_store_census := def.render_stores @ !(ctx.render_store_census);
-        match !(ctx.render_stmt_reads) with
-        | Some acc -> acc := def.render_reads @ !acc
-        | None -> ()
+        charge_reads def.render_reads
       end
     in
     let root =
@@ -5120,9 +5199,10 @@ module C_syntax (B : C_syntax_config) = struct
     in
     let block doc = lbrace ^^ nest 2 (hardline ^^ doc) ^^ hardline ^^ rbrace in
     let literal ~alone (l : guard_lit) =
-      if not l.holds then string "!" ^^ parens l.payload
-      else if alone then l.payload
-      else parens l.payload
+      charge_reads l.payload.reads;
+      if not l.holds then string "!" ^^ parens l.payload.doc
+      else if alone then l.payload.doc
+      else parens l.payload.doc
     in
     let test paths =
       match paths with
@@ -6676,6 +6756,32 @@ module C_syntax (B : C_syntax_config) = struct
   let record_read_render ctx (tn : Tn.t) =
     if !(ctx.render_census_enabled) then
       match !(ctx.render_stmt_reads) with Some acc -> acc := tn.Tn.uid :: !acc | None -> ()
+
+  let charge_stmt_reads ctx reads =
+    if !(ctx.render_census_enabled) && not (List.is_empty reads) then
+      match !(ctx.render_stmt_reads) with Some acc -> acc := reads @ !acc | None -> ()
+
+  (* Capture the direct reads emitted while rendering a sub-expression, keeping them in the
+     enclosing statement's read list (the expression itself is emitted once) and returning them so
+     callers that replay the rendered document (such as hoisted scope guards) can charge each
+     replayed emission. *)
+  let capture_expr_reads ctx f =
+    if not !(ctx.render_census_enabled) then (f (), [])
+    else
+      match !(ctx.render_stmt_reads) with
+      | None -> (f (), [])
+      | Some outer -> (
+          let buf = ref [] in
+          ctx.render_stmt_reads := Some buf;
+          match f () with
+          | res ->
+              ctx.render_stmt_reads := Some outer;
+              let reads = !buf in
+              outer := reads @ !outer;
+              (res, reads)
+          | exception e ->
+              ctx.render_stmt_reads := Some outer;
+              raise e)
 
   let capture_stmt_reads ctx f =
     if not !(ctx.render_census_enabled) then (f (), [])
@@ -9993,7 +10099,9 @@ module C_syntax (B : C_syntax_config) = struct
         let idx_doc = if affine_needs_parens idx then parens idx_doc else idx_doc in
         let expr = string prefix ^^ idx_doc ^^ string postfix in
         ([], expr)
-    | Ternop _ | Binop _ | Unop _ -> pp_scalar_op ~operand:(pp_scalar ctx) prec vcomp
+    | Ternop _ | Binop _ | Unop _ ->
+        pp_scalar_op ~capture_reads:(capture_expr_reads ctx) ~charge_reads:(charge_stmt_reads ctx)
+          ~operand:(pp_scalar ctx) prec vcomp
 
   and debug_float ctx ?guard (prec : Ops.prec) (value : Low_level.scalar_t) :
       PPrint.document * PPrint.document list =

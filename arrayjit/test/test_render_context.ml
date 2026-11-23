@@ -469,4 +469,71 @@ let () =
     | [ { Cs.tn_uid; rendering = Cs.Store_from_scope { reads_target = 0; _ }; reads; _ } ] ->
         tn_uid = r_out.Tn.uid
         && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads expected_dec_reads
+    | _ -> false);
+  (* 11. Short-circuiting Where with a hoisted Local_scope replays its condition in the scope's [if]
+     guard before the final ternary, so a condition reading the target records 2 target reads
+     (whereas an unhoisted Where with no Local_scope records 1). *)
+  let where_hoisted_summary =
+    render_pure ~name:"rc_where_hoisted_guard" ~nodes:[ r_out; r_src ]
+      (B.set r_out
+         [| B.fixed 0 |]
+         (LL.Ternop
+            ( Ops.Where,
+              (B.get r_out [| B.fixed 0 |], prec),
+              (scope_lo, prec),
+              (LL.Constant 0.0, prec) )))
+  in
+  let expected_where_reads =
+    List.sort
+      ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+      [ (r_out.Tn.uid, 2); (r_src.Tn.uid, 1) ]
+  in
+  p "short-circuiting Where with a hoisted Local_scope counts condition reads replayed in the guard"
+    (match where_hoisted_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_rmw { reads_target = 2 }; reads; _ } ] ->
+        tn_uid = r_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads expected_where_reads
+    | _ -> false);
+  let where_plain_summary =
+    render_pure ~name:"rc_where_no_scope" ~nodes:[ r_out; r_src ]
+      (B.set r_out
+         [| B.fixed 0 |]
+         (LL.Ternop
+            ( Ops.Where,
+              (B.get r_out [| B.fixed 0 |], prec),
+              (B.get r_src [| B.fixed 0 |], prec),
+              (LL.Constant 0.0, prec) )))
+  in
+  p "short-circuiting Where with no hoisted Local_scope counts condition reads once"
+    (match where_plain_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_rmw { reads_target = 1 }; _ } ] -> tn_uid = r_out.Tn.uid
+    | _ -> false);
+  (* 12. Gated operator (Relu_gate) guarding a conditional Local_scope (inside a nested Where)
+     replays its first operand twice in [gate_entries]'s inequality guard plus once in the final
+     gate expression (3 reads of [r_out]), and replays the inner Where condition once in the guard
+     plus once in the ternary (2 reads of [u_uni]). *)
+  let gate_hoisted_summary =
+    render_pure ~name:"rc_gate_hoisted_guard" ~nodes:[ r_out; r_src; u_uni ]
+      (B.set r_out
+         [| B.fixed 0 |]
+         (LL.Binop
+            ( Ops.Relu_gate,
+              (B.get r_out [| B.fixed 0 |], prec),
+              ( LL.Ternop
+                  ( Ops.Where,
+                    (B.get u_uni [| B.fixed 0 |], prec),
+                    (scope_lo, prec),
+                    (LL.Constant 0.0, prec) ),
+                prec ) )))
+  in
+  let expected_gate_reads =
+    List.sort
+      ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+      [ (r_out.Tn.uid, 3); (r_src.Tn.uid, 1); (u_uni.Tn.uid, 2) ]
+  in
+  p "gated Relu_gate with a hoisted Local_scope counts condition reads replayed in gate_entries"
+    (match gate_hoisted_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_rmw { reads_target = 3 }; reads; _ } ] ->
+        tn_uid = r_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads expected_gate_reads
     | _ -> false)
