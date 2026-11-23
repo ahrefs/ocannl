@@ -1884,6 +1884,14 @@ if harness_leg 'harness fixture and heredoc literals'; then
   fx_reach 'fail-closed: backslash-newline splitting $(...) inside double-quoted printf stays scanned' tools/test-a.sh tools/test-c.sh
   twin_text 'printf '\''%s\n'\'' $\' '(bash tools/sub.sh)'
   fx_reach 'fail-closed: backslash-newline splitting unquoted $(...) on printf stays scanned' tools/test-a.sh tools/test-c.sh
+  # Round 6 review findings: procfs/variable stdout redirects in functions, and
+  # case-pattern `)` inside $(...) command substitutions.
+  twin_text 'emit() { printf '\''bash tools/sub.sh\n'\'' >/proc/self/fd/1; }' 'emit | bash'
+  fx_reach 'fail-closed: /proc/self/fd/1 redirect inside a function keeps printer scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'emit() { printf '\''bash tools/sub.sh\n'\'' >"$OUT"; }' 'OUT=/dev/stdout; emit | bash'
+  fx_reach 'fail-closed: bare-variable redirect inside a function keeps printer scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'code=$(case x in x) printf '\''bash tools/sub.sh\n'\'';; esac)' 'bash -c "$code"'
+  fx_reach 'fail-closed: case-pattern ) inside $(...) does not expose nested printf' tools/test-a.sh tools/test-c.sh
   hc_restore
 fi
 
@@ -1984,6 +1992,12 @@ if harness_leg 'harness python __file__ placement'; then
   py_twin_reach 'fail-closed: multiline list unpacking reassignment keeps every tied owner' "${twins[@]}"
   py_text 'import os' 'HERE = os.path.dirname(__file__)' 'import sys; HERE = "data"' 'p = os.path.join(HERE, "twin.py")'
   py_twin_reach 'fail-closed: assignment after semicolon following import keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'match "data":' '    case HERE: pass' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: match/case capture rebinding HERE keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'str = lambda p: "data"' 'HERE = str(os.path.dirname(__file__))' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: shadowed str wrapper keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'with ctx() as (HERE, _): pass' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: tuple-unpacked with-as rebinding HERE keeps every tied owner' "${twins[@]}"
   py_text 'import os' '__file__ = "data/driver.py"' 'p = os.path.join(os.path.dirname(__file__), "twin.py")'
   py_twin_reach 'fail-closed: a rebound __file__ keeps every tied owner' "${twins[@]}"
   py_harness_teardown

@@ -736,27 +736,54 @@ sub sh_skip_balanced {
     }
     return undef;
   }
-  my ($nest, $close) = $open eq '${' ? ('{', '}') : ('(', ')');
-  my ($j, $depth, $isq, $idq, $iesc) = ($i + 2, 1, 0, 0, 0);
-  while ($j < $len && $depth > 0) {
+  if ($open eq '${') {
+    my ($j, $depth, $isq, $idq, $iesc) = ($i + 2, 1, 0, 0, 0);
+    while ($j < $len && $depth > 0) {
+      my $c = substr($s, $j, 1);
+      if ($iesc) { $iesc = 0; $j++; next }
+      if ($c eq "\\" && !$isq) { $iesc = 1; $j++; next }
+      if ($c eq "'" && !$idq) { $isq = !$isq; $j++; next }
+      if ($c eq '"' && !$isq) { $idq = !$idq; $j++; next }
+      if (!$isq && !$idq) {
+        if ($c eq "{") { $depth++ }
+        elsif ($c eq "}") { $depth-- }
+      }
+      $j++;
+    }
+    return $depth == 0 ? $j : undef;
+  }
+  # Stack-balanced scan for $(...), <(...), >(...), tracking nested `case ... esac`
+  # so an unparenthesized case pattern terminator `x)` never closes the substitution.
+  my @stk = ("sub");
+  my ($j, $isq, $idq, $iesc) = ($i + 2, 0, 0, 0);
+  while ($j < $len && @stk) {
     my $c = substr($s, $j, 1);
     if ($iesc) { $iesc = 0; $j++; next }
     if ($c eq "\\" && !$isq) { $iesc = 1; $j++; next }
     if ($c eq "'" && !$idq) { $isq = !$isq; $j++; next }
     if ($c eq '"' && !$isq) { $idq = !$idq; $j++; next }
-    if (!$isq && $open ne '${' && substr($s, $j, 2) eq '$(') {
+    if (!$isq && substr($s, $j, 2) eq '$(') {
       my $nj = sh_skip_balanced($s, $j, '$(');
       return undef unless defined $nj;
       $j = $nj;
       next;
     }
     if (!$isq && !$idq) {
-      if ($c eq $nest) { $depth++ }
-      elsif ($c eq $close) { $depth-- }
+      if ($c eq "(") { push @stk, "paren" }
+      elsif ($c eq ")") {
+        pop @stk if $stk[-1] eq "paren" || $stk[-1] eq "sub";
+      } elsif (($j == $i + 2 || substr($s, $j - 1, 1) =~ /[\s;|&(]/) &&
+               substr($s, $j) =~ /\A(case|esac)(?=[\s;|&()]|\z)/) {
+        my $kw = $1;
+        if ($kw eq "case") { push @stk, "case" }
+        elsif ($stk[-1] eq "case") { pop @stk }
+        $j += length($kw);
+        next;
+      }
     }
     $j++;
   }
-  return $depth == 0 ? $j : undef;
+  return !@stk ? $j : undef;
 }
 # Extract only executed command/process substitutions ($(...), `...`, and when
 # $respect_sq is true, <(...) / >(...)) plus assignment-bearing parameter
@@ -966,8 +993,9 @@ sub stage_has_out_procsub {
   }
   return 0;
 }
-# True if $stage redirects stdout (fd 1) directly to a plain file (not /dev/stdout,
-# /dev/stderr, /dev/fd/..., >(...), or a later fd dup like >&2 / 1>&2 / >&3).
+# True if $stage redirects stdout (fd 1) directly to a plain file (closed allowlist:
+# `/dev/null` or a non-`/dev/`, non-`/proc/` path containing a literal non-variable
+# filename, never `>(...)`, bare variable `$OUT`, or a later fd dup like `>&2`/`>&3`).
 sub stage_has_file_stdout_redir {
   my ($stage) = @_;
   my $to_file = 0;
@@ -979,12 +1007,15 @@ sub stage_has_file_stdout_redir {
       next unless defined $it->[2];
       my $op = $it->[1][3];
       next unless $op =~ /\A(?:&>|1?>\|?)\z/;
-      my $t = sh_unquote($it->[2][3]);
-      if ($t ne "" && $t !~ m{\A/dev/(?:stdout|stderr|fd/)} && !word_has_out_procsub($it->[2][3])) {
-        $to_file = 1;
-      } else {
-        $to_file = 0;
-      }
+      my $raw = $it->[2][3];
+      my $t = sh_unquote($raw);
+      my $safe_file = ($t eq "/dev/null")
+        || ($t ne ""
+            && $t !~ m{\A/(?:dev|proc)(?:/|\z)}
+            && $t !~ /\A(?:\$[A-Za-z_]\w*|\$\{[^}]*\})\z/
+            && $t !~ m{(?:/|\A)fd/\d+\z}
+            && !word_has_out_procsub($raw));
+      $to_file = $safe_file ? 1 : 0;
     } elsif ($it->[0] eq "redir_append" && defined $it->[2]) {
       my $op = $it->[1][3];
       $to_file = 0 if $op =~ /\A(?:&>>|1?>>)\z/;
@@ -1730,7 +1761,10 @@ sub py_self_dir_ups {
   my ($expr, $rebound) = @_;
   return undef if $rebound->{__file__};
   $expr =~ s/\A\s+//; $expr =~ s/\s+\z//;
-  $expr = $1 if $expr =~ /\Astr\s*\(\s*(.+?)\s*\)\z/;
+  if ($expr =~ /\Astr\s*\(\s*(.+?)\s*\)\z/) {
+    return undef if $rebound->{str};
+    $expr = $1;
+  }
   # Nested os.path.dirname(...) around __file__, os.path.abspath(__file__), or os.path.realpath(__file__).
   if ($expr =~ /\Aos\.path\.dirname\s*\(/) {
     return undef if $rebound->{os};
@@ -1754,7 +1788,8 @@ sub py_analyze {
   my ($f) = @_;
   return $py_info{$f} if $py_info{$f};
   my (%writes, %rebound, %sd);
-  my %special = map { $_ => 1 } qw(os pathlib Path __file__);
+  my %special = map { $_ => 1 } qw(os pathlib Path __file__ str);
+  my %py_non_cap = map { $_ => 1 } qw(_ True False None as if and or not in is);
   my $note_bind = sub {
     my ($v) = @_;
     $writes{$v}++;
@@ -1782,13 +1817,16 @@ sub py_analyze {
   push @logical, $buf if $buf =~ /\S/;
   for my $code (@logical) {
     next unless $code =~ /\S/;
-    $rebound{os} = 1 if $code =~ /\bos\.path\s*=(?!=)/;
+    $rebound{os}      = 1 if $code =~ /\bos\.path(?:\.\w+)?\s*=(?!=)/;
+    $rebound{pathlib} = 1 if $code =~ /\bpathlib\.Path\s*=(?!=)/;
+    $rebound{Path}    = 1 if $code =~ /\bPath\.\w+\s*=(?!=)/;
     # Split each logical line on `;` before handling imports and assignment targets
     # (so `import sys; HERE = 'data'` and `if flag: import fake as os; HERE = ...`
     # analyze every statement).
     for my $seg (split /;/, $code) {
       my $stmt = $seg;
-      if ($stmt =~ /\A\s*(?:async\s+)?(?:if|elif|else|for|while|with|try|except|finally|match|case)\b/) {
+      if ($stmt =~ /\A\s*(?:async\s+)?(if|elif|else|for|while|with|try|except|finally|match|case)\b/) {
+        my $kw = $1;
         my ($p, $depth, $slen, $colon) = (0, 0, length($stmt), -1);
         while ($p < $slen) {
           my $c = substr($stmt, $p, 1);
@@ -1797,9 +1835,17 @@ sub py_analyze {
           elsif ($c eq ":" && $depth == 0 && substr($stmt, $p, 2) ne ":=") { $colon = $p; last }
           $p++;
         }
+        if ($kw eq "case") {
+          my $pat = $colon >= 0 ? substr($stmt, 0, $colon) : $stmt;
+          $pat =~ s/\A\s*case\b//;
+          $pat =~ s/\bif\b.*//;
+          for my $id ($pat =~ /\b([A-Za-z_]\w*)\b/g) {
+            $note_bind->($id) unless $py_non_cap{$id};
+          }
+        }
         $stmt = $colon >= 0 ? substr($stmt, $colon + 1) : "";
       }
-      # Track non-standard bindings of os, pathlib, Path, __file__.
+      # Track non-standard bindings of os, pathlib, Path, __file__, str.
       if ($stmt =~ /\A\s*import\s+(.+)/) {
         for my $part (split /,/, $1) {
           if ($part =~ /\b([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+as\s+([A-Za-z_]\w*)/) {
@@ -1812,6 +1858,10 @@ sub py_analyze {
       }
       if ($stmt =~ /\A\s*from\s+(\S+)\s+import\s+(.+)/) {
         my ($mod, $rest) = ($1, $2);
+        if ($rest =~ /\*/) {
+          $rebound{$_} = 1 for keys %special;
+          next;
+        }
         $rest =~ s/[()]//g;
         for my $part (split /,/, $rest) {
           if ($part =~ /\b([A-Za-z_]\w*)\s+as\s+([A-Za-z_]\w*)/) {
@@ -1861,10 +1911,14 @@ sub py_analyze {
       next if $for_vars =~ /[A-Za-z_]\w*\s*[\(\[]/;
       $note_bind->($_) for $for_vars =~ /\b([A-Za-z_]\w*)\b/g;
     }
-    $note_bind->($_) for $code =~ /\bas\s+([A-Za-z_]\w*)/g;
+    for my $as_vars ($code =~ /\bas\s+([\sA-Za-z0-9_,\(\)\[\]\*]+)/g) {
+      next if $as_vars =~ /[A-Za-z_]\w*\s*[\(\[]/;
+      for my $id ($as_vars =~ /\b([A-Za-z_]\w*)\b/g) { $note_bind->($id) unless $py_non_cap{$id} }
+    }
     $note_bind->($_) for $code =~ /\b(?:def|class)\s+([A-Za-z_]\w*)/g;
-    for my $del_vars ($code =~ /\bdel\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)/g) {
-      $note_bind->($_) for $del_vars =~ /([A-Za-z_]\w*)/g;
+    for my $del_vars ($code =~ /\bdel\s+([\sA-Za-z0-9_,\(\)\[\]]+)/g) {
+      next if $del_vars =~ /[A-Za-z_]\w*\s*[\(\[]/;
+      $note_bind->($_) for $del_vars =~ /\b([A-Za-z_]\w*)\b/g;
     }
   }
   # Multiline-safe function and lambda parameter scanning over $whole_code
