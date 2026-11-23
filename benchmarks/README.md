@@ -950,7 +950,11 @@ single-threaded segments that sum to the serial step
   `--args-a`/`--args-b` give an arm arguments of its own. A treatment that is not yet a commit is
   committed first: `gh1343_ab.sh` writes its "HEAD with BASE's scheduler sources" as a commit with
   git plumbing, touching no branch, and hands ab.py the two commits; `gh1180_tie_ab.sh` runs one
-  bin_cells run per case (two geometries of one build) and keeps only its census and header checks.
+  bin_cells run per case with two geometries of one build and a third arm that repeats the first.
+  Use a multiple of six rounds for balanced positions. The summary checks the census and header,
+  compares the control's paired spread with the geometry effect, and flags modes and timings
+  below 100 µs per routine run. Parallel readings require actual pool rendering and longer
+  timings. The direction is reported only when the paired range excludes 1.
   Every driver runs its cells on this machinery (gh-ocannl-1607). Those whose cells are a design of
   arms are bin_cells runs: `gh1051_bf16_ab.sh` (the bf16_arithmetic arms on HIP or Metal,
   gh-ocannl-2150; per size, four arms -- the two arms at bf16 and at the f32 control -- its source

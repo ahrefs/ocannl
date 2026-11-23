@@ -241,7 +241,7 @@ census = "CENSUS".replace("RN", rn)
 print(f"packmma         1.000 ms      5.00 GFLOP/s  (spot check [65] 0.50, chk -1.5/2.25, = naive)  "
       f"[{{census}}] [grid: no Grid loop]")
 print(f"packmma_par     1.000 ms      9.00 GFLOP/s  (spot check [65] 0.50, chk -1.5/2.25, = packmma)  "
-      f"[{{census}}] [grid: 1 of 2 on the pool; i45 serial: below cc_grid_min_updates = 16384]")
+      f"[{{census}}] [PAR_GRID]")
 print("bench-result: " + json.dumps({{"variant": "naive", "seconds": 0.05, "check": "passed",
                                       "check_note": ""}}))
 print("bench-result: " + json.dumps({{"variant": "packmma", "seconds": secs, "check": "passed",
@@ -255,12 +255,18 @@ sys.exit(3 if positionals[1] == "REFUSE_N" else EXIT)
 class Gh1180DriverTest(StubRunTest):
     """gh1180_tie_ab.sh on bin_cells: the census and header checks over each case's cells."""
 
+    def gebp_stub(self, census, exit_code, refuse_n, par_grid):
+        bench = self.dir / "root/_build/default/bin/narrow_gebp_bench.exe"
+        write_stub(bench, GEBP_BODY.replace("CENSUS", census).replace("REFUSE_N", refuse_n)
+                   .replace("EXIT", str(exit_code)).replace("PAR_GRID", par_grid)
+                   .replace("{{", "{").replace("}}", "}"))
+        return bench
+
     def measure(self, census="Mma_register_tiled", exit_code=0, refuse_n="none",
-                cases=("f16:64:8:16:3:4:6",), rounds=2):
+                cases=("f16:64:8:16:3:4:6",), rounds=2,
+                par_grid="grid: 1 of 2 on the pool; i45 serial: below cc_grid_min_updates = 16384"):
+        self.gebp_stub(census, exit_code, refuse_n, par_grid)
         root = self.dir / "root"
-        write_stub(root / "_build/default/bin/narrow_gebp_bench.exe",
-                   GEBP_BODY.replace("CENSUS", census).replace("REFUSE_N", refuse_n)
-                   .replace("EXIT", str(exit_code)).replace("{{", "{").replace("}}", "}"))
         out = self.dir / "out"
         proc = self.run_tool(
             [box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "measure", str(root), str(out),
@@ -268,18 +274,23 @@ class Gh1180DriverTest(StubRunTest):
         return proc, out
 
     def test_a_clean_run_pairs_the_two_geometries(self):
-        proc, out = self.measure()
+        proc, out = self.measure(rounds=6)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         summary = (out / "summary.md").read_text()
-        self.assertIn("| f16 n=64 bm=8 bk=16 | serial | rn4 | rn6 | 2 | 1.500 | 1.500-1.500 | 0 of 2 |",
+        self.assertIn("| f16 n=64 bm=8 bk=16 | serial | rn4 | rn6 | 6 | 1.500 | 1.500-1.500 | 0 of 6 |",
                       summary)
+        self.assertIn("| 1.000-1.000 | 0.00% | clears effect | - | A faster |", summary)
         self.assertNotIn("INVALID", summary)
         # Unimodal arms read pooled, as before the mode reading: no row marked, no Modes section.
         self.assertNotIn("pooled over modes", summary)
         self.assertNotIn("## Modes", summary)
         run = out / "f16-64-8-16-3-rn4-rn6"
         records = self.records(run)
-        self.assertEqual([r["arm"] for r in records], ["rn4", "rn6", "rn6", "rn4"])
+        self.assertEqual([r["arm"] for r in records[:6]], ["rn4", "rn6", "control",
+                                                          "control", "rn6", "rn4"])
+        for rnd in range(6):
+            by_arm = {r["arm"]: r for r in records if r["round"] == rnd}
+            self.assertEqual(by_arm["control"]["argv"], by_arm["rn4"]["argv"])
         # The case's precision flag is on argv, the ambient one cleared.
         self.assertTrue(all(r["config"]["fp16_arithmetic"] == {
             "value": "false", "source": "commandline", "layer": "commandline", "profile": None,
@@ -309,7 +320,7 @@ class Gh1180DriverTest(StubRunTest):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         jsonl = out / "f16-64-8-16-3-rn4-rn6/cells.jsonl"
         records = self.records(jsonl.parent)
-        self.assertEqual(len(records), 24)
+        self.assertEqual(len(records), 36)
         for r in records:
             base = (10.0 + 0.01 * r["round"]) * 1e-3
             serial = 0.9 * base if r["arm"] == "rn6" and r["round"] in (1, 5, 9) else base
@@ -323,6 +334,7 @@ class Gh1180DriverTest(StubRunTest):
         # The pooled row stays, marked: it mixes the modes (0.900-1.000 for an identical arm).
         self.assertIn(f"{case} serial (pooled over modes) | rn4 | rn6 | 12 | 1.000 | 0.900-1.000 |"
                       " 3 of 3 |", summary)
+        self.assertIn("inconclusive (modes,", summary)
         self.assertIn(f"{case} parallel | rn4 | rn6 | 12 | 1.000 | 1.000-1.000 | 0 of 0 |", summary)
         self.assertIn("## Modes", summary)
         self.assertIn(cells.MODE_RULE, summary)
@@ -334,6 +346,70 @@ class Gh1180DriverTest(StubRunTest):
         self.assertIn(f"{case} rn4 | rn6 | serial | rn6 | slow/- | 9 | 1.000 | 1.000-1.000 | 0 of 0 |", summary)
         self.assertNotIn("| parallel |", summary.split("## Modes")[1])
         self.assertNotIn("naive", summary)
+
+    def test_a_two_round_smoke_run_reports_unequal_positions(self):
+        proc, out = self.measure(rounds=2)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("inconclusive (unequal position counts)", (out / "summary.md").read_text())
+
+    def test_a_saved_two_arm_run_reports_no_control(self):
+        bench = self.gebp_stub("Mma_register_tiled", 0, "none", "grid: 2 of 2 on the pool")
+        out = self.dir / "legacy"
+        proc = self.run_tool(
+            [sys.executable, str(HERE / "bin_cells.py"), "--exe", str(bench), "--backend", "cc",
+             "--out", str(out / "f16-64-8-16-3-rn4-rn6"), "--rounds", "2",
+             "--arm", "rn4=--rn=4", "--arm", "rn6=--rn=6",
+             "--", "f16", "64", "3", "8", "16", "--ocannl_fp16_arithmetic=false"])
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        (out / "driver.log").write_text("gh1180: cases: f16:64:8:16:3:4:6\n")
+        proc = self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("inconclusive (no control)", proc.stdout)
+
+    def retime(self, out, serial, parallel):
+        jsonl = out / "f16-64-8-16-3-rn4-rn6/cells.jsonl"
+        records = self.records(jsonl.parent)
+        for r in records:
+            seconds = {"packmma": serial(r), "packmma_par": parallel(r)}
+            r["results"] = [[v, seconds.get(v, s), c, n]
+                            for v, s, c, n in r["results"]]
+        jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
+        return self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
+
+    def test_control_drift_and_short_pool_timings_gate_the_reading(self):
+        proc, out = self.measure(rounds=6)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        proc = self.retime(out, lambda r: {"rn4": 1.25, "rn6": 1.375, "control": 1.125}[r["arm"]],
+                           lambda r: 0.00008 if r["arm"] == "rn6" else 0.0001)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        # The equal effects on opposite sides of one must survive ratio roundoff.
+        self.assertIn("| 0.900-0.900 | 10.00% | spread meets effect | - | inconclusive (control spread) |",
+                      proc.stdout)
+        self.assertIn("| 1.000-1.000 | 0.00% | clears effect | rn6 6/6 | inconclusive (short pool timings) |",
+                      proc.stdout)
+
+    def test_drift_can_clear_without_a_direction_and_short_can_be_serial(self):
+        proc, out = self.measure(rounds=6, par_grid="grid: 0 of 2 on the pool; i45 serial: below floor")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        directionless = (0.90, 0.94, 0.98, 1.04, 1.08, 1.12)
+        proc = self.retime(out, lambda r: 0.001 * directionless[r["round"]] if r["arm"] == "rn6"
+                           else 0.001, lambda r: 0.00008 if r["arm"] == "rn6" else 0.0001)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("| clears effect | - | inconclusive (paired range includes 1) |", proc.stdout)
+        self.assertIn("| clears effect | rn6 6/6 | inconclusive (serial rendering in parallel cells) |",
+                      proc.stdout)
+        self.assertNotIn("inconclusive (short pool timings)", proc.stdout)
+
+    def test_a_control_with_different_argv_invalidates_the_run(self):
+        proc, out = self.measure(rounds=6)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        jsonl = out / "f16-64-8-16-3-rn4-rn6/cells.jsonl"
+        records = self.records(jsonl.parent)
+        next(r for r in records if r["arm"] == "control")["argv"].append("--different-treatment")
+        jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
+        proc = self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("round 1: control did not repeat rn4", proc.stdout)
 
     def test_a_scalar_fallback_census_invalidates_the_run(self):
         proc, out = self.measure(census="scalar fallback RN")
