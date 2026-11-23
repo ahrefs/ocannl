@@ -884,7 +884,7 @@ sub sh_tokenize {
       next;
     }
     my $rest = substr($s, $i);
-    if ($rest =~ /\A((?:\d+)?(?:<&|>&)(?:[0-9-]+|\$[A-Za-z_]\w*|\$\{[^}]*\}))/) {
+    if ($rest =~ /\A((?:\d+)?(?:<&|>&))/) {
       push @toks, ["redir_fd", $i, $i + length($1), $1];
       $i += length($1);
       next;
@@ -1017,7 +1017,7 @@ sub stage_has_file_stdout_redir {
   for my $it (@$stage) {
     if ($it->[0] eq "redir_fd") {
       my $op = $it->[1][3];
-      $to_file = 0 if $op =~ /\A(?:1?>&|>&)/;
+      $to_file = 0 if $op =~ /\A(?:1?>&|>&)\z/;
     } elsif ($it->[0] eq "redir_out") {
       next unless defined $it->[2];
       my $op = $it->[1][3];
@@ -1045,18 +1045,37 @@ sub stage_has_unsafe_stdout_redir {
   return 0;
 }
 # True if the tokens immediately following a closed compound command at $close_idx
-# pipe its output onward (`|` / `|&`) or redirect it into an output process substitution `>(...)`.
+# pipe its output onward (`|` / `|&`) or redirect it into an output process
+# substitution `>(...)`, a non-stdout descriptor (`>&3`, `>&2`, `>&$fd`), or an
+# unsafe stdout target (`/dev/fd/N`, `/proc/...`, bare variable `$OUT`).
 sub after_group_is_piped {
   my ($toks, $close_idx) = @_;
   my $j = $close_idx + 1;
   while ($j < @$toks) {
     my $tp = $toks->[$j][0];
-    if ($tp eq "comment" || $tp eq "redir_fd") { $j++; next }
+    if ($tp eq "comment") { $j++; next }
     return 1 if $tp eq "pipe";
+    if ($tp eq "redir_fd") {
+      my $op = $toks->[$j][3];
+      my $tgt = ($j + 1 < @$toks && $toks->[$j + 1][0] eq "word") ? $toks->[++$j] : undef;
+      if ($op =~ /\A(?:1?>&|>&)\z/) {
+        return 1 unless defined $tgt;
+        my $raw = $tgt->[3];
+        return 1 if word_has_expansion($raw) || word_has_out_procsub($raw);
+        my $dst = sh_unquote($raw);
+        return 1 unless $dst eq "-" || $dst eq "1";
+      }
+      $j++;
+      next;
+    }
     if ($tp =~ /\Aredir_(?:out|append|in|hd|herestr)\z/) {
-      if ($j + 1 < @$toks && $toks->[$j + 1][0] eq "word") {
-        return 1 if word_has_out_procsub($toks->[$j + 1][3]);
-        $j++;
+      my $op = $toks->[$j][3];
+      my $tgt = ($j + 1 < @$toks && $toks->[$j + 1][0] eq "word") ? $toks->[++$j] : undef;
+      if (defined $tgt) {
+        return 1 if word_has_out_procsub($tgt->[3]);
+        if (($tp eq "redir_out" || $tp eq "redir_append") && $op =~ /\A(?:&>|1?>\|?|&>>|1?>>)\z/) {
+          return 1 unless is_safe_file_target($tgt->[3], 0);
+        }
       }
       $j++;
       next;
@@ -1068,7 +1087,7 @@ sub after_group_is_piped {
 # Walk compound-command delimiters (`{`/`}`, `(`/`)`, `if`/`fi`, `for`/`while`/`until`/`done`,
 # `case`/`esac`) and function headers (`name() {`, `function name {`, `name() (`) across $toks
 # using stack $stk and scalar ref $pending_fn. Invokes $on_piped when a closed compound command
-# is piped onward or redirected to `>(...)`, and $on_fn when a function body closes.
+# is piped onward or redirected to an executable/unsafe destination, and $on_fn when a function body closes.
 sub sh_walk_groups {
   my ($toks, $stk, $pending_fn, $line_idx, $on_piped, $on_fn) = @_;
   my $cmd_pos = 1;
@@ -1076,9 +1095,9 @@ sub sh_walk_groups {
   while ($ti < @$toks) {
     my $t = $toks->[$ti];
     my ($tp, $w) = ($t->[0], $t->[3]);
-    if ($tp eq "comment" || $tp eq "redir_fd") { $ti++; next }
+    if ($tp eq "comment") { $ti++; next }
     if ($tp eq "sep" || $tp eq "pipe") { $cmd_pos = 1; $$pending_fn = 0; $ti++; next }
-    if ($tp =~ /\Aredir_(?:out|append|in|hd|herestr)\z/) {
+    if ($tp =~ /\Aredir_(?:out|append|in|hd|herestr|fd)\z/) {
       $ti++ if $ti + 1 < @$toks && $toks->[$ti + 1][0] eq "word";
       $ti++;
       next;
@@ -1188,14 +1207,9 @@ sub sh_pipelines {
     $saw_pipe = 0;
     $grp_piped = 1 if $piped_tok[$i];
     $stage_fn  = 1 if $fn_tok[$i];
-    if ($t->[0] =~ /\Aredir_(?:out|append|in|hd|herestr)\z/) {
+    if ($t->[0] =~ /\Aredir_(?:out|append|in|hd|herestr|fd)\z/) {
       my $target = ($i + 1 < @$toks && $toks->[$i + 1][0] eq "word") ? $toks->[++$i] : undef;
       push @cur_stage, [$t->[0], $t, $target];
-      $i++;
-      next;
-    }
-    if ($t->[0] eq "redir_fd") {
-      push @cur_stage, ["redir_fd", $t, undef];
       $i++;
       next;
     }
@@ -1286,14 +1300,18 @@ sub word_has_expansion {
   }
   return 0;
 }
-# True if $stage redirects stdout into any custom fd > 2 (`>&3`, `>&10`, `1>&12`,
-# `>&$fd`), or into stderr (`>&2` / `1>&2`) when persistent `exec 2>...` is present.
+# True if $stage redirects stdout into any custom fd > 2 (`>&3`, `>& 3`, `>& '3'`,
+# `>&10`, `1>&12`, `>&$fd`, or bash `>&file`), or into stderr (`>&2` / `1>&2`) when
+# persistent `exec 2>...` is present.
 sub stage_has_custom_fd_out {
   my ($stage, $overridden) = @_;
   for my $it (@$stage) {
-    next unless $it->[0] eq "redir_fd" && $it->[1][3] =~ /\A(?:1?>&|>&)(.+)\z/;
-    my $dst = $1;
-    next if $dst eq "-";
+    next unless $it->[0] eq "redir_fd" && $it->[1][3] =~ /\A(?:1?>&|>&)\z/;
+    return 1 unless defined $it->[2];
+    my $raw = $it->[2][3];
+    return 1 if word_has_expansion($raw) || word_has_out_procsub($raw);
+    my $dst = sh_unquote($raw);
+    next if $dst eq "-" || $dst eq "1";
     return 1 if $dst !~ /\A\d+\z/;
     return 1 if $dst > 2;
     return 1 if $dst == 2 && $overridden && $overridden->{"\0exec_stderr"};
@@ -1465,8 +1483,8 @@ sub sh_scan_overrides {
             } elsif ($it->[0] eq "redir_fd") {
               my $op = $it->[1][3];
               $has_any_fd_redir = 1;
-              $has_stdout_redir = 1 if $op =~ /\A(?:1?>&|>&)/ && !defined($hidx);
-              $has_stderr_redir = 1 if $op =~ /\A2>&/;
+              $has_stdout_redir = 1 if $op =~ /\A(?:1?>&|>&)\z/ && !defined($hidx);
+              $has_stderr_redir = 1 if $op =~ /\A2>&\z/;
             }
           }
           if ($has_exec) {
@@ -2319,6 +2337,14 @@ sub names_of {
       my $pf_funcs = sh_parse($pf)->{funcs};
       $ov{$_} = 1 for keys %$pf_funcs;
     }
+    # A sourced helper's stdout/stderr may be captured or redirected by its
+    # caller (`code=$(source helper.sh)`, `source helper.sh | bash`, ...), so
+    # require explicit plain-file stdout redirection just as in function bodies.
+    if ($f ne $h) {
+      $ov{"\0exec_stdout"} = 1;
+      $ov{"\0exec_stderr"} = 1;
+      $ov{"\0exec_any_fd"} = 1;
+    }
     $sh_p = sh_parse($f, \%ov);
     $sh_scan = $sh_p->{scan};
   }
@@ -2430,7 +2456,8 @@ sub expand_loads {
           if (!$ov{$fn}) { $ov{$fn} = 1; $changed = 1 }
         }
       }
-      my $ld = loads_of($sf, \%ov);
+      my $ld_ov = $i > 0 ? { %ov, "\0exec_stdout" => 1, "\0exec_stderr" => 1, "\0exec_any_fd" => 1 } : \%ov;
+      my $ld = loads_of($sf, $ld_ov);
       for my $l (sort keys %$ld) {
         next if exists $par->{$l};
         $par->{$l} = [$sf, "loads", @{$ld->{$l}}];
@@ -2465,7 +2492,7 @@ for my $h (@members) {
           if (!$named_ov{$fn}) { $named_ov{$fn} = 1; $n_changed = 1 }
         }
       }
-      my $ld = loads_of($named[$i], \%named_ov);
+      my $ld = loads_of($named[$i], { %named_ov, "\0exec_stdout" => 1, "\0exec_stderr" => 1, "\0exec_any_fd" => 1 });
       for my $l (sort keys %$ld) { next if exists $par{$l}; $par{$l} = [$named[$i], "loads", @{$ld->{$l}}]; push @named, $l; $n_changed = 1 }
     }
   }

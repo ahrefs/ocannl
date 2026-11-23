@@ -1924,6 +1924,21 @@ if harness_leg 'harness fixture and heredoc literals'; then
   fx_reach 'fail-closed: cat >/dev/fd/3 <<SH keeps heredoc scanned' tools/test-a.sh tools/test-c.sh
   twin_text 'cat <<'\''SH'\'' \' '  | bash' 'bash tools/sub.sh' 'SH'
   fx_reach 'fail-closed: backslash-continued heredoc opener piped on the next line keeps heredoc scanned' tools/test-a.sh tools/test-c.sh
+  # Round 10 review findings: descriptor redirections on compound commands,
+  # whitespace-separated/quoted fd duplication targets, and output context of
+  # sourced shell files.
+  twin_text 'exec 3> >(bash)' '{ printf '\''bash tools/sub.sh\n'\''; } >&3'
+  fx_reach 'fail-closed: compound command redirected to >&3 keeps inner printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 3> >(bash)' '{' '  printf '\''bash tools/sub.sh\n'\''' '} >&3'
+  fx_reach 'fail-closed: multiline compound command redirected to >&3 keeps inner printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 3> >(bash)' 'printf '\''bash tools/sub.sh\n'\'' >& 3'
+  fx_reach 'fail-closed: whitespace-separated fd dup (>& 3) keeps printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 3> >(bash)' 'printf '\''bash tools/sub.sh\n'\'' >& '\''3'\'''
+  fx_reach 'fail-closed: quoted fd dup (>& '\''3'\'') keeps printf scanned' tools/test-a.sh tools/test-c.sh
+  printf '%s\n' 'printf '\''bash tools/sub.sh\n'\''' >"$hrepo/tools/clib.sh"
+  twin_text 'code=$(source tools/clib.sh)' 'bash -c "$code"'
+  fx_reach 'fail-closed: unredirected printf inside a sourced shell file stays scanned' tools/test-a.sh tools/test-c.sh
+  : >"$hrepo/tools/clib.sh"
   hc_restore
 fi
 
