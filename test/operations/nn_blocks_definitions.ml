@@ -146,7 +146,7 @@ let () =
       let observed f =
         checked := [];
         Tensor.For_testing.observe_schemes f ~on_event:(function
-          | Tensor.Scheme.Checked l -> checked := l :: !checked
+          | Tensor.Scheme.Checked s -> checked := Tensor.Scheme.label s :: !checked
           | _ -> ())
       in
       let m = model () in

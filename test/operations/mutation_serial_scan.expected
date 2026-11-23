@@ -62,6 +62,7 @@ tensor/shape.ml: times (ref) -- exempt: registration timings, not inference stat
 tensor/shape.ml: timing_paused (ref) -- exempt: registration timings, not inference state
 tensor/shape.ml: live (unread state) -- exempt
 tensor/shape.ml: made (unread state) -- exempt
+tensor/shape.ml: after_closure_publication (unread state) -- exempt
 tensor/shape.ml: boundary restore_globals -- part of a rewind: puts back the globals a checkpoint captured
 tensor/shape.ml: boundary unsafe_reinitialize -- the session reset: it discards all state and clears the taint
 tensor/shape.ml: boundary finish_inference_body -- the commit point: finish_inference taints the session on any failure of this body

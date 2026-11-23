@@ -598,7 +598,10 @@ let wide_draw ~name ~scope =
     Ll_test.optimize_scoped ~name ~raw:(write draw)
       (write (scope ~orig_indices:i (fnode (name ^ "_mid")) draw))
   in
-  (o, [ (x_tn, bf_inputs n) ], out)
+  (* The zero addend exposes half truncation versus rounding of a single draw under the host
+     narrow-compute policy. The fixture uses it on host-pool backends and was verified on cc. *)
+  let inputs = if on_cpu then Array.create ~len:n 0. else bf_inputs n in
+  (o, [ (x_tn, inputs) ], out)
 
 (* A scope in a [Where] condition: the condition has a precision of its own, so the walk does not
    follow it, and the scope stays whatever the arms do. *)

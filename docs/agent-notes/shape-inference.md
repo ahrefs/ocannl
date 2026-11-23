@@ -431,7 +431,11 @@ files.
   equal only to themselves, materialized at their declared maximum; `Total_elems` against them
   fails fast, and `Total_elems` cannot resolve conv/affine dims either — give leaves explicit
   dims (e.g. `Operation.init ~o:[n] ~grad_spec:Require_grad`) instead of `Tensor.term_init` when
-  the consumer is a windowed spec.
+  the consumer is a windowed spec. The distinct-symbol check in `derive_projections` is defensive:
+  projection ids can share a product iterator (a unit-stride window is one source of aliasing),
+  but equating two plain symbolic axes first goes through dimension solving, which requires the
+  same static symbol. The check only compares axes with actual iterators. Extent-one axes can
+  share the absence of an iterator without identifying their symbols.
 - `einsum_n_constraints` (the shared constraint-generation helper for binary Einsum, Block/concat
   and ternary Einsum) takes `?lhs_constraints_first` because the branches need OPPOSITE orders and
   no global choice works: binary Einsum passes `true` (the LHS constraint must precede RHS Affine
@@ -955,6 +959,10 @@ files.
   available. Nothing but `get_projections` compares a step's projections with the shapes they index
   (a closure derives none for a step that has them), so it refuses disagreeing ones on the way out
   of every path (gh-ocannl-1970).
+  The carried-row control installs `Shape.For_testing.with_closure_publication_hook`
+  and throws after reading the captured axes, before the closure commits. A normal rewind clears
+  those axes, and skipping reference restoration leaves them behind. The earlier `closed_kind`
+  field was retired when projection derivation stopped rewriting the binding (gh-ocannl-1969).
 - What a rewind discarded is recorded where it lasts only as long as someone can present it
   (gh-ocannl-1789): a shape's, a capture reference's and an update step's own `discarded_by` field,
   and a node's entry in `Tensor`'s weak `discarded_nodes` (an ephemeron table). A schemed closure's
@@ -1001,7 +1009,9 @@ files.
   scheme pins the trace's precision cells); the body's conversion node fills it per application.
   An explicit `instantiate` has no node and refuses. A new Stage1 arm reading a lazy coefficient
   would break this, and inline precision too. A round-up `Strided_var` is the draw marker: only
-  `Uint4x32_to_prec` mints one. The `op_schemes` GC control witnesses the retained precision cell
+  `Uint4x32_to_prec` mints one. `product_tie_cancellation` passes a nine-element row and a
+  callback coefficient of four to the solver. Stage1 leaves the callback unread and Stage2
+  takes it once, yielding three blocks. The `op_schemes` GC control witnesses the retained precision cell
   directly (gh-ocannl-2170): precision cells no longer capture tensor nodes, so even a sabotaged
   scheme retaining its draw coefficients lets the nodes collect.
 - Printing a scheme (gh-ocannl-1753, `Shape.Scheme.to_string`): substituted boundary rows alone

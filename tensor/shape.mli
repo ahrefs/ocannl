@@ -447,6 +447,12 @@ val propagate_shapes : update_step -> unit
     raise [Row.Shape_error] naming the first failure. [Tensor.rewind_to_last_closure] restores a
     usable session. *)
 
+module For_testing : sig
+  val with_closure_publication_hook : (unit -> unit) -> (unit -> 'a) -> 'a
+  (** Runs the hook after a closure publishes capture solutions, before it commits. A raised
+      exception leaves the closure available to rewind. *)
+end
+
 val check_untainted : unit -> unit
 (** Raises [Row.Shape_error] when the session is tainted. *)
 

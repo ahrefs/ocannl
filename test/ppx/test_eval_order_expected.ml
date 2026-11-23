@@ -97,6 +97,23 @@ let () =
                                     Stdlib.__POS__ (fun () -> mk "b"))|]);
   in_source_order "variables only" []
     (fun () -> let open! TDSL.O in stack ?label:(Some []) `Output [|x;y|])
+type cell = {
+  mutable current: Tensor.t }
+let () =
+  let before = mk "before"
+  and after = mk "after" in
+  let cell = { current = before } in
+  let stacked =
+    let open! TDSL.O in
+      let __op_component1 = cell.current in
+      stack ?label:(Some []) `Output
+        [|__op_component1;((cell.current <- after; after))|] in
+  let rec reads_before (t : Tensor.t) =
+    (t == before) ||
+      (List.exists (fun child -> reads_before child.Tensor.subtensor)
+         t.children) in
+  p "a field read sees the tensor held before the next component mutates it"
+    (reads_before stacked)
 let () =
   let __op_component1 = mk "y" in
   let stacked = ref [] in

@@ -67,6 +67,7 @@ while IFS= read -r script; do
 name=${0#"$FIXTURE/"}
 printf '%s\n' "$name" >>"$RECORD"
 [ "$PWD" = "$FIXTURE" ] || exit 90
+[ -z "${OCANNL_TOOL_HARNESS_SUBJECT+x}" ] || exit 91
 if [ -n "${BARRIER:-}" ]; then
   # Passed only beside another member: two of them here at once, ever.
   : >"$BARRIER/$$"
@@ -224,6 +225,14 @@ for signal in HUP INT TERM; do
   else report 1 "$signal continuation twin launches the later members and loses the interrupt oracle"; fi
 done
 unset FAIL_MEMBER FAIL_SIGNAL
+subject_rc=0
+( export OCANNL_TOOL_HARNESS_SUBJECT=$TMP/ambient-subject
+  run --shell
+  exit "$got"
+) || subject_rc=$?
+if [ "${subject_rc:-0}" = 0 ] && cmp -s "$TMP/shell" "$RECORD"; then
+  report 0 'an ambient subject cannot replace the checkout in an aggregate run'
+else report 1 'an ambient subject cannot replace the checkout in an aggregate run' "exit ${subject_rc:-0}"; fi
 # --expected-skips (gh-ocannl-1236): one shell member skips through the real
 # harness-support.sh. Listed, the run is green and the skip counted; unlisted,
 # the member is red; listed but not skipped, the tier is red; a list the

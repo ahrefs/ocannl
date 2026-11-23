@@ -34,3 +34,6 @@ the cancelled variable closes at the end: true
 the cancelled variable closes, nothing left to wait on: true
 an open row closes empty around the cancelled variable: true
 the open row closes, nothing left to wait on: true
+Stage1 leaves the packed coefficient unread and its block count unsolved: true
+Stage2 reads the coefficient and solves the rounded-up block count: true
+the packed constraint is discharged at Stage2: true

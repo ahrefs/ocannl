@@ -128,7 +128,8 @@ let run_one ?(unbounded = false) ?(whole_env = false) ?(alloc = false) ?(recheck
     let y =
       Tensor.For_testing.observe_schemes
         (fun () -> w.build n)
-        ~on_event:(function Tensor.Scheme.Checked l -> checked := l :: !checked | _ -> ())
+        ~on_event:(function
+          | Tensor.Scheme.Checked s -> checked := Tensor.Scheme.label s :: !checked | _ -> ())
     in
     let construction_s = seconds started in
     (y, construction_s, Array.to_list (Shape.to_dims y.Tensor.shape))

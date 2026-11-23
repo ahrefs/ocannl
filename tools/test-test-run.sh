@@ -7,12 +7,13 @@
 #   tools/test-test-run.sh --only '^81:'   # the members holding a leg whose name matches
 #   tools/test-test-run.sh --only '#lifecycle'   # one named group of legs, wherever its legs sit
 #   tools/test-test-run.sh --subject FILE --only '^99:'   # test FILE, not tools/test-run.sh
+#   tools/test-test-run.sh --subject-rev REV --only '^99:'   # test the runner from REV
 #   tools/test-test-run.sh --members       # list the members, and run nothing
 #   tools/test-test-run.sh --list-legs     # every member's legs
 #
-# Every word but --members goes to each member it runs, unread but for
-# --only's selector: --keep, --subject and the rest are the members'
-# (tools/test-test-run-common.sh). A leg's number names it across the members,
+# Pass the member options through, using --only to select members and
+# resolving --subject-rev once to a commit for all members. A leg's number
+# names it across the members,
 # so a selector needs no member: with --only, a member is run when
 # `--list-legs` shows it a leg the selector matches, by the matcher the gates
 # use. A selector matching no leg of any member is refused (exit 2) as nothing
@@ -28,16 +29,30 @@
 # member stop the run and keep their status (129, 130, 143).
 set -u
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 2
-only= only_set=0 list_members=0 args=("$@")
+only= only_set=0 list_members=0 subject_rev= revision_set=0
+argc=$# args=()
 while [ $# -gt 0 ]; do
   case $1 in
     --members) list_members=1 ;;
-    --only=*) only=${1#--only=} only_set=1 ;;
+    --subject-rev|--subject-rev=*)
+      case $1 in
+        *=*) subject_rev=${1#--subject-rev=} ;;
+        *) subject_rev=${2-}; [ $# -lt 2 ] || shift ;;
+      esac
+      [ -n "$subject_rev" ] ||
+        { echo "${0##*/}: --subject-rev needs a revision" >&2; exit 2; }
+      revision_set=1 ;;
+    --subject)
+      args+=("$1")
+      [ $# -lt 2 ] || { args+=("$2"); shift; } ;;
+    --only=*) only=${1#--only=} only_set=1; args+=("$1") ;;
     --only)
       [ $# -ge 2 ] || { echo "${0##*/}: --only needs a regular expression" >&2; exit 2; }
       only=$2 only_set=1
+      args+=("$1" "$2")
       shift ;;
     -h|--help) sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) args+=("$1") ;;
   esac
   shift
 done
@@ -48,7 +63,7 @@ done < <("${BASH:-bash}" "$here/test-harnesses.sh" --list)
 [ ${#members[@]} -gt 0 ] ||
   { echo "${0##*/}: $here/test-harnesses.sh --list names no tools/test-test-run-NAME.sh" >&2; exit 2; }
 if [ "$list_members" = 1 ]; then
-  [ ${#args[@]} = 1 ] || { echo "${0##*/}: --members takes no other argument" >&2; exit 2; }
+  [ "$argc" = 1 ] || { echo "${0##*/}: --members takes no other argument" >&2; exit 2; }
   printf 'tools/%s\n' "${members[@]}"
   exit 0
 fi
@@ -64,11 +79,18 @@ if [ "$only_set" = 1 ]; then
       [[ ${leg#LEG  } =~ $only ]] || continue
       holding+=("$member")
       break
-    done < <("${BASH:-bash}" "$here/$member" --list-legs 2>/dev/null)
+    # The census comes from the harness. The selected runner is used when the leg runs.
+    done < <(unset OCANNL_TOOL_HARNESS_SUBJECT; "${BASH:-bash}" "$here/$member" --list-legs 2>/dev/null)
   done
   [ ${#holding[@]} -gt 0 ] ||
     { echo "${0##*/}: --only '$only' selected no leg of any member (${members[*]}): nothing was tested" >&2; exit 2; }
   members=("${holding[@]}")
+fi
+if [ "$revision_set" = 1 ]; then
+  # shellcheck source=../scripts/harness-support.sh
+  . "$here/../scripts/harness-support.sh"
+  subject_commit=$(harness_resolve_subject_commit "$here" "$subject_rev") || exit 2
+  args+=("--subject-rev=$subject_commit")
 fi
 failed=0 refused=0
 for member in "${members[@]}"; do

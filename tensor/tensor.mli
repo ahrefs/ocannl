@@ -601,7 +601,7 @@ module Scheme : sig
             applications are checked against. *)
     | Unschemed of string * string
         (** A function (a pattern, by its label) was left unschemed, with the reason. *)
-    | Checked of string  (** An application was checked against its pattern's scheme. *)
+    | Checked of t  (** The scheme against which an application was checked. *)
 
   val registration_counts : unit -> Shape.registration_counts
   (** Process-wide registration statistics since the last reset (gh-ocannl-1752's attribution): see

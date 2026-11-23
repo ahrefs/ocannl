@@ -184,24 +184,6 @@ fi
 }
 harness_leg_run '1: group_alive has one shared production definition #group-alive' leg_1
 
-# A copy of the script with whole lines changed, for the negative controls of
-# legs 1b and 101.
-token_mutant() { # <out> [FROM TO]...: $SRC with each whole line FROM replaced by TO; 0 iff each FROM was one line
-  perl -e '
-    my ($src, $out, %to) = @ARGV;
-    my %n;
-    open(my $in, "<", $src) or exit 1;
-    open(my $o, ">", $out) or exit 1;
-    while (my $l = <$in>) {
-      chomp $l;
-      if (exists $to{$l}) { $n{$l}++; $l = $to{$l} }
-      print $o "$l\n";
-    }
-    close $o or exit 1;
-    exit((grep { ($n{$_} || 0) != 1 } keys %to) ? 1 : 0);
-  ' "$SRC" "$@"
-}
-
 # ---------------------------------------------------------------------------
 # Leg 1b: each embedded Perl program compiles (gh-ocannl-1945)
 # ---------------------------------------------------------------------------
@@ -280,7 +262,7 @@ perl_program_verdicts() { # <script>...: "NAME<TAB>pass", or "NAME<TAB>fail<TAB>
 }
 perl_program_control() { # <label> <bash -n must accept it: 0|1> <why pattern> FROM TO
   local mutant=$TMP/perl-program-mutant.sh rows failed why
-  token_mutant "$mutant" "$4" "$5" ||
+  harness_line_mutant "$SRC" "$mutant" "$4" "$5" ||
     { harness_abandon "the line '$4' is not in $SRC exactly once; the mutant is broken"; return 1; }
   rows=$(perl_program_verdicts "$mutant")
   failed=$(awk -F '\t' '$2 != "pass" { printf "%s%s", sep, $1; sep = " " }' <<<"$rows")
@@ -889,8 +871,10 @@ harness_leg_run '67c: only a /proc observed without both lock tables makes 67b n
 # changed on both of its branches (another stat field under /proc, another
 # time zone for lstart): each must be told from census_token. The fourth
 # renderer the issue counted, the supervisor's own, is gone: the last check
-# is the inventory of every line of the script that renders a token, so one
-# added beside these is pinned here or refused.
+# is a count of the current literal spellings: $f[19] followed by a colon
+# in the Perl reads, and lstart= before any comment marker. It does not
+# recognize other stat parsers, ps options, indirection, or renamed fields.
+# A new spelling needs its own relationship check against census_token.
 # lock_census's own bulk join needs no row: it pairs a pid only while
 # census_same holds on the token it joined, so a rendering that differs finds
 # no holder, which leg 67 decides wherever lsof is the census.
@@ -939,7 +923,7 @@ else
   else
     report 1 "$l_one" "this shell's row (pid, census_token, ps_token, bulk join): ${token_self:-none}; rows that differ: ${token_bad:-none}"
   fi
-  token_mutant "$TMP/token-shell-mutant.sh" \
+  harness_line_mutant "$SRC" "$TMP/token-shell-mutant.sh" \
     '      print defined $f[19] ? $f[19] : "";' '      print defined $f[20] ? $f[20] : "";' \
     '    LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null |' '    LC_ALL=C TZ=UTC-13 ps -o lstart= -p "$1" 2>/dev/null |' ||
     { harness_abandon "ps_token's two renderings could not be changed in a copy of $SRC; the mutant is broken"; return; }
@@ -949,7 +933,7 @@ else
   else
     report 1 "$l_shell_nc" "this shell's row (pid, census_token, ps_token, bulk join): ${token_self:-none}"
   fi
-  token_mutant "$TMP/token-bulk-mutant.sh" \
+  harness_line_mutant "$SRC" "$TMP/token-bulk-mutant.sh" \
     '    $tok{$p} = defined $f[19] ? $f[19] : "";' '    $tok{$p} = defined $f[20] ? $f[20] : "";' \
     '  $ENV{TZ} = "UTC";' '  $ENV{TZ} = "UTC-13";' ||
     { harness_abandon "the bulk join's two renderings could not be changed in a copy of $SRC; the mutant is broken"; return; }

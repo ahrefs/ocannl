@@ -2260,7 +2260,7 @@ module Scheme = struct
 
   (* {3 Automatic schemes for [%op] functions (gh-ocannl-1751)} *)
 
-  type event = Traced of t | Unschemed of string * string | Checked of string
+  type event = Traced of t | Unschemed of string * string | Checked of t
 
   (* Observers of the automatic schemes' events, innermost first: [traced_by] and [check_definition]
      collect the schemes traced, and tests read the log. *)
@@ -2559,7 +2559,7 @@ module Scheme = struct
     (* The check of one application: the scheme's constraints against the arguments, solved, and
        then put back -- the session afterwards is what the body alone makes. False when no check
        could run, so that nothing vouches for the body's applications. *)
-    let check s scheme args =
+    let check scheme args =
       Shape.can_checkpoint ()
       &&
       ((* Its renamed variables die with it: minted from the reserved range. *)
@@ -2567,7 +2567,7 @@ module Scheme = struct
            Shape.Scheme.check scheme ~application:(application_name args) ?site:(site_phrase ())
              ~args:(List.map args ~f:(fun t -> t.shape)));
        Shape.note_checked_application ();
-       emit (Checked s.label);
+       emit (Checked scheme);
        true)
 
     let due s =
@@ -2596,7 +2596,7 @@ module Scheme = struct
               if first then List.iter h.slots ~f:(trace_slot h) else if due s then trace_slot h s;
               let checked =
                 match s.state with
-                | Schemed { scheme; _ } -> check s scheme (List.filter_opt args)
+                | Schemed { scheme; _ } -> check scheme (List.filter_opt args)
                 | Pending | Unschemed _ -> false
               in
               if checked then run_checked_body body else body ())

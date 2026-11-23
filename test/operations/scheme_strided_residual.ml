@@ -50,7 +50,10 @@ let traced name = function
   | Tensor.Scheme.Traced s -> String.equal (Tensor.Scheme.label s) name
   | _ -> false
 
-let checked name = function Tensor.Scheme.Checked n -> String.equal n name | _ -> false
+let checked name = function
+  | Tensor.Scheme.Checked s -> String.equal (Tensor.Scheme.label s) name
+  | _ -> false
+
 let unschemed name = function Tensor.Scheme.Unschemed (n, _) -> String.equal n name | _ -> false
 
 (* The s2 block of [Bench_conv_model.resnet]. The residual [+] evaluates its shortcut first, as the

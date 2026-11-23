@@ -186,9 +186,13 @@ let () =
     p (label ^ ": no context the compile minted is left") (unreleased () = before)
   in
   let pick ?report root = Autotune.model_default ?report root comp Ir.Indexing.Empty in
+  let choice = ref None in
+  let record_choice r = choice := Some r in
   leaves_nothing "the pick compiled" (fun root ->
-      let ctx, routine = pick root ~report:(fun r -> picked := is_pick r) in
-      p "the owned compile took the pick" !picked;
+      let ctx, routine = pick root ~report:record_choice in
+      p "the owned compile took the pick" (Option.exists !choice ~f:is_pick);
+      p "the kept pick reports its placement rank"
+        (Option.exists !choice ~f:(fun r -> Option.is_some r.Autotune.mc_placement_rank_ms));
       ignore (Context.run ctx routine : Context.t);
       Context.release ctx);
   leaves_nothing "the pick's report raised" (fun root ->
@@ -210,6 +214,7 @@ let () =
         | exception Invalid_argument _ -> true));
   leaves_nothing "the pick fell back to the caller's placements" (fun root ->
       let refused = ref 0 in
+      choice := None;
       let ctx, routine =
         Ir.Resource_fault_injection.with_callback
           (fun point ->
@@ -225,9 +230,11 @@ let () =
                        detail = "gh-ocannl-1859";
                      })
             | _ -> ())
-          ~f:(fun () -> pick root ~report:(fun r -> picked := is_pick r))
+          ~f:(fun () -> pick root ~report:record_choice)
       in
       p "the picked placements' compile was refused, and the pick abandoned"
-        (!refused = 1 && not !picked);
+        (!refused = 1 && Option.exists !choice ~f:(fun r -> not (is_pick r)));
+      p "the fallback reports no placement rank from the abandoned pick"
+        (Option.exists !choice ~f:(fun r -> Option.is_none r.Autotune.mc_placement_rank_ms));
       ignore (Context.run ctx routine : Context.t);
       Context.release ctx)

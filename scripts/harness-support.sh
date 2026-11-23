@@ -5,7 +5,33 @@
 # unfinished status 0 becomes exit 1; existing nonzero statuses are preserved.
 # Parse errors before trap installation rely on Bash's own nonzero status.
 
+# Read from the named checkout even when invoked from a different repo's hook.
+harness_git() (
+  local repo_env
+  repo_env=$(git rev-parse --local-env-vars) || return 2
+  # The variable names come from Git, one per line.
+  # shellcheck disable=SC2086
+  unset $repo_env
+  git "$@"
+)
+
+harness_resolve_subject_commit() { # TOOLS_DIR REVISION
+  harness_git -C "$1" rev-parse --verify --end-of-options "$2^{commit}" ||
+    { echo "${0##*/}: cannot resolve subject revision $2" >&2; return 2; }
+}
+
+# Register one value-taking option for the calling harness. Only registered
+# long names accept --name VALUE or --name=VALUE; no abbreviation is read.
+harness_own_option() { # --NAME DESTINATION EMPTY_HINT
+  local i=${harness_own_count:-0}
+  harness_own_name[i]=$1
+  harness_own_destination[i]=$2
+  harness_own_hint[i]=$3
+  harness_own_count=$((i + 1))
+}
+
 harness_args() {
+  local own option value
   KEEP=0 failures=0 skipped=0 harness_finished=0
   harness_only= harness_only_set=0 legs_selected=0 legs_filtered=0
   harness_ran=() harness_skips=() harness_leg_running= harness_leg_current=
@@ -22,7 +48,22 @@ harness_args() {
         harness_only=$2 harness_only_set=1
         shift ;;
       -h|--help) sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-      *) echo "${0##*/}: unknown argument '$1'" >&2; exit 2 ;;
+      *)
+        option=${1%%=*}
+        own=0
+        while [ "$own" -lt "${harness_own_count:-0}" ] &&
+              [ "${harness_own_name[own]}" != "$option" ]; do
+          own=$((own + 1))
+        done
+        [ "$own" -lt "${harness_own_count:-0}" ] ||
+          { echo "${0##*/}: unknown argument '$1'" >&2; exit 2; }
+        case $1 in
+          *=*) value=${1#*=} ;;
+          *) value=${2-}; [ $# -lt 2 ] || shift ;;
+        esac
+        [ -n "$value" ] ||
+          { echo "${0##*/}: $option needs ${harness_own_hint[own]}" >&2; exit 2; }
+        printf -v "${harness_own_destination[own]}" '%s' "$value" ;;
     esac
     shift
   done
@@ -616,6 +657,23 @@ mutant() { # NAME AWK_PROGRAM [AWK_OPTION...], uses caller's SRC and TMP
   bash -n "$out" || return 1
   printf '%s' "$out"
 }
+# Rewrite exact physical lines. Each requested source line must occur once.
+harness_line_mutant() { # SCRIPT OUTPUT [FROM TO]...
+  perl -e '
+    my ($src, $out, %to) = @ARGV;
+    my %n;
+    open(my $in, "<", $src) or exit 1;
+    open(my $o, ">", $out) or exit 1;
+    while (my $l = <$in>) {
+      chomp $l;
+      if (exists $to{$l}) { $n{$l}++; $l = $to{$l} }
+      print $o "$l\n";
+    }
+    close $o or exit 1;
+    exit((grep { ($n{$_} || 0) != 1 } keys %to) ? 1 : 0);
+  ' "$@"
+}
+
 # In-process re-entrant rejection primitive: require the precise status AND
 # diagnostic, never treat an unavailable command or syntax error as a verdict.
 harness_rejected() { # EXPECTED_RC PATTERN LOG COMMAND [ARG...]

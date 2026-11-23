@@ -226,6 +226,34 @@ let test_on_hand_built_constraints () =
     (Row.equal_bcast closed.bcast Broadcastable && List.length closed.dims = 1);
   p_empty "the open row closes, nothing left to wait on" ~over:cs remaining
 
+(* gh-ocannl-1890: packed draws are the only producer of round-up totals. The coefficient reads
+   storage precision, so it must wait for closure. *)
+let packed_coefficient_waits () =
+  let v = Row.get_var () in
+  let forced = ref 0 in
+  let coeff =
+    Utils.safe_lazy "packed coefficient" (fun () ->
+        Int.incr forced;
+        4)
+  in
+  let constr =
+    Row.Total_elems
+      {
+        numerator = Strided_var { coeff; var = v; denom = 1; round_up = true };
+        divided_by = [];
+        keep_axis = false;
+      }
+  in
+  let cs = [ Row.Rows_constr { r = [ closed_row [ dim 9 ] ]; constr; origin } ] in
+  let remaining, env = solve cs in
+  p "Stage1 leaves the packed coefficient unread and its block count unsolved"
+    (!forced = 0 && Option.is_none (value env v));
+  let remaining, env = Row.solve_inequalities ~stage:Stage2 remaining env in
+  p "Stage2 reads the coefficient and solves the rounded-up block count"
+    (!forced = 1 && Option.equal Int.equal (value env v) (Some 3));
+  p_empty "the packed constraint is discharged at Stage2" ~over:cs remaining
+
 let () =
   test_through_captures ();
-  test_on_hand_built_constraints ()
+  test_on_hand_built_constraints ();
+  packed_coefficient_waits ()

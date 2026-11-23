@@ -1334,7 +1334,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `tools/test-run.sh`, so "this leg fails against the previous script" is
   `git show origin/master:tools/test-run.sh >F` and `--subject F --only '^N:'`, expecting exit 1 —
   not a scratch copy of `tools/` and `scripts/` with the script swapped in, which the
-  gh-ocannl-1830 worker made about ten times. FILE is staged once as `tools/test-run.sh` of a root
+  gh-ocannl-1830 worker made about ten times. `--subject-rev REV` resolves a commit in the
+  checkout, with Git's repository-local environment cleared, and stages its `tools/test-run.sh`
+  blob. The dispatcher resolves a moving ref once and gives every member the commit ID.
+  Either explicit selector overrides the
+  environment. The aggregate clears the ambient selector so its verdict belongs to the checkout.
+  `tools/test-mutation-run.sh --subject FILE` similarly substitutes the mutation runner in all
+  its fixtures. Both harnesses register their own options with `harness_own_option`.
+  FILE is staged once as `tools/test-run.sh` of a root
   under the scratch directory beside the files it sources, and every fixture root, mutant and
   direct call reads that copy. Only the script is swapped: what it sources, the shared
   `scripts/`, and the harness itself stay the working tree's, so a control for a change that also
@@ -1344,6 +1351,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   subject missing one `proc_table_perl` rule: leg 99 fails in the one check that rule answers.
   Leg 99c holds the slot stand-in wrapper unreaped until its guardian exits. Removing the
   zombie branch of `q_exited` fails that check while the wrapper is still in state Z.
+  Leg 102b stages two Git repositories to check revision selection, refusal diagnostics, and
+  the dispatcher's commit pin across a ref move. It also plants a literal stock runner read
+  outside the common harness's one default assignment and checks that the member fails.
+  Mutation harness leg 25 substitutes a runner with a distinct exit and checks the failure.
+  The six members' historical serial duration was about 760 s on MacBook Pro, recorded
+  2026-11-07 in the header of `tools/test-harnesses.sh` (a2b1887c1).
 - **Every gated leg must pass run alone** (gh-ocannl-1367). A leg that reads what an EARLIER
   leg's body made (a variable, a file, a lock, an exported mode) passes in every full run and fails
   only under `--only`, as two did when `tools/test-test-run.sh` was first gated (`LAB_MAP`,

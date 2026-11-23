@@ -84,7 +84,21 @@ let () =
   smoke "transformer_without_positions"
     ~outputs:(transformer_outputs ~pos_embed:Nn_blocks.No_pos_embed);
   smoke "lenet" ~outputs:(fun () ->
-      let logits = pin_width (Demo_models.lenet () ~train_step:None (images ~h:8 ~w:8 ~c:1)) 10 in
+      let logits =
+        Demo_models.lenet ~label:[ "smoke_lenet" ] () ~train_step:None (images ~h:8 ~w:8 ~c:1)
+      in
+      let labels =
+        Set.to_list logits.Tensor.params
+        |> List.map ~f:(fun param -> Ir.Tnode.label_name param.Tensor.value)
+        |> List.sort ~compare:String.compare
+      in
+      let head_labels =
+        List.filter labels ~f:(fun l ->
+            String.is_prefix l ~prefix:"b_logits" || String.is_prefix l ~prefix:"w_logits")
+      in
+      p "lenet: both classifier parameters carry the caller's label"
+        (List.equal String.equal head_labels [ "b_logits_smoke_lenet"; "w_logits_smoke_lenet" ]);
+      let logits = pin_width logits 10 in
       ([ logits ], [ ("logits", logits) ]));
   smoke "sokoban_cnn" ~outputs:(fun () ->
       let action_logits, value =
@@ -156,7 +170,7 @@ let () =
           | _ -> false)
       and checked events pattern =
         List.exists events ~f:(function
-          | Tensor.Scheme.Checked l -> String.equal l (label pattern)
+          | Tensor.Scheme.Checked s -> String.equal (Tensor.Scheme.label s) (label pattern)
           | _ -> false)
       in
       let evaluated, y_eval = session `Check (fun () -> model ~grid_state:(img ()) None) in

@@ -11,7 +11,7 @@
 # fixtures legs of more than one member run against, and the leg every member
 # closes with. A fixture only one member's legs read sits in that member.
 #
-# --subject FILE (or OCANNL_TOOL_HARNESS_SUBJECT=FILE; the option wins) tests
+# --subject FILE (or OCANNL_TOOL_HARNESS_SUBJECT=FILE; an explicit selector wins) tests
 # FILE in place of tools/test-run.sh (gh-ocannl-1925): the control "this leg
 # fails against the previous script" is `git show REV:tools/test-run.sh >F`
 # and `--subject F`, with no copy of tools/ and scripts/. FILE is copied to
@@ -22,6 +22,10 @@
 # one run directly. Everything else under test (scripts/process-group.sh, the
 # sourced tools/*.sh, the member) stays the working tree's. The header of
 # such a run and the line above its footer name FILE: its verdict is FILE's.
+#
+# --subject-rev REV instead reads only tools/test-run.sh from a commit of
+# this checkout. The harness and sourced helpers always come from the checkout.
+# A missing revision or subject refuses before any leg.
 #
 # Each leg's body is a function, run by `harness_leg_run 'N: what it pins
 # #group' leg_N` (scripts/harness-support.sh), its name led by its leg numbers
@@ -71,28 +75,15 @@
 set -u
 
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
-# --subject is this harness's own option: taken out of the words before the
-# shared parser, which knows none of it, reads the rest as its own "$@".
-subject=${OCANNL_TOOL_HARNESS_SUBJECT-} subject_set=0
-harness_argv=()
-while [ $# -gt 0 ]; do
-  case $1 in
-    --subject=*) subject=${1#--subject=} subject_set=1 ;;
-    --subject)
-      [ $# -ge 2 ] || { echo "${0##*/}: --subject needs a file" >&2; exit 2; }
-      subject=$2 subject_set=1
-      shift ;;
-    --only)
-      # Its value is not an option, whatever it looks like.
-      harness_argv+=("$1")
-      [ $# -lt 2 ] || { harness_argv+=("$2"); shift; } ;;
-    *) harness_argv+=("$1") ;;
-  esac
-  shift
-done
-[ "$subject_set" = 0 ] || [ -n "$subject" ] || { echo "${0##*/}: --subject needs a file" >&2; exit 2; }
-set -- ${harness_argv[@]+"${harness_argv[@]}"}
+# An explicit selector outranks an ambient file, and the selectors are exclusive.
+subject_file= subject_rev=
+harness_own_option --subject subject_file 'a file'
+harness_own_option --subject-rev subject_rev 'a revision'
 harness_args "$@"
+[ -z "$subject_file" ] || [ -z "$subject_rev" ] ||
+  { echo "${0##*/}: choose --subject or --subject-rev" >&2; exit 2; }
+subject=${subject_file:-${OCANNL_TOOL_HARNESS_SUBJECT-}}
+[ -z "$subject_rev" ] || subject=$subject_rev
 
 # Hermetic against the fleet (gh-ocannl-1004): on a fleet box the shipping
 # script takes a real run-time slot through the deployed fleet-worker.sh, and
@@ -117,17 +108,29 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # The member being run: the legs that run or cut a copy of their own harness name it.
 SELF=$HERE/${0##*/}
 # The subject as named, until the scratch directory exists to stage it in.
-SRC=${subject:-$HERE/test-run.sh}
+stock_src=$HERE/test-run.sh
+SRC=${subject:-$stock_src}
+if [ -n "$subject_rev" ]; then
+  subject_commit=$(harness_resolve_subject_commit "$HERE" "$subject_rev") || exit 2
+else
+  [ -f "$SRC" ] && [ -r "$SRC" ] || { echo "no $SRC" >&2; exit 2; }
+fi
 GROUP_SRC="$HERE/../scripts/process-group.sh"
 HOOK_SRC="$HERE/../scripts/setup-ocaml-env.sh"
 JOBS_SRC="$HERE/box-jobs.sh"
 SWEEP_SRC="$HERE/sweep.sh"
-[ -f "$SRC" ] && [ -r "$SRC" ] || { echo "no $SRC" >&2; exit 2; }
 [ -f "$GROUP_SRC" ] || { echo "no $GROUP_SRC" >&2; exit 2; }
 [ -f "$HOOK_SRC" ] || { echo "no $HOOK_SRC" >&2; exit 2; }
 [ -f "$JOBS_SRC" ] || { echo "no $JOBS_SRC" >&2; exit 2; }
 [ -f "$SWEEP_SRC" ] || { echo "no $SWEEP_SRC" >&2; exit 2; }
 
+harness_scratch "test-test-run"
+if [ -n "$subject_rev" ]; then
+  SRC=$TMP/revision-subject.sh
+  harness_git -C "$HERE" show "${subject_commit}:tools/test-run.sh" >"$SRC" ||
+    { echo "${0##*/}: revision $subject_commit contains no tools/test-run.sh" >&2; exit 2; }
+  printf '  subject revision: %s\n' "$subject_commit"
+fi
 
 # The harness needs the two facts about a process that `group_alive` needs, read
 # INDEPENDENTLY of it: its state and its process group. Neither is available the
@@ -171,7 +174,7 @@ have_state=1; [ -n "$(pstate $$)" ] || have_state=0
 have_pgid=1;  [ -n "$(ppgid $$)" ]  || have_pgid=0
 
 echo "testing $SRC and $GROUP_SRC"
-[ -z "$subject" ] || echo "  subject: $SRC in place of $HERE/test-run.sh"
+[ -z "$subject" ] || echo "  subject: $SRC in place of $stock_src"
 printf '  digest %s\n' "$( (cksum <"$SRC") 2>/dev/null || echo '?')"
 printf '  group digest %s\n' "$( (cksum <"$GROUP_SRC") 2>/dev/null || echo '?')"
 printf '  state reader: %s; pgid reader: %s\n' \
@@ -198,7 +201,6 @@ legacy_holder="" # leg 8's holder of the in-tree lock
 inherit_holder="" # leg 67's holder of the inherited lock
 escape_pid="" # leg 24's session-escaped descendant
 escape_release=""
-harness_scratch "test-test-run"
 
 # ---------------------------------------------------------------------------
 # Everything the shipping script SOURCES has to exist in a fixture root, and the
@@ -236,7 +238,7 @@ stage_shared() { # <fixture root most later legs run against>
 # copy of SRC. From here on SRC is that copy, as it is the working tree's
 # script when no subject is named.
 if [ -n "$subject" ]; then
-  mkdir -p "$TMP/subject/tools" && cp "$SRC" "$TMP/subject/tools/test-run.sh" &&
+  mkdir -p "$TMP/subject/tools" && cp -- "$SRC" "$TMP/subject/tools/test-run.sh" &&
     chmod +x "$TMP/subject/tools/test-run.sh" ||
     { echo "cannot stage the subject $subject under $TMP" >&2; exit 2; }
   SRC=$TMP/subject/tools/test-run.sh
@@ -1566,11 +1568,28 @@ shared_through() { # NAME: run every stage not yet run, up to and including NAME
     shared_done=$i
   done
 }
+# Check exactly the literal stock path spelling. The only allowed occurrence
+# is its default assignment in this file. Shell aliases, expansions and
+# dynamically built paths are outside this check.
+check_stock_source() {
+  local bad
+  bad=$(awk -v literal='$HERE/'test-run.sh '
+    index($0, literal) {
+      if (FILENAME == ARGV[1] && $0 == "stock_src=" literal) found++
+      else print FILENAME ":" FNR ": " $0
+    }
+    END { if (found != 1) print "expected one stock_src assignment, found " found + 0 }
+  ' "$HERE/test-test-run-common.sh" "$SELF") ||
+    { report 1 "the harness uses its selected source" "could not read the harness sources"; return; }
+  [ -z "$bad" ] || report 1 "the harness uses its selected source" "$bad"
+}
+
 # A member's last lines: leg 70, which names no device and so runs after every
 # leg that faked one, then the footer.
 test_run_close() {
+  check_stock_source
   shared_through native
   harness_leg_run '70: a leg that names no device reads the absent defaults #hermetic' leg_70
-  [ -z "$subject" ] || echo "the subject of this run was $subject, not $HERE/test-run.sh"
+  [ -z "$subject" ] || echo "the subject of this run was $subject, not $stock_src"
   finish
 }
