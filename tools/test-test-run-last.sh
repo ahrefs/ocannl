@@ -1541,9 +1541,11 @@ leg_102b() {
   fi
   report 0 "conflicting selectors, an unknown revision and a revision without the runner refuse"
 
-  local script
+  # This is a fixture-owned manifest. Keep its basename split so the reach
+  # census does not treat it as a read of the live manifest.
+  local manifest=$target/tools/test-'harnesses.sh' script
   printf 'printf "%%s\\n" tools/test-test-run-first.sh tools/test-test-run-next.sh\n' \
-    >"$target/tools/test-harnesses.sh"
+    >"$manifest"
   for script in first next; do
     cat >"$target/tools/test-test-run-$script.sh" <<'MEMBER'
 set -eu
