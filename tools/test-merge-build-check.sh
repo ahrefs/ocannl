@@ -20,8 +20,8 @@
 # reaching change before anything is built; a full record, a union of records and a waiver
 # admit; the base alone never prints the merge's refusal line; and `record` certifies only a
 # finished, clean, cc run of an allowlisted command, `prune` only merged heads. The reader
-# prints admitted writers, including legacy, and rejects malformed writers. The fleet report
-# fixture supplies runner argv and last-run metadata to the real hook. The real merge gate reads
+# prints admitted writers, including legacy, and rejects malformed writers. The fleet owed-record
+# fixture supplies the invocation and last-run receipt to the real hook. The real merge gate reads
 # the published ref from a local bare repository and prints its writer for one stubbed train alias.
 # Structured train-name rows require a count matching distinct names and an alias the
 # tree has; legacy count-only output still asks affected and must agree exactly.
@@ -35,7 +35,7 @@
 # timing line; tracebacks and FAILED must survive. It does not scan Dune or Python source text.
 # affected-reads: benchmarks/dune benchmarks/*.py benchmarks/test/*.py benchmarks/runners/*.py benchmarks/runners/*/*.py benchmarks/ocannl_config --only '#compile-output'
 # affected-reads: tools/owed-run.sh
-# affected-reads: .github/fleet-leg tools/owed-run-report.sh --only '#owed-report'
+# affected-reads: .github/fleet-leg tools/owed-run-report.sh --only '#owed-record'
 # Usage: tools/test-merge-build-check.sh [--keep] [--only REGEX]
 set -u
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
@@ -880,54 +880,28 @@ EOF
   else report 1 'prune deletes the merged head'"'"'s record and keeps the open one'"'"'s' "exit $orc: $(cat "$TMP/owed-out"); left: $left"; fi
 fi
 
-owed_report_leg() {
-  if ! fixture owed-report || ! git -C "$R" checkout -q side; then
-    harness_abandon 'could not create the fleet report checkout'
+owed_record_leg() {
+  if ! fixture owed-record || ! git -C "$R" checkout -q side; then
+    harness_abandon 'could not create the fleet hook checkout'
     return
   fi
-  hook=$(sed -n 's/^run-report //p' "$HERE/../.github/fleet-leg")
+  hook=$(sed -n 's/^owed-record //p' "$HERE/../.github/fleet-leg")
   if ! cp "$HERE/../$hook" "$R/tools/" || ! commit_on side; then
-    harness_abandon 'could not commit the fleet report hook on the fixture head'
+    harness_abandon 'could not commit the fleet hook on the fixture head'
     return
   fi
   hook_head=$(git -C "$R" rev-parse HEAD)
-  hook_url=$TMP/owed-report.git
+  hook_url=$TMP/owed-record.git
   git init -q --bare "$hook_url" || { harness_abandon 'could not create the record repository'; return; }
-  leg_report() { # fresh|stale|shared LAST_RUN ARGV...
-    local state=$1 last_run=$2
-    shift 2
+  leg_record() { # LAST_RUN LEG_RECORD OBSERVED_SHA
     hrc=0
     (
       cd "$R" || exit 2
-      export PATH=$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$hook_url FAKE_LAST_RUN=$last_run
-      # The outer shell stays alive, like the fleet leg. Its runner's launcher row persists
-      # after the child returns. The report starts in its own bounded-slot process group.
-      new_group='defined(setsid()) or die "setsid: $!"; exec @ARGV or die "exec: $!"'
-      perl -MPOSIX=setsid -e "$new_group" "$BASH" -c '
-        new_group=$1 state=$2
-        shift 2
-        if [ "$state" != stale ]; then
-          if [ -r /proc/$$/stat ]; then
-            read -r stat <"/proc/$$/stat"
-            fields=${stat##*) }
-            # /proc field 22 is starttime, the twentieth word after comm.
-            token=$(set -- $fields; printf "%s" "${20}")
-          else
-            token=$(LC_ALL=C TZ=UTC ps -o lstart= -p "$$" | xargs)
-          fi
-          printf "%s %s 0123456789abcdef0123456789abcdef\n" "$$" "$token" >"$FAKE_LAST_RUN/launchers"
-        fi
-        if [ "$state" = shared ]; then
-          # Keep the intermediate group leader alive with the report as a member.
-          perl -MPOSIX=setsid -e "$new_group" "$BASH" -c "\"\$@\"; exit \$?" shared-report "$@"
-        else
-          perl -MPOSIX=setsid -e "$new_group" "$@"
-        fi
-        exit $?
-      ' fleet-report-fixture "$new_group" "$state" "./$hook" "$@"
+      PATH=$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$hook_url FAKE_LAST_RUN=$1 \
+        "./$hook" "$2" fixture-request "$3"
     ) >"$TMP/hook-out" 2>&1 || hrc=$?
   }
-  hook_skip() { # LABEL EXPECTED: a refused report leaves the remote ref absent
+  hook_skip() { # LABEL EXPECTED: a refusal leaves the remote ref absent
     if [ "$hrc" = 0 ] && grep -qF "$2" "$TMP/hook-out" &&
        [ -z "$(git -C "$R" ls-remote "$hook_url" "refs/owed-runs/$hook_head")" ]; then
       report 0 "$1"
@@ -936,33 +910,51 @@ owed_report_leg() {
   alias=@test/training/train-a
   leg_cmd="build --no-buffer $alias -j 1 -j 4"
   last_run=$(rundir leg-good 0 '' cc "$leg_cmd" "$hook_head")
-  leg_report fresh "$last_run" env OCANNL_BACKEND=cuda tools/test-run.sh run --expect-backend cuda build "$alias"
-  hook_skip 'an otherwise eligible GPU argv skips the report' 'recorded nothing (not an owed-run argv)'
-  leg_report stale "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
-  hook_skip 'an earlier valid receipt cannot stand for a launch with no receipt' 'was not launched by the current fleet leg'
-  leg_report shared "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
-  hook_skip 'a report sharing the leg group cannot reuse an outer receipt' 'was not launched by the current fleet leg'
-  leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias" @a/runtest-first
-  hook_skip 'a mixed first-tier list skips the report' 'recorded nothing (not an owed-run argv)'
-  leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build @test/training/train-b
+  leg_path="$TMP/current leg"
+  other_path="$TMP/earlier leg"
+  touch "$leg_path" "$other_path"
+  printf '%s\n' "build $alias -j 1" >"$last_run/fleet-leg-command"
+  leg_record "$last_run" "$leg_path" "$hook_head"
+  hook_skip 'a receipt without a fleet invocation path is refused' "does not match this fleet leg's run record"
+  printf '%s\n' "$other_path" >"$last_run/fleet-leg-run-record"
+  leg_record "$last_run" "$leg_path" "$hook_head"
+  hook_skip 'an earlier receipt for the same head and targets cannot stand for this leg' "does not match this fleet leg's run record"
+  printf '%s\n' "$leg_path" >"$last_run/fleet-leg-run-record"
+  leg_record "$last_run" "$leg_path" "$(git -C "$R" rev-parse HEAD^)"
+  hook_skip 'a matching invocation path cannot stand for a different observed head' 'is for a different head than the fleet leg observed'
+  printf '%s\n' "build $alias @a/runtest-first" >"$last_run/fleet-leg-command"
+  leg_record "$last_run" "$leg_path" "$hook_head"
+  hook_skip 'a mixed first-tier request with an eligible effective command is refused' 'did not request an owed-run command'
+  printf '%s\n' "--targets-file $TMP/list build" >"$last_run/fleet-leg-command"
+  leg_record "$last_run" "$leg_path" "$hook_head"
+  hook_skip 'a targets file with an eligible effective command is refused' 'did not request an owed-run command'
+  printf '%s\n' 'build @test/training/train-b' >"$last_run/fleet-leg-command"
+  leg_record "$last_run" "$leg_path" "$hook_head"
   hook_skip 'a receipt for different targets cannot stand for this leg' "does not cover the fleet leg's requested targets"
+  printf '%s\n' "build $alias -j 1" >"$last_run/fleet-leg-command"
+  gpu_run=$(rundir leg-gpu 0 '' cuda "build $alias" "$hook_head")
   dirty_run=$(rundir leg-dirty 0 ' M x.ml' cc "build $alias" "$hook_head")
-  leg_report fresh "$dirty_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
-  hook_skip 'a dirty control receipt is refused with report exit zero' 'ran a dirty checkout'
+  for rejected_run in "$gpu_run" "$dirty_run"; do
+    cp "$last_run/fleet-leg-run-record" "$last_run/fleet-leg-command" "$rejected_run/"
+  done
+  leg_record "$gpu_run" "$leg_path" "$hook_head"
+  hook_skip 'a matching receipt still requires the cc backend' 'was not run with --expect-backend cc'
+  leg_record "$dirty_run" "$leg_path" "$hook_head"
+  hook_skip 'a dirty receipt is refused with hook exit zero' 'ran a dirty checkout'
   last x.ml
-  leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
-  hook_skip 'a dirty control cannot republish an earlier clean receipt' 'the fleet worktree is dirty'
+  leg_record "$last_run" "$leg_path" "$hook_head"
+  hook_skip 'a dirty checkout cannot publish a clean receipt' 'the fleet worktree is dirty'
   git -C "$R" checkout -- x.ml
   git -C "$R" push -q "$hook_url" "$hook_head:refs/heads/master" ||
     { harness_abandon 'could not publish the already-merged control head'; return; }
-  leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias"
+  leg_record "$last_run" "$leg_path" "$hook_head"
   hook_skip 'a head already on the record repository master leaves no record ref' "recorded nothing (head is on master at $hook_url)"
   if ! git -C "$R" push -q -f "$hook_url" "$hook_head^:refs/heads/master" ||
      ! git -C "$R" update-ref refs/remotes/origin/master "$hook_head"; then
     harness_abandon 'could not put the control head ahead of the record repository master'
     return
   fi
-  leg_report fresh "$last_run" env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc build "$alias" -j 1
+  leg_record "$last_run" "$leg_path" "$hook_head"
   merge_side || { harness_abandon 'could not merge the published head into the fixture base'; return; }
   printf '%s\n' "$alias" >"$TMP/hook-train-name"
   OCANNL_TOOL_OWED_RUN_URL=$hook_url FAKE_TRAIN_N=1 FAKE_TRAIN_NAMES=$TMP/hook-train-name run "$TMP/dunebin"
@@ -972,9 +964,9 @@ owed_report_leg() {
      grep -qxF "$admission ($leg_host:$last_run, writer=leg:$leg_host)" "$TMP/out"; then
     report 0 'the merge gate admits the published training record with its fleet writer'
   else report 1 'the merge gate admits the published training record with its fleet writer' \
-    "report exit $hrc: $(cat "$TMP/hook-out"); merge gate exit $rc: $(cat "$TMP/out")"; fi
+    "hook exit $hrc: $(cat "$TMP/hook-out"); merge gate exit $rc: $(cat "$TMP/out")"; fi
 }
-harness_leg_run 'the fleet report publishes only eligible, clean owed runs #owed-report' owed_report_leg
+harness_leg_run 'the fleet hook publishes only eligible receipts from its own leg #owed-record' owed_record_leg
 
 # Use the same tree twice, but force each tier across a different whole-second duration.
 # Compare complete logs without normalizing digits, including the shared shell-red scenario.

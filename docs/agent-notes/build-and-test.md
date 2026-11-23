@@ -5843,13 +5843,19 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   can claim any writer. The script header states the limits of what the record certifies.
 - **Recipe.** On the box that ran it, from the run's own worktree:
   `env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc runtest -j 4`. A training run
-  uses `build @test/training/train-<name>... -j 1` or `build @train`. The fleet leg's
-  `run-report` hook publishes with `writer=leg:<hostname>` for these direct forms. It skips
-  heads already on the record repository's master. The hook receives argv alone. It validates
-  the worktree's last run against the head, coverage and recorded launcher ancestry. The
-  runner and report are nested process groups under the same fleet leg, so an earlier run's
-  receipt cannot stand in for a launch that failed before recording one. A refusal leaves
-  the leg verdict intact. Check readiness with `tools/owed-run.sh check <head sha>
+  uses `build @test/training/train-<name>... -j 1` or `build @train`. After a clean, successful
+  main leg, the fleet's `owed-record` hook (gh-ocannl-2359) publishes with
+  `writer=leg:<hostname>`. It skips heads already on the record repository's master. The hook
+  compares the leg's temporary run-record path to the `FLEET_LEG_RUN_RECORD` path saved in the
+  worktree's last runner receipt and requires the receipt's SHA to match the observed SHA and
+  the current checkout. This rejects earlier receipts even for the same head and command. The
+  runner saves the original explicit `run --expect-backend cc` request alongside the path.
+  Its requested and effective commands must both be allowlisted and cover the same targets.
+  A wrapper can invoke the qualifying command in the leg's worktree and share the hook's runner
+  state directory. Use the actual run directory for manual recording if the wrapper sets a
+  private `OCANNL_TOOL_TEST_RUNS`. Targets files and receipts without the binding also require
+  manual recording if eligible. A refusal leaves the leg verdict intact. Check readiness with
+  `tools/owed-run.sh check <head sha>
   <need>...` from a checkout with that head. Records accumulate on the head's ref and the
   reader takes their union. A run naming a `train` alias gets the two-hour training cap by
   itself (`plan` prints `run cap: 7200s (the training default`); an explicit `--cap` still

@@ -19,7 +19,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #group-alive (1, 2-3, 4, 5), #stop (6-8, 67, 101), #queries (39), #options (26-28, 37, 89, 120, 107, 103, 94, 119, 95, 96, 98), #hermetic (70).
+# Groups: #group-alive (1, 2-3, 4, 5), #stop (6-8, 67, 101), #queries (39), #options (26-28, 37, 89, 120, 107, 103, 94, 119, 95, 96, 98, 125), #hermetic (70).
 #
 # Legs:
 # 107. capped single-test builds retain stderr before timeout, with plan boundaries.
@@ -50,6 +50,9 @@
 #  28. past dune's own `--` the same word is a program argument, untouched.
 #  37. the `--cap` guard still refuses BEFORE dune is spawned: the two exit-2
 #      refusals are told apart by whether dune was ever invoked.
+# 125. fleet receipt metadata preserves the invocation path and the request
+#      before Dune's argv changes. The explicit cc form and fleet path are
+#      required.
 #  39. read-only paths and lock-status: absent state, invalid input, physical
 #      paths, recorded and legacy paths, held/released and uninspectable locks.
 #  89-90 sit after leg 79 (gh-ocannl-1448).
@@ -1623,6 +1626,40 @@ fi
 harness_leg_run '39: read-only paths and lock-status queries #queries' leg_39
 
 shared_through argv_probe
+
+leg_125() {
+  local path="$TMP/leg record" target=@test/training/train-receipt
+  local FLEET_LEG_RUN_RECORD
+  export FLEET_LEG_RUN_RECORD="$path"
+  argv_probe owed-receipt run --expect-backend cc build "$target" -j 1
+  if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
+     [ "$argv_calls" = "build --no-buffer $target -j 1" ] &&
+     cmp -s "$argv_dir/fleet-leg-run-record" <(printf '%s\n' "$path") &&
+     cmp -s "$argv_dir/fleet-leg-command" <(printf 'build %s -j 1 \n' "$target"); then
+    report 0 'the fleet receipt saves the exact path and the Dune request before injection'
+  else
+    report 1 'the fleet receipt saves the exact path and the Dune request before injection' \
+      "exit $argv_rc; receipt: $argv_dir; Dune: $argv_calls; stderr: $argv_err"
+  fi
+
+  argv_probe owed-receipt-equals run --expect-backend=cc build "$target" -j 1
+  if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
+     [ ! -e "$argv_dir/fleet-leg-run-record" ] && [ ! -e "$argv_dir/fleet-leg-command" ]; then
+    report 0 'the fleet receipt requires the explicit spaced cc option'
+  else
+    report 1 'the fleet receipt requires the explicit spaced cc option' "exit $argv_rc; receipt: $argv_dir"
+  fi
+
+  unset FLEET_LEG_RUN_RECORD
+  argv_probe owed-receipt-local run --expect-backend cc build "$target" -j 1
+  if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
+     [ ! -e "$argv_dir/fleet-leg-run-record" ] && [ ! -e "$argv_dir/fleet-leg-command" ]; then
+    report 0 'a local run records no fleet metadata'
+  else
+    report 1 'a local run records no fleet metadata' "exit $argv_rc; receipt: $argv_dir"
+  fi
+}
+harness_leg_run '125: fleet receipts preserve the binding and the original command #options' leg_125
 
 # Every subcommand that takes options, and both spellings of a value option:
 # the guard sits on one code path, but a future refactor that splits it must
