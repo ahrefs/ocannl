@@ -29,12 +29,13 @@ files.
   read: `ident[idx]`, and the cast form `ident)[idx]` that expression-level `volatile` produces. The
   failure direction is a false pass, so it does not announce itself on the CPU backends that never
   emit the cast: an uncounted read costs a read-modify-write its second subscript, and a statement
-  still hammering the device cell every step then reads as one that touches it once. Both existing
-  readers normalize -- `reduction_accumulator_residency.ml` counts the two patterns
-  (`count_node_accesses`), `reduction_forms.ml` erases the cast before any counting
-  (`strip_volatile_casts`) so its several readings cannot disagree about what an access is. Metal is
-  off the per-PR path, so such a test can only be wrong on the daily sweep; a normalizer checked
-  directly on both spellings, as `reduction_forms.ml` does, holds on every backend instead.
+  still hammering the device cell every step then reads as one that touches it once. Existing text
+  readers normalize — `reduction_accumulator_residency.ml` counts the two patterns
+  (`count_node_accesses`); `reduction_forms.ml` retired its textual reader and `strip_volatile_casts`
+  in favour of codegen's per-level rendering census (`Context.routine.render`, gh-ocannl-724). Metal
+  is off the per-PR path, so a text-reading test can only be wrong on the daily sweep; prefer
+  `Context.routine.render` over counting subscripts in emitted text, or check any normalizer
+  directly on both spellings so it holds on every backend.
 - What that matrix refuted is worth knowing before proposing a narrower predicate (gh-ocannl-782,
   M4 Max / macOS 26): the pooled slot table is NOT the trigger — building the pointers from literal
   offsets straight off a kernel parameter, with no dynamic load anywhere, miscompiles identically —

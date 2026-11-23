@@ -178,3 +178,400 @@ let () =
           (!(Syntax.peel_census_enabled inner) && not !(Syntax.peel_census_enabled outer)))
   in
   ()
+
+(* gh-ocannl-724: emission-level invariants of {!Cs.render_summary} — every tensor-write emitter
+   records its store, discarded projection operands are excluded from reads, unconsumed zero-seeds
+   preserve emission order, discarded [debug_float] renders do not duplicate loops, peel provenance
+   is scoped to the closing store occurrence, and [render_census_enabled] is read live at emission
+   time for body-only [compile_main] callers. *)
+let () =
+  let module Ops = Ir.Ops in
+  let prec = Ops.single in
+  let render_pure ?(vec_bytes = 0) ~name ~nodes llc =
+    let opt = optimized llc nodes in
+    let module S = Cs.C_syntax (struct
+      include Cs.Pure_C_config (struct
+        let procs = [| opt.LL.llc |]
+        let full_printf_support = true
+      end)
+
+      let vector_file = { Ir.Vector_file.bytes = vec_bytes; registers = 16 }
+    end) in
+    let _, summary = Cs.with_render_census (fun () -> ignore (S.compile_proc ~name [] opt)) in
+    summary
+  in
+  let rnode = B.node_factory ~first_id:724_100_000 ~dims:[| 16 |] () in
+  let r_out = rnode "rc_out"
+  and r_src = rnode "rc_src"
+  and r_idx = B.node_factory ~first_id:724_100_100 ~dims:[| 4 |] () "rc_idx" in
+  List.iter [ r_out; r_src; r_idx ] ~f:B.materialize;
+  let ri = B.sym () in
+  (* 1. Set_dynamic, Set_from_vec, and try_vectorize packed stores all record store entries. *)
+  let dyn_summary =
+    render_pure ~name:"rc_set_dynamic" ~nodes:[ r_out; r_src ]
+      (B.scatter ~tn:r_out
+         ~idcs:[| B.fixed 0 |]
+         ~dyn_axis:0
+         ~dyn_value:(LL.Embed_index (B.fixed 1), B.iprec ())
+         (B.get r_src [| B.fixed 0 |]))
+  in
+  p "Set_dynamic records its store entry and source read"
+    (match dyn_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_plain; reads; _ } ] ->
+        tn_uid = r_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads [ (r_src.Tn.uid, 1) ]
+    | _ -> false);
+  let vec_unop_summary =
+    render_pure ~name:"rc_set_from_vec" ~nodes:[ r_out ]
+      (B.set_from_vec ~length:4 ~vec_unop:Ops.Uint4x32_to_prec_uniform r_out
+         [| B.fixed 0 |]
+         (LL.Constant_bits 0L, Ops.uint4x32))
+  in
+  p "Set_from_vec records its store entry"
+    (match vec_unop_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_plain; _ } ] -> tn_uid = r_out.Tn.uid
+    | _ -> false);
+  let packed_summary =
+    render_pure ~vec_bytes:16 ~name:"rc_try_vectorize" ~nodes:[ r_out; r_src ]
+      (B.loop ~upto:15 ~axis:LL.Vectorized ri
+         (B.set r_out [| B.iter ri |] (B.get r_src [| B.iter ri |])))
+  in
+  p "try_vectorize records its packed main-loop store beside Render_simd_elementwise"
+    ((match packed_summary.Cs.loops with
+       | [ { Cs.rendering = Cs.Render_simd_elementwise { lanes = 4 }; _ } ] -> true
+       | _ -> false)
+    && List.count packed_summary.Cs.stores ~f:(fun e ->
+           e.Cs.tn_uid = r_out.Tn.uid && Cs.equal_store_rendering e.Cs.rendering Cs.Store_plain)
+       >= 2);
+  (* 2. Discarded projection operand (Arg1) does not turn a plain store into Store_rmw. *)
+  let proj_summary =
+    render_pure ~name:"rc_arg1_proj" ~nodes:[ r_out ]
+      (B.set r_out
+         [| B.fixed 0 |]
+         (LL.Binop (Ops.Arg1, (LL.Constant 1.0, prec), (B.get r_out [| B.fixed 0 |], prec))))
+  in
+  p "discarded Arg1 operand is excluded from store read counts"
+    (match proj_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_plain; reads = []; _ } ] -> tn_uid = r_out.Tn.uid
+    | _ -> false);
+  (* 3. Unconsumed zero seed preserves emission order: zero store appears before SIMD epilogue. *)
+  let z_out = B.node_factory ~first_id:724_100_200 ~dims:[| 1 |] () "rc_zout" in
+  B.materialize z_out;
+  let z_i = B.sym () in
+  let z_summary =
+    render_pure ~vec_bytes:16 ~name:"rc_unconsumed_zero" ~nodes:[ z_out; r_src ]
+      (B.seq (B.zero z_out)
+         (B.loop ~upto:15 ~axis:LL.Vectorized z_i
+            (B.set z_out
+               [| B.fixed 0 |]
+               (B.add (B.get z_out [| B.fixed 0 |]) (B.get r_src [| B.iter z_i |])))))
+  in
+  p "unconsumed zero seed records the zero clear before the SIMD reduction epilogue"
+    (match z_summary.Cs.stores with
+    | [
+     { Cs.tn_uid = u1; rendering = Cs.Store_plain; _ };
+     { Cs.tn_uid = u2; rendering = Cs.Store_simd_epilogue; _ };
+    ] ->
+        u1 = z_out.Tn.uid && u2 = z_out.Tn.uid
+    | _ -> false);
+  (* 4. Discarded debug_float rendering of a Get_dynamic index Local_scope does not duplicate
+     loops. *)
+  let dbg_i = B.sym () in
+  let dbg_sid = { LL.tn = r_idx; scope_id = 72401 } in
+  let dbg_idx_scope =
+    B.scope_of dbg_sid
+      (B.seq
+         (LL.Set_local (dbg_sid, LL.Constant 0.0))
+         (B.loop ~upto:1 dbg_i (LL.Set_local (dbg_sid, LL.Constant 1.0))))
+  in
+  let dbg_llc =
+    B.set r_out
+      [| B.fixed 0 |]
+      (B.gather ~tn:r_src ~idcs:[| B.fixed 0 |] ~dyn_axis:0 ~dyn_value:(dbg_idx_scope, prec))
+  in
+  let saved_dbg = Utils.settings.debug_log_from_routines and saved_lvl = Utils.settings.log_level in
+  let dbg_summary =
+    Exn.protect
+      ~f:(fun () ->
+        Utils.settings.debug_log_from_routines <- true;
+        Utils.settings.log_level <- 2;
+        render_pure ~name:"rc_debug_gather_scope" ~nodes:[ r_out; r_src ] dbg_llc)
+      ~finally:(fun () ->
+        Utils.settings.debug_log_from_routines <- saved_dbg;
+        Utils.settings.log_level <- saved_lvl)
+  in
+  p "discarded debug_float Get_dynamic definitions do not duplicate loop census entries"
+    (List.length dbg_summary.Cs.loops = 1);
+  (* 5. Peel provenance is scoped to the closing store occurrence: a later unpeeled Local_scope
+     reusing the same scope_id reports peeled = false. *)
+  let p_out = B.node_factory ~first_id:724_100_300 ~dims:[| 2 |] () "rc_pout" in
+  B.materialize p_out;
+  let p_k = B.sym () in
+  let shared_sid = { LL.tn = p_out; scope_id = 72402 } in
+  let hoisted_scope =
+    B.scope_of
+      ~orig_indices:[| B.fixed 0 |]
+      ~mint:LL.Schedule_minted shared_sid
+      (B.seq
+         (LL.Set_local (shared_sid, B.get p_out [| B.fixed 0 |]))
+         (LL.Set_local (shared_sid, B.add (LL.Get_local shared_sid) (B.get r_src [| B.iter p_k |]))))
+  in
+  let unpeeled_scope =
+    B.scope_of
+      ~orig_indices:[| B.fixed 1 |]
+      ~mint:LL.Schedule_minted shared_sid
+      (LL.Set_local (shared_sid, LL.Constant 2.0))
+  in
+  let reuse_summary =
+    render_pure ~name:"rc_scope_reuse" ~nodes:[ p_out; r_src ]
+      (B.seq
+         (B.loop ~upto:3 p_k (B.set p_out [| B.fixed 0 |] hoisted_scope))
+         (B.set p_out [| B.fixed 1 |] unpeeled_scope))
+  in
+  p "peel provenance is scoped to the closing store, not leaked to later uses of the same scope_id"
+    (match reuse_summary.Cs.stores with
+    | [
+     { Cs.rendering = Cs.Store_from_scope { peeled = true; _ }; _ };
+     { Cs.rendering = Cs.Store_from_scope { peeled = false; _ }; _ };
+    ] ->
+        true
+    | _ -> false);
+  (* 6. Body-only compile_main reads render_census_enabled live at emission time. *)
+  let live_llc = B.loop ~upto:1 ri (B.set r_out [| B.iter ri |] (LL.Constant 3.0)) in
+  let live_opt = optimized live_llc [ r_out ] in
+  let module Live_syntax = Cs.C_syntax (Cs.Pure_C_config (struct
+    let procs = [| live_opt.LL.llc |]
+    let full_printf_support = true
+  end))
+  in
+  let pre_ctx = Live_syntax.create_render_ctx ~name:"rc_live_switch" live_opt in
+  let (), inside_summary =
+    Cs.with_render_census (fun () -> ignore (Live_syntax.compile_main pre_ctx live_opt.LL.llc))
+  in
+  ignore (Live_syntax.compile_main pre_ctx live_opt.LL.llc);
+  p "create_render_ctx before with_render_census still records compile_main inside the bracket"
+    (List.length inside_summary.Cs.loops = 1 && List.length inside_summary.Cs.stores = 1);
+  Verdict.p_empty "compile_main after with_render_census closes appends nothing to the loop global"
+    ~over:inside_summary.Cs.loops
+    !(Cs.render_loop_census ());
+  Verdict.p_empty "compile_main after with_render_census closes appends nothing to the store global"
+    ~over:inside_summary.Cs.stores
+    !(Cs.render_store_census ());
+  (* 7. Sibling Local_scope operands emitted in Scope_order.plan order (sorted by scope_id) report
+     their loop census entries in emission order, not operand traversal order. *)
+  let sid_hi = { LL.tn = r_idx; scope_id = 72412 }
+  and sid_lo = { LL.tn = r_idx; scope_id = 72411 } in
+  let l_hi = B.sym () and l_lo = B.sym () in
+  let scope_hi =
+    B.scope_of sid_hi
+      (B.seq
+         (LL.Set_local (sid_hi, LL.Constant 0.0))
+         (B.loop ~upto:1 ~axis:LL.Unrolled l_hi
+            (LL.Set_local (sid_hi, B.add (LL.Get_local sid_hi) (B.get r_src [| B.iter l_hi |])))))
+  in
+  let scope_lo =
+    B.scope_of sid_lo
+      (B.seq
+         (LL.Set_local (sid_lo, LL.Constant 0.0))
+         (B.loop ~upto:2 ~axis:LL.Serial l_lo
+            (LL.Set_local (sid_lo, B.add (LL.Get_local sid_lo) (B.get r_src [| B.iter l_lo |])))))
+  in
+  let sibling_summary =
+    render_pure ~name:"rc_sibling_scope_order" ~nodes:[ r_out; r_src ]
+      (B.set r_out [| B.fixed 0 |] (B.add scope_hi scope_lo))
+  in
+  p "sibling Local_scope operands record loop census entries in Scope_order emission order"
+    (match sibling_summary.Cs.loops with
+    | [
+     { Cs.rendering = Cs.Render_serial; _ }; { Cs.rendering = Cs.Render_unrolled { copies = 2 }; _ };
+    ] ->
+        true
+    | _ -> false);
+  (* 8. A shared Local_scope referenced twice in one statement is emitted once by Scope_order.plan,
+     so its reads are counted once rather than per operand occurrence. *)
+  let dup_summary =
+    render_pure ~name:"rc_shared_scope_reads" ~nodes:[ r_out; r_src ]
+      (B.set r_out [| B.fixed 0 |] (B.add scope_lo scope_lo))
+  in
+  p "shared Local_scope referenced twice in one statement counts its reads once"
+    (match dup_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_plain; reads; _ } ] ->
+        tn_uid = r_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads [ (r_src.Tn.uid, 1) ]
+    | _ -> false);
+  (* 9. Unrolled loops inside a stored Local_scope count reads per emitted copy (2 for a 2-iteration
+     unrolled loop, 0 for a dead unrolled loop). *)
+  let u_sid = { LL.tn = r_idx; scope_id = 72413 } and u_i = B.sym () in
+  let unrolled_scope =
+    B.scope_of u_sid
+      (B.seq
+         (LL.Set_local (u_sid, LL.Constant 0.0))
+         (B.loop ~upto:1 ~axis:LL.Unrolled u_i
+            (LL.Set_local (u_sid, B.add (LL.Get_local u_sid) (B.get r_src [| B.iter u_i |])))))
+  in
+  let unrolled_summary =
+    render_pure ~name:"rc_unrolled_scope_reads" ~nodes:[ r_out; r_src ]
+      (B.set r_out [| B.fixed 0 |] unrolled_scope)
+  in
+  p "two-copy Unrolled loop inside a Local_scope records two emitted source reads"
+    (match unrolled_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_from_scope { reads_target = 0; _ }; reads; _ } ] ->
+        tn_uid = r_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads [ (r_src.Tn.uid, 2) ]
+    | _ -> false);
+  let dead_sid = { LL.tn = r_idx; scope_id = 72414 } and dead_i = B.sym () in
+  let dead_unrolled_scope =
+    B.scope_of dead_sid
+      (B.seq
+         (LL.Set_local (dead_sid, LL.Constant 0.0))
+         (B.loop ~from_:1 ~upto:0 ~axis:LL.Unrolled dead_i
+            (LL.Set_local (dead_sid, B.add (LL.Get_local dead_sid) (B.get r_src [| B.iter dead_i |])))))
+  in
+  let dead_unrolled_summary =
+    render_pure ~name:"rc_dead_unrolled_scope_reads" ~nodes:[ r_out; r_src ]
+      (B.set r_out [| B.fixed 0 |] dead_unrolled_scope)
+  in
+  p "dead Unrolled loop inside a Local_scope records zero emitted source reads"
+    (match dead_unrolled_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_from_scope { reads_target = 0; _ }; reads = []; _ } ] ->
+        tn_uid = r_out.Tn.uid
+    | _ -> false);
+  (* 10. Declined SIMD reduction inside a Local_scope rolls back speculative uniform_scalar reads so
+     the serial fallback does not double-count them. *)
+  let u_uni = B.node_factory ~first_id:724_100_500 ~dims:[| 1 |] () "rc_uni" in
+  B.materialize u_uni;
+  let dec_sid = { LL.tn = r_idx; scope_id = 72415 } and dec_i = B.sym () in
+  let dec_contrib =
+    LL.Ternop
+      ( Ops.FMA,
+        (B.get u_uni [| B.fixed 0 |], prec),
+        (LL.Unop (Ops.Exp, (B.get r_src [| B.iter dec_i |], prec)), prec),
+        (LL.Constant 0.0, prec) )
+  in
+  let dec_scope =
+    B.scope_of dec_sid
+      (B.seq
+         (LL.Set_local (dec_sid, LL.Constant 0.0))
+         (B.loop ~upto:15 ~axis:LL.Vectorized dec_i
+            (LL.Set_local (dec_sid, B.add (LL.Get_local dec_sid) dec_contrib))))
+  in
+  let dec_summary =
+    render_pure ~vec_bytes:16 ~name:"rc_declined_simd_reads" ~nodes:[ r_out; r_src; u_uni ]
+      (B.set r_out [| B.fixed 0 |] dec_scope)
+  in
+  let expected_dec_reads =
+    List.sort
+      ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+      [ (r_src.Tn.uid, 1); (u_uni.Tn.uid, 1) ]
+  in
+  p "declined SIMD reduction inside a Local_scope rolls back speculative uniform_scalar reads"
+    (match dec_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_from_scope { reads_target = 0; _ }; reads; _ } ] ->
+        tn_uid = r_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads expected_dec_reads
+    | _ -> false);
+  (* 11. Short-circuiting Where with a hoisted Local_scope replays its condition in the scope's [if]
+     guard before the final ternary, so a condition reading the target records 2 target reads
+     (whereas an unhoisted Where with no Local_scope records 1). *)
+  let where_hoisted_summary =
+    render_pure ~name:"rc_where_hoisted_guard" ~nodes:[ r_out; r_src ]
+      (B.set r_out
+         [| B.fixed 0 |]
+         (LL.Ternop
+            ( Ops.Where,
+              (B.get r_out [| B.fixed 0 |], prec),
+              (scope_lo, prec),
+              (LL.Constant 0.0, prec) )))
+  in
+  let expected_where_reads =
+    List.sort
+      ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+      [ (r_out.Tn.uid, 2); (r_src.Tn.uid, 1) ]
+  in
+  p "short-circuiting Where with a hoisted Local_scope counts condition reads replayed in the guard"
+    (match where_hoisted_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_rmw { reads_target = 2 }; reads; _ } ] ->
+        tn_uid = r_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads expected_where_reads
+    | _ -> false);
+  let where_plain_summary =
+    render_pure ~name:"rc_where_no_scope" ~nodes:[ r_out; r_src ]
+      (B.set r_out
+         [| B.fixed 0 |]
+         (LL.Ternop
+            ( Ops.Where,
+              (B.get r_out [| B.fixed 0 |], prec),
+              (B.get r_src [| B.fixed 0 |], prec),
+              (LL.Constant 0.0, prec) )))
+  in
+  p "short-circuiting Where with no hoisted Local_scope counts condition reads once"
+    (match where_plain_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_rmw { reads_target = 1 }; _ } ] -> tn_uid = r_out.Tn.uid
+    | _ -> false);
+  (* 12. Gated operator (Relu_gate) guarding a conditional Local_scope (inside a nested Where)
+     replays its first operand twice in [gate_entries]'s inequality guard plus once in the final
+     gate expression (3 reads of [r_out]), and replays the inner Where condition once in the guard
+     plus once in the ternary (2 reads of [u_uni]). *)
+  let gate_hoisted_summary =
+    render_pure ~name:"rc_gate_hoisted_guard" ~nodes:[ r_out; r_src; u_uni ]
+      (B.set r_out
+         [| B.fixed 0 |]
+         (LL.Binop
+            ( Ops.Relu_gate,
+              (B.get r_out [| B.fixed 0 |], prec),
+              ( LL.Ternop
+                  ( Ops.Where,
+                    (B.get u_uni [| B.fixed 0 |], prec),
+                    (scope_lo, prec),
+                    (LL.Constant 0.0, prec) ),
+                prec ) )))
+  in
+  let expected_gate_reads =
+    List.sort
+      ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+      [ (r_out.Tn.uid, 3); (r_src.Tn.uid, 1); (u_uni.Tn.uid, 2) ]
+  in
+  p "gated Relu_gate with a hoisted Local_scope counts condition reads replayed in gate_entries"
+    (match gate_hoisted_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_rmw { reads_target = 3 }; reads; _ } ] ->
+        tn_uid = r_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads expected_gate_reads
+    | _ -> false);
+  (* 13. Explicit SIMD reduction counts reads from every emitted load site (4 chain inits + 4 main
+     loop updates + 1 scalar remainder = 9 source reads) for both Cell and Local targets. *)
+  let simd_cell_expected =
+    List.sort
+      ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+      [ (z_out.Tn.uid, 1); (r_src.Tn.uid, 9) ]
+  in
+  p "cell-targeted SIMD reduction counts emitted init, main-loop, and remainder source reads"
+    (match z_summary.Cs.stores with
+    | [
+     { Cs.rendering = Cs.Store_plain; _ };
+     { Cs.tn_uid; rendering = Cs.Store_simd_epilogue; reads; _ };
+    ] ->
+        tn_uid = z_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads simd_cell_expected
+    | _ -> false);
+  let simd_loc_sid = { LL.tn = r_idx; scope_id = 72416 } and simd_loc_i = B.sym () in
+  let simd_loc_scope =
+    B.scope_of simd_loc_sid
+      (B.seq
+         (LL.Set_local (simd_loc_sid, LL.Constant 0.0))
+         (B.loop ~upto:15 ~axis:LL.Vectorized simd_loc_i
+            (LL.Set_local
+               ( simd_loc_sid,
+                 B.add (LL.Get_local simd_loc_sid) (B.get r_src [| B.iter simd_loc_i |]) ))))
+  in
+  let simd_loc_summary =
+    render_pure ~vec_bytes:16 ~name:"rc_simd_local_reads" ~nodes:[ r_out; r_src ]
+      (B.set r_out [| B.fixed 0 |] simd_loc_scope)
+  in
+  p
+    "local-targeted SIMD reduction inside a Local_scope counts emitted init, main-loop, and \
+     remainder source reads"
+    (match simd_loc_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_from_scope { reads_target = 0; _ }; reads; _ } ] ->
+        tn_uid = r_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads [ (r_src.Tn.uid, 9) ]
+    | _ -> false)

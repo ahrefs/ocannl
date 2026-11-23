@@ -301,9 +301,6 @@ let exempt_quantified_helpers =
     ( "test/operations/reduction_forms.ml:changed",
       "an empty schedule deliberately needs no IR change, and an empty per-op result means there \
        were no per-op transformations to validate" );
-    ( "test/operations/reduction_forms.ml:extra_ok",
-      "an empty extra-fragment list deliberately means the member requires no additional emitted \
-       assignment fragments" );
     (* Quantifiers written directly into a native claim are keyed by the claim's label
        (gh-ocannl-908): the sites the audited migration left on the unguarded spelling, each because
        emptiness is what the claim means and nothing in scope must be non-empty. *)
