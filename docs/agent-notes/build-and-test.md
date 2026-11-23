@@ -417,7 +417,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   the dune file: a script a rule lists in its `(deps)` only so a text scan can read it counts as
   covered too, so naming a `.sh` in a scan rule's deps takes that script out of the harness
   fallback. The tests tier runs `runtest-sweep_leg_scripts` for an edit to
-  `test/operations/sweep_leg_scripts.sh` alone. An unmapped script still runs the whole harness
+  `test/operations/sweep_leg_scripts.sh` alone. A header marker `# harness: none -- REASON`
+  covers an unreached hand-run script (gh-ocannl-2413). The harness reader verifies it against
+  the harness graph and literal script names in Dune stanzas and existing includes, across OS
+  guards. Bulk lint inputs still reach their Dune aliases through the ordinary test tier.
+  An unmarked, unmapped script still runs the whole harness
   tier, which prints PENDING until that list is read (`--plan` alone stays there, `--plan --base
   REV` settles it). What the mapping answers is the policy: `scripts/harness-support.sh`, which
   every member
@@ -4409,6 +4413,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     helpers can be missed. It neither proves runtime coverage nor infers which GPU can run a leg.
     `tools/test-affected-tests.sh`'s GPU-gated reach leg pins a changed function's callers,
     CPU and unrelated controls, stanza-local markers and a disabled-discovery negative control.
+  - An otherwise ownerless module maps to an OS-gated directory's stanzas when every
+    stanza has a literal `%{system}` equality guard that is false in Dune's current context
+    (gh-ocannl-2413). Concrete rule readers still count toward reach. Mixed directories and
+    optional dependencies alone keep the ordinary UNMAPPED verdict.
   - The shell harnesses are no dune aliases, so `affected` reads them from their own text
     (gh-ocannl-1900; the boundary is `tools/affected-tests.sh`'s header, The harness legs): each
     member `tools/test-harnesses.sh --list` names reaches what its program (it and the scripts it

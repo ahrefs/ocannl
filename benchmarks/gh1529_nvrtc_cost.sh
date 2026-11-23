@@ -1,4 +1,5 @@
 #!/bin/bash
+# harness: none -- hand-run measurement, requires an exclusive CUDA timing reservation
 # gh-ocannl-1529 measurement driver: what a CUDA compile costs per program and per kernel, on a
 # real routine, and what a search candidate spends compiling -- the evidence for or against porting
 # the HIP kernel code cache (gh-ocannl-1314) to CUDA.

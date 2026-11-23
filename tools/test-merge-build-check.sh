@@ -1107,6 +1107,83 @@ shell --jobs 4' ] && has 'the scoped run was refused (exit 2), no member run; ru
   else report 1 'the whole tier a refusal falls back on still decides' "exit $rc; $(cat "$TMP/out")"; fi
 fi
 
+if harness_leg 'hand-run shell markers preserve harness scope #hand-run'; then
+  harness_require perl
+  fixture hand-run
+  cp "$HERE/affected-tests.sh" "$R/tools/" || exit 2
+  mkdir -p "$R/test/metal_probe" "$R/benchmarks" || exit 2
+  # This fixture hands the plan the real marker and harness reader, with a
+  # one-member manifest and no Dune. Keep fixture marker syntax out of the
+  # hosting harness's own comment header.
+  cat >"$R/tools/test-harnesses.sh" <<'FAKE'
+#!/bin/bash
+if [ "$*" = --list ]; then
+  printf '%s\n' tools/test-one.sh
+elif [ "$1" = --affected ]; then
+  shift 2
+  exec bash "$(dirname "$0")/affected-tests.sh" --harnesses "$@"
+else
+  printf 'shell %s\n' "$*" >>"$FAKE_RECORD"
+fi
+FAKE
+  printf '%s\n' '#!/bin/sh' ':' >"$R/tools/test-one.sh"
+  # Build the fixture names from parts so the reach reader does not mistake
+  # this harness's scratch files for the real drivers.
+  sh_ext=.sh
+  cell=test/metal_probe/run_cells$sh_ext
+  cost=benchmarks/gh1529_nvrtc_cost$sh_ext
+  for p in "$cell" "$cost"; do printf '%s\n' '#!/bin/sh' ':' >"$R/$p"; done
+  commit_on base && git -C "$R" branch -f side HEAD && git -C "$R" checkout -q side || exit 2
+  for p in "$cell" "$cost"; do
+    printf '%s\n' '#!/bin/sh' '# harness: none -- exclusive diagnostic session' ':' >"$R/$p"
+  done
+  commit_on side && merge_side || exit 2
+  plan
+  if [ "$rc" = 0 ] && has 'harness tier: skipped -- the 2 path(s) the head side changed reach no harness'; then
+    report 0 'both hand-run witnesses select no harness'
+  else report 1 'both hand-run witnesses select no harness' "exit $rc; $(cat "$TMP/out")"; fi
+
+  git -C "$R" checkout -q side || exit 2
+  printf '%s\n' '#!/bin/sh' ': # edited without a marker' >"$R/$cost"
+  commit_on side && merge_side || exit 2
+  run "$TMP/dunebin"
+  if [ "$rc" = 0 ] && has "harness tier: SELECTED -- whole -- no harness reaches $cost" &&
+     grep -qxF "shell --jobs 4" "$TMP/record"; then
+    report 0 'an unmarked, unreached script still selects the whole tier'
+  else report 1 'an unmarked, unreached script still selects the whole tier' "exit $rc; $(cat "$TMP/out")"; fi
+
+  check_markers() {
+    rc=0
+    (cd "$R" && bash tools/affected-tests.sh --harnesses --files x.ml) >"$TMP/out" 2>&1 || rc=$?
+  }
+  # Ask about an unrelated path. Adding a consumer must fail even when the
+  # marked script itself does not change.
+  printf '%s\n' "sh $cell" >>"$R/tools/test-one.sh"
+  check_markers
+  if [ "$rc" = 2 ] && has "$cell:2: harness marker conflicts with reach from tools/test-one.sh"; then
+    report 0 'adding a harness consumer of a marked script is refused'
+  else report 1 'adding a harness consumer of a marked script is refused' "exit $rc; $(cat "$TMP/out")"; fi
+  git -C "$R" restore tools/test-one.sh || exit 2
+  printf '(rule (enabled_if false) (alias runtest-probe) (action (run sh %%{dep:%s})))\n' "$cell" >"$R/dune"
+  check_markers
+  if [ "$rc" = 2 ] && has "$cell:2: harness marker conflicts with a literal reference in dune"; then
+    report 0 'adding a Dune rule that names a marked script is refused across guards'
+  else report 1 'adding a Dune rule that names a marked script is refused across guards' "exit $rc; $(cat "$TMP/out")"; fi
+  printf '; (rule (action (run sh %s)))\n' "$cell" >"$R/dune"
+  printf '%s\n' '#!/bin/sh' ':' '# harness: none -- misplaced marker' >"$R/$cell"
+  check_markers
+  if [ "$rc" = 2 ] && has "$cell:3: harness marker must be in the header"; then
+    report 0 'a marker after the header is refused'
+  else report 1 'a marker after the header is refused' "exit $rc; $(cat "$TMP/out")"; fi
+  git -C "$R" restore "$cell" || exit 2
+  spaced="$R/test/metal_probe/another probe.sh"
+  printf '%s\n' '#!/bin/sh' '# harness: none -- exclusive diagnostic session' ':' >"$spaced"
+  check_markers
+  if [ "$rc" = 2 ] && has 'harness marker requires a shell script path'; then
+    report 0 'a marker on a path outside the scanner grammar is refused'
+  else report 1 'a marker on a path outside the scanner grammar is refused' "exit $rc; $(cat "$TMP/out")"; fi
+fi
+
 # A script no member reaches is covered by an alias the tests tier runs whose rule names it
 # (gh-ocannl-2304): affected's exact `named as a dependency` line, for an alias of the list run
 # here. The issue's two shapes -- a script beside its owning test, one a test elsewhere names --

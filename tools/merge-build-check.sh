@@ -69,7 +69,10 @@
 #            base side renamed counting by its other name too, scripts or not. What runs is
 #            `tools/test-harnesses.sh --affected --files PATH...`, the mapping `tools/test-run.sh
 #            affected --harnesses` owns, read from the merged tree. A change reaching no member runs
-#            none. A changed script no member reaches leaves the tier PENDING until the tests tier's
+#            none. An exact `affected: SCRIPT: verified hand-run harness marker` line from the
+#            successful single-path ask covers a script with empty harness reach. The checker in
+#            affected-tests.sh owns the marker grammar and conflicts. Any other changed script no
+#            member reaches leaves the tier PENDING until the tests tier's
 #            list is read (gh-ocannl-2304): it counts as covered when an alias of the list the tests
 #            tier runs here names it as a dependency, as an exact `affected: SCRIPT: named as a
 #            dependency by the rule of ALIAS` line of the ask that printed that list says
@@ -81,12 +84,12 @@
 #            then, and this build only the clash of two.
 # The harness tier's scope is a fail-closed allowlist: it narrows only when HEAD is a two-parent
 # merge, its merge base and both sides' changes were read, git listed every changed path
-# unquoted, each changed path matching `*.sh` (SHELL_GLOB), asked alone, reaches a member or is
+# unquoted, each changed path matching `*.sh` (SHELL_GLOB), asked alone, reaches a member, has a verified marker, or is
 # covered (above: named as a dependency by an alias in the list the tests tier runs here, read
 # whole-line from that ask), and the ask for all the paths answers. Anything else -- a one-parent
 # HEAD, a failed git read, a path git had to quote, an ask that fails (test-harnesses.sh refuses a
 # line of `affected --harnesses` it does not recognize, a path reading as an option, a failed
-# `affected`), a script no member reaches and no alias run here names (one an alias outside the
+# `affected`), an unmarked script no member reaches and no alias run here names (one an alias outside the
 # list names, a list OWED rather than run, a glob or source-tree read), or a scoped run refused
 # before any member started (exit 2) -- runs the whole tier, every group, never less. A script is
 # asked alone because a reach the other paths make up for would hide one nothing maps. Coverage
@@ -202,7 +205,7 @@ EOF
 # It fails when the ask does; `--list` takes no slot and runs nothing.
 ask_reach() {
   reach=$("${BASH:-bash}" "$root/tools/test-harnesses.sh" --affected --list --files "$@" \
-    2>/dev/null </dev/null)
+    2>"$tests_dir/harness-ask" </dev/null)
 }
 
 # scope_tier narrows the tier to what `asked` reaches (`scoped` 1, `reach` its commands, empty
@@ -210,7 +213,7 @@ ask_reach() {
 # asked path matching SHELL_GLOB: a reach the others make up for would hide one nothing maps, so
 # each is asked alone.
 # A script no member reaches leaves the tier PENDING (`pending` 1, the scripts in `unreached`)
-# rather than whole: cover_tier settles it once the tests tier's list is read.
+# unless the ask verifies a hand-run marker. cover_tier settles PENDING once the tests tier is read.
 scope_tier() {
   local s rc
   for s in ${scripts[@]+"${scripts[@]}"}; do
@@ -219,7 +222,10 @@ scope_tier() {
       scope_why="what $s reaches could not be asked (test-harnesses.sh exit $rc)"
       return
     }
-    [ -n "$reach" ] || unreached+=("$s")
+    if [ -z "$reach" ] &&
+       ! grep -qxF -- "affected: $s: verified hand-run harness marker" "$tests_dir/harness-ask"; then
+      unreached+=("$s")
+    fi
   done
   ask_reach "${asked[@]}" || {
     rc=$?
@@ -643,11 +649,11 @@ branch_plan() (
 merged_plan() (
   cd "$root" || exit 1
   read_parents
+  tests_dir=$(mktemp -d "${TMPDIR:-/tmp}/merge-build-query.XXXXXX") || die_plan 'cannot make a query directory'
+  trap 'rm -rf "$tests_dir"' EXIT
   select_tiers
   show_tiers
   find_dune
-  tests_dir=$(mktemp -d "${TMPDIR:-/tmp}/merge-build-query.XXXXXX") || die_plan 'cannot make a query directory'
-  trap 'rm -rf "$tests_dir"' EXIT
   if ! read_tests; then die_plan "tests tier unreadable: $tests_why"; fi
   was_pending=$pending
   cover_tier
@@ -703,6 +709,11 @@ if [ "$compile_only" = 1 ]; then
   echo "$me: passed"
   exit 0
 fi
+tests_dir=$(mktemp -d "${TMPDIR:-/tmp}/merge-build-check.XXXXXX") || {
+  echo "$me: tests tier FAILED (cannot make a scratch directory)" >&2
+  exit 1
+}
+trap 'rm -rf "$tests_dir"' EXIT
 read_parents
 select_tiers
 show_tiers
@@ -717,11 +728,6 @@ OCANNL_TOOL_FMT_CHECK_SCANS=0 tools/fmt-check.sh </dev/null || {
 }
 echo "$me: format tier passed"
 run_compile_tier
-tests_dir=$(mktemp -d "${TMPDIR:-/tmp}/merge-build-check.XXXXXX") || {
-  echo "$me: tests tier FAILED (cannot make a scratch directory)" >&2
-  exit 1
-}
-trap 'rm -rf "$tests_dir"' EXIT
 if ! read_tests; then
   echo "$me: tests tier FAILED ($tests_why)" >&2
   exit 1

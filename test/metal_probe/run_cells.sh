@@ -1,4 +1,5 @@
 #!/bin/sh
+# harness: none -- hand-run diagnostic, requires a Mac with the GPU to itself
 # gh-ocannl-2082, gh-ocannl-2139: builds metal_hang_probe and runs the cells named on the command
 # line, one process each, in order (a cell is its words joined by `:`, e.g. `stall:1:120`;
 # `bg:<cell>` starts one in the background, `sleep:N` waits N s, `waitbg` waits for the background

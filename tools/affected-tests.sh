@@ -310,6 +310,27 @@
 #   compile) that a harness reaches is mapped to those legs, not UNMAPPED.
 #   A changed script no harness reaches is named on stderr.
 #
+# Hand-run shell scripts (gh-ocannl-2413): the harness reader checks every
+# visible regular *.sh file for a single `# harness: none -- REASON` marker,
+# in the uninterrupted column-one comment header following the shebang. The
+# script path consists of ASCII letters, digits, underscores, periods and
+# hyphens in slash-separated components. The reason is two or more
+# space-separated printable ASCII words. A malformed,
+# duplicate or misplaced declaration refuses. A marker conflicts with any
+# harness reach in the graph above, including declared globs, or a literal
+# script basename in a Dune stanza's atoms (including quoted commands and
+# existing literal include files, across guards). Comments and bulk Dune
+# glob/source-tree reads do not name a script individually. Generated includes
+# and computed filenames are outside the literal reading. On a successful
+# ask an exact `affected: PATH: verified hand-run harness marker` line on
+# stderr is the planner's evidence for that changed path.
+#
+# A directory with only library, executable, test, rule or alias stanzas
+# guarded by false `(= %{system} LITERAL)` comparisons in Dune's current
+# context accounts for an otherwise ownerless module there. Other guards,
+# mixed directories and optional dependency failures keep the UNMAPPED path.
+# Concrete reads from elsewhere are still selected.
+#
 # Literal dependencies (gh-ocannl-2304): for each changed `*.sh` path, stderr
 # carries one line `affected: PATH: named as a dependency by the rule of
 # @ALIAS` per per-test alias that names PATH, sorted, whatever the alias's
@@ -525,6 +546,60 @@ else
     die "git diff ${revs[0]} failed"
 fi
 
+cat >"$tmp/dune-source.pl" <<'DUNE_SOURCE'
+use strict; use warnings;
+# A reader for Dune source syntax, as its lexer has it
+# (src/dune_sexp/lexer.mll): `;` end-of-line comments only (`#|` and `#;` are
+# atom text), quoted strings, block strings, atoms. It dies on text it cannot
+# read; the caller decides whether that stops the run. A block string comes
+# back OPAQUE (\x01-prefixed: its escapes and its leading space are not
+# decoded), which every reader of a stanza's needs takes as unknown.
+sub parse_dune {
+  my ($s, $what, $markers) = @_;
+  my @stack = ([]);
+  my $put = sub { push @{$stack[-1]}, $_[0] };
+  pos($s) = 0;
+  while (pos($s) < length $s) {
+    next if $s =~ /\G\s+/gc;
+    if ($s =~ /\G;([^\n]*)/gc) {
+      # A second reading retains only stanza-local GPU backend declarations.
+      if ($markers && $1 =~ /^\s*ocannl-backend:\s*([a-z_]+(?:[ \t]*,[ \t]*[a-z_]+)*)/
+          && grep { /^(?:cuda|hip|metal)$/ } split /[ \t]*,[ \t]*/, $1) {
+        # Containment, not adjacency: a marker inside a field still belongs
+        # to its enclosing stanza, including within a (subdir ...) wrapper.
+        for my $x (reverse @stack) {
+          next unless @$x && !ref $x->[0] && $x->[0] =~ /^(?:library|executables?|tests?|rule)$/;
+          push @$x, ["affected_gpu_backend"];
+          last;
+        }
+      }
+      next;
+    }
+    if ($s =~ /\G\(/gc) { push @stack, []; next }
+    if ($s =~ /\G\)/gc) {
+      @stack > 1 or die "unbalanced parentheses in $what at byte " . (pos($s) - 1) . "\n";
+      my $l = pop @stack; $put->($l); next;
+    }
+    if ($s =~ /\G"\\[|>]([^\n]*)/gc) {   # block string: consecutive "\| lines
+      my $str = $1;
+      $str .= "\n$1" while $s =~ /\G\n[ \t]*"\\[|>]([^\n]*)/gc;
+      $put->("\x01" . $str); next;
+    }
+    if ($s =~ /\G"((?:[^"\\]++|\\.)*+)"/gcs) {
+      my $a = $1 =~ s/\\\n[ \t]*//gr;
+      $a =~ s/\\(x[0-9A-Fa-f]{2}|[0-9]{3}|.)/length $1 > 1 ? ($1 =~ m{^x} ? chr hex substr($1, 1) : chr $1)
+                                            : $1 eq "n" ? "\n" : $1 eq "t" ? "\t" : $1 eq "r" ? "\r" : $1/gse;
+      $put->($a); next;
+    }
+    if ($s =~ /\G([^\s()";]+)/gc) { $put->($1); next }
+    die "unreadable text in $what at byte " . pos($s) . "\n";
+  }
+  @stack == 1 or die "unbalanced parentheses in $what\n";
+  return $stack[0];
+}
+1;
+DUNE_SOURCE
+
 # The harness legs (gh-ocannl-1900; the header's boundary): their membership
 # from CI's own list, every file their text may name, and harness.pl's reading
 # of that text. Dune is not asked: `--harnesses` stops here.
@@ -546,6 +621,7 @@ $(cat "$tmp/err")"
 # harness-eres (`ERE<TAB>HARNESS:LINE` for every declared selector).
 use strict; use warnings;
 my ($tmp) = @ARGV;
+require "$tmp/dune-source.pl";
 sub fail { print STDERR "affected: $_[0]\n"; exit 2 }
 sub lines {
   my ($f) = @_;
@@ -794,6 +870,81 @@ for my $h (@members) {
     push @eres, "$ere\t$where" if defined $ere;
   }
 }
+# A marker grants no credit until this read proves it has no named consumer.
+my %hand_run;
+for my $p (grep { /\.sh\z/ && -f } @known) {
+  my @lines = split /\r?\n/, raw($p);
+  my $in_header = 1;
+  for my $i (1 .. $#lines) {
+    my $line = $lines[$i];
+    $in_header = 0 unless $line =~ /^#/;
+    next unless $line =~ /^[ \t]*#[ \t]*harness\s*:/;
+    my $where = "$p:" . ($i + 1);
+    fail("$where: harness marker must be in the header of a regular shell script")
+      unless $in_header && $lines[0] =~ /^#!/ && !-l $p;
+    fail("$where: harness marker requires a shell script path made of letters, digits, underscore, period, hyphen and slash")
+      unless $p =~ m{\A[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\.sh\z};
+    fail("$where: expected `# harness: none -- REASON` with a reason of at least two words")
+      unless $line =~ /\A# harness: none -- [!-~]+(?: [!-~]+)+\z/ && (index($line, "harness:", 3) < 0);
+    fail("$where: duplicate harness marker") if $hand_run{$p};
+    $hand_run{$p} = $where;
+  }
+  fail("$p:1: harness marker must follow the shebang")
+    if @lines && $lines[0] =~ /^[ \t]*#[ \t]*harness\s*:/;
+}
+for my $p (sort keys %hand_run) {
+  for my $h (@members) {
+    next unless exists $reach{$h}{$p} || grep {
+      my $d = $_; grep { $p =~ $_ } @{$d->{re}}
+    } @{$decl{$h} // []};
+    fail("$hand_run{$p}: harness marker conflicts with reach from $h");
+  }
+}
+# Rule names and arguments are atoms, even within a quoted shell command.
+# Compare literal basenames conservatively across directories and OS guards.
+sub check_dune_markers {
+  my ($file, $dir, $items, $by_base, $seen) = @_;
+  for my $item (@$items) {
+    if (ref $item) {
+      my ($head, $arg) = @$item;
+      if (defined $head && !ref $head && defined $arg && !ref $arg) {
+        if ($head eq "subdir" && $arg !~ /%\{/) {
+          my $sub = norm("$dir/$arg");
+          check_dune_markers($file, $sub, [@$item[2 .. $#$item]], $by_base, $seen) if defined $sub;
+          next;
+        }
+        if ($head eq "include" || $head eq "dynamic_include") {
+          my $path = $arg !~ m{(?:^/|%\{)} ? norm("$dir/$arg") : undef;
+          read_dune_markers($path, $dir, $by_base, $seen) if defined $path && -f $path;
+        }
+      }
+      check_dune_markers($file, $dir, $item, $by_base, $seen);
+      next;
+    }
+    while ($item =~ m{([A-Za-z0-9_.-]+\.sh)(?![A-Za-z0-9_.-])}g) {
+      my $name = $1;
+      my $p = $by_base->{$name} or next;
+      fail("$hand_run{$p}: harness marker conflicts with a literal reference in $file");
+    }
+  }
+}
+sub read_dune_markers {
+  my ($file, $dir, $by_base, $seen) = @_;
+  return if $seen->{"$file\0$dir"}++;
+  open my $fh, "<", $file or fail("cannot read $file to check harness markers");
+  my $s = do { local $/; <$fh> // "" };
+  close $fh or fail("cannot close $file while checking harness markers");
+  my $items = eval { parse_dune($s, $file) } or fail($@ =~ s/\n$//r);
+  check_dune_markers($file, $dir, $items, $by_base, $seen);
+}
+if (%hand_run) {
+  my %by_base = map { (s{.*/}{}r) => $_ } sort keys %hand_run;
+  my %seen;
+  for my $file (grep { m{(?:^|/)dune\z} && -f } @known) {
+    read_dune_markers($file, dir_of($file), \%by_base, \%seen);
+  }
+}
+
 my (%whole, %some);
 open my $rd, ">", "$tmp/harness-read" or fail("cannot write $tmp/harness-read");
 for my $p (@changed) {
@@ -818,6 +969,8 @@ for my $p (@changed) {
   if (@hits) {
     print $rd "$p\t" . scalar(@hits) . "\n";
     push @err, "affected: $p: read by " . scalar(@hits) . " harness(es): " . join("; ", @hits);
+  } elsif ($hand_run{$p}) {
+    push @err, "affected: $p: verified hand-run harness marker";
   } elsif (is_script($p)) {
     push @err, "affected: $p: no harness reads it (no member of tools/test-harnesses.sh --list names it, loads it,"
       . " runs a script loading it, or declares it)";
@@ -1261,6 +1414,7 @@ listings
 cat >"$tmp/main.pl" <<'PERL'
 use strict; use warnings;
 my ($tmp, $referenced_only, $probe_ok, $qroot, $old_root, $gpu_gated) = @ARGV;
+require "$tmp/dune-source.pl";
 # While a dune answer is being read, a refusal keeps a copy of it (see keep_raw).
 our ($raw_text, $raw_what);
 sub fail {
@@ -1671,57 +1825,6 @@ sub keep_raw {
   open my $o, ">", $f or return "(could not write $f)";
   print $o $text; close $o;
   return $f;
-}
-# The dune files themselves, read as text: what an alias's own rule needs, which
-# `dune rules` never dumps (it accepts no alias), and which stanzas a dune-file
-# edit changed. A reader for dune's syntax, as its lexer has it
-# (src/dune_sexp/lexer.mll): `;` end-of-line comments only (`#|` and `#;` are
-# atom text), quoted strings, block strings, atoms. It dies on text it cannot
-# read; the caller decides whether that stops the run. A block string comes
-# back OPAQUE (\x01-prefixed: its escapes and its leading space are not
-# decoded), which every reader of a stanza's needs takes as unknown.
-sub parse_dune {
-  my ($s, $what, $markers) = @_;
-  my @stack = ([]);
-  my $put = sub { push @{$stack[-1]}, $_[0] };
-  pos($s) = 0;
-  while (pos($s) < length $s) {
-    next if $s =~ /\G\s+/gc;
-    if ($s =~ /\G;([^\n]*)/gc) {
-      # A second reading retains only stanza-local GPU backend declarations.
-      if ($markers && $1 =~ /^\s*ocannl-backend:\s*([a-z_]+(?:[ \t]*,[ \t]*[a-z_]+)*)/
-          && grep { /^(?:cuda|hip|metal)$/ } split /[ \t]*,[ \t]*/, $1) {
-        # Containment, not adjacency: a marker inside a field still belongs
-        # to its enclosing stanza, including within a (subdir ...) wrapper.
-        for my $x (reverse @stack) {
-          next unless @$x && !ref $x->[0] && $x->[0] =~ /^(?:library|executables?|tests?|rule)$/;
-          push @$x, ["affected_gpu_backend"];
-          last;
-        }
-      }
-      next;
-    }
-    if ($s =~ /\G\(/gc) { push @stack, []; next }
-    if ($s =~ /\G\)/gc) {
-      @stack > 1 or die "unbalanced parentheses in $what at byte " . (pos($s) - 1) . "\n";
-      my $l = pop @stack; $put->($l); next;
-    }
-    if ($s =~ /\G"\\[|>]([^\n]*)/gc) {   # block string: consecutive "\| lines
-      my $str = $1;
-      $str .= "\n$1" while $s =~ /\G\n[ \t]*"\\[|>]([^\n]*)/gc;
-      $put->("\x01" . $str); next;
-    }
-    if ($s =~ /\G"((?:[^"\\]++|\\.)*+)"/gcs) {
-      my $a = $1 =~ s/\\\n[ \t]*//gr;
-      $a =~ s/\\(x[0-9A-Fa-f]{2}|[0-9]{3}|.)/length $1 > 1 ? ($1 =~ m{^x} ? chr hex substr($1, 1) : chr $1)
-                                            : $1 eq "n" ? "\n" : $1 eq "t" ? "\t" : $1 eq "r" ? "\r" : $1/gse;
-      $put->($a); next;
-    }
-    if ($s =~ /\G([^\s()";]+)/gc) { $put->($1); next }
-    die "unreadable text in $what at byte " . pos($s) . "\n";
-  }
-  @stack == 1 or die "unbalanced parentheses in $what\n";
-  return $stack[0];
 }
 sub has_opaque { my ($x) = @_; ref $x ? scalar(grep { has_opaque($_) } @$x) : $x =~ /^\x01/ }
 sub canon {   # a stanza or form as text, for messages
@@ -2386,6 +2489,38 @@ sub names_literally {   # ALIAS PATH
   return grep { $names_of{$_} && $names_of{$_}{$p} && $reads{$_} && $reads{$_}{$p} } @{$a->{own}};
 }
 
+# Only a directory wholly gated by literal system comparisons can account for
+# an otherwise ownerless module. Optional libraries with missing dependencies
+# and directories with mixed or opaque guards keep the ordinary UNMAPPED path.
+my %stanzas_here;
+push @{$stanzas_here{$_->{dir}}}, $_ for @dstanzas;
+my ($system, $asked_system, %disabled_here);
+sub disabled_stanzas {
+  my ($d) = @_;
+  return $disabled_here{$d} if exists $disabled_here{$d};
+  my @forms = @{$stanzas_here{$d} // []};
+  return $disabled_here{$d} = [] unless @forms;
+  my @gates;
+  for my $s (@forms) {
+    return $disabled_here{$d} = [] unless $s->{kind} =~ /\A(?:library|executables?|tests?|rule|alias)\z/;
+    my $g = dfield($s->{x}, "enabled_if");
+    return $disabled_here{$d} = [] unless $g && @$g == 1 && ref $g->[0] && @{$g->[0]} == 3
+      && !grep { ref } @{$g->[0]};
+    my ($op, $left, $right) = @{$g->[0]};
+    ($left, $right) = ($right, $left) if $right eq '%{system}';
+    return $disabled_here{$d} = [] unless $op eq '=' && $left eq '%{system}' && $right =~ /\A[a-zA-Z0-9_]+\z/;
+    push @gates, $right;
+  }
+  unless ($asked_system++) {
+    if (open my $fh, "-|", "dune", "exec", "--root", ".", "--no-build", "--", "printf", '%s\n', 'system=%{system}') {
+      my @answer = <$fh>;
+      $system = $1 if close($fh) && @answer == 1 && $answer[0] =~ m{(?:\A|/)system=([a-zA-Z0-9_]+)\n\z};
+    }
+  }
+  return $disabled_here{$d} = [] unless defined $system && !grep { $_ eq $system } @gates;
+  return $disabled_here{$d} = \@forms;
+}
+
 for my $p (@changed) {
   my ($d, $b) = dir_of($p);
   for my $a (@al) {
@@ -2448,7 +2583,11 @@ for my $p (@changed) {
       @ix = @named ? @named : @tests;
       $how = @named ? "test module $mod of" : "a module of a tests stanza here (dune does not describe theirs), so all of";
     }
-    unless (@ix || @gen) {
+    if (my @disabled = @ix || @gen ? () : @{disabled_stanzas($d)}) {
+      push @parts, "stanzas disabled on system $system: " . join(", ", map {
+        join(" ", $_->{kind}, dnames($_))
+      } @disabled);
+    } elsif (!@ix && !@gen) {
       # No stanza of this build owns it. One that dune lists but does not
       # compile here (an optional backend) may: those are reached, unknown
       # modules and all, and the path stays UNMAPPED either way.

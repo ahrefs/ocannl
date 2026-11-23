@@ -624,6 +624,35 @@ if harness_leg 'undescribed stanza'; then
   else report 1 'a module of a library this build does not compile is UNMAPPED, exit 3, its rule readers still listed' "exit $rc; $(cat "$out" "$err")"; fi
 fi
 
+if harness_leg 'OS-gated Metal probe module'; then
+  # On Linux this is the actual Metal gate. On macOS reverse the comparison
+  # value so the same fixture exercises both Dune enablement outcomes.
+  gate=macosx
+  [ "$(ocamlc -config-var system)" != macosx ] || gate=linux
+  probe_dir=test/metal_probe
+  ml_ext=.ml
+  probe=$probe_dir/metal_hang_probe$ml_ext
+  mkdir -p "$repo/$probe_dir" || exit 2
+  printf 'let () = ()\n' >"$repo/$probe"
+  printf '(executable (name metal_hang_probe) (modules metal_hang_probe) (enabled_if (= %%{system} %s)))\n' \
+    "$gate" >"$repo/$probe_dir/dune"
+  git_q add -A test && git_q commit -qm os-gated-probe || exit 2
+  affected --files "$probe"
+  if alias_reader_completed && [ "$verdict" = ok ] && [ ! -s "$out" ] &&
+     grep -q "^affected: $probe: stanzas disabled on system .*: executable metal_hang_probe$" "$err"; then
+    report 0 'a wholly OS-disabled directory owns its module without owing aliases'
+  else report 1 'a wholly OS-disabled directory owns its module without owing aliases' "exit $rc; $(cat "$out" "$err")"; fi
+
+  printf '(executable (name other) (modules other))\n' >>"$repo/$probe_dir/dune"
+  printf 'let () = ()\n' >"$repo/$probe_dir/other.ml"
+  git_q add -A test && git_q commit -qm mixed-probe || exit 2
+  affected --files "$probe"
+  if alias_reader_completed && [ "$verdict" = incomplete ] && grep -qF "UNMAPPED: $probe" "$err"; then
+    report 0 'a directory with mixed enablement keeps the ordinary mapping requirement'
+  else report 1 'a directory with mixed enablement keeps the ordinary mapping requirement' "exit $rc; $(cat "$out" "$err")"; fi
+  git_q reset -q --hard HEAD~2 || exit 2
+fi
+
 if harness_leg 'off-build reach'; then
   # What a build that compiles opt9 would reach (gh-ocannl-1651: cuda_backend.ml on a Mac): sel
   # links it through a (select) by its local name, which dune lists by its public one, so this
