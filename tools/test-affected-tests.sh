@@ -1913,6 +1913,17 @@ if harness_leg 'harness fixture and heredoc literals'; then
   fx_reach 'fail-closed: env --unset printf consumes operand and keeps bash tools/sub.sh scanned' tools/test-a.sh tools/test-c.sh
   twin_text 'alias \' '  cat=bash' 'cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
   fx_reach 'fail-closed: backslash-continued alias declaration keeps cat heredoc scanned' tools/test-a.sh tools/test-c.sh
+  # Round 9 review findings: persistent `exec 2>...` with `>&2`, `/dev/fd/N`
+  # targets on `tee` and stdout redirections, and backslash-continued heredoc
+  # openers piped on the next line.
+  twin_text 'exec 2> >(bash)' 'printf '\''bash tools/sub.sh\n'\'' >&2'
+  fx_reach 'fail-closed: persistent exec 2> >(bash) with >&2 keeps printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 3> >(bash)' 'tee /dev/fd/3 >/dev/null <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: tee /dev/fd/3 >/dev/null <<SH keeps heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 3> >(bash)' 'cat >/dev/fd/3 <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: cat >/dev/fd/3 <<SH keeps heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat <<'\''SH'\'' \' '  | bash' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: backslash-continued heredoc opener piped on the next line keeps heredoc scanned' tools/test-a.sh tools/test-c.sh
   hc_restore
 fi
 
@@ -2025,6 +2036,17 @@ if harness_leg 'harness python __file__ placement'; then
   py_twin_reach 'fail-closed: walrus binding inside an f-string keeps every tied owner' "${twins[@]}"
   py_text 'import os' '__file__ = "data/driver.py"' 'p = os.path.join(os.path.dirname(__file__), "twin.py")'
   py_twin_reach 'fail-closed: a rebound __file__ keeps every tied owner' "${twins[@]}"
+  # Symlinked Python file: `.resolve()` / `os.path.realpath(__file__)` dereference
+  # to the symlink target's directory (`data/`), while plain `dirname(__file__)`
+  # stays at the symlink's own directory (`tools/`).
+  printf '%s\n' 'from pathlib import Path' 'p = Path(__file__).resolve().parent / "twin.py"' >"$hrepo/data/py_helper.py"
+  rm -f "$hrepo/tools/test_p.py" && ln -s ../data/py_helper.py "$hrepo/tools/test_p.py"
+  py_twin_reach 'symlinked .py: Path(__file__).resolve().parent places at symlink target directory' data/twin.py
+  printf '%s\n' 'import os' 'p = os.path.join(os.path.dirname(os.path.realpath(__file__)), "twin.py")' >"$hrepo/data/py_helper.py"
+  py_twin_reach 'symlinked .py: os.path.dirname(os.path.realpath(__file__)) places at symlink target directory' data/twin.py
+  printf '%s\n' 'import os' 'p = os.path.join(os.path.dirname(__file__), "twin.py")' >"$hrepo/data/py_helper.py"
+  py_twin_reach 'symlinked .py: os.path.dirname(__file__) stays at symlink directory' tools/twin.py
+  rm -f "$hrepo/tools/test_p.py" "$hrepo/data/py_helper.py"
   py_harness_teardown
 fi
 
