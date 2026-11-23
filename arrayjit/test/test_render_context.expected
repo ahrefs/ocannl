@@ -31,3 +31,5 @@ declined SIMD reduction inside a Local_scope rolls back speculative uniform_scal
 short-circuiting Where with a hoisted Local_scope counts condition reads replayed in the guard: true
 short-circuiting Where with no hoisted Local_scope counts condition reads once: true
 gated Relu_gate with a hoisted Local_scope counts condition reads replayed in gate_entries: true
+cell-targeted SIMD reduction counts emitted init, main-loop, and remainder source reads: true
+local-targeted SIMD reduction inside a Local_scope counts emitted init, main-loop, and remainder source reads: true

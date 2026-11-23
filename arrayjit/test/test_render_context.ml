@@ -536,4 +536,42 @@ let () =
     | [ { Cs.tn_uid; rendering = Cs.Store_rmw { reads_target = 3 }; reads; _ } ] ->
         tn_uid = r_out.Tn.uid
         && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads expected_gate_reads
+    | _ -> false);
+  (* 13. Explicit SIMD reduction counts reads from every emitted load site (4 chain inits + 4 main
+     loop updates + 1 scalar remainder = 9 source reads) for both Cell and Local targets. *)
+  let simd_cell_expected =
+    List.sort
+      ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+      [ (z_out.Tn.uid, 1); (r_src.Tn.uid, 9) ]
+  in
+  p "cell-targeted SIMD reduction counts emitted init, main-loop, and remainder source reads"
+    (match z_summary.Cs.stores with
+    | [
+     { Cs.rendering = Cs.Store_plain; _ };
+     { Cs.tn_uid; rendering = Cs.Store_simd_epilogue; reads; _ };
+    ] ->
+        tn_uid = z_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads simd_cell_expected
+    | _ -> false);
+  let simd_loc_sid = { LL.tn = r_idx; scope_id = 72416 } and simd_loc_i = B.sym () in
+  let simd_loc_scope =
+    B.scope_of simd_loc_sid
+      (B.seq
+         (LL.Set_local (simd_loc_sid, LL.Constant 0.0))
+         (B.loop ~upto:15 ~axis:LL.Vectorized simd_loc_i
+            (LL.Set_local
+               ( simd_loc_sid,
+                 B.add (LL.Get_local simd_loc_sid) (B.get r_src [| B.iter simd_loc_i |]) ))))
+  in
+  let simd_loc_summary =
+    render_pure ~vec_bytes:16 ~name:"rc_simd_local_reads" ~nodes:[ r_out; r_src ]
+      (B.set r_out [| B.fixed 0 |] simd_loc_scope)
+  in
+  p
+    "local-targeted SIMD reduction inside a Local_scope counts emitted init, main-loop, and \
+     remainder source reads"
+    (match simd_loc_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_from_scope { reads_target = 0; _ }; reads; _ } ] ->
+        tn_uid = r_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads [ (r_src.Tn.uid, 9) ]
     | _ -> false)

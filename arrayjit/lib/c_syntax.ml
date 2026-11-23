@@ -6837,38 +6837,6 @@ module C_syntax (B : C_syntax_config) = struct
         ctx.render_stmt_reads := saved_reads;
         raise e
 
-  (* Scalar-only read collector for packed vector stores ([try_vectorize], which declines any
-     [Local_scope] or nested loop) and cell-targeted SIMD reductions ([try_vectorize_reduce]). *)
-  let collect_scalar_reads (s : Low_level.scalar_t) : (int * int) list =
-    let counts = Hashtbl.create (module Int) in
-    let bump uid = Hashtbl.update counts uid ~f:(function None -> 1 | Some n -> n + 1) in
-    let rec walk (s : Low_level.scalar_t) =
-      match s with
-      | Low_level.Get (tn2, _) -> bump tn2.Tn.uid
-      | Get_dynamic { tn = tn2; dyn_value = v, _; _ } ->
-          bump tn2.Tn.uid;
-          walk v
-      | Local_scope _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _
-      | Embed_index _ ->
-          ()
-      | Ternop (op, (a, _), (b, _), (c, _)) -> (
-          match Ops.ternop_conditionality op with
-          | Ops.All_three | Ops.Cond_and_one_arm ->
-              walk a;
-              walk b;
-              walk c)
-      | Binop (op, (a, _), (b, _)) -> (
-          match Ops.binop_conditionality op with
-          | Ops.Only_first -> walk a
-          | Ops.Only_second -> walk b
-          | Ops.Both_operands | Ops.Gated_second ->
-              walk a;
-              walk b)
-      | Unop (_, (a, _)) -> walk a
-    in
-    walk s;
-    Hashtbl.to_alist counts |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
-
   let classify_set_store ctx ~(tn : Tn.t) ~(reads : (int * int) list) (llsc : Low_level.scalar_t) :
       store_rendering =
     let reads_target = Option.value (List.Assoc.find reads ~equal:Int.equal tn.Tn.uid) ~default:0 in
@@ -8668,6 +8636,7 @@ module C_syntax (B : C_syntax_config) = struct
       if (is_swizzled ctx) tn || (is_pipelined ctx) tn then raise Vectorization_declined;
       if not ((contiguous loop) idcs) then raise Vectorization_declined;
       check_read ~written tn idcs;
+      record_read_render ctx tn;
       let name = fresh "vget" in
       let offset = pp_array_offset (idcs, Lazy.force tn.Tn.dims) in
       let store_prec = Lazy.force tn.Tn.storage_prec in
@@ -8829,7 +8798,7 @@ module C_syntax (B : C_syntax_config) = struct
               Int.incr ctr;
               Printf.sprintf "%s%d__" pfx !ctr
           in
-          let prelude =
+          let prelude, recorded_sets =
             match B.vector_style with
             | `Vec_extensions ->
                 let vtyp, typedef_doc = vec_ext_typ ~prec ~lanes in
@@ -8837,23 +8806,29 @@ module C_syntax (B : C_syntax_config) = struct
                   (vec_ext_machinery ctx loop) ~prec ~lanes ~vtyp ~written ~emit ~fresh
                     ~need_typedef
                 in
-                List.iter sets ~f:(fun (tn, idcs, llsc) ->
-                    if (is_swizzled ctx) tn || (is_pipelined ctx) tn then
-                      raise Vectorization_declined;
-                    if not ((contiguous loop) idcs) then raise Vectorization_declined;
-                    let rhs = vec_operand llsc prec in
-                    let vname = fresh "vset" in
-                    emit (string (vtyp ^ " " ^ vname ^ " = ") ^^ rhs ^^ semi);
-                    let store_prec = Lazy.force tn.Tn.storage_prec in
-                    let _load, store =
-                      vec_bridge ~store_prec ~prec ~lanes ~vtyp ~need_typedef ~fresh
-                    in
-                    emit
-                      (store ~width:lanes ~src:vname
-                         ~mem:
-                           (string (get_ident tn)
-                           ^^ brackets (pp_array_offset (idcs, Lazy.force tn.Tn.dims)))));
-                separate hardline (typedef_doc :: registered_typedefs extra_typedefs) ^^ hardline
+                let recorded_sets =
+                  List.map sets ~f:(fun (tn, idcs, llsc) ->
+                      if (is_swizzled ctx) tn || (is_pipelined ctx) tn then
+                        raise Vectorization_declined;
+                      if not ((contiguous loop) idcs) then raise Vectorization_declined;
+                      let rhs, emitted_reads =
+                        capture_stmt_reads ctx (fun () -> vec_operand llsc prec)
+                      in
+                      let vname = fresh "vset" in
+                      emit (string (vtyp ^ " " ^ vname ^ " = ") ^^ rhs ^^ semi);
+                      let store_prec = Lazy.force tn.Tn.storage_prec in
+                      let _load, store =
+                        vec_bridge ~store_prec ~prec ~lanes ~vtyp ~need_typedef ~fresh
+                      in
+                      emit
+                        (store ~width:lanes ~src:vname
+                           ~mem:
+                             (string (get_ident tn)
+                             ^^ brackets (pp_array_offset (idcs, Lazy.force tn.Tn.dims))));
+                      (tn, llsc, emitted_reads))
+                in
+                ( separate hardline (typedef_doc :: registered_typedefs extra_typedefs) ^^ hardline,
+                  recorded_sets )
             | `Packed_struct ->
                 (* GPU 128-bit packed loads/stores (gh-ocannl-463; llm.c's Packed128): the backend's
                    aligned pack aggregate is loaded/stored via [reinterpret_cast] — one 128-bit
@@ -8893,6 +8868,7 @@ module C_syntax (B : C_syntax_config) = struct
                 let vload tn idcs =
                   if not (eligible tn idcs) then raise Vectorization_declined;
                   check_read ~written tn idcs;
+                  record_read_render ctx tn;
                   let name = fresh "vget" in
                   emit
                     (string
@@ -8940,7 +8916,10 @@ module C_syntax (B : C_syntax_config) = struct
                     | Ternop (op, _, _, _) when not (Ops.is_homogeneous_prec_ternop op) ->
                         raise Vectorization_declined
                     | Binop _ | Unop _ | Ternop _ ->
-                        let _no_defs, doc = pp_scalar_op ~operand:lane_operand prec llsc in
+                        let _no_defs, doc =
+                          pp_scalar_op ~capture_reads:(capture_expr_reads ctx)
+                            ~charge_reads:(charge_stmt_reads ctx) ~operand:lane_operand prec llsc
+                        in
                         doc
                     | Local_scope _ | Get_local _ | Get_merge_buffer _ | Get_dynamic _
                     | Embed_index _ | Constant _ | Constant_bits _ ->
@@ -8953,22 +8932,25 @@ module C_syntax (B : C_syntax_config) = struct
                   if not (Ops.equal_prec p prec) then raise Vectorization_declined;
                   ([], lane_expr llsc)
                 in
-                List.iter sets ~f:(fun (tn, idcs, llsc) ->
-                    if not (eligible tn idcs) then raise Vectorization_declined;
-                    let rhs = lane_expr llsc in
-                    let vname = fresh "vset" in
-                    emit (string (vtyp ^ " " ^ vname ^ ";"));
-                    emit
-                      (string
-                         (Printf.sprintf "for (int %s = 0; %s < %d; ++%s) { %s.v[%s] = " lane_var
-                            lane_var lanes lane_var vname lane_var)
-                      ^^ rhs ^^ string "; }");
-                    emit
-                      (string (Printf.sprintf "*reinterpret_cast<%s%s*>(&" B.buffer_prefix vtyp)
-                      ^^ string (get_ident tn)
-                      ^^ brackets (pp_array_offset (idcs, Lazy.force tn.Tn.dims))
-                      ^^ string (") = " ^ vname ^ ";")));
-                empty
+                let recorded_sets =
+                  List.map sets ~f:(fun (tn, idcs, llsc) ->
+                      if not (eligible tn idcs) then raise Vectorization_declined;
+                      let rhs, emitted_reads = capture_stmt_reads ctx (fun () -> lane_expr llsc) in
+                      let vname = fresh "vset" in
+                      emit (string (vtyp ^ " " ^ vname ^ ";"));
+                      emit
+                        (string
+                           (Printf.sprintf "for (int %s = 0; %s < %d; ++%s) { %s.v[%s] = " lane_var
+                              lane_var lanes lane_var vname lane_var)
+                        ^^ rhs ^^ string "; }");
+                      emit
+                        (string (Printf.sprintf "*reinterpret_cast<%s%s*>(&" B.buffer_prefix vtyp)
+                        ^^ string (get_ident tn)
+                        ^^ brackets (pp_array_offset (idcs, Lazy.force tn.Tn.dims))
+                        ^^ string (") = " ^ vname ^ ";"));
+                      (tn, llsc, emitted_reads))
+                in
+                (empty, recorded_sets)
           in
           let ivar = symbol_ident i in
           let it = B.loop_index_type in
@@ -8978,8 +8960,8 @@ module C_syntax (B : C_syntax_config) = struct
             (render_loop ctx loop
                (Render_simd_elementwise { lanes })
                (fun () ->
-                 List.iter sets ~f:(fun (tn, _, llsc) ->
-                     record_classified_store ctx ~tn ~reads:(collect_scalar_reads llsc) llsc);
+                 List.iter recorded_sets ~f:(fun (tn, llsc, emitted_reads) ->
+                     record_classified_store ctx ~tn ~reads:(reads_of_uids emitted_reads) llsc);
                  string
                    (Printf.sprintf "{ /* Vectorized rendering: %d lanes of %s. */" lanes
                       (B.typ_of_prec prec))
@@ -9134,86 +9116,99 @@ module C_syntax (B : C_syntax_config) = struct
           let ivar = symbol_ident i in
           let grid = vec_acc_grid ~prefix:("vred_" ^ ivar) ~rows:1 ~cols:chains in
           let acc_regs = grid.(0) in
-          (* Chain initialization from the first [chains] blocks, read at [i = 0]. *)
-          Array.iteri acc_regs ~f:(fun c name ->
-              let rhs = vec_operand (shift ~by:(c * lanes) contrib) prec in
-              emit (string (vtyp ^ " " ^ name ^ " = ") ^^ rhs ^^ semi));
-          let init_docs = take () in
-          (* The fused main-loop body: one independent update per chain. *)
-          Array.iteri acc_regs ~f:(fun c name ->
-              match (op, contrib) with
-              | Ops.Add, Low_level.Binop (Ops.Mul, (a, pa), (b, pb)) ->
-                  (* The dot-product case (also reached from the recognizer's FMA form):
-                     fused-multiply-accumulate straight into the chain register. *)
-                  let bind llsc p =
-                    let nm = fresh "vfop" in
-                    emit
-                      (string (vtyp ^ " " ^ nm ^ " = ")
-                      ^^ vec_operand (shift ~by:(c * lanes) llsc) p
-                      ^^ semi);
-                    nm
-                  in
-                  let na = bind a pa in
-                  let nb = bind b pb in
-                  emit (vec_acc_fma ~prec ~lanes ~dst:name ~a:na ~b:nb)
-              | _ ->
-                  let nm = fresh "vsrc" in
-                  emit
-                    (string (vtyp ^ " " ^ nm ^ " = ")
-                    ^^ vec_operand (shift ~by:(c * lanes) contrib) prec
-                    ^^ semi);
-                  emit (vec_acc_combine ~prec ~lanes ~op ~dst:name ~src:nm));
-          let update_docs = take () in
-          let total = "vred_total_" ^ ivar ^ "__" in
-          (* The accumulator cell itself stays at its storage precision: the fold reads it widened
-             and narrows the combined value once, exactly as the scalar path's [Set] does
-             (gh-ocannl-517); a scope-local target is already at [prec] and takes the combined value
-             with no conversion. The scalar REMAINDER (a non-multiple extent's tail) folds into the
-             compute-precision [total] BEFORE that single store (gh-ocannl-639): the original
-             per-step body would narrow the vector partial mid-way and then narrow again per tail
-             step, splitting this rendering from the widened serial baseline on exactly the
-             non-dividing extents. *)
-          let folds =
-            vec_acc_grid_fold ~prec ~lanes ~op grid
-            @ vec_acc_lane_fold ~prec ~lanes ~op ~vname:acc_regs.(0) ~out:total
-          in
-          let tail_roots, tail_defs, tail_update =
-            match (op, contrib) with
-            | Ops.Add, Low_level.Binop (Ops.Mul, (a, _), (b, _)) ->
-                (* Mirror the widened serial baseline's fused update ([pp_scalar]'s homogeneous
-                   FMA), or the tail's mul-then-add would round differently from the serial
-                   candidate's fmaf on the same steps. *)
-                let da, ea = (pp_scalar ctx) prec a in
-                let db, eb = (pp_scalar ctx) prec b in
-                ( [ (prec, a); (prec, b) ],
-                  da @ db,
-                  string total ^^ string " = "
-                  ^^ B.ternop_syntax prec Ops.FMA ea eb (string total)
-                  ^^ semi )
-            | _ ->
-                let dc, ec = (pp_scalar ctx) prec contrib in
-                ( [ (prec, contrib) ],
-                  dc,
-                  string total ^^ string " = " ^^ B.binop_syntax prec op (string total) ec ^^ semi
-                )
-          in
-          let store =
+          let (init_docs, update_docs, folds, tail_body, store), emitted_reads =
+            let render_body () =
+              (* Chain initialization from the first [chains] blocks, read at [i = 0]. *)
+              Array.iteri acc_regs ~f:(fun c name ->
+                  let rhs = vec_operand (shift ~by:(c * lanes) contrib) prec in
+                  emit (string (vtyp ^ " " ^ name ^ " = ") ^^ rhs ^^ semi));
+              let init_docs = take () in
+              (* The fused main-loop body: one independent update per chain. *)
+              Array.iteri acc_regs ~f:(fun c name ->
+                  match (op, contrib) with
+                  | Ops.Add, Low_level.Binop (Ops.Mul, (a, pa), (b, pb)) ->
+                      (* The dot-product case (also reached from the recognizer's FMA form):
+                         fused-multiply-accumulate straight into the chain register. *)
+                      let bind llsc p =
+                        let nm = fresh "vfop" in
+                        emit
+                          (string (vtyp ^ " " ^ nm ^ " = ")
+                          ^^ vec_operand (shift ~by:(c * lanes) llsc) p
+                          ^^ semi);
+                        nm
+                      in
+                      let na = bind a pa in
+                      let nb = bind b pb in
+                      emit (vec_acc_fma ~prec ~lanes ~dst:name ~a:na ~b:nb)
+                  | _ ->
+                      let nm = fresh "vsrc" in
+                      emit
+                        (string (vtyp ^ " " ^ nm ^ " = ")
+                        ^^ vec_operand (shift ~by:(c * lanes) contrib) prec
+                        ^^ semi);
+                      emit (vec_acc_combine ~prec ~lanes ~op ~dst:name ~src:nm));
+              let update_docs = take () in
+              let total = "vred_total_" ^ ivar ^ "__" in
+              (* The accumulator cell itself stays at its storage precision: the fold reads it
+                 widened and narrows the combined value once, exactly as the scalar path's [Set]
+                 does (gh-ocannl-517); a scope-local target is already at [prec] and takes the
+                 combined value with no conversion. The scalar REMAINDER (a non-multiple extent's
+                 tail) folds into the compute-precision [total] BEFORE that single store
+                 (gh-ocannl-639): the original per-step body would narrow the vector partial mid-way
+                 and then narrow again per tail step, splitting this rendering from the widened
+                 serial baseline on exactly the non-dividing extents. *)
+              let folds =
+                vec_acc_grid_fold ~prec ~lanes ~op grid
+                @ vec_acc_lane_fold ~prec ~lanes ~op ~vname:acc_regs.(0) ~out:total
+              in
+              let tail_roots, tail_defs, tail_update =
+                match (op, contrib) with
+                | Ops.Add, Low_level.Binop (Ops.Mul, (a, _), (b, _)) ->
+                    (* Mirror the widened serial baseline's fused update ([pp_scalar]'s homogeneous
+                       FMA), or the tail's mul-then-add would round differently from the serial
+                       candidate's fmaf on the same steps. *)
+                    let da, ea = (pp_scalar ctx) prec a in
+                    let db, eb = (pp_scalar ctx) prec b in
+                    ( [ (prec, a); (prec, b) ],
+                      da @ db,
+                      string total ^^ string " = "
+                      ^^ B.ternop_syntax prec Ops.FMA ea eb (string total)
+                      ^^ semi )
+                | _ ->
+                    let dc, ec = (pp_scalar ctx) prec contrib in
+                    ( [ (prec, contrib) ],
+                      dc,
+                      string total ^^ string " = "
+                      ^^ B.binop_syntax prec op (string total) ec
+                      ^^ semi )
+              in
+              let tail_body =
+                pp_local_defs ctx ~check:(None, tail_roots) tail_defs ^^ tail_update
+              in
+              let store =
+                match acc_target with
+                | `Cell (tn, idcs) ->
+                    let store_prec = Lazy.force tn.Tn.storage_prec in
+                    let widen = B.convert_precision ~from:store_prec ~to_:prec in
+                    let narrow = B.convert_precision ~from:prec ~to_:store_prec in
+                    let cell () =
+                      string (get_ident tn)
+                      ^^ brackets (pp_array_offset (idcs, Lazy.force tn.Tn.dims))
+                    in
+                    cell () ^^ string " = "
+                    ^^ wrap_conversion narrow
+                         (B.binop_syntax prec op (wrap_conversion widen (cell ())) (string total))
+                    ^^ semi
+                | `Local id ->
+                    pp_scope_id id ^^ string " = "
+                    ^^ B.binop_syntax prec op (pp_scope_id id) (string total)
+                    ^^ semi
+              in
+              (init_docs, update_docs, folds, tail_body, store)
+            in
             match acc_target with
-            | `Cell (tn, idcs) ->
-                let store_prec = Lazy.force tn.Tn.storage_prec in
-                let widen = B.convert_precision ~from:store_prec ~to_:prec in
-                let narrow = B.convert_precision ~from:prec ~to_:store_prec in
-                let cell () =
-                  string (get_ident tn) ^^ brackets (pp_array_offset (idcs, Lazy.force tn.Tn.dims))
-                in
-                cell () ^^ string " = "
-                ^^ wrap_conversion narrow
-                     (B.binop_syntax prec op (wrap_conversion widen (cell ())) (string total))
-                ^^ semi
-            | `Local id ->
-                pp_scope_id id ^^ string " = "
-                ^^ B.binop_syntax prec op (pp_scope_id id) (string total)
-                ^^ semi
+            | `Cell _ -> capture_stmt_reads ctx render_body
+            | `Local _ -> (render_body (), [])
           in
           let it = B.loop_index_type in
           (* Past every bail-out: the grid renders, and the census says which decision it took its
@@ -9226,16 +9221,11 @@ module C_syntax (B : C_syntax_config) = struct
             (render_loop ctx loop
                (Render_simd_reduce { target; lanes; chains })
                (fun () ->
-                 let tail_body =
-                   pp_local_defs ctx ~check:(None, tail_roots) tail_defs ^^ tail_update
-                 in
                  (match acc_target with
-                 | `Cell (tn, idcs) ->
+                 | `Cell (tn, _) ->
                      let reads =
                        if !(ctx.render_census_enabled) then
-                         collect_scalar_reads
-                           (Low_level.Binop
-                              (Ops.Add, (Low_level.Get (tn, idcs), prec), (contrib, prec)))
+                         reads_of_uids (tn.Tn.uid :: emitted_reads)
                        else []
                      in
                      record_store_render ctx tn ~reads Store_simd_epilogue
