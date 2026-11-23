@@ -24,3 +24,4 @@ create_render_ctx before with_render_census still records compile_main inside th
 compile_main after with_render_census closes appends nothing to the loop global: true
 compile_main after with_render_census closes appends nothing to the store global: true
 sibling Local_scope operands record loop census entries in Scope_order emission order: true
+shared Local_scope referenced twice in one statement counts its reads once: true

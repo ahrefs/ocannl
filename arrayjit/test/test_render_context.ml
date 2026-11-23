@@ -386,4 +386,16 @@ let () =
      { Cs.rendering = Cs.Render_serial; _ }; { Cs.rendering = Cs.Render_unrolled { copies = 2 }; _ };
     ] ->
         true
+    | _ -> false);
+  (* 8. A shared Local_scope referenced twice in one statement is emitted once by Scope_order.plan,
+     so its reads are counted once rather than per operand occurrence. *)
+  let dup_summary =
+    render_pure ~name:"rc_shared_scope_reads" ~nodes:[ r_out; r_src ]
+      (B.set r_out [| B.fixed 0 |] (B.add scope_lo scope_lo))
+  in
+  p "shared Local_scope referenced twice in one statement counts its reads once"
+    (match dup_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_plain; reads; _ } ] ->
+        tn_uid = r_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads [ (r_src.Tn.uid, 1) ]
     | _ -> false)

@@ -6685,28 +6685,39 @@ module C_syntax (B : C_syntax_config) = struct
   let collect_reads_from ~scalars ~lls : (int * int) list =
     let counts = Hashtbl.create (module Int) in
     let bump uid = Hashtbl.update counts uid ~f:(function None -> 1 | Some n -> n + 1) in
-    let rec walk_scalar (s : Low_level.scalar_t) =
-      match s with
-      | Low_level.Get (tn2, _) -> bump tn2.Tn.uid
-      | Get_dynamic { tn = tn2; dyn_value = v, _; _ } ->
-          bump tn2.Tn.uid;
-          walk_scalar v
-      | Local_scope { body; _ } -> walk_ll body
-      | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
-      | Ternop (op, (a, _), (b, _), (c, _)) -> (
-          match Ops.ternop_conditionality op with
-          | Ops.All_three | Ops.Cond_and_one_arm ->
-              walk_scalar a;
-              walk_scalar b;
-              walk_scalar c)
-      | Binop (op, (a, _), (b, _)) -> (
-          match Ops.binop_conditionality op with
-          | Ops.Only_first -> walk_scalar a
-          | Ops.Only_second -> walk_scalar b
-          | Ops.Both_operands | Ops.Gated_second ->
-              walk_scalar a;
-              walk_scalar b)
-      | Unop (_, (a, _)) -> walk_scalar a
+    (* Each statement emits its [Local_scope] definitions through one [pp_local_defs] call, which
+       deduplicates definitions by [scope_id] (via [Low_level.Scope_order.plan]). Deduplicating
+       visited scope IDs per statement keeps [reads] aligned with emitted definitions. *)
+    let rec walk_stmt_scalars (ss : Low_level.scalar_t list) =
+      let seen_scopes = Hash_set.create (module Int) in
+      let rec walk_scalar (s : Low_level.scalar_t) =
+        match s with
+        | Low_level.Get (tn2, _) -> bump tn2.Tn.uid
+        | Get_dynamic { tn = tn2; dyn_value = v, _; _ } ->
+            bump tn2.Tn.uid;
+            walk_scalar v
+        | Local_scope { id; body; _ } ->
+            if not (Hash_set.mem seen_scopes id.Low_level.scope_id) then begin
+              Hash_set.add seen_scopes id.Low_level.scope_id;
+              walk_ll body
+            end
+        | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
+        | Ternop (op, (a, _), (b, _), (c, _)) -> (
+            match Ops.ternop_conditionality op with
+            | Ops.All_three | Ops.Cond_and_one_arm ->
+                walk_scalar a;
+                walk_scalar b;
+                walk_scalar c)
+        | Binop (op, (a, _), (b, _)) -> (
+            match Ops.binop_conditionality op with
+            | Ops.Only_first -> walk_scalar a
+            | Ops.Only_second -> walk_scalar b
+            | Ops.Both_operands | Ops.Gated_second ->
+                walk_scalar a;
+                walk_scalar b)
+        | Unop (_, (a, _)) -> walk_scalar a
+      in
+      List.iter ss ~f:walk_scalar
     and walk_ll (c : Low_level.t) =
       match c with
       | Low_level.Seq (a, b) ->
@@ -6714,22 +6725,20 @@ module C_syntax (B : C_syntax_config) = struct
           walk_ll b
       | For_loop { body; _ } -> walk_ll body
       | Scan_loop { carried; body; _ } ->
-          List.iter carried ~f:(fun c -> walk_scalar c.Low_level.init);
+          List.iter carried ~f:(fun c -> walk_stmt_scalars [ c.Low_level.init ]);
           walk_ll body
       | If { cond = c, _; body } ->
-          walk_scalar c;
+          walk_stmt_scalars [ c ];
           walk_ll body
-      | Set { llsc; _ } | Set_local (_, llsc) -> walk_scalar llsc
-      | Set_dynamic { dyn_value = v, _; llsc; _ } ->
-          walk_scalar v;
-          walk_scalar llsc
-      | Set_from_vec { arg = a, _; _ } -> walk_scalar a
+      | Set { llsc; _ } | Set_local (_, llsc) -> walk_stmt_scalars [ llsc ]
+      | Set_dynamic { dyn_value = v, _; llsc; _ } -> walk_stmt_scalars [ v; llsc ]
+      | Set_from_vec { arg = a, _; _ } -> walk_stmt_scalars [ a ]
       | Tile_mma { fallback; _ } -> walk_ll fallback
       | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier
         ->
           ()
     in
-    List.iter scalars ~f:walk_scalar;
+    if not (List.is_empty scalars) then walk_stmt_scalars scalars;
     List.iter lls ~f:walk_ll;
     Hashtbl.to_alist counts |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
 
