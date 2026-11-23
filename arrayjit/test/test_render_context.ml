@@ -435,4 +435,38 @@ let () =
     (match dead_unrolled_summary.Cs.stores with
     | [ { Cs.tn_uid; rendering = Cs.Store_from_scope { reads_target = 0; _ }; reads = []; _ } ] ->
         tn_uid = r_out.Tn.uid
+    | _ -> false);
+  (* 10. Declined SIMD reduction inside a Local_scope rolls back speculative uniform_scalar reads so
+     the serial fallback does not double-count them. *)
+  let u_uni = B.node_factory ~first_id:724_100_500 ~dims:[| 1 |] () "rc_uni" in
+  B.materialize u_uni;
+  let dec_sid = { LL.tn = r_idx; scope_id = 72415 } and dec_i = B.sym () in
+  let dec_contrib =
+    LL.Ternop
+      ( Ops.FMA,
+        (B.get u_uni [| B.fixed 0 |], prec),
+        (LL.Unop (Ops.Exp, (B.get r_src [| B.iter dec_i |], prec)), prec),
+        (LL.Constant 0.0, prec) )
+  in
+  let dec_scope =
+    B.scope_of dec_sid
+      (B.seq
+         (LL.Set_local (dec_sid, LL.Constant 0.0))
+         (B.loop ~upto:15 ~axis:LL.Vectorized dec_i
+            (LL.Set_local (dec_sid, B.add (LL.Get_local dec_sid) dec_contrib))))
+  in
+  let dec_summary =
+    render_pure ~vec_bytes:16 ~name:"rc_declined_simd_reads" ~nodes:[ r_out; r_src; u_uni ]
+      (B.set r_out [| B.fixed 0 |] dec_scope)
+  in
+  let expected_dec_reads =
+    List.sort
+      ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+      [ (r_src.Tn.uid, 1); (u_uni.Tn.uid, 1) ]
+  in
+  p "declined SIMD reduction inside a Local_scope rolls back speculative uniform_scalar reads"
+    (match dec_summary.Cs.stores with
+    | [ { Cs.tn_uid; rendering = Cs.Store_from_scope { reads_target = 0; _ }; reads; _ } ] ->
+        tn_uid = r_out.Tn.uid
+        && List.equal (fun (u1, c1) (u2, c2) -> u1 = u2 && c1 = c2) reads expected_dec_reads
     | _ -> false)
