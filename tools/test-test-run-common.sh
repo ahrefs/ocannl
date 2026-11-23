@@ -873,6 +873,12 @@ case $REPEAT_TEST_MODE in
   red_line_only)
     printf 'File "test/operations/fixture.ml", line 3:\nError: The implementation does not match the interface\n' >&2
     exit 1 ;;
+  red_warning_error)
+    printf 'File "test/operations/fixture.ml", line 3, characters 4-9:\nError (warning 32 [unused-value-declaration]): unused value fixture.\n' >&2
+    exit 1 ;;
+  red_alert_error)
+    printf 'File "test/operations/fixture.ml", line 3, characters 4-9:\nError (alert deprecated): Fixture.legacy\n' >&2
+    exit 1 ;;
   dune_prefixed_red)
     printf 'dune: is what this test prints first\n'
     printf 'File "test/operations/fixture.ml", line 3, characters 4-9:\nError: This expression has type int but an expression was expected of type float\n' >&2
@@ -898,6 +904,7 @@ case $REPEAT_TEST_MODE in
       attribution_command) printf '(cd _fixture/default && ./fail-fixture) > fail-fixture.out\n' ;;
     esac >&2
     printf 'Error: fixture error from failed action\n' >&2
+    printf 'a continuation from the action\n' >&2
     printf 'FAIL: fixture failure\n' >&2
     if [ "$REPEAT_TEST_MODE" = attribution_chain ]; then
       printf 'Error: No rule found for\nfixture-missing-target\n-> required by alias runtest-fixture-dependency\n' >&2

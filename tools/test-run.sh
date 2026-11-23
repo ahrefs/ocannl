@@ -33,15 +33,18 @@
 #
 # Failure digest boundary (gh-ocannl-2345): the last 10 MB of the run log,
 # with Dune's color and CRLF stripped. Reads column-one Dune File locations
-# and their excerpts, the location's opening compiler Error:, and action
-# output delimited by Dune's short, verbose or (cd ... && ...) reports (also
-# with redirections). An Error: followed by a Dune dependency chain belongs
-# to the batch when no location introduces that error.
+# and their excerpts, the location's opening compiler error (including
+# promoted warnings and alerts), and action output delimited by Dune's short,
+# verbose or (cd ... && ...) reports (also with redirections). A dependency
+# chain can identify a locationless Dune
+# error as batch context. Only a chain joins wrapped error lines. Ordinary
+# multiline errors contribute their diagnostic head.
 # Quiet output without a command marker, locationless errors without a failed
 # command report, and text before the first recognized block have no action
 # owner. Diagnostic-looking lines there or in passing blocks are batch
-# context. The raw log holds the rest. A child replaying complete Dune
-# report syntax is indistinguishable from Dune in a flat log.
+# context. Each section displays up to 40 lines. The raw log holds the rest.
+# A child replaying complete Dune report syntax is indistinguishable from
+# Dune in a flat log.
 #
 # Usage:
 #   tools/test-run.sh run   [--cap N] [--test-cap N] [--expect-backend B]... [--targets-file FILE]...
@@ -4110,12 +4113,14 @@ failure_diagnostics() {
     BEGIN {
       sgr = sprintf("%c", 27) "\\[[0-9;]*m"
       location = "^File \"[^\"]+\", lines? [0-9]+(-[0-9]+)?"
+      error_head = "^Error( \\((warning|alert) [^)]*\\))?:"
       short_target = "(alias )?[^[:space:]]+"
       short_status = " \\((exit -?[0-9]+|got signal [[:alnum:]]+|had unexpected output on [^)]+)\\)$"
+      line_limit = 40
     }
     function add(line,   owner) {
       owner = active ? block : 0
-      if ((active && nf >= 40) || (!active && nc >= 12)) return
+      if ((active && nf >= line_limit) || (!active && nc >= line_limit)) return
       line = substr(line, 1, 300)
       if (seen[owner, line]++) return
       if (active) fingerprint[++nf] = "    " line
@@ -4123,7 +4128,7 @@ failure_diagnostics() {
     }
     function start_failure(site) {
       block++
-      if (nf < 40) fingerprint[++nf] = "  " substr(site, 1, 300)
+      if (nf < line_limit) fingerprint[++nf] = "  " substr(site, 1, 300)
     }
     {
       gsub(sgr, "")
@@ -4139,7 +4144,8 @@ failure_diagnostics() {
       chained = /^-> required by /
       boundary = short || command || chained ||
                  /^(Output\[[0-9]+\]:|Running\[[0-9]+\]:|exit: |=== |test-run: |(Entering|Leaving) directory )/
-      diagnostic = /^(Error:|Fatal error:|Exception([ :]|$)|FAIL(ED)?:)/
+      error = $0 ~ error_head
+      diagnostic = error || /^(Fatal error:|Exception([ :]|$)|FAIL(ED)?:)/
 
       # A locationless Dune error can wrap before its dependency chain.
       # Until that chain arrives, its opening line could be action output.
@@ -4175,7 +4181,7 @@ failure_diagnostics() {
           start_failure(site)
           active = verbose_fail || short_fail || (command && !diff_site)
           short_command = short_fail
-          if (!active && compiler && /^Error:/) {
+          if (!active && compiler && error) {
             active = 1
             add($0)
             active = 0
@@ -4198,7 +4204,7 @@ failure_diagnostics() {
         active = 0
         next
       }
-      if (active && /^Error:/) {
+      if (active && error) {
         pending = wrapped = substr($0, 1, 300)
         wrap_lines = 0
       } else if (diagnostic) add($0)

@@ -680,7 +680,7 @@ harness_leg_run '35: a dune-refused invocation is INVOCATION REFUSED #digest' le
 leg_36() {
 red_label="a red run still digests as FAIL (exit 1) with its fingerprint"
 red_detail=
-for mode in red red_color red_line_only dune_prefixed_red nested_usage_red nested_usage_output; do
+for mode in red red_color red_line_only red_warning_error red_alert_error dune_prefixed_red nested_usage_red nested_usage_output; do
   argv_mode=$mode argv_probe "red-$mode" run build @cheap
   case $argv_rc in
     1) ;;
@@ -707,10 +707,15 @@ for mode in red red_color red_line_only dune_prefixed_red nested_usage_red neste
     continue
   fi
   # Check the location and its compiler diagnostic together.
-  local error='This expression has type int'
-  [ "$mode" != red_line_only ] || error='The implementation does not match the interface'
+  local error
+  case $mode in
+    red_line_only) error='Error: The implementation does not match the interface' ;;
+    red_warning_error) error='Error (warning 32 [unused-value-declaration]): unused value fixture.' ;;
+    red_alert_error) error='Error (alert deprecated): Fixture.legacy' ;;
+    *) error='Error: This expression has type int' ;;
+  esac
   case $argv_out in
-    *$'fingerprint:\n  File "test/operations/fixture.ml", line 3\n    Error: '"$error"*) ;;
+    *$'fingerprint:\n  File "test/operations/fixture.ml", line 3\n    '"$error"*) ;;
     *) red_detail="$mode: located compiler error missing from fingerprint: $argv_out"; break ;;
   esac
   argv_runs=$TMP/argv-runs-red-$mode argv_probe "red-$mode-wait" wait last
