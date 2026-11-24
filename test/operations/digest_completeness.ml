@@ -46,24 +46,9 @@ let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 module SC = Ir.Schedule_cache
 module Config_key_scan = Test_scan.Config_key_scan
 
-(* Modules that run AFTER lowering: rendering a kernel, compiling it, dispatching it, and building
-   the cache identity itself. A key whose only reads are here is invisible to the canonical digest
-   by construction. [schedule_cache.ml] belongs in the list for the same reason as the backends
-   (Codex P2 on PR #337): it reads its keys while assembling the codegen component, downstream of
-   the code the digest names, so a [Code_borne] classification of one of them would be wrong in
-   exactly the way check 3 exists to catch. *)
-let codegen_stage_modules =
-  [
-    "c_syntax.ml";
-    "cc_backend.ml";
-    "cuda_backend.ml";
-    "cuda_like_config.ml";
-    (* CUDA's arm tables and descriptor, extracted from cuda_backend.ml (gh-ocannl-1214). *)
-    "cuda_mma.ml";
-    "hip_backend.ml";
-    "metal_backend.ml";
-    "schedule_cache.ml";
-  ]
+(* Shared with [cache_key_agreement] so the two checks stay held to one codegen-stage module set
+   (gh-ocannl-2440). *)
+let codegen_stage_modules = Test_scan.Codegen_stage_modules.modules
 
 (* Lower bounds on the classified keys and on the keys the codegen-stage modules read: floors, not
    counts, so that adding a key moves nothing (gh-ocannl-1046). There were 120 and 30 on 2026-09-25;

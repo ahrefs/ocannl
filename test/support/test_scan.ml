@@ -7,6 +7,10 @@ module Config_key_scan = Config_key_scan
 (** Scanning OCaml sources for the config keys they read, shared by the configuration-consistency
     tests. *)
 
+module Codegen_stage_modules = Codegen_stage_modules
+(** The modules that run after lowering, shared by [digest_completeness] and [cache_key_agreement]
+    (gh-ocannl-2440). *)
+
 module Lifecycle_scan = Lifecycle_scan
 
 module Policy_invariance_scan = Policy_invariance_scan

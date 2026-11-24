@@ -98,6 +98,7 @@
   doc_examples_scan
   dead_export_scan
   api_drift
+  codegen_stage_modules
   codegen_text_scan
   kernel_exec_scan
   rerun_aliases
