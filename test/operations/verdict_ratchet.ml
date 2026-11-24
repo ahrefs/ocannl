@@ -6244,10 +6244,6 @@ let exempt_leg_gate_calls : (string * int * string) list =
       1,
       "known dependent gate (pre-existing): gates fill_leg on Autotune.ranking_fill_model while \
        claiming about Autotune.ranking_ms; tracked for follow-up" );
-    ( "test/operations/cuda_wmma_floor.real.ml:Ir.Cuda_mma.arm_floor",
-      1,
-      "compiles the plain driver-JIT sm_70 probe at the k8 arm floor; arm_floor values are \
-       separately pinned by cuda_mma_cutoffs.ml" );
     ( "test/operations/launch_predicate_parity.ml:Autotune.c_a",
       1,
       "reads the conv site's input precision node from the test fixture lowering for \
