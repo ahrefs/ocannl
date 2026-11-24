@@ -6886,6 +6886,52 @@ let leg =
     ()
 let () = Verdict.in_leg ~leg "aligned" (fun label -> Verdict.p label true)|ocaml},
       [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
+    ( "accepts a helper with an unused nested claim helper before claiming a deferred sub_leg \
+       inside Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub =
+  Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let run () =
+  let _unused () = in_leg ~leg:sub "unused" (fun label -> p label true) in
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg:sub "used" (fun label -> p label true))
+let () = run ()|ocaml},
+      [] );
+    ( "refuses a leg gating on an unqualified capability field supplied through List.fold ~init",
+      {ocaml|let caps = Context.codegen_capabilities (Context.auto ())
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:
+      (snd
+         (List.fold [ () ] ~init:(caps, true) ~f:(fun (c, _) () ->
+              (c, c.workgroup_allocation_alignment = 4))))
+    ()
+let () = Verdict.in_leg ~leg "aligned" (fun label -> Verdict.p label true)|ocaml},
+      [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
+    ( "refuses a production call projected from a record returned by a local helper",
+      {ocaml|type box = { available : bool }
+let wrap available = { available }
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:(wrap (Option.is_some (Autotune.detect_conv llc))).available
+    ()
+let () = Verdict.in_leg ~leg "conv" (fun label -> Verdict.p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses two sub_legs sharing a named lazy condition when the first is claimed before \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let ready = lazy (Ir.Numerics.get ()).tf32_matmuls
+let sub1 = Verdict.sub_leg gpu ~on:"cuda" ~when_:ready
+let sub2 = Verdict.sub_leg gpu ~on:"cuda" ~when_:ready
+let () =
+  in_leg ~leg:sub1 "before policy" (fun label -> p label true);
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg:sub2 "under policy" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
     ( "refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy",
       {ocaml|open Verdict.Claims
 let leg =

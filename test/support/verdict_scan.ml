@@ -7687,7 +7687,10 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
             match fn with
             | "iter" | "map" | "filter_map" | "concat_map" | "for_all" | "exists" | "filter" ->
                 Some `Unary
-            | "iteri" | "mapi" | "fold" -> Some `Indexed
+            | "iteri" | "mapi" -> Some `Indexed
+            | "fold" | "fold_left" -> Some `Fold
+            | "fold_right" -> Some `Fold_right
+            | "foldi" -> Some `Foldi
             | "iter2" | "iter2_exn" | "map2" | "map2_exn" | "for_all2" | "for_all2_exn" ->
                 Some `Binary
             | _ -> None)
@@ -7703,6 +7706,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
       val mutable active_wrappers : (int * string) list = []
       val mutable current_eval_kind : lg_eval_kind option = None
       val mutable call_site_pos : int option = None
+      val mutable replaying_fn_id : int option = None
       val mutable in_uninvoked_fn_def : bool = false
       val active_fn_rewalks : int Hash_set.t = Hash_set.create (module Int)
       val active_lazy_rewalks : int Hash_set.t = Hash_set.create (module Int)
@@ -7909,6 +7913,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
          expression at the scope where it actually ran. *)
       method resolve_record_field ~eval_kind env record field_name =
         let seen = Hash_set.create (module Int) in
+        let active_fns = Hash_set.create (module Int) in
         let rec find ~ek env expr =
           let expr = strip expr in
           match expr.pexp_desc with
@@ -7934,8 +7939,8 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                     self#bind_group env bindings denotes)
               in
               find ~ek scope b
-          | Pexp_ident { txt = Lident name; _ } -> (
-              match Lexical_scope.lookup env name with
+          | Pexp_ident { txt; _ } -> (
+              match lookup_local_val env txt with
               | Some v when (not (Hash_set.mem seen v.lg_id)) && List.is_empty v.lg_proj ->
                   Hash_set.add seen v.lg_id;
                   Option.bind v.lg_rhs ~f:(fun (rhs, rhs_env) ->
@@ -7948,26 +7953,33 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                       in
                       find ~ek:next_ek rhs_env rhs)
               | _ -> None)
-          | Pexp_apply (callee, [ (Nolabel, arg) ]) -> (
-              match (strip callee).pexp_desc with
-              | Pexp_ident { txt; _ } -> (
-                  match resolve_longident env txt with
-                  | `External ([ "Lazy"; "force" ] | [ "Base"; "Lazy"; "force" ])
-                  | `Unqualified "force" ->
-                      find ~ek env arg
-                  | `Unqualified name -> (
-                      match Lexical_scope.lookup env name with
-                      | Some v when not (Hash_set.mem seen v.lg_id) -> (
-                          Hash_set.add seen v.lg_id;
-                          match v.lg_rhs with
-                          | Some (rhs, rhs_env) -> (
-                              match (strip rhs).pexp_desc with
-                              | Pexp_function (_, _, Pfunction_body body) -> find ~ek rhs_env body
-                              | _ -> None)
-                          | None -> None)
-                      | _ -> None)
-                  | _ -> None)
-              | _ -> None)
+          | Pexp_apply _ -> (
+              match resolve_external_chain env expr with
+              | Some
+                  ( ([ "Lazy"; "force" ] | [ "Base"; "Lazy"; "force" ]),
+                    [ (Ppxlib.Asttypes.Nolabel, arg, arg_env, _) ] ) ->
+                  find ~ek arg_env arg
+              | _ -> (
+                  match
+                    Option.bind (resolve_local_fn_chain env expr) ~f:(fun (fn_id, all_args) ->
+                        Option.map (Hashtbl.find fn_def_by_id fn_id) ~f:(fun def ->
+                            (fn_id, all_args, def)))
+                  with
+                  | Some (fn_id, all_args, (params, body, fn_env))
+                    when not (Hash_set.mem active_fns fn_id) ->
+                      Hash_set.add active_fns fn_id;
+                      Exn.protect
+                        ~finally:(fun () -> Hash_set.remove active_fns fn_id)
+                        ~f:(fun () ->
+                          let call_env, _ = self#bind_local_call fn_env params all_args in
+                          find ~ek call_env body)
+                  | _ -> (
+                      match expr.pexp_desc with
+                      | Pexp_apply (callee, [ (Nolabel, arg) ]) -> (
+                          match (strip callee).pexp_desc with
+                          | Pexp_ident { txt = Lident "force"; _ } -> find ~ek env arg
+                          | _ -> None)
+                      | _ -> None)))
           | _ -> None
         in
         find ~ek:eval_kind env record
@@ -8562,26 +8574,82 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                                       pexp_attributes = [];
                                     }
                                   in
-                                  let elems_of c_expr ~prefix =
+                                  let init_arg =
+                                    List.find_map iter_all_args ~f:(function
+                                      | Ppxlib.Asttypes.Labelled "init", a -> Some a
+                                      | _ -> None)
+                                  in
+                                  let elems_of c_expr ~prefix ?(suffix = []) () =
                                     match
                                       extract_list_literal env (Hash_set.create (module Int)) c_expr
                                     with
                                     | Some elems ->
                                         List.map elems ~f:(fun (el, el_env) ->
-                                            prefix @ [ (Ppxlib.Asttypes.Nolabel, el, el_env, None) ])
+                                            prefix
+                                            @ [ (Ppxlib.Asttypes.Nolabel, el, el_env, None) ]
+                                            @ suffix)
                                     | None ->
                                         [
-                                          prefix @ [ (Ppxlib.Asttypes.Nolabel, c_expr, env, None) ];
+                                          prefix
+                                          @ [ (Ppxlib.Asttypes.Nolabel, c_expr, env, None) ]
+                                          @ suffix;
                                         ]
                                   in
                                   let elem_arg_lists =
-                                    match (kind, colls) with
-                                    | `Unary, c1 :: _ -> elems_of c1 ~prefix:[]
-                                    | `Indexed, c1 :: _ ->
+                                    match (kind, init_arg, colls) with
+                                    | `Unary, _, c1 :: _ -> elems_of c1 ~prefix:[] ()
+                                    | `Indexed, _, c1 :: _ ->
                                         elems_of c1
                                           ~prefix:
                                             [ (Ppxlib.Asttypes.Nolabel, dummy_idx, env, None) ]
-                                    | `Binary, c1 :: c2 :: _ -> (
+                                          ()
+                                    | `Fold, Some init_expr, c1 :: _ ->
+                                        elems_of c1
+                                          ~prefix:
+                                            [ (Ppxlib.Asttypes.Nolabel, init_expr, env, None) ]
+                                          ()
+                                    | `Fold, None, init_expr :: c1 :: _ ->
+                                        elems_of c1
+                                          ~prefix:
+                                            [ (Ppxlib.Asttypes.Nolabel, init_expr, env, None) ]
+                                          ()
+                                    | `Fold, None, c1 :: _ ->
+                                        elems_of c1
+                                          ~prefix:
+                                            [ (Ppxlib.Asttypes.Nolabel, dummy_idx, env, None) ]
+                                          ()
+                                    | `Fold_right, Some init_expr, c1 :: _ ->
+                                        elems_of c1 ~prefix:[]
+                                          ~suffix:
+                                            [ (Ppxlib.Asttypes.Nolabel, init_expr, env, None) ]
+                                          ()
+                                    | `Fold_right, None, c1 :: init_expr :: _ ->
+                                        elems_of c1 ~prefix:[]
+                                          ~suffix:
+                                            [ (Ppxlib.Asttypes.Nolabel, init_expr, env, None) ]
+                                          ()
+                                    | `Fold_right, None, c1 :: _ ->
+                                        elems_of c1 ~prefix:[]
+                                          ~suffix:
+                                            [ (Ppxlib.Asttypes.Nolabel, dummy_idx, env, None) ]
+                                          ()
+                                    | `Foldi, Some init_expr, c1 :: _ ->
+                                        elems_of c1
+                                          ~prefix:
+                                            [
+                                              (Ppxlib.Asttypes.Nolabel, dummy_idx, env, None);
+                                              (Ppxlib.Asttypes.Nolabel, init_expr, env, None);
+                                            ]
+                                          ()
+                                    | `Foldi, None, c1 :: _ ->
+                                        elems_of c1
+                                          ~prefix:
+                                            [
+                                              (Ppxlib.Asttypes.Nolabel, dummy_idx, env, None);
+                                              (Ppxlib.Asttypes.Nolabel, dummy_idx, env, None);
+                                            ]
+                                          ()
+                                    | `Binary, _, c1 :: c2 :: _ -> (
                                         let e1 =
                                           extract_list_literal env (Hash_set.create (module Int)) c1
                                         and e2 =
@@ -9455,7 +9523,11 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                defined; only actual call sites / callbacks execute it, so mark definition-time
                traversal so deferred [sub_leg] force-order checks ignore uninvoked definitions. *)
             let saved_uninvoked = in_uninvoked_fn_def in
-            let is_named_def = Hashtbl.mem fn_id_by_expr_pos pos && Option.is_none call_site_pos in
+            let is_named_def =
+              match Hashtbl.find fn_id_by_expr_pos pos with
+              | Some def_id -> not (Option.exists replaying_fn_id ~f:(Int.equal def_id))
+              | None -> false
+            in
             if is_named_def then in_uninvoked_fn_def <- true;
             Exn.protect
               ~finally:(fun () -> in_uninvoked_fn_def <- saved_uninvoked)
@@ -9587,7 +9659,12 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                               pexp_attributes = [];
                             }
                           in
-                          let record_elems c_expr ~prefix =
+                          let init_arg =
+                            List.find_map all_args ~f:(function
+                              | Ppxlib.Asttypes.Labelled "init", a -> Some a
+                              | _ -> None)
+                          in
+                          let record_elems c_expr ~prefix ?(suffix = []) () =
                             match
                               extract_list_literal env (Hash_set.create (module Int)) c_expr
                             with
@@ -9595,17 +9672,62 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                                 List.iteri elems ~f:(fun idx (el, el_env) ->
                                     add_iter_call
                                       ((pos * 1009) + idx + 1)
-                                      (prefix @ [ (Ppxlib.Asttypes.Nolabel, el, el_env, None) ]))
+                                      (prefix
+                                      @ [ (Ppxlib.Asttypes.Nolabel, el, el_env, None) ]
+                                      @ suffix))
                             | None ->
                                 add_iter_call pos
-                                  (prefix @ [ (Ppxlib.Asttypes.Nolabel, c_expr, env, None) ])
+                                  (prefix
+                                  @ [ (Ppxlib.Asttypes.Nolabel, c_expr, env, None) ]
+                                  @ suffix)
                           in
-                          match (kind, colls) with
-                          | `Unary, c1 :: _ -> record_elems c1 ~prefix:[]
-                          | `Indexed, c1 :: _ ->
+                          match (kind, init_arg, colls) with
+                          | `Unary, _, c1 :: _ -> record_elems c1 ~prefix:[] ()
+                          | `Indexed, _, c1 :: _ ->
                               record_elems c1
                                 ~prefix:[ (Ppxlib.Asttypes.Nolabel, dummy_idx, env, None) ]
-                          | `Binary, c1 :: c2 :: _ -> (
+                                ()
+                          | `Fold, Some init_expr, c1 :: _ ->
+                              record_elems c1
+                                ~prefix:[ (Ppxlib.Asttypes.Nolabel, init_expr, env, None) ]
+                                ()
+                          | `Fold, None, init_expr :: c1 :: _ ->
+                              record_elems c1
+                                ~prefix:[ (Ppxlib.Asttypes.Nolabel, init_expr, env, None) ]
+                                ()
+                          | `Fold, None, c1 :: _ ->
+                              record_elems c1
+                                ~prefix:[ (Ppxlib.Asttypes.Nolabel, dummy_idx, env, None) ]
+                                ()
+                          | `Fold_right, Some init_expr, c1 :: _ ->
+                              record_elems c1 ~prefix:[]
+                                ~suffix:[ (Ppxlib.Asttypes.Nolabel, init_expr, env, None) ]
+                                ()
+                          | `Fold_right, None, c1 :: init_expr :: _ ->
+                              record_elems c1 ~prefix:[]
+                                ~suffix:[ (Ppxlib.Asttypes.Nolabel, init_expr, env, None) ]
+                                ()
+                          | `Fold_right, None, c1 :: _ ->
+                              record_elems c1 ~prefix:[]
+                                ~suffix:[ (Ppxlib.Asttypes.Nolabel, dummy_idx, env, None) ]
+                                ()
+                          | `Foldi, Some init_expr, c1 :: _ ->
+                              record_elems c1
+                                ~prefix:
+                                  [
+                                    (Ppxlib.Asttypes.Nolabel, dummy_idx, env, None);
+                                    (Ppxlib.Asttypes.Nolabel, init_expr, env, None);
+                                  ]
+                                ()
+                          | `Foldi, None, c1 :: _ ->
+                              record_elems c1
+                                ~prefix:
+                                  [
+                                    (Ppxlib.Asttypes.Nolabel, dummy_idx, env, None);
+                                    (Ppxlib.Asttypes.Nolabel, dummy_idx, env, None);
+                                  ]
+                                ()
+                          | `Binary, _, c1 :: c2 :: _ -> (
                               let e1 = extract_list_literal env (Hash_set.create (module Int)) c1
                               and e2 = extract_list_literal env (Hash_set.create (module Int)) c2 in
                               match (e1, e2) with
@@ -9680,13 +9802,16 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                 Hash_set.add seen_callback_walks wkey;
                 Hash_set.add active_fn_rewalks fn_id;
                 let saved_call_pos = call_site_pos in
+                let saved_replaying = replaying_fn_id in
                 let saved_uninvoked = in_uninvoked_fn_def in
                 call_site_pos <- Some site_pos;
+                replaying_fn_id <- Some fn_id;
                 in_uninvoked_fn_def <- false;
                 Exn.protect
                   ~finally:(fun () ->
                     Hash_set.remove active_fn_rewalks fn_id;
                     call_site_pos <- saved_call_pos;
+                    replaying_fn_id <- saved_replaying;
                     in_uninvoked_fn_def <- saved_uninvoked)
                   ~f:(fun () -> ignore (self#expression fn_env fn_expr : expression)))
             in
@@ -9921,6 +10046,10 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
     if not (Hash_set.mem seen_keys r.lg_leg_key) then (
       Hash_set.add seen_keys r.lg_leg_key;
       Hashtbl.add_multi leg_uses_by_key ~key:r.lg_leg_key ~data:(at_pos, wrappers);
+      List.iter r.lg_ambient ~f:(function
+        | _, Lg_deferred (Some lid) ->
+            Hashtbl.add_multi lazy_forces ~key:lid ~data:(at_pos, wrappers)
+        | _ -> ());
       List.iter r.lg_parents ~f:(record_use ~at_pos ~wrappers seen_keys))
   in
   List.iter (List.rev !pending_leg_forces)
