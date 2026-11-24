@@ -237,22 +237,33 @@ let () =
   let open Ll_test in
   let width = 16 in
   let mk = node_factory ~first_id:246100 ~dims:[| width |] () in
-  let run_replay ~name ~aliasing ~stored =
+  let run_replay ?launch_offset ~name ~aliasing ~stored () =
     Unix.putenv "OCANNL_BUFFER_ALIASING" (Bool.to_string aliasing);
     let early = mk "early" and tap = mk "tap" and middle = mk "middle" in
     let late = mk "late" and last = mk "last" and out = mk "out" in
     Tn.set_observable tap;
     materialize out;
+    let bindings, launch =
+      match launch_offset with
+      | None -> (Idx.Empty, None)
+      | Some offset ->
+          let k, bindings = Idx.get_static_symbol Idx.Empty in
+          (bindings, Some (k, offset))
+    in
     let write tn value =
       let i = sym () in
       loop_n i width (set_at tn (iter i) (value i))
     in
     let plus source bias i = add (get source [| iter i |]) (c bias) in
+    let tap_value i =
+      let value = plus early 10. i in
+      match launch with None -> value | Some (k, _) -> add value (embed k.Idx.static_symbol)
+    in
     let llc =
       List.reduce_exn ~f:seq
         [
           write early tick;
-          write tap (plus early 10.);
+          write tap tap_value;
           write middle (plus tap 20.);
           write late (plus middle 40.);
           write last (plus late 80.);
@@ -260,23 +271,24 @@ let () =
         ]
     in
     let materialized = [ early; middle; late; last ] @ if stored then [ tap ] else [] in
-    let lowered = optimize ~name ~materialized llc in
+    let lowered = optimize ~name ~materialized ~static_indices:(Idx.bound_symbols bindings) llc in
     (* A cut at each producer gives the GPU planner the same disjoint lifetimes as cc. *)
     let lowered_transform o =
       List.map (LL.flat_lines [ o.LL.llc ]) ~f:(fun llc -> { o with LL.llc })
     in
     let ctx, routine =
       Context.compile ~name ~prelowered:lowered ~lowered_transform (Context.auto ())
-        Asgns.empty_comp Ir.Indexing.Empty
+        Asgns.empty_comp bindings
     in
+    Option.iter launch ~f:(fun (k, offset) -> Idx.find_exn routine.Context.bindings k := offset);
     (* The test config prefills fresh outputs, including those that share bytes. *)
     (Context.run ctx routine, early, tap, middle, last, out)
   in
   let ref_ctx, _, ref_tap, _, _, ref_out =
-    run_replay ~name:"buffer_alias_replay_reference" ~aliasing:false ~stored:true
+    run_replay ~name:"buffer_alias_replay_reference" ~aliasing:false ~stored:true ()
   in
   let ctx, early, tap, middle, last, out =
-    run_replay ~name:"buffer_alias_replay" ~aliasing:true ~stored:false
+    run_replay ~name:"buffer_alias_replay" ~aliasing:true ~stored:false ()
   in
   let expected bias = Array.init width ~f:(fun i -> Float.of_int i +. bias) in
   let exact = Array.equal Float.equal in
@@ -285,12 +297,12 @@ let () =
   p "replay: the forward result matches its materialized run and the closed form"
     (let values = Context.get_values ctx out in
      exact values (expected 311.) && exact values (Context.get_values ref_ctx ref_out));
-  let aliased tn =
+  let aliased ctx tn =
     match Context.observability ctx tn with
     | Unobservable_aliased [ v ] -> Tn.equal v tn
     | _ -> false
   in
-  p "replay: unrelated intermediates still share storage" (aliased middle && aliased last);
+  p "replay: unrelated intermediates still share storage" (aliased ctx middle && aliased ctx last);
   p "replay: the observable virtual result stays recomputable"
     (match Context.observability ctx tap with
     | Recomputable -> true
@@ -306,4 +318,19 @@ let () =
     | values -> exact values ref_values
     | exception Utils.User_error msg ->
         eprintf "replay: %s\n%!" msg;
-        false)
+        false);
+  let launch_ref, _, launch_tap, _, _, launch_ref_out =
+    run_replay ~name:"buffer_alias_launch_reference" ~aliasing:false ~stored:false ~launch_offset:3
+      ()
+  in
+  let launch_ctx, launch_early, _, _, _, launch_out =
+    run_replay ~name:"buffer_alias_launch" ~aliasing:true ~stored:false ~launch_offset:3 ()
+  in
+  p "launch-bound replay: the virtual tap needs a launch index"
+    (match Context.observability launch_ref launch_tap with
+    | Launch_bound ([ root ], [ _ ]) -> Tn.equal root launch_tap
+    | _ -> false);
+  p "launch-bound replay: the early buffer can still alias" (aliased launch_ctx launch_early);
+  p "launch-bound replay: the forward result matches the closed form with aliasing on and off"
+    (exact (Context.get_values launch_ctx launch_out) (expected 314.)
+    && exact (Context.get_values launch_ref launch_ref_out) (expected 314.))

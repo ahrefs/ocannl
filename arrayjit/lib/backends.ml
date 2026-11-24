@@ -114,17 +114,42 @@ let size_in_bytes_of (key : Tn.t) =
    own inputs from replay. *)
 let observable_replay_buffers (ctx : Low_level.optimize_ctx) =
   let { Low_level.computations; placements; _ } = ctx in
+  let reads = Hashtbl.create (module Tn) in
+  (* A replay the host must refuse does not extend any lifetime. Cache both the refusal and the
+     immediate reads so that shared virtual dependencies only need one analysis. *)
+  let rec replay_reads tn =
+    match Hashtbl.find reads tn with
+    | Some result -> result
+    | None ->
+        (* Match the observation walk's in-progress mark. Stored replays are acyclic. *)
+        Hashtbl.set reads ~key:tn ~data:(Some []);
+        let result =
+          List.fold_until (Hashtbl.find_multi computations tn) ~init:[] ~finish:Option.some
+            ~f:(fun reads (_, code) ->
+              let facts = Low_level.replay_facts ~placements ~self:tn code in
+              if
+                facts.replay_merge_reads
+                || (not (Set.is_empty facts.replay_free_symbols))
+                || Set.exists facts.replay_reads ~f:read_blocked
+              then Stop None
+              else Continue (facts.replay_reads :: reads))
+        in
+        Hashtbl.set reads ~key:tn ~data:result;
+        result
+  and read_blocked tn =
+    match Tn.Placements.get placements tn with
+    | Some (Tn.Local, _) -> true
+    | Some ((Tn.Virtual | Tn.Effectively_constant), _) ->
+        (not (Host_inits.mem tn)) && Option.is_none (replay_reads tn)
+    | Some ((Tn.On_device | Tn.Never_virtual), _) | None -> false
+  in
   let visited = Hash_set.create (module Tn) in
   let buffers = Hash_set.create (module Tn) in
   let rec visit tn =
     if not (Hash_set.mem visited tn || Host_inits.mem tn) then (
       Hash_set.add visited tn;
       if Tn.Placements.known_non_virtual placements tn then Hash_set.add buffers tn
-      else
-        Option.iter (Hashtbl.find computations tn) ~f:(fun components ->
-            List.iter components ~f:(fun (_, code) ->
-                let facts = Low_level.replay_facts ~placements ~self:tn code in
-                Set.iter facts.replay_reads ~f:visit)))
+      else Option.iter (replay_reads tn) ~f:(List.iter ~f:(Set.iter ~f:visit)))
   in
   Hashtbl.iter_keys computations ~f:(fun tn ->
       if Tn.is_observable tn && not (Tn.Placements.known_non_virtual placements tn) then visit tn);
