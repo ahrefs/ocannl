@@ -26,8 +26,9 @@ no registered non-Keyed key moves the cache key when flipped off its default: tr
 two fresh builds of the probe compile to the same kernel under the same key: true
 every key a compile reads whose class promises an unchanged kernel has oracle values or an exemption: true
 every key read in a codegen-stage module whose class promises an unchanged kernel has oracle values or an exemption: true
-emitted_flips, emitted_exemptions, and settings_flips are disjoint with no duplicate keys: true
+emitted_flips, emitted_exemptions, codegen_not_traced, and settings_flips are disjoint with no duplicate keys: true
 every emitted_flips and emitted_exemptions row is in an oracle class, has non-empty flip candidates, and is read at codegen or during compile_probe: true
+every codegen_not_traced row is an oracle-class key read in a codegen-stage module and not traced during compile_probe: true
 no such key changes the emitted kernel while leaving the cache key unchanged: true
 
 Keyed keys this sweep cannot flip in-process:
@@ -36,10 +37,12 @@ Keyed keys this sweep cannot flip in-process:
   cc_pool_core_class -- resolved once, by the lazy [Cc_backend.pool_restriction] the first compile forces; the pool tag it decides is what the component hashes -- varied in child processes, held to separating exactly the pool decisions that differ and to moving codegen only through that decision: its tag in the limits record, and the auto chunk count its width sets
   cc_grid_private_bytes_cap -- resolved once, by the lazy [C_syntax.per_chunk_private_bytes_cap] the first compile forces; the codegen tag hashes that resolved value -- varied in child processes
 
-Keys read at compile time or in a codegen-stage module that the codegen-diff oracle does not flip:
+Keys a compile reads that the codegen-diff oracle does not flip:
   ll_ident_style -- identifier spelling: the canonical rendering alpha-renames identifiers away, and code that differs only in their names compiles to the same kernel -- a changed text is what the key is right to ignore
   cc_backend_verify_codesign -- a check on the compiled library, which signs it or refuses it and never touches the source: stated on a host without codesign (every Linux CI box) it refuses every compile, so no kernel comes back to compare
   build_files_prefix -- it moves the very artifacts this oracle reads, and Generated refuses a set prefix
+
+Keys read in a codegen-stage module that compile_probe does not trace (resolved once or at device init):
   cc_backend_probe_cache -- read only inside module-level lazy toolchain probes (Cc_backend.cached_probe); memoizes probe results on disk without altering emitted source
   cc_kernel_cache_mib -- resolved once by the module-level lazy Cc_backend.kernel_cache_capacity_bytes; bounds in-process compiled-kernel cache capacity without altering emitted source
   cuda_kernel_cache_mib -- resolved once by the module-level lazy Cuda_backend.kernel_cache_capacity_bytes; bounds in-process compiled-kernel cache capacity without altering emitted source

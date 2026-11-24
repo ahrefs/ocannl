@@ -9,8 +9,8 @@
 
     Shared by [digest_completeness] (no key read here may be classified [Code_borne]) and
     [cache_key_agreement] (every key read here whose class promises an unchanged kernel must have
-    oracle values in [emitted_flips] or a documented exemption in [emitted_exemptions], even when
-    that backend is not running; gh-ocannl-2440). *)
+    oracle values in [emitted_flips] or a documented exemption in [emitted_exemptions] /
+    [codegen_not_traced], even when that backend is not running; gh-ocannl-2440). *)
 
 let modules =
   [

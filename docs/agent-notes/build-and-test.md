@@ -887,7 +887,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   question of a tree handed to it as data.
 - Not every hand-written list is a member of that habit, and telling them apart is the test of
   whether it is being applied thoughtfully. A JUDGMENT CALL is not a set the system owns anywhere
-  else: `digest_completeness`'s `codegen_stage_modules` says which modules read configuration
+  else: `Test_scan.Codegen_stage_modules.modules` (shared by `digest_completeness` and
+  `cache_key_agreement`) says which modules read configuration
   downstream of the canonical digest, and `Config_key_scan.scan_root_floors` is hand-written
   precisely so that no scan of ours can move it. Nor is a restatement whose INDEPENDENCE is the
   point — `reduction_forms`'s GPU arms restate their backends' `accum_prec` because a table derived

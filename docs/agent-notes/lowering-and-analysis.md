@@ -266,10 +266,11 @@ files.
   (`Utils.restore_settings`, the memoized `Numerics` policy), the settings-borne set derived from
   `utils.ml`. Its stage 2 recompiles a probe under every key a compile reads whose class promises an
   unchanged kernel (execution-neutral, placement-shaping, untimed-model), and fails a changed
-  kernel under an unchanged key, and cross-checks `emitted_flips`/`emitted_exemptions` statically
-  against `Test_scan.Codegen_stage_modules.modules` (shared with `digest_completeness`,
-  gh-ocannl-2440) -- so a new codegen-stage read, including a GPU-only one, owes `emitted_flips`
-  or `emitted_exemptions` a row and fails on `cc` before merge. `digest_identity_flips` calibrates one representative per
+  kernel under an unchanged key, and cross-checks `emitted_flips`/`emitted_exemptions`/
+  `codegen_not_traced` statically against `Test_scan.Codegen_stage_modules.modules` (shared with
+  `digest_completeness`, gh-ocannl-2440) -- so a new codegen-stage read, including a GPU-only one,
+  owes `emitted_flips` (or `emitted_exemptions`/`codegen_not_traced`) a row and fails on `cc`
+  before merge. `digest_identity_flips` calibrates one representative per
   class against a real compile; when picking a code-borne representative note that many optimizer
   keys (`virtualize_max_visits` and its neighbors) are read ONCE into `Low_level.virtualize_settings`
   at module init, so poking `Utils.config_file_args` at runtime does not move them. Caches with an
