@@ -1174,7 +1174,10 @@ let width_key = "cc_vector_bytes"
    lint: what it credits is narrow on purpose -- a reviewed helper, called in plain sight before the
    first search, or a literal in the stanza -- and everything else needs the marker (Codex P2,
    rounds 1-3 of staging#1263, where proving arbitrary statements of a setting kept finding new ways
-   to write one).
+   to write one). An initialization pin is invalidated if any top-level item from the pinning one
+   onward -- including the search item and later items -- spells a vector-file key literal (by
+   config key or env-var name), without trying to distinguish read-only diagnostics from resets; a
+   program that needs to mention a key after pinning pins via `(setenv …)` or carries the marker.
 
    "Starts a search" is derived from the search's entry points [search_value] (and
    [search_values_extra]) of [search_home] and the values of the framework library
@@ -1182,11 +1185,11 @@ let width_key = "cc_vector_bytes"
    program names them by, under an alias or an `open` too, or any path ending in one, whatever
    qualifies it. The functor form is read from qualified value references such as `Search.tune`
    after `module Search = Autotune.Make (Driver)`, including local bindings and module aliases. The
-   reader follows lexical shadowing. Opens of the result, re-exports through structures or
-   first-class modules, and wrapper discovery through an instantiation in a different file are
-   outside this source pass. "Can select cc" is the backend rule's own answer for the run: `(env_var
-   OCANNL_BACKEND)`, or a backend marker naming cc or multidev_cc, the two backends rendering
-   through `Cc_backend`.
+   reader follows lexical shadowing. Bare `Make` introduced by `open Autotune`, opens of the result,
+   re-exports through structures or first-class modules, and wrapper discovery through an
+   instantiation in a different file are outside this source pass. "Can select cc" is the backend
+   rule's own answer for the run: `(env_var OCANNL_BACKEND)`, or a backend marker naming cc or
+   multidev_cc, the two backends rendering through `Cc_backend`.
 
    "A run" is read from a fail-closed allowlist of shapes (gh-ocannl-1901). A program's runs are:
    for a `(test)`/`(tests)` program, the stanza's own run AND every stanza running that program by
@@ -1703,13 +1706,15 @@ let main () =
             match applied_search_sites content with
             | [] -> (items, None)
             | (_, (start, stop)) :: _ ->
-                (* The initializer reader inlines some includes. Read the prefix and the search item
-                   separately so an include cannot move the lexical search boundary. *)
+                (* The initializer reader inlines some includes. Read the prefix, the search item,
+                   and the suffix separately so an include cannot move the lexical search boundary
+                   while later items remain visible to the reset check. *)
                 let before = Sources.initialization_items (String.prefix content start) in
                 let first =
                   Sources.initialization_items (String.sub content ~pos:start ~len:(stop - start))
                 in
-                (before @ first, Some (List.length before))
+                let after = Sources.initialization_items (String.drop_prefix content stop) in
+                (before @ first @ after, Some (List.length before))
           in
           Some (String.lowercase path, (items, helper_of, is_search, first_applied)))
     |> Map.of_alist_reduce (module String) ~f:(fun a _ -> a)
@@ -3260,9 +3265,10 @@ let main () =
                          4), every item before it names neither a search nor another of the
                          program's modules -- a search seeds from whatever the file is when it
                          starts, so a pin after it is no pin (round 3) -- and no item from the
-                         pinning one up to the first search spells a key of the file, which could
-                         reset it (round 4). No other module of the program names a search at all,
-                         since its initializers may run before the pinning one. *)
+                         pinning one onward (including the search item and later items) spells a key
+                         of the file, which could reset it (round 4, gh-ocannl-2458). No other
+                         module of the program names a search at all, since its initializers may run
+                         before the pinning one. *)
                       let init_pin modules =
                         let names_search m = Map.mem search_reach (in_here m) in
                         let key_literals =
@@ -3287,12 +3293,14 @@ let main () =
                                 in
                                 let rec scan index pinned = function
                                   | [] -> pinned
-                                  | item :: _ when Option.exists first_applied ~f:(Int.equal index)
-                                    ->
-                                      (* The same item may reset the pin before the reference. *)
-                                      if spells_key item then None else pinned
-                                  | item :: _ when List.exists item.Sources.paths ~f:barrier ->
-                                      pinned
+                                  | item :: rest
+                                    when Option.exists first_applied ~f:(Int.equal index)
+                                         || List.exists item.Sources.paths ~f:barrier ->
+                                      (* No later pin counts after a search or cross-module barrier,
+                                         and a key literal in this item or any later one may still
+                                         reset the pin before a search runs. *)
+                                      if List.exists (item :: rest) ~f:spells_key then None
+                                      else pinned
                                   | item :: rest ->
                                       let pinned =
                                         match
@@ -6297,6 +6305,36 @@ let search_control () =
                ^ Printf.sprintf "let () = Utils.state_config ~key:%S ~data:\"-1\"; Search.tune ()\n"
                    width_key)
              ()) );
+      ( "applied_later_clean",
+        passed
+          (run
+             ~probe:(pin ^ applied_setup ^ "let search () = Search.tune ()\nlet () = search ()\n")
+             ()) );
+      ( "applied_later_reset",
+        refused
+          (run
+             ~probe:
+               (pin ^ applied_setup ^ "let search () = Search.tune ()\n"
+               ^ Printf.sprintf "let () = Utils.state_config ~key:%S ~data:\"-1\"; search ()\n"
+                   width_key)
+             ()) );
+      ( "direct_reset",
+        refused
+          (run
+             ~probe:
+               (pin
+               ^ Printf.sprintf
+                   "let () = Utils.state_config ~key:%S ~data:\"-1\"; Autotune.tune ()\n" width_key
+               )
+             ()) );
+      ( "later_reset",
+        refused
+          (run
+             ~probe:
+               (pin ^ "let search () = Autotune.tune ()\n"
+               ^ Printf.sprintf "let () = Utils.state_config ~key:%S ~data:\"-1\"; search ()\n"
+                   width_key)
+             ()) );
       ("marked", passed (run ~marker ~probe:named ()));
       ("setenv", passed (run ~action:(setenv "32") ~probe:named ()));
       ("helper", passed (run ~probe:helper ()));
@@ -6474,9 +6512,12 @@ let search_control () =
   Verdict.p "local module aliases follow the functor instance until shadowed"
     (ok "applied_local" && ok "applied_shadowed" && ok "applied_shadowed_parameter");
   Verdict.p "an initialization pin must precede a search through the functor instance"
-    (ok "applied_early_pin" && ok "applied_late_pin");
+    (ok "applied_early_pin" && ok "applied_later_clean" && ok "applied_late_pin");
   Verdict.p "a width reset in the functor search item invalidates an earlier pin"
     (ok "applied_reset");
+  Verdict.p "a width reset in a direct search item invalidates an earlier pin" (ok "direct_reset");
+  Verdict.p "a width reset in a later item after a search invalidates an earlier pin"
+    (ok "later_reset" && ok "applied_later_reset");
   Verdict.p "the same stanza carrying `; cc-vector-width: independent -- <reason>` passes"
     (ok "marked");
   Verdict.p "and so does one pinning the variable with `setenv` around its run" (ok "setenv");
