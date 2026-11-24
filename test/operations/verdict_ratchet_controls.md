@@ -1180,3 +1180,17 @@ byte-for-byte. The batch's baseline exited 0 (`20261110T173928Z-99425`).
   With a zero addend on the host, the same removal also fails the bitwise readback at
   `narrow_compute_f32=true` (`20261122T214552Z-20651`, exit 1). The zero-addend fixture passes
   with the render-time clause in place (`20261122T214748Z-75163`, exit 0).
+
+## Leg-gate independence and ambient-policy alignment (gh-ocannl-2434)
+
+`Verdict_scan.leg_gate_census` checks every `Verdict.leg` and `Verdict.sub_leg` condition against
+the closed independent-gate allowlist (`leg_gate_allowed_paths`) and refuses ambient-policy leg
+gates (`Ll_test.advertised` without `~policy`, `Ll_test.tensorized_capability`, `Ir.Numerics.get`)
+evaluated outside an enclosing `Test_utils.with_*` policy wrapper.
+
+| Mechanism | Mutation | Control(s) | Run |
+|---|---|---|---|
+| Non-allowlisted external calls in a `Verdict.sub_leg` or `Verdict.leg` gate are refused (including through module aliases) | `verdict_scan.ml`: `is_allowed_path` forced `true` | `refuses a sub_leg gated on a production function under test`; `refuses a leg gated on a production function reached through a module alias`; `refuses a leg gated on pinned workgroup alignment and granule fields of codegen_capabilities`; `refuses a non-allowlisted leg-gate call, an ambient-policy mismatch, a stale leg-gate exemption, and a leg-gate reader that raised` (also flags all `exempt_leg_gate_calls` entries stale) | `20261124T122954Z-27499` |
+| Unqualified field projections on `Context.codegen_capabilities` are checked against `Ir.Backend_intf` | `verdict_scan.ml`: unqualified `expr_is_cap_record` field branch disabled | `refuses a leg reading an unqualified non-allowlisted field from Context.codegen_capabilities` (qualified control stays refused) | `20261124T122603Z-92523` |
+| Ambient-policy leg gates built outside `Test_utils.with_policy` (including `@@`) are refused when `in_leg` runs inside | `verdict_scan.ml`: policy-wrapper mismatch check disabled | `refuses a leg calling Ll_test.advertised without ~policy outside Test_utils.with_policy`; `refuses an ambient-policy leg used inside Test_utils.with_policy applied with @@`; plus the refusal-wiring control above | `20261124T122802Z-50573` |
+| Accepting neighbours and local-module shadowing hygiene | (exercised on every run) | `accepts a sub_leg gated on an allowlisted independent MMA ISA capability and config`; `accepts a leg passing ~policy explicitly to Ll_test.advertised outside Test_utils.with_policy`; `accepts a leg calling Ll_test.advertised without ~policy inside the same Test_utils.with_policy`; `accepts a policy-independent leg built outside Test_utils.with_policy and used inside it`; `accepts a leg gated on backend identity rather than pinned alignment fields`; `does not treat a local module shadowing an external module as a disallowed leg-gate call` | -- |

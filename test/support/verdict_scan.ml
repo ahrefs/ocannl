@@ -6879,3 +6879,1142 @@ let folded_gate_census content =
       : structure);
   List.iter (List.rev !pending) ~f:(fun judge -> judge ());
   { folded = List.rev !folded; folded_hatches = List.rev !hatches; folded_claim_sites = !sites }
+
+(** {1 Leg-gate independence and ambient-policy alignment (gh-ocannl-2434)}
+
+    A [Verdict.leg] or [Verdict.sub_leg] condition ([~when_]) must derive from an invariant
+    independent of the code or capability value under test, and must read the same numerics policy
+    that its [in_leg]/[in_legf] claims execute under. Otherwise a regression in the function or
+    capability under test — or a policy switch applied only after the leg was constructed — closes
+    the gate and turns every claim in the leg into [SKIPPED] while the golden stays green
+    (gh-ocannl-2434: [dominant_kernel_mma_ceiling] gating on [Autotune.mma_peak_leg],
+    [compiled_workgroup_bytes] gating on
+    [workgroup_allocation_alignment]/[workgroup_reporting_granule], and [winner_fixture_replay]
+    calling [Ll_test.advertised] before [Test_utils.with_policy] enabled [tf32_matmuls]).
+
+    {2 What is read (closed fail-closed allowlist)}
+
+    Every [Verdict.leg] and [Verdict.sub_leg] application whose callee {!Verdict_callee} resolves as
+    [Verdicts] or [Ambiguous], and every [in_leg]/[in_legf] application resolved the same way:
+
+    - {b Disallowed external calls and capability fields ({!disallowed_calls})}: walks each leg's
+      [~when_] expression, following local [let] bindings (including [lazy], functions and [:=]
+      writes) in lexical scope ({!Lexical_scope}) and resolving local module aliases
+      ([module A = Path]) and known re-export opens ([open Ir], [open Test_utils]). Every external
+      qualified value path ([M.x]) and qualified record field projection ([e.M.field]), as well as
+      every unqualified field projection or record pattern over a value bound from
+      [Context.codegen_capabilities], [Context.hardware_limits], [Context.backend_facts] or
+      [Context.backend_facts_of_name], must belong to the closed allowlist of standard-library
+      modules ({!leg_gate_stdlib_modules}) or independent platform, backend, configuration and
+      capability queries ({!leg_gate_allowed_paths}). Any other external path is reported;
+      legitimate sites that call a production module for an independent reason belong in
+      [verdict_ratchet.ml]'s [exempt_leg_gate_calls] with that stated reason.
+    - {b Ambient-policy mismatch ({!policy_mismatches})}: tracks the enclosing calls to
+      [Test_utils]'s policy wrappers ([?policy_wrappers], derived by [verdict_ratchet] from
+      [Policy_invariance_scan.wrappers] on [test/support/test_utils.ml]). A leg whose [~when_]
+      reaches an ambient-policy reader — [Ll_test.advertised] without a [~policy]/[?policy] argument
+      (directly or through a local alias), [Ll_test.tensorized_capability],
+      [Ll_test.tensorized_matmul_capability], or [Ir.Numerics.get] outside a [~policy] argument to
+      [Ll_test.advertised] — is refused when an [in_leg]/[in_legf] using that leg (directly or
+      through local [let] bindings and [sub_leg] parents) runs inside a policy-wrapper callback that
+      did not enclose the leg's construction.
+
+    {2 What is deliberately not read}
+
+    - Unqualified identifiers imported by an [open] of an external production module (e.g.
+      [open Autotune]) that does not appear in a qualified path or module alias;
+    - Functor parameters, first-class modules, or legs passed across module or file boundaries
+      (cross-file leg construction is handled by {!gate_census});
+    - Imperative [Ir.Numerics.set_policy] ordering outside structured [Test_utils.with_*] scopes;
+    - [Verdict.gated] / [Verdict.gated_*] claims (this reader governs [Verdict.leg] and
+      [Verdict.sub_leg] legs; population-reading gates on both forms are checked by {!gate_census}).
+*)
+
+type leg_gate_call = {
+  leg_call_form : string;
+  leg_call_ambiguous : bool;
+  leg_call_line : int;
+  callee : string;
+  callee_line : int;
+}
+
+type leg_policy_mismatch = {
+  mismatch_form : string;
+  mismatch_ambiguous : bool;
+  mismatch_line : int;
+  leg_line : int;
+  wrapper : string;
+  ambient_reader : string;
+}
+
+type leg_gate_census = {
+  disallowed_calls : leg_gate_call list;
+  policy_mismatches : leg_policy_mismatch list;
+  leg_gate_sites : int;
+}
+
+let empty_leg_gate_census = { disallowed_calls = []; policy_mismatches = []; leg_gate_sites = 0 }
+
+let default_policy_wrappers =
+  [ "with_bf16_auto"; "with_fp16_auto"; "with_fp16_narrow"; "with_policy" ]
+
+(* Standard-library, FFI, vendor driver-binding and test-plumbing modules whose members are never
+   OCANNL code under test. *)
+let leg_gate_stdlib_modules =
+  Set.of_list
+    (module String)
+    [
+      "Array";
+      "Atomic";
+      "Base";
+      "Bigarray";
+      "Bool";
+      "Buffer";
+      "Bytes";
+      "Caml";
+      "Char";
+      "Comparable";
+      "Comparator";
+      "Complex";
+      "Condition";
+      "Container";
+      "Core";
+      "Ctypes";
+      "Cuda";
+      "Digest";
+      "Domain";
+      "Either";
+      "Equal";
+      "Error";
+      "Exn";
+      "Filename";
+      "Float";
+      "Fn";
+      "Foreign";
+      "Format";
+      "Fun";
+      "Gc";
+      "Hash_set";
+      "Hashtbl";
+      "In_channel";
+      "Int";
+      "Int32";
+      "Int64";
+      "Invariant";
+      "Lazy";
+      "Lexing";
+      "List";
+      "Map";
+      "Monad";
+      "Mutex";
+      "Nativeint";
+      "Nvrtc";
+      "Option";
+      "Or_error";
+      "Ordering";
+      "Out_channel";
+      "Parsing";
+      "Poly";
+      "Ppxlib";
+      "Printexc";
+      "Printf";
+      "Queue";
+      "Random";
+      "Re";
+      "Ref";
+      "Result";
+      "Seq";
+      "Sequence";
+      "Set";
+      "Sexp";
+      "Sexplib";
+      "Sexps";
+      "Source_code_position";
+      "Stdio";
+      "Stdlib";
+      "Str";
+      "String";
+      "Sys";
+      "Unix";
+      "Yojson";
+    ]
+
+let ir_submodules =
+  Set.of_list
+    (module String)
+    [
+      "Assignments";
+      "Backend_intf";
+      "C_syntax";
+      "Compiled_kernels";
+      "Compiler_options";
+      "Cuda_like_config";
+      "Cuda_mma";
+      "Hip_mma";
+      "Indexing";
+      "Low_level";
+      "Metal_mma";
+      "Ndarray";
+      "Numerics";
+      "Ops";
+      "Register_tile";
+      "Schedule";
+      "Schedule_cache";
+      "Tnode";
+    ]
+
+let test_utils_submodules =
+  Set.of_list (module String) [ "Asm_census"; "Cache_plant"; "Descriptors"; "Generated" ]
+
+(* Closed allowlist of OCANNL platform, backend, configuration and hardware-capability paths that a
+   [Verdict.leg] / [Verdict.sub_leg] gate may query independently of the code under test.
+   Deliberately excludes algorithm/heuristic functions ([Autotune.*], [Bench_harness.*],
+   [Ir.Schedule.*], [Ir.Register_tile.*], ...) and pinned capability constants
+   ([workgroup_allocation_alignment], [workgroup_reporting_granule], [mma_peak_*], [fill_chains],
+   ...). *)
+let leg_gate_allowed_paths =
+  Set.of_list
+    (module String)
+    [
+      "Context.auto";
+      "Context.backend_compiles";
+      "Context.backend_facts";
+      "Context.backend_facts_of_name";
+      "Context.backend_name";
+      "Context.codegen_capabilities";
+      "Context.cpu";
+      "Context.get_free_and_total_memory";
+      "Context.global_debug_info";
+      "Context.hardware_limits";
+      "Context.host_capabilities";
+      "Context.static_properties";
+      "Context.thread_scratch_limit";
+      "Context.Cc_backend.compiler_command";
+      "Context.Cc_backend.host_capabilities";
+      "Context.Cc_backend.pool_parallel_grid";
+      "Context.Cc_backend.vector_bytes_setting";
+      "Descriptors.count";
+      "Fresh_process.nested_dune_environment";
+      "Fresh_process.run";
+      "Gpu_recovery.recovery_count";
+      "Ir.Backend_intf.Mma_bf16";
+      "Ir.Backend_intf.Mma_f16";
+      "Ir.Backend_intf.Mma_f32";
+      "Ir.Backend_intf.Mma_fp8_e5m2";
+      "Ir.Backend_intf.Mma_fragment_scope";
+      "Ir.Backend_intf.Mma_per_statement";
+      "Ir.Backend_intf.Mma_tf32";
+      "Ir.Backend_intf.accum_prec";
+      "Ir.Backend_intf.advertises_mma_format";
+      "Ir.Backend_intf.advertises_mma_format_in_scope";
+      "Ir.Backend_intf.binds_hardware_grid";
+      "Ir.Backend_intf.blends_value_selects";
+      "Ir.Backend_intf.compute_prec";
+      "Ir.Backend_intf.equal_mma_emission_scope";
+      "Ir.Backend_intf.equal_mma_format_triple";
+      "Ir.Backend_intf.max_resident_threads";
+      "Ir.Backend_intf.max_thread_private_bytes";
+      "Ir.Backend_intf.max_workgroup_memory_bytes";
+      "Ir.Backend_intf.mma";
+      "Ir.Backend_intf.mma_bf16_wide_acc_scopes";
+      "Ir.Backend_intf.mma_f16_wide_acc_scopes";
+      "Ir.Backend_intf.mma_format_tiles";
+      "Ir.Backend_intf.mma_kernel_workgroup_bytes";
+      "Ir.Backend_intf.mma_staged_layouts";
+      "Ir.Backend_intf.native_fp16_arithmetic";
+      "Ir.Backend_intf.no_hardware_limits";
+      "Ir.Backend_intf.parse_static_properties";
+      "Ir.Backend_intf.renders_lane_bounds_check";
+      "Ir.Backend_intf.renders_on_host_pool";
+      "Ir.Backend_intf.seeds_untuned_default";
+      "Ir.Backend_intf.select_blend";
+      "Ir.Backend_intf.simd_reduce_lanes_for";
+      "Ir.Backend_intf.simd_vector";
+      "Ir.Backend_intf.supports_f64";
+      "Ir.Backend_intf.with_select_blend";
+      "Ir.Cuda_like_config.cuda_fast_math";
+      "Ir.Cuda_like_config.hip_fast_math";
+      "Ir.Cuda_mma.Fp8_m16n8k32";
+      "Ir.Cuda_mma.Inline_ptx";
+      "Ir.Cuda_mma.M16n8k16";
+      "Ir.Cuda_mma.M16n8k16_bf16";
+      "Ir.Cuda_mma.M16n8k16_f16";
+      "Ir.Cuda_mma.M16n8k8_f16";
+      "Ir.Cuda_mma.Wmma";
+      "Ir.Cuda_mma.Wmma_bf16";
+      "Ir.Cuda_mma.Wmma_f16_f16";
+      "Ir.Cuda_mma.Wmma_f16_f32";
+      "Ir.Cuda_mma.Wmma_f16_wide";
+      "Ir.Cuda_mma.Wmma_tf32";
+      "Ir.Cuda_mma.arm_floor";
+      "Ir.Cuda_mma.arm_marker";
+      "Ir.Low_level.Fp_licence.fast_math";
+      "Ir.Low_level.Fp_licence.finite_math";
+      "Ir.Low_level.Fp_licence.of_config";
+      "Ir.Numerics.Bf16_auto";
+      "Ir.Numerics.Bf16_narrow";
+      "Ir.Numerics.Bf16_wide";
+      "Ir.Numerics.Fp16_auto";
+      "Ir.Numerics.Fp16_narrow";
+      "Ir.Numerics.Fp16_prefer_narrow";
+      "Ir.Numerics.Fp16_wide";
+      "Ir.Numerics.bf16_arithmetic";
+      "Ir.Numerics.fp16_arithmetic";
+      "Ir.Numerics.get";
+      "Ir.Numerics.narrow_compute_f32";
+      "Ir.Numerics.set_policy";
+      "Ir.Numerics.tf32_matmuls";
+      "Ir.Ops.all_precs";
+      "Ir.Ops.bfloat16";
+      "Ir.Ops.byte";
+      "Ir.Ops.double";
+      "Ir.Ops.equal_prec";
+      "Ir.Ops.fp8";
+      "Ir.Ops.half";
+      "Ir.Ops.int32";
+      "Ir.Ops.int64";
+      "Ir.Ops.prec_in_bytes";
+      "Ir.Ops.prec_string";
+      "Ir.Ops.significand_bits";
+      "Ir.Ops.single";
+      "Ir.Ops.uint32";
+      "Ir.Ops.uint4x32";
+      "Ll_test.advertised";
+      "Ll_test.backend_contraction_off";
+      "Ll_test.base_ctx";
+      "Ll_test.cuda_arm_leg";
+      "Ll_test.cuda_compute_capabilities";
+      "Ll_test.cuda_compute_capability_of_fields";
+      "Ll_test.cuda_min_compute_capability";
+      "Ll_test.cuda_model_target";
+      "Ll_test.debug_counter";
+      "Ll_test.host_target";
+      "Ll_test.tensorized_capability";
+      "Ll_test.tensorized_matmul_capability";
+      "Row.substitution_cross_checked";
+      "Test_utils.Asm_census.compilation_plan";
+      "Test_utils.Asm_census.metal_compiler";
+      "Test_utils.Asm_census.metal_toolchain_version";
+      "Test_utils.Descriptors.count";
+      "Test_utils.with_bf16_auto";
+      "Test_utils.with_fp16_auto";
+      "Test_utils.with_fp16_narrow";
+      "Test_utils.with_policy";
+      "Utils.debug_log_from_routines";
+      "Utils.get_global_arg";
+      "Utils.get_global_flag";
+      "Utils.registered_flag";
+      "Utils.settings";
+      "Verdict.leg";
+      "Verdict.sub_leg";
+    ]
+
+(* Context-query functions whose [ctx] argument is a runtime handle rather than gate logic: do not
+   chase a [let]-bound [ctx] variable back into fixture setup ([Train.to_routine], ...). *)
+let leg_gate_context_queries =
+  Set.of_list
+    (module String)
+    [
+      "Context.backend_facts";
+      "Context.backend_name";
+      "Context.codegen_capabilities";
+      "Context.get_free_and_total_memory";
+      "Context.global_debug_info";
+      "Context.hardware_limits";
+      "Context.host_capabilities";
+      "Context.static_properties";
+      "Context.thread_scratch_limit";
+      "Ll_test.debug_counter";
+    ]
+
+type lg_mod =
+  | Lg_local of { values : (string * lg_val) list; modules : (string * lg_mod) list }
+  | Lg_alias of string list
+
+and lg_leg_rec = {
+  lg_leg_line : int;
+  lg_leg_scopes : (int * string) list;
+  lg_ambient : string list;
+  lg_parents : lg_leg_rec list;
+}
+
+and lg_val = {
+  lg_id : int;
+  mutable lg_rhs : (expression * (lg_val, lg_mod) Lexical_scope.env) option;
+  mutable lg_leg : lg_leg_rec option;
+  mutable lg_cap_record : bool;
+  mutable lg_advertised_alias : bool;
+}
+
+let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
+  let ast = Read.structure_of content in
+  let owners = Verdict_callee.of_structure ast in
+  let wrapper_set = Set.of_list (module String) policy_wrappers in
+  let rec strip expr =
+    match expr.pexp_desc with
+    | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> strip inner
+    | _ -> expr
+  in
+  let writes : (int, (expression * (lg_val, lg_mod) Lexical_scope.env) list) Hashtbl.t =
+    Hashtbl.create (module Int)
+  in
+  let disallowed = ref [] and mismatches = ref [] and sites = ref 0 in
+  let pending_legs = ref [] and pending_uses = ref [] in
+  let ir_opened_marker = "__ocannl_ir_opened__" in
+  let tu_opened_marker = "__ocannl_tu_opened__" in
+  let is_stdlib_path = function
+    | [] -> true
+    | ("Base" | "Stdlib" | "Core" | "Stdio") :: _ -> true
+    | head :: _ -> Set.mem leg_gate_stdlib_modules head
+  in
+  let is_allowed_path path =
+    is_stdlib_path path || Set.mem leg_gate_allowed_paths (String.concat ~sep:"." path)
+  in
+  let normalize_ocannl = function "Ocannl" :: (_ :: _ as rest) -> rest | path -> path in
+  let resolve_module_prefix env prefix =
+    let prefix = normalize_ocannl prefix in
+    match prefix with
+    | [] -> `External []
+    | head :: tail -> (
+        match Map.find env.Lexical_scope.modules head with
+        | Some (Lg_alias target) -> `External (normalize_ocannl (target @ tail))
+        | Some (Lg_local _ as local) ->
+            let rec descend cur = function
+              | [] -> `Local cur
+              | seg :: rest -> (
+                  match cur with
+                  | Lg_local { modules; _ } -> (
+                      match List.Assoc.find modules seg ~equal:String.equal with
+                      | Some next -> descend next rest
+                      | None -> `Local_missing)
+                  | Lg_alias target -> `External (normalize_ocannl (target @ (seg :: rest))))
+            in
+            descend local tail
+        | None ->
+            if
+              Option.is_some (Lexical_scope.lookup env ir_opened_marker)
+              && Set.mem ir_submodules head
+            then `External ("Ir" :: prefix)
+            else if
+              Option.is_some (Lexical_scope.lookup env tu_opened_marker)
+              && Set.mem test_utils_submodules head
+            then `External ("Test_utils" :: prefix)
+            else if String.equal head "Asm_census" then `External ("Test_utils" :: prefix)
+            else `External prefix)
+  in
+  let resolve_longident env lid =
+    match Ppxlib.Longident.flatten_exn lid with
+    | [] -> `Unqualified ""
+    | [ name ] -> `Unqualified name
+    | segments -> (
+        let prefix = List.drop_last_exn segments in
+        let name = List.last_exn segments in
+        match resolve_module_prefix env prefix with
+        | `External canon -> `External (canon @ [ name ])
+        | `Local (Lg_local { values; _ }) -> (
+            match List.Assoc.find values name ~equal:String.equal with
+            | Some v -> `Local_val v
+            | None -> `Local_other)
+        | `Local (Lg_alias target) -> `External (target @ [ name ])
+        | `Local_missing -> `Local_other)
+  in
+  let is_cap_producer_path path =
+    match String.concat ~sep:"." path with
+    | "Context.codegen_capabilities" | "Context.hardware_limits" | "Context.backend_facts"
+    | "Context.backend_facts_of_name" ->
+        true
+    | _ -> false
+  in
+  let rec expr_is_cap_record env expr =
+    match (strip expr).pexp_desc with
+    | Pexp_ident { txt = Lident name; _ } -> (
+        match Lexical_scope.lookup env name with Some v -> v.lg_cap_record | None -> false)
+    | Pexp_lazy inner -> expr_is_cap_record env inner
+    | Pexp_apply (callee, _) -> (
+        match (strip callee).pexp_desc with
+        | Pexp_ident { txt; _ } -> (
+            match resolve_longident env txt with
+            | `External path when is_cap_producer_path path -> true
+            | `External [ "Lazy"; "force" ] | `External [ "Base"; "Lazy"; "force" ] -> (
+                match expr.pexp_desc with
+                | Pexp_apply (_, [ (Nolabel, arg) ]) -> expr_is_cap_record env arg
+                | _ -> false)
+            | `Unqualified "force" -> (
+                match expr.pexp_desc with
+                | Pexp_apply (_, [ (Nolabel, arg) ]) -> expr_is_cap_record env arg
+                | _ -> false)
+            | _ -> false)
+        | _ -> false)
+    | _ -> false
+  in
+  let expr_is_advertised_alias env expr =
+    match (strip expr).pexp_desc with
+    | Pexp_ident { txt; _ } -> (
+        match resolve_longident env txt with
+        | `External [ "Ll_test"; "advertised" ] -> true
+        | `Unqualified name -> (
+            match Lexical_scope.lookup env name with
+            | Some v -> v.lg_advertised_alias
+            | None -> false)
+        | _ -> false)
+    | Pexp_apply (callee, args) -> (
+        let has_policy =
+          List.exists args ~f:(function
+            | (Ppxlib.Asttypes.Labelled "policy" | Optional "policy"), _ -> true
+            | _ -> false)
+        in
+        let has_unit =
+          List.exists args ~f:(function
+            | ( Ppxlib.Asttypes.Nolabel,
+                { pexp_desc = Pexp_construct ({ txt = Lident "()"; _ }, None); _ } ) ->
+                true
+            | _ -> false)
+        in
+        if has_policy || has_unit then false
+        else
+          match (strip callee).pexp_desc with
+          | Pexp_ident { txt; _ } -> (
+              match resolve_longident env txt with
+              | `External [ "Ll_test"; "advertised" ] -> true
+              | `Unqualified name -> (
+                  match Lexical_scope.lookup env name with
+                  | Some v -> v.lg_advertised_alias
+                  | None -> false)
+              | _ -> false)
+          | _ -> false)
+    | _ -> false
+  in
+  let policy_wrapper_of env callee =
+    match (strip callee).pexp_desc with
+    | Pexp_ident { txt; _ } -> (
+        match resolve_longident env txt with
+        | `External [ "Test_utils"; name ] when Set.mem wrapper_set name ->
+            Some ("Test_utils." ^ name)
+        | `Unqualified name
+          when Option.is_some (Lexical_scope.lookup env tu_opened_marker)
+               && Option.is_none (Lexical_scope.lookup env name)
+               && Set.mem wrapper_set name ->
+            Some ("Test_utils." ^ name)
+        | _ -> None)
+    | _ -> None
+  in
+  let walker =
+    object (self)
+      inherit [lg_val, lg_mod] Lexical_scope.scoped as super
+      val mutable next_id = 0
+      val mutable active_wrappers : (int * string) list = []
+      val leg_by_pos : (int, lg_leg_rec) Hashtbl.t = Hashtbl.create (module Int)
+
+      method local =
+        next_id <- next_id + 1;
+        {
+          lg_id = next_id;
+          lg_rhs = None;
+          lg_leg = None;
+          lg_cap_record = false;
+          lg_advertised_alias = false;
+        }
+
+      method module_path env path =
+        match resolve_module_prefix env (Ppxlib.Longident.flatten_exn path) with
+        | `External canon -> Some (Lg_alias canon)
+        | `Local m -> Some m
+        | `Local_missing -> None
+
+      method! module_of env module_expr =
+        match module_expr.pmod_desc with
+        | Pmod_structure items ->
+            let module_exports = ref [] in
+            let _, exports =
+              List.fold items ~init:(env, []) ~f:(fun (env, exports) item ->
+                  match item.pstr_desc with
+                  | Pstr_value (rec_flag, bindings) ->
+                      let denotes = self#denotations env rec_flag bindings in
+                      let scope = self#bind_group env bindings denotes in
+                      let exported =
+                        List.concat_map (List.zip_exn bindings denotes) ~f:(fun (b, d) ->
+                            List.map (Lexical_scope.pattern_vars [ b.pvb_pat ]) ~f:(fun n -> (n, d)))
+                      in
+                      (scope, exports @ exported)
+                  | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
+                      let m = self#module_of env pmb_expr in
+                      Option.iter m ~f:(fun d -> module_exports := (name, d) :: !module_exports);
+                      ( (match m with
+                        | Some d ->
+                            {
+                              env with
+                              Lexical_scope.modules =
+                                Map.set env.Lexical_scope.modules ~key:name ~data:d;
+                            }
+                        | None -> env),
+                        exports )
+                  | Pstr_open { popen_expr; _ } ->
+                      ( self#opened ~top:false ~include_:false env (self#module_of env popen_expr),
+                        exports )
+                  | _ -> (env, exports))
+            in
+            let latest pairs =
+              Map.to_alist (Map.of_alist_reduce (module String) pairs ~f:(fun _ later -> later))
+            in
+            Some (Lg_local { values = latest exports; modules = latest !module_exports })
+        | _ -> super#module_of env module_expr
+
+      method! opened ~top:_ ~include_:_ env denotes =
+        match denotes with
+        | Some (Lg_local { values; modules }) ->
+            let env =
+              {
+                env with
+                Lexical_scope.modules =
+                  List.fold modules ~init:env.Lexical_scope.modules ~f:(fun acc (k, v) ->
+                      Map.set acc ~key:k ~data:v);
+              }
+            in
+            Lexical_scope.push_frame env
+              (Map.of_alist_reduce (module String) values ~f:(fun _ later -> later))
+        | Some (Lg_alias [ "Ir" ]) | Some (Lg_alias [ "Ocannl"; "Ir" ]) ->
+            Lexical_scope.bind_values env [ ir_opened_marker ] self#local
+        | Some (Lg_alias [ "Test_utils" ]) ->
+            Lexical_scope.bind_values env [ tu_opened_marker ] self#local
+        | _ -> env
+
+      method! binding_denotes env binding =
+        let v = self#local in
+        (match Read.pattern_name binding.pvb_pat with
+        | Some _ ->
+            v.lg_rhs <- Some (binding.pvb_expr, env);
+            v.lg_cap_record <- expr_is_cap_record env binding.pvb_expr;
+            v.lg_advertised_alias <- expr_is_advertised_alias env binding.pvb_expr
+        | None -> ());
+        v
+
+      method! denotations env rec_flag bindings =
+        match rec_flag with
+        | Nonrecursive -> super#denotations env rec_flag bindings
+        | Recursive ->
+            let denotes = List.map bindings ~f:(fun _ -> self#local) in
+            let scope = self#bind_group env bindings denotes in
+            List.iter2_exn denotes bindings ~f:(fun v binding ->
+                if Option.is_some (Read.pattern_name binding.pvb_pat) then (
+                  v.lg_rhs <- Some (binding.pvb_expr, scope);
+                  v.lg_cap_record <- expr_is_cap_record scope binding.pvb_expr;
+                  v.lg_advertised_alias <- expr_is_advertised_alias scope binding.pvb_expr));
+            denotes
+
+      method! attribute _ attr = attr
+
+      (* Resolve a record expression through local [let]s, [lazy], [Lazy.force] and trailing
+         [let]/[sequence] wrappers to a record literal, so projecting [.field] inspects only that
+         field's expression rather than unrelated sibling fields (e.g. [(Lazy.force
+         hang).killed]). *)
+      method resolve_record_field env record field_name =
+        let seen = Hash_set.create (module Int) in
+        let rec find env expr =
+          let expr = strip expr in
+          match expr.pexp_desc with
+          | Pexp_record (fields, base) -> (
+              match
+                List.find_map fields ~f:(fun ({ txt; _ }, value) ->
+                    if String.equal (Ppxlib.Longident.last_exn txt) field_name then Some (value, env)
+                    else None)
+              with
+              | Some hit -> Some hit
+              | None -> Option.bind base ~f:(find env))
+          | Pexp_lazy inner -> find env inner
+          | Pexp_sequence (_, b) -> find env b
+          | Pexp_let (rec_flag, bindings, b) ->
+              let denotes = self#denotations env rec_flag bindings in
+              let scope = self#bind_group env bindings denotes in
+              find scope b
+          | Pexp_ident { txt = Lident name; _ } -> (
+              match Lexical_scope.lookup env name with
+              | Some v when not (Hash_set.mem seen v.lg_id) ->
+                  Hash_set.add seen v.lg_id;
+                  Option.bind v.lg_rhs ~f:(fun (rhs, rhs_env) -> find rhs_env rhs)
+              | _ -> None)
+          | Pexp_apply (callee, [ (Nolabel, arg) ]) -> (
+              match (strip callee).pexp_desc with
+              | Pexp_ident { txt; _ } -> (
+                  match resolve_longident env txt with
+                  | `External ([ "Lazy"; "force" ] | [ "Base"; "Lazy"; "force" ])
+                  | `Unqualified "force" ->
+                      find env arg
+                  | `Unqualified name -> (
+                      match Lexical_scope.lookup env name with
+                      | Some v when not (Hash_set.mem seen v.lg_id) -> (
+                          Hash_set.add seen v.lg_id;
+                          match v.lg_rhs with
+                          | Some (rhs, rhs_env) -> (
+                              match (strip rhs).pexp_desc with
+                              | Pexp_function (_, _, Pfunction_body body) -> find rhs_env body
+                              | _ -> None)
+                          | None -> None)
+                      | _ -> None)
+                  | _ -> None)
+              | _ -> None)
+          | _ -> None
+        in
+        find env record
+
+      (* Walk a gate expression to collect: (1) any disallowed external qualified calls or
+         capability-record field accesses, and (2) any ambient-policy reads. *)
+      method inspect_gate env expr =
+        let seen_vals = Hash_set.create (module Int) in
+        let found_disallowed = ref [] in
+        let found_ambient = ref [] in
+        let record_path ~line path =
+          if not (is_allowed_path path) then
+            found_disallowed := (String.concat ~sep:"." path, line) :: !found_disallowed
+        in
+        let rec walk env ~in_explicit_policy expr =
+          let line = expr.pexp_loc.loc_start.pos_lnum in
+          let visit_val v =
+            if not (Hash_set.mem seen_vals v.lg_id) then (
+              Hash_set.add seen_vals v.lg_id;
+              Option.iter v.lg_rhs ~f:(fun (rhs, rhs_env) -> walk rhs_env ~in_explicit_policy rhs);
+              List.iter (Hashtbl.find_multi writes v.lg_id) ~f:(fun (written, w_env) ->
+                  walk w_env ~in_explicit_policy written))
+          in
+          match expr.pexp_desc with
+          | Pexp_ident { txt; _ } -> (
+              match resolve_longident env txt with
+              | `External path ->
+                  record_path ~line path;
+                  if
+                    (not in_explicit_policy)
+                    && String.equal (String.concat ~sep:"." path) "Ir.Numerics.get"
+                  then found_ambient := "Ir.Numerics.get" :: !found_ambient
+              | `Local_val v -> visit_val v
+              | `Unqualified name -> (
+                  match Lexical_scope.lookup env name with Some v -> visit_val v | None -> ())
+              | `Local_other -> ())
+          | Pexp_field (record, { txt; loc }) -> (
+              let fline = loc.loc_start.pos_lnum in
+              let field_name = Ppxlib.Longident.last_exn txt in
+              let resolved_field = self#resolve_record_field env record field_name in
+              (match resolved_field with
+              | Some (field_expr, field_env) -> walk field_env ~in_explicit_policy field_expr
+              | None -> walk env ~in_explicit_policy record);
+              match resolve_longident env txt with
+              | `External path -> record_path ~line:fline path
+              | `Unqualified field ->
+                  if expr_is_cap_record env record then
+                    record_path ~line:fline [ "Ir"; "Backend_intf"; field ]
+              | `Local_val _ | `Local_other -> ())
+          | Pexp_apply (callee, args) ->
+              let callee_stripped = strip callee in
+              let is_context_query =
+                match callee_stripped.pexp_desc with
+                | Pexp_ident { txt; _ } -> (
+                    match resolve_longident env txt with
+                    | `External path ->
+                        Set.mem leg_gate_context_queries (String.concat ~sep:"." path)
+                    | `Unqualified name -> (
+                        (* A local 1-parameter wrapper [let gpu ctx = ... Context.backend_facts ctx]
+                           whose parameter is only passed to an allowlisted context query. *)
+                        match Lexical_scope.lookup env name with
+                        | Some { lg_rhs = Some (rhs, rhs_env); _ } -> (
+                            match (strip rhs).pexp_desc with
+                            | Pexp_function
+                                ( [
+                                    {
+                                      pparam_desc =
+                                        Pparam_val
+                                          ( Nolabel,
+                                            None,
+                                            { ppat_desc = Ppat_var { txt = param; _ }; _ } );
+                                      _;
+                                    };
+                                  ],
+                                  _,
+                                  Pfunction_body body ) ->
+                                let only_in_ctx_query = ref true
+                                and used_in_ctx_query = ref false in
+                                let rec scan ~in_ctx e =
+                                  match e.pexp_desc with
+                                  | Pexp_ident { txt = Lident x; _ } when String.equal x param ->
+                                      if in_ctx then used_in_ctx_query := true
+                                      else only_in_ctx_query := false
+                                  | Pexp_apply (c, a) ->
+                                      let c_is_ctx =
+                                        match (strip c).pexp_desc with
+                                        | Pexp_ident { txt; _ } -> (
+                                            match resolve_longident rhs_env txt with
+                                            | `External p ->
+                                                Set.mem leg_gate_context_queries
+                                                  (String.concat ~sep:"." p)
+                                            | _ -> false)
+                                        | _ -> false
+                                      in
+                                      scan ~in_ctx c;
+                                      List.iter a ~f:(fun (_, arg) ->
+                                          scan ~in_ctx:(in_ctx || c_is_ctx) arg)
+                                  | Pexp_constraint (i, _) | Pexp_coerce (i, _, _) | Pexp_lazy i ->
+                                      scan ~in_ctx i
+                                  | Pexp_ifthenelse (c, t, f) ->
+                                      scan ~in_ctx c;
+                                      scan ~in_ctx t;
+                                      Option.iter f ~f:(scan ~in_ctx)
+                                  | Pexp_tuple es | Pexp_array es -> List.iter es ~f:(scan ~in_ctx)
+                                  | _ -> ()
+                                in
+                                scan ~in_ctx:false body;
+                                !used_in_ctx_query && !only_in_ctx_query
+                            | _ -> false)
+                        | _ -> false)
+                    | _ -> false)
+                | _ -> false
+              in
+              let is_advertised_call =
+                match callee_stripped.pexp_desc with
+                | Pexp_ident { txt; _ } -> (
+                    match resolve_longident env txt with
+                    | `External [ "Ll_test"; "advertised" ] -> true
+                    | `Unqualified name -> (
+                        match Lexical_scope.lookup env name with
+                        | Some v -> v.lg_advertised_alias
+                        | None -> false)
+                    | _ -> false)
+                | _ -> false
+              in
+              let is_cap_ambient_call =
+                match callee_stripped.pexp_desc with
+                | Pexp_ident { txt; _ } -> (
+                    match resolve_longident env txt with
+                    | `External [ "Ll_test"; "tensorized_capability" ] ->
+                        Some "Ll_test.tensorized_capability"
+                    | `External [ "Ll_test"; "tensorized_matmul_capability" ] ->
+                        Some "Ll_test.tensorized_matmul_capability"
+                    | _ -> None)
+                | _ -> None
+              in
+              let has_policy_arg =
+                List.exists args ~f:(function
+                  | (Ppxlib.Asttypes.Labelled "policy" | Optional "policy"), _ -> true
+                  | _ -> false)
+              in
+              if is_advertised_call && not has_policy_arg then
+                found_ambient := "Ll_test.advertised (without ~policy)" :: !found_ambient;
+              Option.iter is_cap_ambient_call ~f:(fun name ->
+                  found_ambient := name :: !found_ambient);
+              walk env ~in_explicit_policy callee;
+              if not is_context_query then
+                List.iter args ~f:(fun (lbl, arg) ->
+                    let arg_explicit_policy =
+                      in_explicit_policy
+                      || is_advertised_call
+                         &&
+                         match lbl with
+                         | Ppxlib.Asttypes.Labelled "policy" | Optional "policy" -> true
+                         | _ -> false
+                    in
+                    walk env ~in_explicit_policy:arg_explicit_policy arg)
+          | Pexp_let (rec_flag, bindings, body) ->
+              let denotes = self#denotations env rec_flag bindings in
+              let scope = self#bind_group env bindings denotes in
+              let rhs_env = match rec_flag with Recursive -> scope | Nonrecursive -> env in
+              List.iter bindings ~f:(fun b ->
+                  (if expr_is_cap_record rhs_env b.pvb_expr then
+                     let rec check_pat pat =
+                       match pat.ppat_desc with
+                       | Ppat_record (fields, _) ->
+                           List.iter fields ~f:(fun ({ txt; loc }, inner) ->
+                               (match resolve_longident rhs_env txt with
+                               | `External path -> record_path ~line:loc.loc_start.pos_lnum path
+                               | `Unqualified field ->
+                                   record_path ~line:loc.loc_start.pos_lnum
+                                     [ "Ir"; "Backend_intf"; field ]
+                               | `Local_val _ | `Local_other -> ());
+                               check_pat inner)
+                       | Ppat_alias (inner, _) | Ppat_constraint (inner, _) -> check_pat inner
+                       | _ -> ()
+                     in
+                     check_pat b.pvb_pat);
+                  walk rhs_env ~in_explicit_policy b.pvb_expr);
+              walk scope ~in_explicit_policy body
+          | Pexp_match (scrutinee, cases) ->
+              walk env ~in_explicit_policy scrutinee;
+              let scrut_cap = expr_is_cap_record env scrutinee in
+              List.iter cases ~f:(fun c ->
+                  (if scrut_cap then
+                     let rec check_pat pat =
+                       match pat.ppat_desc with
+                       | Ppat_record (fields, _) ->
+                           List.iter fields ~f:(fun ({ txt; loc }, inner) ->
+                               (match resolve_longident env txt with
+                               | `External path -> record_path ~line:loc.loc_start.pos_lnum path
+                               | `Unqualified field ->
+                                   record_path ~line:loc.loc_start.pos_lnum
+                                     [ "Ir"; "Backend_intf"; field ]
+                               | `Local_val _ | `Local_other -> ());
+                               check_pat inner)
+                       | Ppat_alias (inner, _) | Ppat_constraint (inner, _) -> check_pat inner
+                       | _ -> ()
+                     in
+                     check_pat c.pc_lhs);
+                  let c_env = self#bind_patterns env [ c.pc_lhs ] in
+                  Option.iter c.pc_guard ~f:(walk c_env ~in_explicit_policy);
+                  walk c_env ~in_explicit_policy c.pc_rhs)
+          | Pexp_ifthenelse (c, t, f) ->
+              walk env ~in_explicit_policy c;
+              walk env ~in_explicit_policy t;
+              Option.iter f ~f:(walk env ~in_explicit_policy)
+          | Pexp_sequence (a, b) ->
+              walk env ~in_explicit_policy a;
+              walk env ~in_explicit_policy b
+          | Pexp_tuple es | Pexp_array es -> List.iter es ~f:(walk env ~in_explicit_policy)
+          | Pexp_construct ({ txt; loc }, payload) ->
+              (match resolve_longident env txt with
+              | `External path -> record_path ~line:loc.loc_start.pos_lnum path
+              | _ -> ());
+              Option.iter payload ~f:(walk env ~in_explicit_policy)
+          | Pexp_variant (_, payload) -> Option.iter payload ~f:(walk env ~in_explicit_policy)
+          | Pexp_record (fields, base) ->
+              List.iter fields ~f:(fun (_, e) -> walk env ~in_explicit_policy e);
+              Option.iter base ~f:(walk env ~in_explicit_policy)
+          | Pexp_lazy inner
+          | Pexp_constraint (inner, _)
+          | Pexp_coerce (inner, _, _)
+          | Pexp_newtype (_, inner)
+          | Pexp_assert inner
+          | Pexp_letexception (_, inner) ->
+              walk env ~in_explicit_policy inner
+          | Pexp_open ({ popen_expr; _ }, inner) ->
+              let inner_env =
+                self#opened ~top:false ~include_:false env (self#module_of env popen_expr)
+              in
+              walk inner_env ~in_explicit_policy inner
+          | Pexp_letmodule ({ txt = Some name; _ }, mod_expr, inner) ->
+              let inner_env =
+                match self#module_of env mod_expr with
+                | Some d ->
+                    {
+                      env with
+                      Lexical_scope.modules = Map.set env.Lexical_scope.modules ~key:name ~data:d;
+                    }
+                | None -> env
+              in
+              walk inner_env ~in_explicit_policy inner
+          | Pexp_letmodule ({ txt = None; _ }, _, inner) -> walk env ~in_explicit_policy inner
+          | Pexp_function (params, _, body) -> (
+              let f_env =
+                List.fold params ~init:env ~f:(fun acc p ->
+                    match p.pparam_desc with
+                    | Pparam_val (_, default, pat) ->
+                        Option.iter default ~f:(walk acc ~in_explicit_policy);
+                        self#bind_patterns acc [ pat ]
+                    | Pparam_newtype _ -> acc)
+              in
+              match body with
+              | Pfunction_body b -> walk f_env ~in_explicit_policy b
+              | Pfunction_cases (cases, _, _) ->
+                  List.iter cases ~f:(fun c ->
+                      let c_env = self#bind_patterns f_env [ c.pc_lhs ] in
+                      Option.iter c.pc_guard ~f:(walk c_env ~in_explicit_policy);
+                      walk c_env ~in_explicit_policy c.pc_rhs))
+          | Pexp_try (body, cases) ->
+              walk env ~in_explicit_policy body;
+              List.iter cases ~f:(fun c ->
+                  let c_env = self#bind_patterns env [ c.pc_lhs ] in
+                  Option.iter c.pc_guard ~f:(walk c_env ~in_explicit_policy);
+                  walk c_env ~in_explicit_policy c.pc_rhs)
+          | Pexp_letop { let_; ands; body } ->
+              let scope =
+                List.fold (let_ :: ands) ~init:env ~f:(fun acc op ->
+                    walk env ~in_explicit_policy op.pbop_exp;
+                    self#bind_patterns acc [ op.pbop_pat ])
+              in
+              walk scope ~in_explicit_policy body
+          | Pexp_setfield (r, _, v) ->
+              walk env ~in_explicit_policy r;
+              walk env ~in_explicit_policy v
+          | Pexp_for (pat, lo, hi, _, body) ->
+              walk env ~in_explicit_policy lo;
+              walk env ~in_explicit_policy hi;
+              walk (self#bind_patterns env [ pat ]) ~in_explicit_policy body
+          | Pexp_while (c, body) ->
+              walk env ~in_explicit_policy c;
+              walk env ~in_explicit_policy body
+          | _ -> ()
+        in
+        walk env ~in_explicit_policy:false expr;
+        (* Keep one finding per disallowed canonical path within one leg (the earliest line). *)
+        let deduped_disallowed =
+          List.rev !found_disallowed
+          |> List.fold
+               ~init:(Map.empty (module String))
+               ~f:(fun acc (path, line) ->
+                 Map.update acc path ~f:(function None -> line | Some prev -> Int.min prev line))
+          |> Map.to_alist
+        in
+        (deduped_disallowed, List.dedup_and_sort (List.rev !found_ambient) ~compare:String.compare)
+
+      method resolve_legs env expr =
+        let seen = Hash_set.create (module Int) in
+        let rec go env expr =
+          let expr = strip expr in
+          match Hashtbl.find leg_by_pos expr.pexp_loc.loc_start.pos_cnum with
+          | Some rec_ -> [ rec_ ]
+          | None -> (
+              match expr.pexp_desc with
+              | Pexp_ident { txt = Lident name; _ } -> (
+                  match Lexical_scope.lookup env name with
+                  | Some v when not (Hash_set.mem seen v.lg_id) -> (
+                      Hash_set.add seen v.lg_id;
+                      match v.lg_rhs with Some (rhs, rhs_env) -> go rhs_env rhs | None -> [])
+                  | _ -> [])
+              | Pexp_ifthenelse (_, t, Some f) -> go env t @ go env f
+              | Pexp_match (_, cases) -> List.concat_map cases ~f:(fun c -> go env c.pc_rhs)
+              | Pexp_sequence (_, b) -> go env b
+              | Pexp_let (rec_flag, bindings, b) ->
+                  let denotes = self#denotations env rec_flag bindings in
+                  let scope = self#bind_group env bindings denotes in
+                  go scope b
+              | _ -> [])
+        in
+        go env expr
+
+      method! expression env expr =
+        (* Track [x := e] writes so gate inspection follows ref mutations too. *)
+        (match expr.pexp_desc with
+        | Pexp_apply
+            ( { pexp_desc = Pexp_ident { txt = Lident ":="; _ }; _ },
+              [
+                (Nolabel, { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }); (Nolabel, written);
+              ] ) -> (
+            match Lexical_scope.lookup env name with
+            | Some v -> Hashtbl.add_multi writes ~key:v.lg_id ~data:(written, env)
+            | None -> ())
+        | _ -> ());
+        match expr.pexp_desc with
+        | Pexp_apply (callee, arguments) -> (
+            (* Track enclosing policy-wrapper calls ([Test_utils.with_policy], ...), including
+               [Test_utils.with_policy adjust @@ fun () -> ...] and [(fun () -> ...) |> ...]. *)
+            let wrapper_match =
+              match policy_wrapper_of env callee with
+              | Some w -> Some w
+              | None -> (
+                  match ((strip callee).pexp_desc, arguments) with
+                  | Pexp_ident { txt = Lident "@@"; _ }, [ (Nolabel, lhs); (Nolabel, _) ] -> (
+                      match (strip lhs).pexp_desc with
+                      | Pexp_ident _ -> policy_wrapper_of env lhs
+                      | Pexp_apply (inner_callee, _) -> policy_wrapper_of env inner_callee
+                      | _ -> None)
+                  | Pexp_ident { txt = Lident "|>"; _ }, [ (Nolabel, _); (Nolabel, rhs) ] -> (
+                      match (strip rhs).pexp_desc with
+                      | Pexp_ident _ -> policy_wrapper_of env rhs
+                      | Pexp_apply (inner_callee, _) -> policy_wrapper_of env inner_callee
+                      | _ -> None)
+                  | _ -> None)
+            in
+            match wrapper_match with
+            | Some wrapper_name ->
+                let saved = active_wrappers in
+                active_wrappers <- (expr.pexp_loc.loc_start.pos_cnum, wrapper_name) :: saved;
+                Exn.protect
+                  ~finally:(fun () -> active_wrappers <- saved)
+                  ~f:(fun () -> super#expression env expr)
+            | None ->
+                (match Verdict_callee.resolve_leg owners callee with
+                | Some { member; ownership = (Verdicts | Ambiguous) as ownership; spelled }
+                  when List.mem Verdict_callee.leg_constructors member ~equal:String.equal -> (
+                    let when_arg =
+                      List.find_map arguments ~f:(function
+                        | Ppxlib.Asttypes.Labelled "when_", arg -> Some arg
+                        | _ -> None)
+                    in
+                    let parent_arg =
+                      if String.equal member "sub_leg" then
+                        List.find_map arguments ~f:(function
+                          | Ppxlib.Asttypes.Nolabel, arg -> Some arg
+                          | _ -> None)
+                      else None
+                    in
+                    match when_arg with
+                    | Some gate_expr ->
+                        Int.incr sites;
+                        let line = expr.pexp_loc.loc_start.pos_lnum in
+                        let pos = expr.pexp_loc.loc_start.pos_cnum in
+                        let wrappers_snapshot = active_wrappers in
+                        let ambiguous = Poly.equal ownership Ambiguous in
+                        pending_legs :=
+                          (fun () ->
+                            let bad_calls, ambient = self#inspect_gate env gate_expr in
+                            List.iter bad_calls ~f:(fun (callee_path, callee_line) ->
+                                disallowed :=
+                                  {
+                                    leg_call_form = spelled;
+                                    leg_call_ambiguous = ambiguous;
+                                    leg_call_line = line;
+                                    callee = callee_path;
+                                    callee_line;
+                                  }
+                                  :: !disallowed);
+                            let parents =
+                              Option.value_map parent_arg ~default:[] ~f:(self#resolve_legs env)
+                            in
+                            Hashtbl.set leg_by_pos ~key:pos
+                              ~data:
+                                {
+                                  lg_leg_line = line;
+                                  lg_leg_scopes = wrappers_snapshot;
+                                  lg_ambient = ambient;
+                                  lg_parents = parents;
+                                })
+                          :: !pending_legs
+                    | None -> ())
+                | _ -> (
+                    match Verdict_callee.resolve owners callee with
+                    | Some { member; ownership = (Verdicts | Ambiguous) as ownership; spelled }
+                      when List.mem leg_claims member ~equal:String.equal -> (
+                        match
+                          List.find_map arguments ~f:(function
+                            | Ppxlib.Asttypes.Labelled "leg", arg -> Some arg
+                            | _ -> None)
+                        with
+                        | Some leg_arg ->
+                            let use_line = expr.pexp_loc.loc_start.pos_lnum in
+                            let use_wrappers = active_wrappers in
+                            let ambiguous = Poly.equal ownership Ambiguous in
+                            pending_uses :=
+                              (fun () ->
+                                let rec check_rec r =
+                                  List.iter r.lg_parents ~f:check_rec;
+                                  if not (List.is_empty r.lg_ambient) then
+                                    List.iter use_wrappers ~f:(fun (wpos, wname) ->
+                                        if
+                                          not
+                                            (List.exists r.lg_leg_scopes ~f:(fun (lpos, _) ->
+                                                 lpos = wpos))
+                                        then
+                                          List.iter r.lg_ambient ~f:(fun reader ->
+                                              mismatches :=
+                                                {
+                                                  mismatch_form = spelled;
+                                                  mismatch_ambiguous = ambiguous;
+                                                  mismatch_line = use_line;
+                                                  leg_line = r.lg_leg_line;
+                                                  wrapper = wname;
+                                                  ambient_reader = reader;
+                                                }
+                                                :: !mismatches))
+                                in
+                                List.iter (self#resolve_legs env leg_arg) ~f:check_rec)
+                              :: !pending_uses
+                        | None -> ())
+                    | _ -> ()));
+                super#expression env expr)
+        | _ -> super#expression env expr
+    end
+  in
+  ignore
+    (walker#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
+      : structure);
+  (* Process legs in source order so [sub_leg] parents exist before children resolve them. *)
+  List.iter (List.rev !pending_legs) ~f:(fun f -> f ());
+  List.iter (List.rev !pending_uses) ~f:(fun f -> f ());
+  {
+    disallowed_calls = List.rev !disallowed;
+    policy_mismatches = List.rev !mismatches;
+    leg_gate_sites = !sites;
+  }
