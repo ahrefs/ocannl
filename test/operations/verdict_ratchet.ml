@@ -6723,6 +6723,22 @@ let () =
     (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
     (fun () -> check ~leg ())|ocaml},
       [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
+    ( "refuses a stale ambient-policy leg passed to a second call of a local claim helper inside \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let safe = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let stale =
+  Verdict.leg ~on:"cuda"
+    ~when_:(Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+    ()
+let check ~leg () = in_leg ~leg "tf32 replay" (fun label -> p label true)
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () ->
+      check ~leg:safe ();
+      check ~leg:stale ())|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
     ( "refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy",
       {ocaml|open Verdict.Claims
 let leg =

@@ -7671,7 +7671,9 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
       val mutable active_wrappers : (int * string) list = []
       val mutable current_eval_kind : lg_eval_kind option = None
       val mutable call_site_pos : int option = None
+      val mutable root_call_pos : int option = None
       val mutable in_uninvoked_fn_def : bool = false
+      val active_fn_rewalks : int Hash_set.t = Hash_set.create (module Int)
       val leg_by_key : (string, lg_leg_rec) Hashtbl.t = Hashtbl.create (module String)
       val seen_apply_spines : int Hash_set.t = Hash_set.create (module Int)
       method eval_kind_here = Option.value current_eval_kind ~default:(Lg_eager active_wrappers)
@@ -8919,11 +8921,15 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                 | `Unqualified "force"
                   when not in_uninvoked_fn_def -> (
                     let eff_pos =
+                      Option.value root_call_pos ~default:expr.pexp_loc.loc_start.pos_cnum
+                    in
+                    let match_call_pos =
                       Option.value call_site_pos ~default:expr.pexp_loc.loc_start.pos_cnum
                     in
                     let wrapper_ids = List.map active_wrappers ~f:fst in
                     pending_leg_forces :=
-                      (eff_pos, active_wrappers, wrapper_ids, env, arg) :: !pending_leg_forces;
+                      (eff_pos, match_call_pos, active_wrappers, wrapper_ids, env, arg)
+                      :: !pending_leg_forces;
                     match (strip arg).pexp_desc with
                     | Pexp_ident { txt = lid; _ } -> (
                         match lookup_local_val env lid with
@@ -9177,20 +9183,28 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                the callback (including named callbacks) and NOT the policy-adjuster argument. *)
             let rewalk_local_under_wrappers ~site_pos fn_id fn_expr fn_env =
               let wkey =
-                Printf.sprintf "%s:%d"
+                Printf.sprintf "%s:%d:%d"
                   (String.concat ~sep:","
                      (List.map active_wrappers ~f:(fun (p, _) -> Int.to_string p)))
-                  fn_id
+                  fn_id site_pos
               in
-              if not (Hash_set.mem seen_callback_walks wkey) then (
+              if
+                (not (Hash_set.mem active_fn_rewalks fn_id))
+                && not (Hash_set.mem seen_callback_walks wkey)
+              then (
                 Hash_set.add seen_callback_walks wkey;
+                Hash_set.add active_fn_rewalks fn_id;
                 let saved_call_pos = call_site_pos in
+                let saved_root_pos = root_call_pos in
                 let saved_uninvoked = in_uninvoked_fn_def in
-                call_site_pos <- Some (Option.value saved_call_pos ~default:site_pos);
+                call_site_pos <- Some site_pos;
+                root_call_pos <- Some (Option.value saved_root_pos ~default:site_pos);
                 in_uninvoked_fn_def <- false;
                 Exn.protect
                   ~finally:(fun () ->
+                    Hash_set.remove active_fn_rewalks fn_id;
                     call_site_pos <- saved_call_pos;
+                    root_call_pos <- saved_root_pos;
                     in_uninvoked_fn_def <- saved_uninvoked)
                   ~f:(fun () -> ignore (self#expression fn_env fn_expr : expression)))
             in
@@ -9291,7 +9305,8 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                             | _ -> None)
                         with
                         | Some leg_arg ->
-                            let eff_pos = Option.value call_site_pos ~default:pos in
+                            let eff_pos = Option.value root_call_pos ~default:pos in
+                            let match_call_pos = Option.value call_site_pos ~default:pos in
                             let is_exec = not in_uninvoked_fn_def in
                             let use_line = expr.pexp_loc.loc_start.pos_lnum in
                             let use_wrappers = active_wrappers in
@@ -9300,6 +9315,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                             pending_uses :=
                               ( is_exec,
                                 eff_pos,
+                                match_call_pos,
                                 use_line,
                                 spelled,
                                 ambiguous,
@@ -9333,8 +9349,9 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
       Hashtbl.add_multi leg_uses_by_key ~key:r.lg_leg_key ~data:(at_pos, wrappers);
       List.iter r.lg_parents ~f:(record_use ~at_pos ~wrappers seen_keys))
   in
-  List.iter (List.rev !pending_leg_forces) ~f:(fun (fpos, fwrappers, wrapper_ids, env, arg) ->
-      let legs = walker#resolve_legs ~call_pos:fpos ~wrapper_ids env arg in
+  List.iter (List.rev !pending_leg_forces)
+    ~f:(fun (fpos, match_call_pos, fwrappers, wrapper_ids, env, arg) ->
+      let legs = walker#resolve_legs ~call_pos:match_call_pos ~wrapper_ids env arg in
       List.iter legs
         ~f:(record_use ~at_pos:fpos ~wrappers:fwrappers (Hash_set.create (module String))));
   let resolved_uses =
@@ -9343,6 +9360,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
          ~f:(fun
              ( is_exec,
                use_pos,
+               match_call_pos,
                use_line,
                spelled,
                ambiguous,
@@ -9351,7 +9369,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                env,
                leg_arg )
            ->
-           let legs = walker#resolve_legs ~call_pos:use_pos ~wrapper_ids env leg_arg in
+           let legs = walker#resolve_legs ~call_pos:match_call_pos ~wrapper_ids env leg_arg in
            if is_exec then
              List.iter legs
                ~f:
