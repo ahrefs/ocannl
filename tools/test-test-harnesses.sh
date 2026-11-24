@@ -43,27 +43,33 @@ if [ "$system_bash_version" = 3.2 ]; then
   expected_member_bash=/bin/bash
 fi
 expected_member_version=$("$expected_member_bash" -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"')
+# Derive the subject's Darwin fallback list once rather than restating it.
+eval "$(sed -n '/^darwin_mawk_fallbacks=/p' "$subject")"
+host_mawk_path=$(type -P mawk 2>/dev/null || :)
+host_mawk=
+if [ -n "$host_mawk_path" ] && [ -f "$host_mawk_path" ] && [ -x "$host_mawk_path" ]; then
+  case $host_mawk_path in
+    /*) host_mawk=$host_mawk_path ;;
+    *) host_mawk=$(CDPATH= cd -- "$(dirname -- "$host_mawk_path")" && pwd)/${host_mawk_path##*/} ;;
+  esac
+else
+  for cand in ${darwin_mawk_fallbacks[@]+"${darwin_mawk_fallbacks[@]}"}; do
+    if [ -f "$cand" ] && [ -x "$cand" ]; then host_mawk=$cand; break; fi
+  done
+fi
 expected_member_awk=
 if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
-  expected_member_awk=$(type -P mawk 2>/dev/null || :)
-  if [ -n "$expected_member_awk" ] && [ -f "$expected_member_awk" ] && [ -x "$expected_member_awk" ]; then
-    case $expected_member_awk in
-      /*) ;;
-      *)
-        # Keep a relative-PATH mawk reachable after `run()` changes cwd to `$TMP`.
-        rel_mawk=$(CDPATH= cd -- "$(dirname -- "$expected_member_awk")" && pwd)/${expected_member_awk##*/}
-        mkdir -p "$TMP/host-mawk-bin"
-        host_mawk_bin=$(CDPATH= cd -- "$TMP/host-mawk-bin" && pwd)
-        ln -s "$rel_mawk" "$host_mawk_bin/mawk"
-        export PATH="$host_mawk_bin:$PATH"
-        expected_member_awk=$host_mawk_bin/mawk ;;
-    esac
-  else
-    expected_member_awk=
-    for cand in /opt/homebrew/bin/mawk /usr/local/bin/mawk; do
-      if [ -f "$cand" ] && [ -x "$cand" ]; then expected_member_awk=$cand; break; fi
-    done
-  fi
+  expected_member_awk=$host_mawk
+  case $host_mawk_path in
+    ''|/*) ;;
+    *)
+      # Keep a relative-PATH mawk reachable after `run()` changes cwd to `$TMP`.
+      mkdir -p "$TMP/host-mawk-bin"
+      host_mawk_bin=$(CDPATH= cd -- "$TMP/host-mawk-bin" && pwd)
+      ln -s "$host_mawk" "$host_mawk_bin/mawk"
+      export PATH="$host_mawk_bin:$PATH"
+      expected_member_awk=$host_mawk_bin/mawk ;;
+  esac
 fi
 expected_member_banner="$expected_member_version $expected_member_bash${expected_member_awk:+; awk $expected_member_awk}"
 # Empty arrays under nounset changed at 4.4, independently of the 3.2 leg.
@@ -367,7 +373,7 @@ for os in Linux Darwin; do
   chmod +x "$TMP/uname-$os/uname"
 done
 # Keep fake-Darwin --ci-shell legs host-independent on Linux boxes without mawk.
-if ! type -P mawk >/dev/null 2>&1 && [ ! -x /opt/homebrew/bin/mawk ] && [ ! -x /usr/local/bin/mawk ]; then
+if [ -z "$host_mawk" ]; then
   host_awk=$(type -P awk 2>/dev/null || echo /usr/bin/awk)
   printf '#!/bin/sh\nexec "%s" "$@"\n' "$host_awk" >"$TMP/uname-Darwin/mawk"
   chmod +x "$TMP/uname-Darwin/mawk"
@@ -1737,21 +1743,14 @@ fi
 # Planted #2244 control with real mawk: `in`-inside-assignment yields `[; x]`
 # under mawk (failing the pinned Darwin run) while macOS BWK `/usr/bin/awk`
 # yields `[x]` (passing unpinned).
-real_mawk=$(type -P mawk 2>/dev/null || :)
-if [ -z "$real_mawk" ] || [ ! -x "$real_mawk" ]; then
-  real_mawk=
-  for cand in /opt/homebrew/bin/mawk /usr/local/bin/mawk; do
-    if [ -f "$cand" ] && [ -x "$cand" ]; then real_mawk=$cand; break; fi
-  done
-fi
 planted_2244_leg() {
-  if [ -z "$real_mawk" ]; then
+  if [ -z "$host_mawk" ]; then
     harness_not_applicable 'no real mawk installed on this host for the #2244 control'
     return
   fi
   local real_mawk_dir=$TMP/real-mawk-bin
   rm -rf "$real_mawk_dir"; mkdir -p "$real_mawk_dir"
-  ln -s "$real_mawk" "$real_mawk_dir/mawk"
+  ln -s "$host_mawk" "$real_mawk_dir/mawk"
   cat >"$fixture/$mawk_member" <<'PLANTED_2244'
 #!/usr/bin/env bash
 out=$(awk 'BEGIN { a["k"] = ("k" in a) ? a["k"] "; x" : "x"; print "got=[" a["k"] "]" }')

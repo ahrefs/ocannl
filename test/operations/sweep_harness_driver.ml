@@ -52,6 +52,17 @@ let resolve_darwin_mawk ~darwin ~path_env ~fallbacks ~getcwd ~available =
     | Some mawk -> `Pinned mawk
     | None -> `Missing
 
+(* `--check-mawk` writes a stamp consumed by the cached driver rules so Dune invalidates them when
+   `mawk` appears, disappears, or changes on disk. It prints "missing" and exits 0 when `mawk` is
+   absent so plain `dune build` (@default) stays usable on macOS without `mawk`; the hard exit-2
+   refusal stays on the driver execution path when a shell test actually runs. *)
+let format_mawk_stamp ~realpath ~digest_file = function
+  | `Not_needed -> "non-darwin"
+  | `Missing -> "missing"
+  | `Pinned mawk ->
+      let resolved = realpath mawk in
+      Printf.sprintf "%s\t%s\t%s" mawk resolved (digest_file resolved)
+
 let prepend_path ~dir env =
   let replaced = ref false in
   let env =
@@ -128,35 +139,38 @@ let check_resolution () =
     if got <> want then failwith (Printf.sprintf "%s: got %s, want %s" name (show got) (show want))
   in
   let getcwd () = "/fixture/cwd" in
-  let fallbacks = [ "/opt/homebrew/bin/mawk"; "/usr/local/bin/mawk" ] in
   expect_mawk "non-Darwin leaves awk unpinned even when mawk is absent"
-    (resolve_darwin_mawk ~darwin:false ~path_env:(Some "/usr/bin:/bin") ~fallbacks ~getcwd
-       ~available:(fun _ -> false))
+    (resolve_darwin_mawk ~darwin:false ~path_env:(Some "/usr/bin:/bin")
+       ~fallbacks:darwin_mawk_fallbacks ~getcwd ~available:(fun _ -> false))
     `Not_needed;
   expect_mawk "Darwin selects PATH mawk ahead of fallbacks and absolutizes relative dirs"
-    (resolve_darwin_mawk ~darwin:true ~path_env:(Some "rel/bin:/usr/bin") ~fallbacks ~getcwd
-       ~available:(fun p ->
+    (resolve_darwin_mawk ~darwin:true ~path_env:(Some "rel/bin:/usr/bin")
+       ~fallbacks:darwin_mawk_fallbacks ~getcwd ~available:(fun p ->
          String.equal p "/fixture/cwd/rel/bin/mawk" || String.equal p "/opt/homebrew/bin/mawk"))
     (`Pinned "/fixture/cwd/rel/bin/mawk");
   expect_mawk "Darwin treats empty PATH component as current working directory"
-    (resolve_darwin_mawk ~darwin:true ~path_env:(Some ":/usr/bin:/bin") ~fallbacks ~getcwd
-       ~available:(fun p ->
+    (resolve_darwin_mawk ~darwin:true ~path_env:(Some ":/usr/bin:/bin")
+       ~fallbacks:darwin_mawk_fallbacks ~getcwd ~available:(fun p ->
          String.equal p "/fixture/cwd/mawk" || String.equal p "/opt/homebrew/bin/mawk"))
     (`Pinned "/fixture/cwd/mawk");
   expect_mawk "Darwin treats empty PATH string as current working directory"
-    (resolve_darwin_mawk ~darwin:true ~path_env:(Some "") ~fallbacks ~getcwd ~available:(fun p ->
+    (resolve_darwin_mawk ~darwin:true ~path_env:(Some "") ~fallbacks:darwin_mawk_fallbacks ~getcwd
+       ~available:(fun p ->
          String.equal p "/fixture/cwd/mawk" || String.equal p "/opt/homebrew/bin/mawk"))
     (`Pinned "/fixture/cwd/mawk");
   expect_mawk "Darwin falls back to Homebrew mawk when PATH lacks mawk"
-    (resolve_darwin_mawk ~darwin:true ~path_env:(Some "/usr/bin:/bin") ~fallbacks ~getcwd
-       ~available:(fun p -> String.equal p "/opt/homebrew/bin/mawk"))
+    (resolve_darwin_mawk ~darwin:true ~path_env:(Some "/usr/bin:/bin")
+       ~fallbacks:darwin_mawk_fallbacks ~getcwd ~available:(fun p ->
+         String.equal p "/opt/homebrew/bin/mawk"))
     (`Pinned "/opt/homebrew/bin/mawk");
   expect_mawk "Darwin refuses when mawk is absent and never falls back to /usr/bin/awk"
-    (resolve_darwin_mawk ~darwin:true ~path_env:(Some "/usr/bin:/bin") ~fallbacks ~getcwd
-       ~available:(fun p -> String.equal p "/usr/bin/awk" || String.equal p "awk"))
+    (resolve_darwin_mawk ~darwin:true ~path_env:(Some "/usr/bin:/bin")
+       ~fallbacks:darwin_mawk_fallbacks ~getcwd ~available:(fun p ->
+         String.equal p "/usr/bin/awk" || String.equal p "awk"))
     `Missing;
   expect_mawk "Darwin ignores non-regular or non-executable mawk entries"
-    (resolve_darwin_mawk ~darwin:true ~path_env:(Some "/dir/bin:/noexec/bin") ~fallbacks ~getcwd
+    (resolve_darwin_mawk ~darwin:true ~path_env:(Some "/dir/bin:/noexec/bin")
+       ~fallbacks:darwin_mawk_fallbacks ~getcwd
        ~available:
          (path_available ~win32:false
             ~stat_kind:(fun p ->
@@ -165,6 +179,18 @@ let check_resolution () =
               else None)
             ~x_ok:(fun _ -> false)))
     `Missing;
+  let expect_str name got want =
+    if not (String.equal got want) then
+      failwith (Printf.sprintf "%s: got %S, want %S" name got want)
+  in
+  let stamp =
+    format_mawk_stamp ~realpath:(fun p -> "/real" ^ p) ~digest_file:(fun _ -> "deadbeef")
+  in
+  expect_str "stamp encodes non-Darwin as constant" (stamp `Not_needed) "non-darwin";
+  expect_str "stamp encodes missing mawk without failing plain builds" (stamp `Missing) "missing";
+  expect_str "stamp fingerprints pinned mawk path, realpath and digest"
+    (stamp (`Pinned "/opt/homebrew/bin/mawk"))
+    "/opt/homebrew/bin/mawk\t/real/opt/homebrew/bin/mawk\tdeadbeef";
   let contains_substring ~haystack ~needle =
     let hlen = String.length haystack and nlen = String.length needle in
     let rec loop i =
@@ -212,24 +238,17 @@ let () =
       ~fallbacks:darwin_mawk_fallbacks ~getcwd:Sys.getcwd
       ~available:(path_available ~win32:false ~stat_kind ~x_ok:executable)
   in
-  (if check_mawk_only then
-     match awk_pin with
-     | `Not_needed ->
-         print_endline "non-darwin";
-         exit 0
-     | `Missing ->
-         prerr_endline missing_mawk_message;
-         exit 2
-     | `Pinned mawk ->
-         let resolved = try Unix.realpath mawk with Unix.Unix_error _ -> mawk in
-         let digest =
-           try Digest.to_hex (Digest.file resolved)
-           with Sys_error msg ->
-             prerr_endline ("sweep_harness_driver: cannot fingerprint mawk: " ^ msg);
-             exit 2
-         in
-         Printf.printf "%s\t%s\t%s\n" mawk resolved digest;
-         exit 0);
+  if check_mawk_only then (
+    let line =
+      try
+        format_mawk_stamp
+          ~realpath:(fun p -> try Unix.realpath p with Unix.Unix_error _ -> p)
+          ~digest_file:(fun p -> Digest.to_hex (Digest.file p))
+          awk_pin
+      with Sys_error _ -> "missing"
+    in
+    print_endline line;
+    exit 0);
   let bash =
     resolve_bash ~win32:Sys.win32
       ~git_bashes:(git_bash_candidates Sys.getenv_opt)
