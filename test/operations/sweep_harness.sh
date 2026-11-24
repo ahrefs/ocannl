@@ -3763,16 +3763,133 @@ grep -q '^native signature: amdgpu: process pid N DQM create queue type 1 failed
 [ "$(window_fingerprint_lines "$tmp/native-quiet.log")" != \
   "$(window_fingerprint_lines "$tmp/native-red-a.log")" ]
 
+# Userspace segfault/trap lines and their immediately following `Code:` opcode dump (gh-ocannl-2460):
+# surfaced in the native window's uncounted display tier (count stays 0, never triggers a GPU-refusal
+# rerun), while benign lines, prose mentioning the words, and standalone kernel-warning `Code:` dumps
+# (e.g. rog-nv's i915 `WARN_ON`) stay excluded. Real lines from rog-nv-linux's journal (gh-ocannl-2410).
+native_segfault='Nov 19 17:06:23 rog-nv-linux kernel: autotune_candid[348243]: segfault at 6488f66170e0 ip 00006088b8c8980e sp 00007ffc560bcf40 error 6 in autotune_candidate_release.exe[d3780e,6088b8550000+75d000] likely on CPU 15 (core 15, socket 0)'
+native_segfault_code='Nov 19 17:06:23 rog-nv-linux kernel: Code: 41 56 55 48 89 fd 53 48 89 f3 83 e6 01 0f 85 c1 00 00 00 48 8b 15 ca cd a2 00 48 8b 07 48 39 d3 72 1a a8 01 0f 85 c2 00 00 00 <48> 89 5d 00 5b 5d 41 5e c3 66 0f 1f 84 00 00 00 00 00 48 8b 0d a9'
+native_trap_a='Nov 05 20:42:07 rog-nv-linux kernel: traps: localsearch-3[8233] general protection fault ip:77005b960bae sp:7ffdb4623560 error:0 in libgio-2.0.so.0.8800.0[60bae,77005b93d000+11e000]'
+native_trap_b='Nov 22 17:37:21 rog-nv-linux kernel: traps: localsearch-3[22106] general protection fault ip:7eb4864b3bae sp:7fff468ec9a0 error:0 in libgio-2.0.so.0.8800.0[60bae,7eb486490000+11e000]'
+native_i915_warn='Nov 24 08:00:40 rog-nv-linux kernel: RIP: 0010:print_ddi_port+0x3b0/0x3c0 [i915]
+Nov 24 08:00:40 rog-nv-linux kernel: Code: 8b 3c 24 48 85 ff 74 04 48 8b 7f 08 <67> 48 0f b9 3a'
+native_fault_noise='Nov 19 17:06:24 rog-nv-linux kernel: audit: type=1400 comm="segfault at 8" info="traps: benign"
+Nov 19 17:06:25 rog-nv-linux kernel: traps: Missing ENDBR: some_kernel_sym+0x0/0x10
+autotune_candid[348243]: segfault at 8 ip 0000000000001000 sp 00007ffc00001000 error 4'
+
+native_segfault_block=$(printf '%s\n%s\n%s\n%s\n%s\n' \
+  "$native_quiet" "$native_segfault" "$native_segfault_code" "$native_i915_warn" "$native_fault_noise" |
+  native_window_summary 20261119T170000Z 20261119T171000Z)
+grep -q '^=== native window: 0 GPU queue refusals ===$' <<<"$native_segfault_block"
+grep -qF "$native_segfault" <<<"$native_segfault_block"
+grep -qF "$native_segfault_code" <<<"$native_segfault_block"
+grep -q '^native signature: autotune_candid\[N\]: segfault at ADDR ip ADDR sp ADDR error 6 in autotune_candidate_release.exe\[d3780e,ADDR+75d000\] likely on CPU N (core N, socket N)$' \
+  <<<"$native_segfault_block"
+grep -q '^native signature: Code: 41 56 55 .* <48> 89 5d 00 ' <<<"$native_segfault_block"
+absent 'print_ddi_port' <<<"$native_segfault_block"
+absent '<67> 48 0f b9 3a' <<<"$native_segfault_block"
+absent 'Missing ENDBR' <<<"$native_segfault_block"
+absent 'audit:' <<<"$native_segfault_block"
+absent 'nvme0' <<<"$native_segfault_block"
+absent 'workqueue' <<<"$native_segfault_block"
+absent 'error 4' <<<"$native_segfault_block"
+printf '%s\n' "$native_segfault_block" >"$(window_sidecar "$tmp/native-segfault.log")"
+[ "$(window_count "$tmp/native-segfault.log")" = 0 ]
+grep -q '^native window: no refusal$' <<<"$(window_fingerprint_lines "$tmp/native-segfault.log")"
+grep -q '^native signature: autotune_candid\[N\]: segfault at ADDR ' \
+  <<<"$(window_fingerprint_lines "$tmp/native-segfault.log")"
+if window_red "$tmp/native-segfault.log"; then
+  printf 'sweep_harness: a userspace segfault made the native window environment-red\n' >&2
+  exit 1
+fi
+
+# Traps line: shown, count stays 0, and a `Code:` line separated by an intervening benign line does
+# not attach to it. Two real runs across ASLR/PID changes produce identical fingerprints.
+native_trap_block_a=$(printf '%s\n%s\n%s\n' "$native_trap_a" "$native_fault_noise" \
+  'Nov 05 20:42:08 rog-nv-linux kernel: Code: aa bb <cc> dd' |
+  native_window_summary 20261105T204000Z 20261105T205000Z)
+native_trap_block_b=$(printf '%s\n' "$native_trap_b" |
+  native_window_summary 20261122T173000Z 20261122T174000Z)
+grep -q '^=== native window: 0 GPU queue refusals ===$' <<<"$native_trap_block_a"
+grep -qF "$native_trap_a" <<<"$native_trap_block_a"
+absent 'aa bb <cc> dd' <<<"$native_trap_block_a"
+grep -q '^native signature: traps: localsearch-3\[N\] general protection fault ip:ADDR sp:ADDR error:0 in libgio-2.0.so.0.8800.0\[60bae,ADDR+11e000\]$' \
+  <<<"$native_trap_block_a"
+printf '%s\n' "$native_trap_block_a" >"$(window_sidecar "$tmp/native-trap-a.log")"
+printf '%s\n' "$native_trap_block_b" >"$(window_sidecar "$tmp/native-trap-b.log")"
+[ "$(window_count "$tmp/native-trap-a.log")" = 0 ]
+if window_red "$tmp/native-trap-a.log"; then
+  printf 'sweep_harness: a userspace trap made the native window environment-red\n' >&2
+  exit 1
+fi
+[ "$(window_fingerprint_lines "$tmp/native-trap-a.log")" = \
+  "$(window_fingerprint_lines "$tmp/native-trap-b.log")" ]
+
+# Segfault fingerprint stability across PID, ASLR addresses, CPU/core/socket, and `dmesg -T` stamps;
+# a different faulting offset or error code still moves the fingerprint.
+native_segfault_dmesg=$(printf '%s\n%s\n' \
+  '[Thu Nov 19 18:10:00 2026] autotune_candid[999111]: segfault at 7f1122334455 ip 0000555512345678 sp 00007fff11112222 error 6 in autotune_candidate_release.exe[d3780e,555511600000+75d000] likely on CPU 3 (core 3, socket 1)' \
+  '[Thu Nov 19 18:10:00 2026] Code: 41 56 55 48 89 fd 53 48 89 f3 83 e6 01 0f 85 c1 00 00 00 48 8b 15 ca cd a2 00 48 8b 07 48 39 d3 72 1a a8 01 0f 85 c2 00 00 00 <48> 89 5d 00 5b 5d 41 5e c3 66 0f 1f 84 00 00 00 00 00 48 8b 0d a9' |
+  native_window_summary 20261119T180000Z 20261119T182000Z)
+native_segfault_only=$(printf '%s\n%s\n' "$native_segfault" "$native_segfault_code" |
+  native_window_summary 20261119T170000Z 20261119T171000Z)
+native_segfault_other=$(printf '%s\n%s\n' "${native_segfault/d3780e/e00000}" "$native_segfault_code" |
+  native_window_summary 20261119T170000Z 20261119T171000Z)
+printf '%s\n' "$native_segfault_only" >"$(window_sidecar "$tmp/native-segfault-only.log")"
+printf '%s\n' "$native_segfault_dmesg" >"$(window_sidecar "$tmp/native-segfault-dmesg.log")"
+printf '%s\n' "$native_segfault_other" >"$(window_sidecar "$tmp/native-segfault-other.log")"
+[ "$(window_fingerprint_lines "$tmp/native-segfault-only.log")" = \
+  "$(window_fingerprint_lines "$tmp/native-segfault-dmesg.log")" ]
+[ "$(window_fingerprint_lines "$tmp/native-segfault-only.log")" != \
+  "$(window_fingerprint_lines "$tmp/native-segfault-other.log")" ]
+
+# Unreadable opcode bytes and older-kernel `[base+size]` VMA brackets normalize cleanly too.
+native_segfault_old=$(printf '%s\n%s\n' \
+  'Nov 19 17:06:23 rog-nv-linux kernel: hip_test[77]: segfault at 0 ip 00007f0000001000 sp 00007ffc00001000 error 4 in libdrm_amdgpu.so.1[7f0000000000+10000]' \
+  'Nov 19 17:06:23 rog-nv-linux kernel: Code: Unable to access opcode bytes at 0x00007f0000000fd6.' |
+  native_window_summary A B)
+grep -q '^=== native window: 0 GPU queue refusals ===$' <<<"$native_segfault_old"
+# A segfault inside `libdrm_amdgpu.so` matches `NATIVE_KEEP` too, yet appears once and normalizes as a fault.
+[ "$(grep -c 'hip_test\[77\]: segfault at ' <<<"$native_segfault_old")" -eq 1 ]
+grep -q '^native signature: hip_test\[N\]: segfault at ADDR ip ADDR sp ADDR error 4 in libdrm_amdgpu.so.1\[ADDR+10000\]$' \
+  <<<"$native_segfault_old"
+grep -q '^native signature: Code: Unable to access opcode bytes at 0xADDR\.$' <<<"$native_segfault_old"
+# Suffix-free segfault/trap lines (ending right after the error code, with no VMA or CPU suffix)
+# still normalize PID and addresses so repeated runs keep the same fingerprint.
+printf '%s\n' \
+  'Nov 19 17:06:23 rog-nv-linux kernel: bare_proc[111]: segfault at 0 ip 0000000000000000 sp 00007ffc00001111 error 14' \
+  'Nov 19 17:06:23 rog-nv-linux kernel: traps: bare_trap[333] trap invalid opcode ip:555555551111 sp:7ffc00001111 error:0' |
+  native_window_summary A B >"$(window_sidecar "$tmp/native-bare-a.log")"
+printf '%s\n' \
+  'Nov 19 17:06:24 rog-nv-linux kernel: bare_proc[222]: segfault at 10 ip 00007f0000001234 sp 00007fff00002222 error 14' \
+  'Nov 19 17:06:24 rog-nv-linux kernel: traps: bare_trap[444] trap invalid opcode ip:555555552222 sp:7fff00002222 error:0' |
+  native_window_summary C D >"$(window_sidecar "$tmp/native-bare-b.log")"
+[ "$(window_fingerprint_lines "$tmp/native-bare-a.log")" = \
+  "$(window_fingerprint_lines "$tmp/native-bare-b.log")" ]
+grep -q '^native signature: bare_proc\[N\]: segfault at ADDR ip ADDR sp ADDR error 14$' \
+  "$(window_sidecar "$tmp/native-bare-a.log")"
+grep -q '^native signature: traps: bare_trap\[N\] trap invalid opcode ip:ADDR sp:ADDR error:0$' \
+  "$(window_sidecar "$tmp/native-bare-a.log")"
+# Coexisting with a counted GPU refusal: both surface, and only the refusal is counted.
+native_mixed=$(printf '%s\n%s\n%s\n%s\n' "$native_sdma" "$native_dqm" "$native_segfault" "$native_segfault_code" |
+  native_window_summary A B)
+grep -q '^=== native window: 1 GPU queue refusals ===$' <<<"$native_mixed"
+grep -qF "$native_segfault" <<<"$native_mixed"
+grep -qF "$native_segfault_code" <<<"$native_mixed"
+
 # The two signature sets are separate: a native window does not count a dxg burst -- nor keep it,
 # since a bridge line cannot come from a native boot -- and a dxg window does not count an SDMA
-# refusal.
+# refusal or keep native userspace crash lines.
 native_of_dxg=$(printf '%s\n%s\n' "$dxg_benign" "$dxg_burst" | native_window_summary A B)
 grep -q '^=== native window: 0 GPU queue refusals ===$' <<<"$native_of_dxg"
 absent 'misc dxg' <<<"$native_of_dxg"
-dxg_of_native=$(printf '%s\n%s\n%s\n' "$native_sdma" "$native_dqm" "$native_xid" |
+dxg_of_native=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+  "$native_sdma" "$native_dqm" "$native_xid" "$native_segfault" "$native_segfault_code" "$native_trap_a" |
   dxg_window_summary A B)
 grep -q '^=== dxg window: 0 vmbus_sendpacket failures ===$' <<<"$dxg_of_native"
 absent 'amdgpu' <<<"$dxg_of_native"
+absent 'segfault at' <<<"$dxg_of_native"
+absent 'traps:' <<<"$dxg_of_native"
 
 # A native collection that failed, and a native box that rebooted mid-unit, keep the verdicts the
 # dxg kind has: `unavailable` establishes nothing, and `vm-replaced` -- the kernel's boot id, not the
@@ -3893,6 +4010,25 @@ native_cpu_record=$(sed -n 's/^run:  *//p' <<<"$native_unit_cpu")
 [ "$(awk -F '\t' '$1 == "unit" && $3 == "multidev_cc" { print $7 "\t" $8 "\t" $9 "\t" $10 }' \
   "$native_cpu_record")" = "$(printf -- '-\t-\t-\t-')" ]
 absent 'window-bounds' "$ssh_calls"
+# End-to-end native userspace segfault + Code: line (gh-ocannl-2460): surfaced in the unit's sidecar
+# and fingerprint, while the run record stays `0\tnative` and triggers no spurious GPU-refusal rerun.
+native_segfault_kernel=$(printf '%s\n%s\n%s\n%s\n' \
+  "$native_segfault" "$native_segfault_code" "$native_i915_warn" "$native_fault_noise")
+native_unit_segfault=$(SWEEP_TEST_SSH_MODE=window SWEEP_TEST_KERNEL_LINES=$native_segfault_kernel \
+  run_sweep_args --only cuda --target native-segfault-probe)
+grep -q '^  rog-nv/cuda: error (cannot pin rog-nv-linux' <<<"$native_unit_segfault"
+absent 'serial rerun' <<<"$native_unit_segfault"
+native_segfault_record=$(sed -n 's/^run:  *//p' <<<"$native_unit_segfault")
+[ "$(awk -F '\t' '$1 == "unit" && $2 == "rog-nv" && $3 == "cuda" { print $9 "\t" $10 }' "$native_segfault_record")" = \
+  "$(printf '0\tnative')" ]
+native_segfault_log=$(awk -F '\t' '$1 == "unit" && $2 == "rog-nv" && $3 == "cuda" { print $6 }' "$native_segfault_record")
+grep -qF "$native_segfault" "$(window_sidecar "$native_segfault_log")"
+grep -qF "$native_segfault_code" "$(window_sidecar "$native_segfault_log")"
+absent 'print_ddi_port' "$(window_sidecar "$native_segfault_log")"
+grep -q '^native signature: autotune_candid\[N\]: segfault at ADDR ip ADDR sp ADDR error 6 in autotune_candidate_release.exe\[d3780e,ADDR+75d000\] likely on CPU N (core N, socket N)$' \
+  "${native_segfault_log%.log}.fingerprint"
+grep -q '^native signature: Code: 41 56 55 .* <48> 89 5d 00 ' "${native_segfault_log%.log}.fingerprint"
+grep -q '^native window: no refusal$' "${native_segfault_log%.log}.fingerprint"
 
 # The ROCr abort a refused SDMA queue ends in lands in the unit's LOG, and makes the unit
 # environment-red there too -- the half that survives a window that could not be read. Driven
