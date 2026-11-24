@@ -120,8 +120,8 @@ let describe_site = Provenance.describe_site
 (* Every claim the provenance layer finds, reduced to what the ratchet reports: one finding per
    binding whose quantifier the claim can rest on, and one per argument site for quantifiers written
    directly into the claim. The layer has already removed every source a witness covers. *)
-let quantified_claims structure =
-  Provenance.claims structure
+let quantified_findings claims =
+  claims
   |> List.concat_map ~f:(fun (claim : Provenance.claim) ->
       let claim_line = claim.fired.line in
       let quantified =
@@ -165,6 +165,8 @@ let quantified_claims structure =
           | 0 -> String.compare a.helper b.helper
           | order -> order)
       | order -> order)
+
+let quantified_claims structure = quantified_findings (Provenance.claims structure)
 
 (* Sources whose claim-shaped literals are this check's own input rather than anything printed: the
    table that pins the shape reader on hostile formats, which has to spell the shapes out to pin
@@ -5922,8 +5924,9 @@ let read_skip_lists ~fail ~source ~census content =
    named as such rather than as a syntax error. [readers] is a parameter so the control below can
    plant the defect. *)
 let all_readers content =
+  let claims, probe_tokens = Provenance.claims_and_probe_tokens (Sources.structure_of content) in
   ( Scan.scan content,
-    quantified_claims (Sources.structure_of content),
+    (quantified_findings claims, probe_tokens),
     Scan.dialect_census content,
     Scan.line_break_census content )
 
@@ -5936,7 +5939,7 @@ let read_claims ?(readers = all_readers) ~fail ~source content =
         literals = 0;
         applied_literals = 0;
       },
-      [],
+      ([], []),
       { Scan.pairings = []; skipped_sites = 0; pass_fail_sites = 0 },
       { Scan.broken = []; label_sites = 0 } )
   in
@@ -7260,6 +7263,49 @@ let folded_gate_controls =
       ( "refuses a fold spelled as an if whose then branch passes",
         {ocaml|let () = p "the values agree" (if on_gpu then true else census_ok (Context.auto ()))|ocaml},
         [ "not (on_gpu)" ] );
+      ( "refuses each passing component of a backend-gated tuple",
+        {ocaml|let () =
+  let declined, clean =
+    if not on_gpu then (true, true)
+    else
+      let%op out = src *. 2.0 in
+      match compile (Context.auto ()) out with
+      | Ok result -> result.declined, result.clean
+      | Error _ -> false, false
+  in
+  p "declined" declined;
+  p "clean" clean|ocaml},
+        [ "not (not on_gpu)"; "not (not on_gpu)" ] );
+      ( "refuses a tuple component that passes after printing a skip diagnostic",
+        {ocaml|let () =
+  let checked, _ =
+    if on_gpu then (gpu_check (Context.auto ()), false)
+    else
+      let reason = "GPU unavailable" in
+      Stdio.eprintf "%s\n" reason;
+      (true, true)
+  in
+  p "the check holds" checked|ocaml},
+        [ "on_gpu" ] );
+      ( "refuses a folded tuple component in a DSL binding continuation",
+        {ocaml|let () =
+  let checked, _ =
+    let%op out = src *. 2.0 in
+    if on_gpu then (gpu_check out, false) else (true, true)
+  in
+  p "the check holds" checked|ocaml},
+        [ "on_gpu" ] );
+      ( "accepts a tuple component computed on both sides of a backend gate",
+        {ocaml|let checked, _ =
+  if on_gpu then (gpu_check (Context.auto ()), true)
+  else (cpu_check (Context.auto ()), false)
+let () = p "the check holds" checked|ocaml},
+        [] );
+      ( "leaves a scalar passing arm with setup outside tuple projection",
+        {ocaml|let () =
+  p "the check holds"
+    (if on_gpu then gpu_check (Context.auto ()) else (Stdio.eprintf "skip\n"; true))|ocaml},
+        [] );
       ( "refuses a fold behind a negated conjunction",
         {ocaml|let () = p "the census renders tiled" (not (on_cpu && not (census_ok (Context.auto ()))))|ocaml},
         [ "on_cpu" ] );
@@ -7478,6 +7524,71 @@ let run_folded_gate_controls () =
           (String.concat ~sep:"; " expected)
           (String.concat ~sep:"; " found);
       (label, ok))
+
+let probe_token_refusal ~source (line, token) =
+  Test_scan.Refusal_control_manifest.fail
+    "%s:%d stdout probe token %S can pass when a for_all population is empty (gh-ocannl-2435). \
+     Require a nonempty witness or emit one token per row and claim the expected tokens with \
+     Verdict.p_all"
+    source line token
+
+let probe_token_control
+    ?(parent = {|p "all rows pass" (List.mem passed "all_rows" ~equal:String.equal)|}) label rows
+    expected =
+  let source =
+    {ocaml|open Base
+open Verdict.Claims
+let probe_arg = "--probe"
+let () =
+  if Array.exists Stdlib.Sys.argv ~f:(String.equal probe_arg) then (
+    let rows = collect_rows () in
+    let checks = |ocaml}
+    ^ rows
+    ^ {ocaml| in
+    List.iter checks ~f:(fun (tag, ok) -> if ok then Stdio.printf "%s\n%!" tag);
+    Stdlib.exit 0)
+let () =
+  let passed = run_probe_lines [ probe_arg ] in
+  |ocaml}
+    ^ parent
+  in
+  let _, findings = Provenance.claims_and_probe_tokens (Sources.structure_of source) in
+  let found = List.map findings ~f:snd in
+  (* Pin the exact refusal independently of the emitted format. The manifest also extracts the
+     literal at the failure site. *)
+  let formats =
+    List.map expected ~f:(fun _ ->
+        "%s:%d stdout probe token %S can pass when a for_all population is empty (gh-ocannl-2435). \
+         Require a nonempty witness or emit one token per row and claim the expected tokens with \
+         Verdict.p_all")
+  in
+  let routed =
+    Test_scan.Refusal_control_manifest.check_failures ~source:"test/operations/verdict_ratchet.ml"
+      ~formats
+      (List.map findings ~f:(probe_token_refusal ~source:"fixture.ml"))
+  in
+  let ok = List.equal String.equal found expected && routed in
+  if not ok then
+    eprintf "probe-token control %S expected [%s], found [%s]\n" label
+      (String.concat ~sep:"; " expected)
+      (String.concat ~sep:"; " found);
+  (label, ok)
+
+let run_probe_token_controls () =
+  [
+    probe_token_control "refuses a stdout probe token that can pass on an empty population"
+      {|[ ("all_rows", List.for_all rows ~f:row_ok) ]|} [ "all_rows" ];
+    probe_token_control "accepts a stdout probe token with a nonempty population witness"
+      {|[ ("all_rows", not (List.is_empty rows) && List.for_all rows ~f:row_ok) ]|} [];
+    probe_token_control "accepts a stdout probe token that explicitly permits empty input"
+      {|[ ("all_rows", if List.is_empty rows then true else List.for_all rows ~f:row_ok) ]|} [];
+    probe_token_control "accepts separate stdout tokens for independently checked rows"
+      {|[ ("first_row", row_ok first); ("second_row", row_ok second) ]|}
+      ~parent:
+        {|p_all ~min:2 "both rows pass" [ "first_row"; "second_row" ]
+        ~f:(fun tag -> List.mem passed tag ~equal:String.equal)|}
+      [];
+  ]
 
 let refuse_folded_gate ~fail ~source (fold : Scan.folded_gate) =
   fail
@@ -8312,7 +8423,7 @@ let () =
     @ run_leg_gate_controls ()
     @ [ run_leg_gate_refusal_control () ]
     @ [ run_claim_reader_refusal_control (); run_matrix_reader_control () ]
-    @ run_folded_gate_controls ()
+    @ run_folded_gate_controls () @ run_probe_token_controls ()
     @ [ run_folded_gate_refusal_control () ]
     @ run_folded_hatch_controls ()
     @ [ run_folded_hatch_refusal_control () ]
@@ -8349,7 +8460,10 @@ let () =
          arrives is whatever the test directories hold -- including whatever a `(select …)` or a ppx
          put there -- and the one thing worse than a parse failure here is one that leaves nobody
          knowing which of three hundred files it was about. *)
-      let scanned, helper_claims, dialects, line_breaks = read_claims ~fail ~source content in
+      let scanned, (helper_claims, probe_tokens), dialects, line_breaks =
+        read_claims ~fail ~source content
+      in
+      List.iter probe_tokens ~f:(fun token -> fail (probe_token_refusal ~source token).message);
       trailer_literals := !trailer_literals + scanned.Scan.stdout_literals;
       List.iter scanned.Scan.hand_rolled_trailers ~f:(fun site ->
           Int.incr trailer_offenders;

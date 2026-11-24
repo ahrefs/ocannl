@@ -841,6 +841,7 @@ type context = {
   mutated : Set.M(String).t;
       (** The fields some assignment in the file writes; see [mutated_fields]. *)
   owners : Verdict_callee.t;  (** Whose each claim name in the file is. *)
+  observe : expression -> provenance -> unit;
 }
 
 (* Unknown opens may replace implicit Boolean operator names. Keep this fact in the lexical
@@ -1437,6 +1438,11 @@ let emit ctx ~site ~helper claim =
   else ctx.found := claim :: !(ctx.found)
 
 let rec walk ctx expr =
+  let value = walk_value ctx expr in
+  ctx.observe expr value;
+  value
+
+and walk_value ctx expr =
   let expr = normalize ~rebound:(rebound_in ctx.env) expr in
   match expr.pexp_desc with
   | Pexp_ident _ -> resolve ctx expr
@@ -2678,7 +2684,7 @@ let mutated_fields structure =
 
 (** Every [Verdict] claim [structure] fires, in source order, each with the sources its claimed
     Boolean can rest on. *)
-let claims structure =
+let claims ?(observe = fun _ _ -> ()) structure =
   let ctx =
     {
       env = [];
@@ -2687,6 +2693,7 @@ let claims structure =
       pending_calls = ref [];
       mutated = mutated_fields structure;
       owners = Verdict_callee.of_structure structure;
+      observe;
     }
   in
   ignore (scan_structure ctx structure : binding list * binding list);
@@ -2707,6 +2714,30 @@ let claims structure =
         claim with
         ambiguous = claim.ambiguous || Set.mem ambiguous_keys (claim.fired.position, claim_key claim);
       })
+
+(** The stdout gate is read at its real evaluation site, so it uses the same lexical population keys
+    and nonempty witnesses as a Verdict Boolean. *)
+let claims_and_probe_tokens structure =
+  let guards = Scan.probe_token_guards structure in
+  let index =
+    Map.of_alist_multi
+      (module Int)
+      (List.map guards ~f:(fun (token, expr) ->
+           ((site_of_location expr.pexp_loc).position, (token, expr))))
+  in
+  let tokens = ref Set.Poly.empty in
+  let observe expr value =
+    let site = site_of_location expr.pexp_loc in
+    match Map.find index site.position with
+    | Some guards
+      when List.exists value.when_true.sources ~f:(fun source ->
+               match source.origin with Quantifier { kind = For_all; _ } -> true | _ -> false) ->
+        List.iter guards ~f:(fun (token, guard) ->
+            if phys_equal expr guard then tokens := Set.add !tokens (site.line, token))
+    | _ -> ()
+  in
+  let claims = if List.is_empty guards then claims structure else claims ~observe structure in
+  (claims, Set.to_list !tokens)
 
 (** How a claim's label reads: the literal, or the expression that computes it. *)
 let label_text = function
