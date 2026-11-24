@@ -153,13 +153,14 @@ let () =
         && Option.is_none (Utils.stated_config key))
 
 let () =
-  p_all ~min:5 "a startup-only input or compatibility spelling is refused, naming the key"
+  p_all ~min:6 "a startup-only input or compatibility spelling is refused, naming the key"
     [
       ("log_level", "2");
       ("detach_c_stderr", "false");
       ("big_models", "true");
       ("debug_backend", "text");
       ("clean_up_build_files_on_startup", "true");
+      ("device_init_deadline", "0");
     ]
     ~f:(fun (key, data) ->
       match Utils.state_config ~key ~data with
