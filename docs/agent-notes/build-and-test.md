@@ -3220,8 +3220,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   For gh-ocannl-2435 the reader projects a nonrecursive flat tuple binding into its individual
   variables when every terminal value is a matching tuple literal. An `if`, `match`, local
   `let` (including `let%op` and `let%cd`) or sequence can return the tuple, as the original
-  `hip_scratch_budget` did. A side-effecting setup can still end in an unconditional pass.
-  Other destructuring and qualified component access remain outside the reader.
+  `hip_scratch_budget` did. The DSL continuation keeps its lexical scope and the DSL-bound values
+  stay opaque. In a projected tuple component, a side-effecting setup can still end in an
+  unconditional pass. Other destructuring and qualified component access remain outside the reader.
 - A subprocess can hide a vacuous quantifier by emitting one success token from `List.for_all`
   and claiming its presence in the parent (gh-ocannl-2435). In argv-selected probes that print
   literal tags via `List.iter` over a literal `(tag, ok)` table, `verdict_ratchet` checks the

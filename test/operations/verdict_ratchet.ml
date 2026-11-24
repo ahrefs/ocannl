@@ -7291,11 +7291,24 @@ let folded_gate_controls =
   in
   p "the check holds" checked|ocaml},
         [ "on_gpu" ] );
+      ( "refuses a folded tuple component in a DSL binding continuation",
+        {ocaml|let () =
+  let checked, _ =
+    let%op out = src *. 2.0 in
+    if on_gpu then (gpu_check out, false) else (true, true)
+  in
+  p "the check holds" checked|ocaml},
+        [ "on_gpu" ] );
       ( "accepts a tuple component computed on both sides of a backend gate",
         {ocaml|let checked, _ =
   if on_gpu then (gpu_check (Context.auto ()), true)
   else (cpu_check (Context.auto ()), false)
 let () = p "the check holds" checked|ocaml},
+        [] );
+      ( "leaves a scalar passing arm with setup outside tuple projection",
+        {ocaml|let () =
+  p "the check holds"
+    (if on_gpu then gpu_check (Context.auto ()) else (Stdio.eprintf "skip\n"; true))|ocaml},
         [] );
       ( "refuses a fold behind a negated conjunction",
         {ocaml|let () = p "the census renders tiled" (not (on_cpu && not (census_ok (Context.auto ()))))|ocaml},
@@ -7545,6 +7558,8 @@ let () =
   in
   let _, findings = Provenance.claims_and_probe_tokens (Sources.structure_of source) in
   let found = List.map findings ~f:snd in
+  (* Pin the exact refusal independently of the emitted format. The manifest also extracts the
+     literal at the failure site. *)
   let formats =
     List.map expected ~f:(fun _ ->
         "%s:%d stdout probe token %S can pass when a for_all population is empty (gh-ocannl-2435). \

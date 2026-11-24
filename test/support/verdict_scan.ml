@@ -6403,44 +6403,55 @@ let folded_unread_members =
     "in_legf";
   ]
 
-(* The scanner sees these bindings before PPX expansion. The extension still owns its value binding,
-   and the continuation supplies the result being projected. *)
 let dsl_let expr =
   match expr.pexp_desc with
   | Pexp_extension
-      ( ({ txt = "op" | "cd"; _ } as name),
+      ( { txt = "op" | "cd"; _ },
         PStr
-          [
-            ({ pstr_desc = Pstr_eval (({ pexp_desc = Pexp_let _; _ } as inner), attributes); _ } as
-             item);
-          ] ) ->
-      Some
-        ( inner,
-          fun result ->
-            let item = { item with pstr_desc = Pstr_eval (result, attributes) } in
-            { expr with pexp_desc = Pexp_extension (name, PStr [ item ]) } )
+          [ { pstr_desc = Pstr_eval ({ pexp_desc = Pexp_let (flag, bindings, body); _ }, _); _ } ]
+      ) ->
+      Some (flag, bindings, body)
   | _ -> None
+
+let rec tuple_terminal_boolean expr =
+  let expr = strip_constraints expr in
+  match expr.pexp_desc with
+  | Pexp_construct ({ txt = Lident ("true" | "false"); _ }, None) -> Some expr
+  | Pexp_let (_, _, result) | Pexp_sequence (_, result) -> tuple_terminal_boolean result
+  | _ -> Option.bind (dsl_let expr) ~f:(fun (_, _, body) -> tuple_terminal_boolean body)
 
 let rec tuple_projection ~index ~arity expr =
   let project = tuple_projection ~index ~arity in
   let rebuild desc = { expr with pexp_desc = desc } in
+  let project_let flag bindings body =
+    Option.map (project body) ~f:(fun body -> rebuild (Pexp_let (flag, bindings, body)))
+  in
   let expr = strip_constraints expr in
-  match expr.pexp_desc with
-  | Pexp_tuple parts when List.length parts = arity -> List.nth parts index
-  | Pexp_ifthenelse (condition, yes, Some no) ->
-      Option.map2 (project yes) (project no) ~f:(fun yes no ->
-          rebuild (Pexp_ifthenelse (condition, yes, Some no)))
-  | Pexp_match (scrutinee, cases) ->
-      List.map cases ~f:(fun case ->
-          Option.map (project case.pc_rhs) ~f:(fun rhs -> { case with pc_rhs = rhs }))
-      |> Option.all
-      |> Option.map ~f:(fun cases -> rebuild (Pexp_match (scrutinee, cases)))
-  | Pexp_let (rec_flag, bindings, body) ->
-      Option.map (project body) ~f:(fun body -> rebuild (Pexp_let (rec_flag, bindings, body)))
-  | Pexp_sequence (setup, result) ->
-      Option.map (project result) ~f:(fun result -> rebuild (Pexp_sequence (setup, result)))
-  | _ ->
-      Option.bind (dsl_let expr) ~f:(fun (inner, rebuild) -> Option.map (project inner) ~f:rebuild)
+  let projected =
+    match expr.pexp_desc with
+    | Pexp_tuple parts when List.length parts = arity -> List.nth parts index
+    | Pexp_ifthenelse (condition, yes, Some no) ->
+        Option.map2 (project yes) (project no) ~f:(fun yes no ->
+            rebuild (Pexp_ifthenelse (condition, yes, Some no)))
+    | Pexp_match (scrutinee, cases) ->
+        List.map cases ~f:(fun case ->
+            Option.map (project case.pc_rhs) ~f:(fun rhs -> { case with pc_rhs = rhs }))
+        |> Option.all
+        |> Option.map ~f:(fun cases -> rebuild (Pexp_match (scrutinee, cases)))
+    | Pexp_let (flag, bindings, body) -> project_let flag bindings body
+    | Pexp_sequence (setup, result) ->
+        Option.map (project result) ~f:(fun result -> rebuild (Pexp_sequence (setup, result)))
+    | _ ->
+        Option.bind (dsl_let expr) ~f:(fun (flag, bindings, body) ->
+            (* The continuation has ordinary lexical scope. Use the opaque extension for each RHS
+               because its value is decided by the DSL, before analysis can see it. *)
+            let opaque_bindings =
+              List.map bindings ~f:(fun binding -> { binding with pvb_expr = expr })
+            in
+            project_let flag opaque_bindings body)
+  in
+  (* Setup cannot change a literal result. Keep its scopes for every computed result. *)
+  Option.map projected ~f:(fun value -> Option.value (tuple_terminal_boolean value) ~default:value)
 
 let folded_gate_census content =
   let ast = Read.structure_of content in
@@ -6479,13 +6490,11 @@ let folded_gate_census content =
     | Ppat_tuple parts -> List.for_all parts ~f:irrefutable
     | _ -> false
   in
-  let rec is_bool expr value =
-    let expr = strip_constraints expr in
-    match expr.pexp_desc with
+  let is_bool expr value =
+    match (strip_constraints expr).pexp_desc with
     | Pexp_construct ({ txt = Ppxlib.Longident.Lident name; _ }, None) ->
         String.equal name (if value then "true" else "false")
-    | Pexp_let (_, _, result) | Pexp_sequence (_, result) -> is_bool result value
-    | _ -> Option.value_map (dsl_let expr) ~default:false ~f:(fun (inner, _) -> is_bool inner value)
+    | _ -> false
   in
   let walker =
     object (self)

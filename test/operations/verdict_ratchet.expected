@@ -889,7 +889,9 @@ refuses a fold spelled as an if whose else branch passes: true
 refuses a fold spelled as an if whose then branch passes: true
 refuses each passing component of a backend-gated tuple: true
 refuses a tuple component that passes after printing a skip diagnostic: true
+refuses a folded tuple component in a DSL binding continuation: true
 accepts a tuple component computed on both sides of a backend gate: true
+leaves a scalar passing arm with setup outside tuple projection: true
 refuses a fold behind a negated conjunction: true
 refuses a fold in a quantified claim's predicate: true
 refuses a fold in a predicate a name is bound to: true
