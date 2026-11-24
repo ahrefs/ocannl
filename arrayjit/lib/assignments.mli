@@ -269,6 +269,7 @@ val get_name_exn : t -> string
 val lower :
   ?rewrite_target:Rewrites.target ->
   ?blends_value_selects:bool ->
+  ?accum_prec:(Ops.prec -> Ops.prec) ->
   Low_level.optimize_ctx ->
   unoptim_ll_source:(PPrint.document -> unit) option ->
   ll_source:(PPrint.document -> unit) option ->
@@ -278,4 +279,5 @@ val lower :
   t ->
   Low_level.optimized
 (** Lowers and optimizes [t]. [blends_value_selects] is the rendering backend's fact, passed on to
-    {!Low_level.optimize} (gh-ocannl-1775); [Backends.lower_assignments] always states it. *)
+    {!Low_level.optimize} (gh-ocannl-1775), and [accum_prec] its accumulator-residency resolver
+    (gh-ocannl-2444); [Backends.lower_assignments] always states both. *)

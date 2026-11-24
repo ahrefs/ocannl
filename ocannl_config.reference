@@ -2170,10 +2170,15 @@
 # convolution input-gradient cell with independent positive affine pairs, one per axis
 # (gh-ocannl-2423, gh-ocannl-2464), the optimizer groups all contributing windows and channels
 # under the cell so the store rounds once.
-# Where nothing widens, the move changes no value. Per-step rounding remains for affine nests
-# outside the allowlist (coupled pairs sharing an iterator, a shorter-scan frame or residue product
-# past the 64-nest cap, or unproved bounds), concatenated cells, dynamic embedding scatters, and
-# accumulations reading another target cell.
+# Where nothing widens, the move changes no value. For an allowlisted multi-hit f16/bf16
+# Set_dynamic embedding scatter (gh-ocannl-2444), the optimizer brackets the scatter in an
+# accum_prec buffer (widening load, wide scatter, one narrowing store-back) wherever accum_prec
+# widens the storage precision (and routine logging is off), so repeated token hits round once
+# rather than per hit; where accum_prec stays narrow, the IR is unchanged. Per-step rounding
+# remains for affine nests outside the allowlist (coupled pairs sharing an iterator, a
+# shorter-scan frame or residue product past the 64-nest cap, or unproved bounds), concatenated
+# cells, FP8 / multi-scatter / non-add dynamic writes, and accumulations reading another target
+# cell.
 # Programmatic override: `Ir.Numerics.set_policy`.
 #bf16_arithmetic=auto
 

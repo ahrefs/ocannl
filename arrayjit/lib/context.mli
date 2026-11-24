@@ -344,6 +344,7 @@ val lowered_for_decisions :
   ?footprint:Ir.Tnode.t list ->
   ?facts:Ir.Backend_intf.backend_facts ->
   ?limits:Ir.Backend_intf.hardware_limits ->
+  ?accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
   t ->
   Ir.Assignments.comp ->
   Ir.Indexing.unit_bindings ->

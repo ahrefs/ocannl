@@ -109,6 +109,7 @@ val maybe_sink_zeros : Ir.Low_level.optimized -> Ir.Low_level.optimized
 val lower_assignments :
   facts:Ir.Backend_intf.backend_facts ->
   limits:Ir.Backend_intf.hardware_limits ->
+  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
   Ir.Low_level.optimize_ctx ->
   ?name:string ->
   'a Ir.Indexing.bindings ->
@@ -118,9 +119,10 @@ val lower_assignments :
     ([Low_level.copy_optimize_ctx], so the compile's decisions stay hermetic), derives the routine
     name, wires the debug-file callbacks, and runs [Assignments.lower]. Exposed for analyze-only
     consumers (gh-560: {!Context.decision_surface}) that read the optimized code's decision surface
-    without backend codegen. [limits] and [facts] are required so every backend-aware lowering
-    resolves device-dependent rewrites, and the inline fan-in guard's charge of a value select
-    ([blends_value_selects], gh-ocannl-1775), from the same facts as compilation. *)
+    without backend codegen. [limits], [facts], and [accum_prec] are required so every backend-aware
+    lowering resolves device-dependent rewrites, the inline fan-in guard's charge of a value select
+    ([blends_value_selects], gh-ocannl-1775), and narrow-scatter accumulation residency
+    (gh-ocannl-2444) from the same facts as compilation. *)
 
 val unchecked_lane_bounds_notice :
   facts:Ir.Backend_intf.backend_facts -> requested:bool -> backend:string -> string option

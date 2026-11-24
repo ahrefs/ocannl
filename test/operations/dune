@@ -317,6 +317,7 @@
   (alias runtest-narrow_conv_grad_residency)
   (alias runtest-narrow_placement_contract)
   (alias runtest-narrow_rng_nesting)
+  (alias runtest-narrow_scatter_residency)
   (alias runtest-narrow_storage_compute)
   (alias runtest-op_table_compile)
   (alias runtest-pipelined_move_legality)
@@ -12057,6 +12058,30 @@
   ocannl
   stdio
   arrayjit.verdict
+  arrayjit.utils
+  arrayjit.context)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-2444: a narrow-float Set_dynamic embedding scatter accumulates repeated token hits at
+; the backend's accumulator residency (accum_prec) and rounds once into the narrow store, for
+; virtual and materialized cast twins, tied two-consumer twins (lm_head + embedding), nonzero
+; incoming gradients (accum_steps:1), Split_reduce composition, Fp16_wide, and Bf16_narrow.
+
+(test
+ (name narrow_scatter_residency)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules narrow_scatter_residency)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  test_utils
   arrayjit.utils
   arrayjit.context)
  (preprocess

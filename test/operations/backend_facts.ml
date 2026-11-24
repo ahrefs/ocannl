@@ -139,7 +139,7 @@ let () =
       ({ f with BI.blends_value_selects = true }, { f with BI.blends_value_selects = false }))
     ~decide:(fun facts ->
       let _, (o : LL.optimized) =
-        Context.Backends.lower_assignments ~facts ~limits:BI.no_hardware_limits
+        Context.Backends.lower_assignments ~facts ~limits:BI.no_hardware_limits ~accum_prec:Fn.id
           (LL.empty_optimize_ctx ()) Ir.Indexing.Empty comp.Ir.Assignments.asgns
       in
       Tn.Placements.known_non_virtual o.LL.optimize_ctx.placements y.Tensor.value)

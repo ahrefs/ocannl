@@ -911,6 +911,7 @@ test/operations/metal_reap_failure.ml [through Ll_test.run_routine; run by @test
 test/operations/metal_routine_log_delivery.ml [through Ll_test.run_routine; run by @test/operations/runtest-metal_routine_log_delivery]
 test/operations/minted_name_labels.ml [through Ll_test.run_routine; run by @test/operations/runtest-minted_name_labels-logged, @test/operations/runtest-minted_name_labels-plain]
 test/operations/narrow_constant_rounding.ml [through Ll_test.execute; run by @test/operations/runtest-narrow_constant_rounding]
+test/operations/narrow_scatter_residency.ml [through Ll_test.run; run by @test/operations/runtest-narrow_scatter_residency]
 test/operations/narrow_storage_compute.ml [through Ll_test.link; run by @test/operations/runtest-narrow_storage_compute]
 test/operations/narrow_uniform_bound.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-narrow_uniform_bound]
 test/operations/observability_query.ml [through Ll_test.link; run by @test/operations/runtest-observability_query]
@@ -1068,6 +1069,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-minted_name_labels-logged
 @test/operations/runtest-minted_name_labels-plain
 @test/operations/runtest-narrow_constant_rounding
+@test/operations/runtest-narrow_scatter_residency
 @test/operations/runtest-narrow_storage_compute
 @test/operations/runtest-narrow_uniform_bound
 @test/operations/runtest-observability_query

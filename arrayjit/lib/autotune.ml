@@ -6739,6 +6739,7 @@ module type Driver = sig
     ?footprint:Ir.Tnode.t list ->
     ?facts:Ir.Backend_intf.backend_facts ->
     ?limits:Ir.Backend_intf.hardware_limits ->
+    ?accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
     ctx ->
     program ->
     Ir.Indexing.unit_bindings ->
@@ -7340,9 +7341,11 @@ module Make (D : Driver) = struct
       | `Profitable -> Some (family_profit_of_reports evidence)
       | `Cost | `Enablement -> None
     in
-    let limits = target.mt_limits and facts = target.mt_facts in
+    let limits = target.mt_limits
+    and facts = target.mt_facts
+    and accum_prec = target.mt_capabilities.Ir.Backend_intf.accum_prec in
     let static_indices = Idx.bound_symbols bindings in
-    let base = D.lowered_for_decisions ?name ~facts ~limits ctx comp bindings in
+    let base = D.lowered_for_decisions ?name ~facts ~limits ~accum_prec ctx comp bindings in
     let candidates = base.LL.flip_candidates in
     (* The all-materialized specialization of the decision surface: the [`Materialize] flips are the
        default-virtual candidates, so deciding exactly those materialized makes every open node's
@@ -7352,7 +7355,8 @@ module Make (D : Driver) = struct
       List.filter_map candidates ~f:(fun fc -> Option.some_if (offers_materialize fc) fc.LL.fc_tn)
     in
     let allmat =
-      D.lowered_for_decisions ?name ~materialized:to_materialize ~facts ~limits ctx comp bindings
+      D.lowered_for_decisions ?name ~materialized:to_materialize ~facts ~limits ~accum_prec ctx comp
+        bindings
     in
     let enablement, disablement =
       placement_enablement
@@ -7517,7 +7521,8 @@ module Make (D : Driver) = struct
     let materialized, inline, footprint = readings in
     D.lowered_transform_input
       (D.lowered_for_decisions ?name ~materialized ~inline ~footprint ~facts:target.mt_facts
-         ~limits:target.mt_limits ctx comp bindings)
+         ~limits:target.mt_limits ~accum_prec:target.mt_capabilities.Ir.Backend_intf.accum_prec ctx
+         comp bindings)
 
   (* gh-ocannl-1780: [model_default]'s selection for one computation, up to the compile it hands
      [sel_transforms] to, under [target] -- the context's own for [model_default], a stand-in's for

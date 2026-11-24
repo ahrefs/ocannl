@@ -3229,7 +3229,7 @@ let global_debug_info ctx =
    cache (gh-560), a context that already compiled this routine (e.g. the tuner's arms) pays only
    the [specialize_proc] replay here. *)
 let lowered_for_decisions ?name ?(materialized = []) ?(inline = []) ?(footprint = []) ?facts ?limits
-    ctx comp bindings =
+    ?accum_prec ctx comp bindings =
   (* Lowering forces dims like a compile does: the same gate first. *)
   frontend_gate comp;
   let optim_ctx = Backends.query ctx.wrapped { q = (fun _ c -> c.BI.optimize_ctx) } in
@@ -3243,6 +3243,8 @@ let lowered_for_decisions ?name ?(materialized = []) ?(inline = []) ?(footprint 
     Backends.lower_assignments
       ~facts:(Option.value_or_thunk facts ~default:(fun () -> backend_facts ctx))
       ~limits:(Option.value_or_thunk limits ~default:(fun () -> hardware_limits ctx))
+      ~accum_prec:
+        (Option.value_or_thunk accum_prec ~default:(fun () -> (codegen_capabilities ctx).accum_prec))
       optim_ctx ?name bindings comp.Asgns.asgns
   in
   lowered
