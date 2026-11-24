@@ -236,8 +236,10 @@ let () =
       let k8_leg = Ll_test.cuda_arm_leg leg k8_arm
       and k16_leg = Ll_test.cuda_arm_leg leg (M.Inline_ptx (M.M16n8k16 M.M16n8k16_f16)) in
       let jit_70_leg =
+        (* Compile the plain probe for a fixed target so this gate depends only on the installed
+           toolchain and driver. Retargeting also works when NVRTC has dropped compute_70. *)
         Verdict.sub_leg ~aggregation:`Environment k8_leg
-          ~when_:(lazy (loads (retarget (compile k8_floor plain_control) ~sm:70)))
+          ~when_:(lazy (loads (retarget (compile 75 plain_control) ~sm:70)))
           ~on:"a driver JIT refusing sm_70 PTX of this toolkit's version"
       in
       Claims.run ~leg ~compute_70_leg ~k8_leg ~jit_70_leg ~k16_leg (function

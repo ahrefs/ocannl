@@ -3198,6 +3198,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   stay allowlisted because GPU execution legs legitimately gate on hardware ISA capability, so a
   descriptor-gated leg still needs an independently hardware-gated descriptor claim. The reader's
   header in `test/support/verdict_scan.ml` states its closed allowlist and boundary.
+- A Dune `select` can expose a leg gate under both its variant source path and the selected
+  module's path. On cudajit builds `verdict_ratchet` reads `cuda_wmma_floor.ml` with the real
+  witness selected, so an exemption for `cuda_wmma_floor.real.ml` missed the same gate there
+  (gh-ocannl-2471). The driver probe compiles plain code at fixed `compute_75` before retargeting
+  it to `sm_70`; its target stays independent of the arm floor the witness uses.
 - `verdict_ratchet`'s fifth reader is about a gate FOLDED INTO THE VALUE (gh-ocannl-1310):
   `p "…" ((not on_cpu) || ok)` prints `true` on a GPU, a pass byte-identical to a CPU run that
   checked `ok`, so the transcript says the claim held on hardware that never evaluated it.
