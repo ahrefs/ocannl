@@ -24,8 +24,9 @@
    shows on it), a single-array 37 B [byte] staged probe must equal its granule-rounded bound (48 B
    on Metal, 37 B on CUDA and HIP — catching granule 1 vs 2 as well as coarser Metal granules, with
    no MMA requirement). On HIP, two-array probes pin inter-array padding separately from the
-   trailing array. On CUDA and Metal, where f16 tensorization is advertised, some unaligned seeded
-   kernel must equal its granule-rounded bound below a 32 B multiple.
+   trailing array. On CUDA, odd byte pairs pin the exact sum of array sizes. On CUDA and Metal,
+   where f16 tensorization is advertised, some unaligned seeded kernel must equal its
+   granule-rounded bound below a 32 B multiple.
 
    Candidates: every whole-routine seed [Autotune.search_seeding] proposes under the device's own
    limits and capabilities (sketch and coalesced; staged, tensorized and [Fuse_epilogue] twins
@@ -356,8 +357,10 @@ let run_byte_probe ~stage_v ~tag ~bi ~cols =
 
 let on_metal = String.equal backend_name "metal"
 let on_hip = String.equal backend_name "hip"
+let on_cuda = String.equal backend_name "cuda"
 let two_tier_leg = Verdict.leg ~when_:on_metal ~on:backend_name ()
 let hip_lds_leg = Verdict.leg ~when_:on_hip ~on:backend_name ()
+let cuda_shared_leg = Verdict.leg ~when_:on_cuda ~on:backend_name ()
 
 let () =
   fixture "dense" (gemm ~m:32 ~k:64 ~n:64 "cwb_dense");
@@ -401,8 +404,22 @@ let () =
       @ List.map k2 ~f:(fun kernel -> { kernel; metal_charge = 40; hip_min = 49; hip_charge = 49 }))
 
 let () =
-  let outcomes = !all_outcomes @ !probe_outcomes @ !two_tier_outcomes
-  and kernels = !all_kernels @ !probe_kernels @ List.map !byte_pairs ~f:(fun pair -> pair.kernel)
+  (* Both CUDA arrays contribute their exact sizes, so each equal-sized pair has a tight bound. *)
+  let cuda_pairs =
+    if on_cuda then
+      List.map [ 17; 33 ] ~f:(fun size ->
+          let tag = Printf.sprintf "cwb_byte_pair_%d_%d" size size in
+          let outcome, kernels = run_byte_probe ~stage_v:true ~tag ~bi:size ~cols:size in
+          (size, outcome, kernels))
+    else []
+  in
+  let outcomes =
+    !all_outcomes @ !probe_outcomes @ !two_tier_outcomes
+    @ List.map cuda_pairs ~f:(fun (_, outcome, _) -> outcome)
+  and kernels =
+    !all_kernels @ !probe_kernels
+    @ List.map !byte_pairs ~f:(fun pair -> pair.kernel)
+    @ List.concat_map cuda_pairs ~f:(fun (_, _, kernels) -> kernels)
   and seeded_kernels = !all_kernels
   and probe = !probe_kernels
   and byte_pairs = !byte_pairs in
@@ -413,7 +430,7 @@ let () =
         Ll_test.tensorized_capability ~is_gpu ~is_cpu ~limits ~a_prec:Ir.Ops.half
           ~b_prec:Ir.Ops.half ~d_prec:Ir.Ops.half
       with
-      | `Advertised -> (on_metal || String.equal backend_name "cuda", None)
+      | `Advertised -> (on_metal || on_cuda, None)
       | `Withheld aggregation -> (false, Some aggregation)
     in
     Verdict.leg ?aggregation ~when_ ~on:backend_name ()
@@ -444,6 +461,11 @@ let () =
     (fun label ->
       p_all ~min:2 label byte_pairs ~f:(fun { kernel = k; hip_min; hip_charge; _ } ->
           k.charged = hip_charge && k.compiled >= hip_min));
+  in_leg ~leg:cuda_shared_leg "CUDA odd-byte pairs charge and allocate exactly their array sizes"
+    (fun label ->
+      p_all ~min:2 label cuda_pairs ~f:(function
+        | size, _, [ k ] -> k.charged = 2 * size && k.compiled = 2 * size
+        | _ -> false));
   in_leg ~leg:seeded_f16_leg
     "some unaligned seeded kernel allocates exactly its granule-rounded bound, not a coarser \
      multiple" (fun label ->

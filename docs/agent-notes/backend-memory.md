@@ -709,6 +709,9 @@ files.
   (`rog-nv-linux`, `20261122T165804Z-1226811`) and HIP (`tuf-amd-linux` discrete gfx1102
   `20261122T165816Z-762875` and `minix-amd-linux` unified gfx1151 `20261122T165826Z-1286312`,
   byte-identical on both) report to 1 B (4474, 4294 and 4402 B on the same f16 fused products).
+  The CUDA leg also requires its 17+17 B and 33+33 B staged arrays to charge and report exactly
+  34 B and 66 B, respectively. The exact checks detect compiler padding as well as a change in
+  the scheduler's charge.
   HIP's LLVM AMDGPU compiler can align `__shared__` array starts to 16 B (gh-ocannl-2465). The
   two-array probes reported 47 B for 17+15 B, 49 B for 17+17 B, and 81 B for 33+33 B. The scheduler
   uses `workgroup_start_alignment` to bound inter-array padding. It subtracts the smallest padding
