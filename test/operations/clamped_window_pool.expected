@@ -17,5 +17,7 @@ shared conv = [-31 -45 -42 -39 -36 -33 -30 -19]
 pool never reads the 0-margins: true
 conv sums with 0-margins: true
 padded add-family window still commits margins: true
+padded product commits margins with neutral one: true
+padded product uses one at the window edges: true
 
 Done.

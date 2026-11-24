@@ -579,8 +579,9 @@ files.
 - Padded (`=`-mode) windows: max/tropical-family accumulations lower with clamped window bounds
   and demand NO margins (gh-504: `Row.proj_env.clamp_padded`; interval-based range guards in
   `Assignments.to_low_level`); add-family keeps physical halos committed as tensor-node identity
-  (padded convs lower offset-free). The padded dim equation requires the input divisible by the
-  stride, and a stride-2 window only clips on the right for window ≥ 4. A padded window in the
+  (padded convs lower offset-free). The product case in `clamped_window_pool` reads a halo of ones
+  at both edges from a materialized producer. The padded dim equation requires the input divisible
+  by the stride, and a stride-2 window only clips on the right for window ≥ 4. A padded window in the
   RESULT slot is refused before any write (gh-ocannl-1550, `refuse_result_side_padded_window`,
   run from `propagate_shapes` like `refuse_unsized_kernels` below, so the refusal leaves the
   session untainted, gh-ocannl-2042); a padded window's backward writes through the same window
