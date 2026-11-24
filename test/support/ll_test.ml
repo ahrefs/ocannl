@@ -1646,28 +1646,38 @@ let none_emitted ~what census =
     Stdio.eprintf "%s: expected no Tile_mma statement, census %s\n%!" what (census_string census);
   holds
 
-(** Whether [backend_name]'s backend, under the current configuration, advertises a tensorized
-    emission for these storage precisions: {!tensorized_capability}, the seeder's own judgment, so a
-    structure claim gated here is gated on the backend's capability and never on the rendering under
-    test. The stanza declares the configuration that judgment reads (see {!tensorized_capability}).
-*)
-let advertised ~backend_name ~a_prec ~b_prec ~d_prec =
-  let is_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name) in
-  match
-    tensorized_capability ~is_gpu ~is_cpu:(not is_gpu)
-      ~limits:(Context.hardware_limits (Context.auto ()))
-      ~a_prec ~b_prec ~d_prec
-  with
-  | `Advertised -> true
-  | `Withheld _ -> false
+(** Whether [backend_name]'s backend, under [policy] (default: the ambient {!Ir.Numerics.get}
+    policy), advertises a tensorized emission for these storage precisions:
+    {!tensorized_capability}, the seeder's own judgment, so a structure claim gated here is gated on
+    the backend's capability and never on the rendering under test. Pass [~policy] explicitly when
+    evaluating a gate outside [Test_utils.with_policy] (gh-ocannl-2434) so the gate cannot silently
+    read the wrong ambient policy. The stanza declares the configuration that judgment reads (see
+    {!tensorized_capability}). *)
+let advertised ?policy ~backend_name ~a_prec ~b_prec ~d_prec () =
+  let check () =
+    let is_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name) in
+    match
+      tensorized_capability ~is_gpu ~is_cpu:(not is_gpu)
+        ~limits:(Context.hardware_limits (Context.auto ()))
+        ~a_prec ~b_prec ~d_prec
+    with
+    | `Advertised -> true
+    | `Withheld _ -> false
+  in
+  match policy with
+  | None -> check ()
+  | Some p ->
+      let saved = Ir.Numerics.get () in
+      Ir.Numerics.set_policy p;
+      Exn.protect ~f:check ~finally:(fun () -> Ir.Numerics.set_policy saved)
 
 (** Where a structure claim would accept either the intrinsic or the lane-0 fallback because the arm
     is device-dependent, a decline on a device that DOES advertise the tile used to pass as the
     "older device" alternative (gh-ocannl-1283). Read against the capability for the leg's storage
     precisions, the census takes that choice away: where the tile is advertised every statement must
     render tensorized, elsewhere every one the deliberate scalar fallback. *)
-let census_agrees_with_capability ~backend_name ~what ~a_prec ~b_prec ~d_prec census =
-  if advertised ~backend_name ~a_prec ~b_prec ~d_prec then all_tensorized ~what census
+let census_agrees_with_capability ?policy ~backend_name ~what ~a_prec ~b_prec ~d_prec census =
+  if advertised ?policy ~backend_name ~a_prec ~b_prec ~d_prec () then all_tensorized ~what census
   else all_declined ~what census
 
 (** {1 The tuner's segmentation}

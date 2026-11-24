@@ -1031,6 +1031,10 @@ let raw_entries =
         "[scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application";
         "[scanner-refusal:f94dbc9f97cc1e9b0662107356001f6b] applies the leg";
         "[scanner-refusal:1decd3d7c917569b94d9f613373fc1c2] population or gate";
+        "[scanner-refusal:41f6b5db55cef6f0486ec091a293a838] Verdict_scan.leg_gate_allowed_paths";
+        "[scanner-refusal:c921c1a193838de76e92d91d550cd7b1] executes";
+        "[scanner-refusal:df4e110ae1379f998d366f0875cbade7] exempt_leg_gate_calls";
+        "[scanner-refusal:deafc7763427d518f93ceafc49426fa1] leg-gate independence reader";
         "[scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into";
         "[scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised";
         "[scanner-refusal:add5883320d9cdf491a628c74ff3aa98] folds the run-time";
@@ -1068,6 +1072,9 @@ let raw_entries =
         "[scanner-refusal:f675a65703076dfc53ea44fb59f9fd09] claim-name resolver resolves";
         "[scanner-refusal:664fc647996773a4adb1a331fc223f1f] gates and populations";
         "[scanner-refusal:578e6b63483d4d08d00475e2d75ee60b] exempt_uncompared_legs";
+        "[scanner-refusal:e06e04779aed13eb61abbdbd6392f9c4] exempt_leg_gate_calls";
+        "[scanner-refusal:b7208bf2fcc5db24ceb15a5611291be8] in_leg";
+        "[scanner-refusal:74964ef6b574e06b674507a8e449d7e2] independence reader inspected";
         "[scanner-refusal:92b2164afd41d9fd93850d02494032d7] run-constant gate into";
         "[scanner-refusal:e1194c69948ad1ab8eca8dfe687e1962] run-time hatch into";
         "[scanner-refusal:90b4edf499fe49feb30dde99ff5e87b3] no source writes";

@@ -230,15 +230,19 @@ let () =
   let products = Ll_test.matmul_products ~m ~n ~k a_values b_values in
   p_all "gh-2347 fixture products have exact partial sums at f32" products
     ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits prec));
+  let tf32_policy = { (Ir.Numerics.get ()) with Ir.Numerics.tf32_matmuls = true } in
+  let cuda = String.equal backend_name "cuda" in
+  let leg =
+    Verdict.leg ~on:backend_name
+      ~when_:
+        (cuda
+        && Ll_test.advertised ~policy:tf32_policy ~backend_name ~a_prec:prec ~b_prec:prec
+             ~d_prec:prec ())
+      ()
+  in
   Test_utils.with_policy
-    (fun policy -> { policy with Ir.Numerics.tf32_matmuls = true })
+    (fun _ -> tf32_policy)
     (fun () ->
-      let cuda = String.equal backend_name "cuda" in
-      let leg =
-        Verdict.leg ~on:backend_name
-          ~when_:(cuda && Ll_test.advertised ~backend_name ~a_prec:prec ~b_prec:prec ~d_prec:prec)
-          ()
-      in
       let reference =
         lazy
           (let ctx, routine, prod, out = compile_gh2347 ~scheduled:false "wf_gh2347_ref" in

@@ -677,7 +677,7 @@ let () =
    let advertised_h, census_ok =
      (* Read under the policy the leg compiled with. *)
      with_half_leg_policy (fun () ->
-         ( advertised ~a_prec:half ~b_prec:half ~d_prec:half,
+         ( advertised ~a_prec:half ~b_prec:half ~d_prec:half (),
            census_agrees_with_capability ~what:"half" ~a_prec:half ~b_prec:half ~d_prec:half
              (renderings routine_h) ))
    in
@@ -1397,7 +1397,7 @@ let () =
          census_agrees_with_capability ~what:tag ~a_prec:fp8 ~b_prec:fp8 ~d_prec:Ir.Ops.single
            census
          && Bool.equal
-              (advertised ~a_prec:fp8 ~b_prec:fp8 ~d_prec:Ir.Ops.single)
+              (advertised ~a_prec:fp8 ~b_prec:fp8 ~d_prec:Ir.Ops.single ())
               (has "mma.sync.aligned.m16n8k32")
        else if String.equal tag "f8_tb" then
          (* Transposed B declines the register tiling on the C backends. *)
@@ -1933,7 +1933,8 @@ let () =
           && has "simdgroup_float8x8 __mma_fragment_"
           && has "simdgroup_half8x8 __mma_af"
           && not (has "ocannl_mma_rc8")
-        else (not (advertised ~a_prec:half ~b_prec:half ~d_prec:single)) || staged_half_resident src
+        else
+          (not (advertised ~a_prec:half ~b_prec:half ~d_prec:single ())) || staged_half_resident src
       in
       p label ok);
 
@@ -1981,7 +1982,7 @@ let () =
         Test_utils.with_fp16_narrow (fun () ->
             census_agrees_with_capability ~what:"staged uniform-f16" ~a_prec:half ~b_prec:half
               ~d_prec:half (renderings routine_u)
-            && ((not (advertised ~a_prec:half ~b_prec:half ~d_prec:half))
+            && ((not (advertised ~a_prec:half ~b_prec:half ~d_prec:half ()))
                || staged_half_resident src))
       in
       p label ok);

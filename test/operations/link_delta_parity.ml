@@ -422,7 +422,7 @@ let fusion () =
   let advertised =
     on_gpu
     && Ll_test.advertised ~backend_name ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single
-         ~d_prec:Ir.Ops.single
+         ~d_prec:Ir.Ops.single ()
   in
   let sf = Option.value_exn !seeded in
   (* Under routine logging the matmul oracle withholds even a native tile, while the floor

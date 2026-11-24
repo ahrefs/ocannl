@@ -123,12 +123,16 @@ let compile ?pipeline_depth name =
 
 let () =
   let policy = Ir.Numerics.get () in
+  let tf32_policy = { policy with Ir.Numerics.tf32_matmuls = true } in
   let set_tf32 tf32_matmuls = Ir.Numerics.set_policy { policy with tf32_matmuls } in
   set_tf32 true;
   let cuda = String.equal backend_name "cuda" in
   let leg =
     Verdict.leg ~on:backend_name
-      ~when_:(cuda && Ll_test.advertised ~backend_name ~a_prec:prec ~b_prec:prec ~d_prec:prec)
+      ~when_:
+        (cuda
+        && Ll_test.advertised ~policy:tf32_policy ~backend_name ~a_prec:prec ~b_prec:prec
+             ~d_prec:prec ())
       ()
   in
   let cells dims read =
