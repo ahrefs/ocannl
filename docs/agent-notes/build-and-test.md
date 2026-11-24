@@ -4047,7 +4047,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 - The sweep harness's synthetic Git history takes its policy alias from the generated
   `sweep_policy_inventory.sexp` (gh-ocannl-2449). An edit to `test/operations/dune` rechecks the
   inventory; Dune reuses the harness action when its input bytes are identical. Direct membership
-  or an alias's condition changes those bytes and invalidates the action.
+  or an alias's condition changes those bytes and invalidates the action. `dune_scan_cases` checks
+  those byte changes and the live harness's file inputs.
 
 - Backend-disabled targets from `affected` or the codegen inventory are handled by
   `test-run.sh run` and `start` (gh-ocannl-2161): every skipped operand is printed,

@@ -7662,7 +7662,7 @@
  (deps ocannl_config config_dep_completeness.ml)
  (modules dune_scan_cases)
  (action
-  (run %{test} %{dep:config_dep_completeness.exe}))
+  (run %{test} %{dep:config_dep_completeness.exe} %{dep:dune}))
  (libraries base stdio test_scan arrayjit.verdict))
 
 ; gh-ocannl-1174: the containment query reads a dynamic gather through its coordinate view -- a

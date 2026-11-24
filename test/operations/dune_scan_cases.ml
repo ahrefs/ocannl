@@ -2169,6 +2169,31 @@ let sweep_policy_inventory_cases () =
   Verdict.p "a policy alias spelling the sweep would miss is refused by the inventory"
     (refuses "(alias (name policy-invariance) (deps (alias runtest-alpha)))")
 
+(* Pin the live consumer edge as well as the producer's bytes. This reads literal file dependencies
+   and path pforms of the harness's own rule. *)
+let sweep_harness_dependencies dune_file =
+  let module Slot = Test_scan.Slot_kind in
+  let dir = "test/operations" in
+  let rules =
+    Scan.stanzas (Stdio.In_channel.read_all dune_file)
+    |> List.filter ~f:(fun stanza ->
+        List.mem (Scan.aliases_of stanza) "runtest-sweep_harness" ~equal:String.equal)
+  in
+  match rules with
+  | [ rule ] ->
+      let inventory = "sweep_policy_inventory.sexp" in
+      Verdict.p_exists "the sweep harness declares the generated policy inventory as a file input"
+        (Scan.declared_config_paths ~name:inventory (Scan.field rule "deps")
+        |> List.map ~f:Scan.normalize_path)
+        ~f:(String.equal inventory);
+      let reads_local_dune = function
+        | Slot.File_need { in_dir = Some in_dir; base = "dune" } -> String.equal in_dir dir
+        | _ -> false
+      in
+      Verdict.p_none "the sweep harness has no direct file input from its own Dune file"
+        (Slot.file_needs ~dir rule) ~f:reads_local_dune
+  | _ -> fail "expected one rule for runtest-sweep_harness in %s" dune_file
+
 let () =
   sweep_policy_inventory_cases ();
   let check name expected found =
@@ -2304,6 +2329,8 @@ let () =
     ~f:(fun (name, tree, exemptions, expected) ->
       check ("resolution -- " ^ name) expected (render_resolution ~exemptions tree));
   (match Stdlib.Sys.argv with
-  | [| _; exe |] -> scanner_refusal_controls exe
-  | _ -> Verdict.fail "usage: dune_scan_cases <config_dep_completeness.exe>");
+  | [| _; exe; dune_file |] ->
+      scanner_refusal_controls exe;
+      sweep_harness_dependencies dune_file
+  | _ -> Verdict.fail "usage: dune_scan_cases <config_dep_completeness.exe> DUNE_FILE");
   Test_scan.Refusal_control_manifest.print "config_dep_completeness.ml"
