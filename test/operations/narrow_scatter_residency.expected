@@ -10,13 +10,13 @@ tied two-consumer: bf16 wte.grad equals f32 narrowed once, cell for cell: true
 accum_steps:1 f32 gradient equals exact host sum onto incoming: true
 accum_steps:1 per-hit bf16 differs from once-rounded f32 (non-vacuity): true
 accum_steps:1 bf16 gradient equals f32 narrowed once, untouched rows preserved: true
-Split_reduce over widened scatter mints f32 partials: true
+Split_reduce over widened scatter redirects Set_dynamic to an f32 partials buffer: true
 Split_reduce over widened scatter matches default bf16 output bitwise: true
 fp16 Fp16_wide: f32 baseline equals exact host sums: true
 fp16 Fp16_wide: per-hit fp16 differs from one final rounding (non-vacuity): true
-fp16 Fp16_wide: Set_dynamic targets an f32 scatter_acc buffer: true
+fp16 Fp16_wide: every Set_dynamic targets an f32 scatter_acc buffer: true
 fp16 Fp16_wide: wte.grad equals f32 reference narrowed once, cell for cell: true
-Bf16_narrow: scatter target precision matches backend accum_prec: true
+Bf16_narrow: every Set_dynamic target precision matches backend accum_prec: true
 Bf16_narrow: executed bf16 gradient matches backend accum_prec reference: true
 identity accum_prec leaves scatter IR physically unchanged: true
 f32 scatter target is left physically unchanged: true
@@ -26,3 +26,10 @@ scatter reading target T elsewhere declines widening: true
 dead enclosing loop declines widening: true
 RNG-bearing scatter declines widening: true
 valid bf16 scatter (including CSE-hoisted local) rewrites to 3 statements with memoized f32 node: true
+fp8_e5m2 scatter target declines widening: true
+partially-initialized Local scatter target declines widening: true
+fully-zeroed Local scatter target widens cleanly: true
+mismatched Get_dynamic index precision declines widening: true
+single-hit scatter (no multi-trip reduction loop) declines widening: true
+lowered_for_decisions ~accum_prec:Fn.id keeps narrow scatter target: true
+lowered_for_decisions ~accum_prec:widen_all widens scatter target to f32: true

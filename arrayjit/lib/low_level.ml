@@ -14219,33 +14219,44 @@ let scatter_accum_node ~(target : Tn.t) (acc_prec : Ops.prec) : Tn.t =
    [Utils.debug_log_from_routines ()] is off (matches {!accum_update_widens} / gh-ocannl-2111); -
    the statement holds exactly one [Set_dynamic] in statement position (not inside a [Local_scope]),
    with no enclosing dead loop ([to_ < from_]), no non-[Serial] loop, and no [Staged_compilation],
-   [Workgroup_barrier], [Scan_loop], or [Tile_mma]; - the target [tn] is non-virtual, not a
-   slice-alias view, has positive dims, and its storage precision is a narrow float strictly and
-   exactly widened by [accum_prec]; - [llsc] is a self-accumulating [Add] or [FMA] reading
-   [Get_dynamic] of [tn]'s own dynamic cell, contains no RNG conversion, and neither [dyn_value],
-   the contribution, nor any other sub-part of the statement touches [tn]. *)
-let widen_narrow_scatters ~(accum_prec : Ops.prec -> Ops.prec) (plc : Tn.Placements.t)
-    (traced_store : traced_store) (llc : t) : t =
+   [Workgroup_barrier], [Scan_loop], or [Tile_mma]; - at least one enclosing [For_loop] has extent
+   [> 1] and is not pinned as a plain [Iterator] on a non-[dyn_axis] axis of [idcs] (so multiple
+   iterations can hit the same dynamic cell; provably single-hit scatters decline and avoid
+   table-sized scratch); - the target [tn] is non-virtual, not a slice-alias view, has positive
+   dims, and its storage precision is [Half_prec] or [Bfloat16_prec] (whose widening and write-back
+   round-trip every bit pattern, including infinities and NaNs, losslessly — FP8 declines because
+   CUDA's saturating E5M2 cast turns an untouched ±inf into ±57344 on write-back) strictly and
+   exactly widened by [accum_prec]; - if [tn] is a routine [Local] (non-virtual and
+   not-materialized), the statements preceding this statement cover the full-table widening load
+   under {!reads_covered_query}, matching {!refuse_uncovered_local_reads}; - [llsc] is a
+   self-accumulating [Add] or [FMA] reading [Get_dynamic] of [tn]'s own dynamic cell (including
+   matching [dyn_value] precision), contains no RNG conversion, and neither [dyn_value], the
+   contribution, nor any other sub-part of the statement touches [tn]. *)
+let widen_narrow_scatters ~(accum_prec : Ops.prec -> Ops.prec) ?(static_indices = [])
+    (plc : Tn.Placements.t) (traced_store : traced_store) (llc : t) : t =
   if Utils.debug_log_from_routines () then llc
   else
     let exception Decline in
-    let widen_stmt (stmt : t) : t list option =
+    let routine_local tn =
+      Tn.Placements.known_non_virtual plc tn && Tn.Placements.known_not_materialized plc tn
+    in
+    let widen_stmt ~prefix_rev (stmt : t) : t list option =
       let found = ref None in
-      let rec scan (c : t) =
+      let rec scan loops (c : t) =
         match c with
         | Noop | Comment _ | Declare_local _ | Zero_out _ | Set _ | Set_from_vec _ | Set_local _ ->
             ()
         | Staged_compilation _ | Workgroup_barrier | Scan_loop _ | Tile_mma _ -> raise Decline
         | Seq (a, b) ->
-            scan a;
-            scan b
-        | For_loop { from_; to_; axis; body; _ } ->
+            scan loops a;
+            scan loops b
+        | For_loop { index; from_; to_; axis; body } ->
             if to_ < from_ || not (equal_axis_type axis Serial) then raise Decline;
-            scan body
-        | If { body; _ } -> scan body
+            scan ((index, from_, to_) :: loops) body
+        | If { body; _ } -> scan loops body
         | Set_dynamic { tn; idcs; dyn_axis; dyn_value; llsc; debug } as node ->
             if Option.is_some !found then raise Decline;
-            found := Some (node, tn, idcs, dyn_axis, dyn_value, llsc, debug)
+            found := Some (node, loops, tn, idcs, dyn_axis, dyn_value, llsc, debug)
       in
       let rec touches_other ~site tn (c : t) =
         if phys_equal c site then false
@@ -14280,14 +14291,20 @@ let widen_narrow_scatters ~(accum_prec : Ops.prec -> Ops.prec) (plc : Tn.Placeme
           | other -> other
       in
       try
-        scan stmt;
+        scan [] stmt;
         match !found with
         | None -> None
-        | Some (site, tn, idcs, dyn_axis, ((iv, iprec) as dyn_value), llsc, debug) ->
+        | Some (site, enclosing_loops, tn, idcs, dyn_axis, ((iv, iprec) as dyn_value), llsc, debug)
+          ->
             if Option.is_some (Tn.alias_of tn) || Tn.Placements.known_virtual plc tn then
               raise Decline;
             let store_prec = Lazy.force tn.Tn.storage_prec in
-            if not (Ops.is_narrow_float store_prec) then raise Decline;
+            (* Restrict to IEEE narrow floats whose widening and write-back round-trip every bit
+               pattern losslessly (CUDA's saturating FP8 E5M2 cast turns untouched ±inf into
+               ±57344). *)
+            (match store_prec with
+            | Ops.Half_prec _ | Ops.Bfloat16_prec _ -> ()
+            | _ -> raise Decline);
             let acc_prec = accum_prec store_prec in
             if
               Ops.equal_prec acc_prec store_prec
@@ -14300,12 +14317,24 @@ let widen_narrow_scatters ~(accum_prec : Ops.prec -> Ops.prec) (plc : Tn.Placeme
               || dyn_axis < 0
               || dyn_axis >= Array.length dims
             then raise Decline;
+            let has_multi_hit_loop =
+              List.exists enclosing_loops ~f:(fun (s, from_, to_) ->
+                  to_ > from_
+                  && not
+                       (Array.existsi idcs ~f:(fun ax idx ->
+                            ax <> dyn_axis
+                            &&
+                            match idx with
+                            | Indexing.Iterator s' -> Indexing.equal_symbol s s'
+                            | _ -> false)))
+            in
+            if not has_multi_hit_loop then raise Decline;
             if mentions_rng_conversion llsc || scalar_touches_tn tn iv then raise Decline;
             let is_self = function
-              | Get_dynamic { tn = g; idcs = gi; dyn_axis = ga; dyn_value = gv, _ } ->
+              | Get_dynamic { tn = g; idcs = gi; dyn_axis = ga; dyn_value = gv, gprec } ->
                   Tn.equal g tn && ga = dyn_axis
                   && Array.equal Indexing.equal_axis_index gi idcs
-                  && equal_scalar_t gv iv
+                  && Ops.equal_prec gprec iprec && equal_scalar_t gv iv
               | _ -> false
             in
             let retarget_llsc =
@@ -14321,6 +14350,25 @@ let widen_narrow_scatters ~(accum_prec : Ops.prec -> Ops.prec) (plc : Tn.Placeme
             in
             if touches_other ~site tn stmt then raise Decline;
             let acc = scatter_accum_node ~target:tn acc_prec in
+            let load_stmt =
+              loop_over_dims dims ~body:(fun c ->
+                  Set { tn = acc; idcs = c; llsc = Get (tn, c); debug = "" })
+            in
+            if routine_local tn then begin
+              let live =
+                live_view static_indices (unflat_lines (List.rev_append prefix_rev [ load_stmt ]))
+              in
+              let covered =
+                reads_covered_query
+                  ~write_eligible:(fun ~read ~write ->
+                    (not write.Affine.a_guarded) || write_guards_dominate ~write ~read)
+                  static_indices
+                  (drop_dead_loop_accesses (affine_accesses live))
+              in
+              match covered tn with
+              | `Covered -> ()
+              | `Covered_rmw_exempt _ | `Unknown _ -> raise Decline
+            end;
             let get_acc =
               (Get_dynamic { tn = acc; idcs; dyn_axis; dyn_value = (iv, iprec) }, acc_prec)
             in
@@ -14332,10 +14380,6 @@ let widen_narrow_scatters ~(accum_prec : Ops.prec -> Ops.prec) (plc : Tn.Placeme
             st.has_assignment <- true;
             st.read_by_other <- true;
             st.is_accessing <- true;
-            let load_stmt =
-              loop_over_dims dims ~body:(fun c ->
-                  Set { tn = acc; idcs = c; llsc = Get (tn, c); debug = "" })
-            in
             let scatter_stmt = describe_operand_precisions (replace_site ~site ~replacement stmt) in
             let store_stmt =
               loop_over_dims dims ~body:(fun c ->
@@ -14345,14 +14389,16 @@ let widen_narrow_scatters ~(accum_prec : Ops.prec -> Ops.prec) (plc : Tn.Placeme
       with Decline -> None
     in
     let changed = ref false in
-    let stmts =
-      List.concat_map (flat_lines [ llc ]) ~f:(fun stmt ->
-          match widen_stmt stmt with
+    let rec walk prefix_rev acc_rev = function
+      | [] -> List.rev acc_rev
+      | stmt :: rest -> (
+          match widen_stmt ~prefix_rev stmt with
           | Some widened ->
               changed := true;
-              widened
-          | None -> [ stmt ])
+              walk (List.rev_append widened prefix_rev) (List.rev_append widened acc_rev) rest
+          | None -> walk (stmt :: prefix_rev) (stmt :: acc_rev) rest)
     in
+    let stmts = walk [] [] (flat_lines [ llc ]) in
     if !changed then unflat_lines stmts else llc
 
 (* gh-ocannl-1011: the passes virtualized code receives on its way to being the routine's schedule —
@@ -14676,7 +14722,9 @@ let%diagn2_sexp specialize_proc ?(blends_value_selects = false) ?(accum_prec = F
     post_virtualization_pipeline input_ctx.placements traced_store ~input_scopes ~static_indices
       virtual_llc_result
   in
-  let llc = widen_narrow_scatters ~accum_prec input_ctx.placements traced_store llc in
+  let llc =
+    widen_narrow_scatters ~accum_prec ~static_indices input_ctx.placements traced_store llc
+  in
   refuse_uncovered_local_reads input_ctx.placements ~static_indices llc;
   let uses_merge, spliced_rbw =
     reconcile_traced_store input_ctx.placements traced_store ~spliced_reads ~static_indices

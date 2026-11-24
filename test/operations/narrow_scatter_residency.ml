@@ -241,11 +241,10 @@ let () =
               digits ("bf16 case1 " ^ label) bf_grad;
               let expected = Array.map f32_grad ~f:(Ops.round_to_prec bf16) in
               let targets = scatter_targets routine in
-              pf "%s: every Set_dynamic targets an f32 scatter_acc buffer" label
-                ((not (List.is_empty targets))
-                && List.for_all targets ~f:(fun tn ->
-                    String.equal tn.Tn.namespace LL.scatter_accum_namespace
-                    && Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ops.single));
+              p_all (Printf.sprintf "%s: every Set_dynamic targets an f32 scatter_acc buffer" label)
+                targets ~f:(fun tn ->
+                  String.equal tn.Tn.namespace LL.scatter_accum_namespace
+                  && Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ops.single);
               pf_all2 "%s: bf16 wte.grad equals f32 reference narrowed once, cell for cell" label
                 bf_grad expected ~f:bitwise)))
 
@@ -462,7 +461,8 @@ let () =
               ~prec:(Some (bf16, MP.Twin_virtual))
               ()
           in
-          let partials_prec = ref None in
+          let widened_target = ref None in
+          let partials_target = ref None in
           let facts = Context.backend_facts (Context.auto ()) in
           let preset opt =
             if Ir.Backend_intf.binds_hardware_grid facts then Sched.default_gpu ~min_parallel:1 opt
@@ -480,6 +480,7 @@ let () =
                       not (List.is_empty (scatter_targets_of_ll st)))
                 in
                 let target = List.hd_exn (scatter_targets_of_ll scatter_stmt) in
+                widened_target := Some target;
                 let outer_sym =
                   match Ll_test.nest_paths scatter_stmt with
                   | (s :: _) :: _ -> s
@@ -488,15 +489,22 @@ let () =
                 let sr, _, _, _ = Sched.split_reduce ~axis:outer_sym ~target ~num_blocks:2 in
                 let applied = Sched.apply [ sr ] opt in
                 Ll_test.walk applied.LL.llc ~on_stmt:(function
-                  | LL.Set_dynamic { tn; _ } ->
-                      partials_prec := Some (Lazy.force tn.Tn.storage_prec)
+                  | LL.Set_dynamic { tn; _ } -> partials_target := Some tn
                   | _ -> ());
                 Sched.fission_scheduled ~preset ~zero_sched:(fun _ -> []) ~static_indices:[] applied
                 |> List.map ~f:(fun (_, _, _, scheduled) -> scheduled))
               ()
           in
-          p "Split_reduce over widened scatter mints f32 partials"
-            (Option.exists !partials_prec ~f:(Ops.equal_prec Ops.single));
+          p "Split_reduce over widened scatter redirects Set_dynamic to an f32 partials buffer"
+            (match (!widened_target, !partials_target) with
+            | Some orig, Some part ->
+                let dims = Lazy.force part.Tn.dims in
+                (not (Tn.equal orig part))
+                && List.mem part.Tn.label "partials" ~equal:String.equal
+                && Array.length dims > 0
+                && dims.(0) = 2
+                && Ops.equal_prec (Lazy.force part.Tn.storage_prec) Ops.single
+            | _ -> false);
           p_all2 "Split_reduce over widened scatter matches default bf16 output bitwise" split_grad
             default_grad ~f:bitwise))
 
@@ -531,12 +539,10 @@ let () =
           p_exists "fp16 Fp16_wide: per-hit fp16 differs from one final rounding (non-vacuity)"
             (List.zip_exn (Array.to_list per_hit) (Array.to_list once))
             ~f:(fun (a, b) -> not (bitwise a b));
-          p "fp16 Fp16_wide: Set_dynamic targets an f32 scatter_acc buffer"
-            (let targets = scatter_targets routine in
-             (not (List.is_empty targets))
-             && List.for_all targets ~f:(fun tn ->
-                 String.equal tn.Tn.namespace LL.scatter_accum_namespace
-                 && Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ops.single));
+          p_all "fp16 Fp16_wide: every Set_dynamic targets an f32 scatter_acc buffer"
+            (scatter_targets routine) ~f:(fun tn ->
+              String.equal tn.Tn.namespace LL.scatter_accum_namespace
+              && Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ops.single);
           p_all2 "fp16 Fp16_wide: wte.grad equals f32 reference narrowed once, cell for cell"
             f16_grad once ~f:bitwise))
 
@@ -569,13 +575,10 @@ let () =
           let targets = scatter_targets routine in
           Stdio.eprintf "Bf16_narrow (not part of the golden): narrows=%b targets=%d\n%!" narrows
             (List.length targets);
-          p "Bf16_narrow: scatter target precision matches backend accum_prec"
-            ((not (List.is_empty targets))
-            && List.for_all targets ~f:(fun tn ->
-                Ops.equal_prec (Lazy.force tn.Tn.storage_prec) acc_bf16
-                && Bool.equal
-                     (String.equal tn.Tn.namespace LL.scatter_accum_namespace)
-                     (not narrows)));
+          p_all "Bf16_narrow: every Set_dynamic target precision matches backend accum_prec" targets
+            ~f:(fun tn ->
+              Ops.equal_prec (Lazy.force tn.Tn.storage_prec) acc_bf16
+              && Bool.equal (String.equal tn.Tn.namespace LL.scatter_accum_namespace) (not narrows));
           let expected = if narrows then per_hit else once in
           p_all2 "Bf16_narrow: executed bf16 gradient matches backend accum_prec reference" bf_grad
             expected ~f:bitwise))
@@ -730,4 +733,126 @@ let () =
             && String.equal w1.Tn.namespace LL.scatter_accum_namespace
             && Ops.equal_prec (Lazy.force w1.Tn.storage_prec) Ops.single
             && Hashtbl.mem store1 w1
-        | _ -> false))
+        | _ -> false);
+      (* 7i: FP8 E5M2 target declines widening (reverse cast saturates ±inf on untouched cells). *)
+      let tbl_fp8 = node_factory ~prec:Ops.fp8 ~first_id:24445 ~dims:[| 4; 8 |] () "nsr_tbl_fp8" in
+      let fp8_sc = mk_scatter ~tn:tbl_fp8 () in
+      let plc, store = mk_store () in
+      p "fp8_e5m2 scatter target declines widening"
+        (phys_equal (LL.widen_narrow_scatters ~accum_prec:widen_all plc store fp8_sc) fp8_sc);
+      (* 7j: Partially-initialized routine Local table declines widening, while fully zeroed Local
+         table widens cleanly. *)
+      let tbl_loc_part =
+        node_factory ~prec:bf16 ~first_id:24446 ~dims:[| 4; 8 |] () "nsr_tbl_loc_part"
+      in
+      let j_init = sym () in
+      let partial_init =
+        loop_n j_init 8 (set tbl_loc_part [| fixed 0; iter j_init |] (LL.Constant 0.))
+      in
+      let slice_sc =
+        LL.For_loop
+          {
+            index = pos;
+            from_ = 0;
+            to_ = 5;
+            axis = LL.Serial;
+            body =
+              LL.Set_dynamic
+                {
+                  tn = tbl_loc_part;
+                  idcs = [| fixed 0; fixed 0 |];
+                  dyn_axis = 1;
+                  dyn_value = (get ids [| iter pos |], Ops.uint32);
+                  llsc =
+                    LL.Binop
+                      ( Ops.Add,
+                        ( LL.Get_dynamic
+                            {
+                              tn = tbl_loc_part;
+                              idcs = [| fixed 0; fixed 0 |];
+                              dyn_axis = 1;
+                              dyn_value = (get ids [| iter pos |], Ops.uint32);
+                            },
+                          bf16 ),
+                        (get grad [| iter pos; fixed 0 |], bf16) );
+                  debug = "";
+                };
+          }
+      in
+      let partial_prog = LL.Seq (partial_init, slice_sc) in
+      let plc_part, store_part = mk_store () in
+      Tn.Placements.update plc_part tbl_loc_part Tn.Local Tn.Visit_cap;
+      p "partially-initialized Local scatter target declines widening"
+        (phys_equal
+           (LL.widen_narrow_scatters ~accum_prec:widen_all plc_part store_part partial_prog)
+           partial_prog);
+      let full_prog = LL.Seq (LL.Zero_out tbl_loc_part, slice_sc) in
+      let plc_full, store_full = mk_store () in
+      Tn.Placements.update plc_full tbl_loc_part Tn.Local Tn.Visit_cap;
+      p "fully-zeroed Local scatter target widens cleanly"
+        (List.length
+           (LL.flat_lines
+              [ LL.widen_narrow_scatters ~accum_prec:widen_all plc_full store_full full_prog ])
+        = 4);
+      (* 7k: Mismatched Get_dynamic vs Set_dynamic index precision declines widening. *)
+      let mismatch_prec_sc =
+        mk_scatter
+          ~llsc_of:(fun tn ->
+            let p = Lazy.force tn.Tn.storage_prec in
+            let self =
+              LL.Get_dynamic
+                {
+                  tn;
+                  idcs = [| iter d; fixed 0 |];
+                  dyn_axis = 1;
+                  dyn_value = (get ids [| iter pos |], Ops.byte);
+                }
+            in
+            LL.Binop (Ops.Add, (self, p), (get grad [| iter pos; iter d |], p)))
+          ()
+      in
+      let plc, store = mk_store () in
+      p "mismatched Get_dynamic index precision declines widening"
+        (phys_equal
+           (LL.widen_narrow_scatters ~accum_prec:widen_all plc store mismatch_prec_sc)
+           mismatch_prec_sc);
+      (* 7l: Provably single-hit scatter (no multi-trip non-channel loop) declines widening. *)
+      let single_hit = mk_scatter ~to_pos:0 () in
+      let plc, store = mk_store () in
+      p "single-hit scatter (no multi-trip reduction loop) declines widening"
+        (phys_equal
+           (LL.widen_narrow_scatters ~accum_prec:widen_all plc store single_hit)
+           single_hit);
+      (* 7m: Decision-only lowering respects caller-supplied ~accum_prec override. *)
+      Tensor.unsafe_reinitialize ();
+      let ids_t = ids_tensor_2d ~label:"dec_ids" [| [| 0; 0; 1; 1 |] |] in
+      let onehot_t = Nn_blocks.one_hot_of_ids ~num_classes:4 ids_t in
+      let wte_t =
+        MP.with_master_weights ~placement:MP.Twin_virtual ~prec:bf16 (fun () ->
+            TDSL.param ~values:(Array.create ~len:8 0.5) "dec_wte" ~input_dims:[ 4 ]
+              ~output_dims:[ 2 ] ())
+      in
+      let%op emb_t = wte_t * onehot_t in
+      let%op loss_t = emb_t ++ "...|... => |->0" in
+      Precision_policy.apply
+        ~except:(fun tn -> Tn.equal tn loss_t.Tensor.value)
+        { Precision_policy.param_prec = None; activation_prec = Some bf16; grad_prec = Some bf16 }
+        loss_t;
+      let update_t = Train.grad_update loss_t in
+      let ctx_t = Context.auto () in
+      let opt_narrow =
+        Context.lowered_for_decisions ~name:"nsr_dec_narrow" ~accum_prec:Fn.id ctx_t update_t
+          Idx.Empty
+      in
+      let opt_wide =
+        Context.lowered_for_decisions ~name:"nsr_dec_wide" ~accum_prec:widen_all ctx_t update_t
+          Idx.Empty
+      in
+      p_all "lowered_for_decisions ~accum_prec:Fn.id keeps narrow scatter target"
+        (scatter_targets_of_ll opt_narrow.LL.llc) ~f:(fun tn ->
+          Ops.equal_prec (Lazy.force tn.Tn.storage_prec) bf16
+          && not (String.equal tn.Tn.namespace LL.scatter_accum_namespace));
+      p_all "lowered_for_decisions ~accum_prec:widen_all widens scatter target to f32"
+        (scatter_targets_of_ll opt_wide.LL.llc) ~f:(fun tn ->
+          Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ops.single
+          && String.equal tn.Tn.namespace LL.scatter_accum_namespace))

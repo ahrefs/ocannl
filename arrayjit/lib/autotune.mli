@@ -4161,6 +4161,7 @@ module type Driver = sig
     ?footprint:Ir.Tnode.t list ->
     ?facts:Ir.Backend_intf.backend_facts ->
     ?limits:Ir.Backend_intf.hardware_limits ->
+    ?accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
     ctx ->
     program ->
     Ir.Indexing.unit_bindings ->

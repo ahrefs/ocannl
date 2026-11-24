@@ -33,7 +33,7 @@ test/operations/integer_power_domain.ml -- records=1 traversals=0
 test/operations/launch_dim_gate.ml -- records=2 traversals=0
 test/operations/ll_test_substitute.ml -- records=1 traversals=0
 test/operations/masked_persistent_fragment.ml -- records=0 traversals=1
-test/operations/narrow_scatter_residency.ml -- records=5 traversals=0
+test/operations/narrow_scatter_residency.ml -- records=9 traversals=0
 test/operations/narrow_storage_compute.ml -- records=0 traversals=1
 test/operations/online_softmax.ml -- records=8 traversals=4
 test/operations/online_softmax_block.ml -- records=11 traversals=8

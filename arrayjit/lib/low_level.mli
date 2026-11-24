@@ -2235,16 +2235,23 @@ val sink_narrow_reduction_loops : t -> t
     {!post_virtualization_pipeline}, after {!rewrite_one_hot_reductions}. *)
 
 val widen_narrow_scatters :
-  accum_prec:(Ops.prec -> Ops.prec) -> Tnode.Placements.t -> traced_store -> t -> t
-(** gh-ocannl-2444: for each allowlisted top-level statement holding a single narrow-float
-    [Set_dynamic] add-accumulation whose target [T] is strictly and exactly widened by [accum_prec],
-    mint an [accum_prec] buffer [W] (memoized weakly per [(T, acc_prec)] in
-    {!scatter_accum_namespace}, declared [On_device]), register it in [traced_store], and bracket
-    the redirected scatter with an exact widening load [W = T] and a single narrowing store-back
-    [T = W]. Declines under routine logging, RNG-bearing updates, dead or non-serial loops,
-    slice-alias or virtual targets, multi-scatter statements, or statements touching [T] elsewhere.
-    Called by {!specialize_proc} directly after {!post_virtualization_pipeline}; exposed for direct
-    testing. *)
+  accum_prec:(Ops.prec -> Ops.prec) ->
+  ?static_indices:Indexing.static_symbol list ->
+  Tnode.Placements.t ->
+  traced_store ->
+  t ->
+  t
+(** gh-ocannl-2444: for each allowlisted top-level statement holding a single multi-hit
+    [Half_prec]/[Bfloat16_prec] [Set_dynamic] add-accumulation whose target [T] is strictly and
+    exactly widened by [accum_prec], mint an [accum_prec] buffer [W] (memoized weakly per
+    [(T, acc_prec)] in {!scatter_accum_namespace}, declared [On_device]), register it in
+    [traced_store], and bracket the redirected scatter with an exact widening load [W = T] and a
+    single narrowing store-back [T = W]. Declines under routine logging, RNG-bearing updates, dead
+    or non-serial loops, provably single-hit scatters, FP8 targets (whose reverse cast is not
+    bit-preserving on non-finites), routine [Local] targets without proven full-table coverage ahead
+    of the load, slice-alias or virtual targets, multi-scatter statements, mismatched self-read
+    index precisions, or statements touching [T] elsewhere. Called by {!specialize_proc} directly
+    after {!post_virtualization_pipeline}; exposed for direct testing. *)
 
 val rewrite_one_hot_reductions : ?static_indices:Indexing.static_symbol list -> t -> t
 (** gh-343: rewrites the narrow one-hot embedding pattern -- an [Add] reduction over a loop variable
