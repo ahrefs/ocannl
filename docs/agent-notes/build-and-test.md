@@ -4778,6 +4778,9 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   opam template, `dune-project` or that workflow changed. `Build` (every shard, `train`
   included), `Formatting`, `Shell harnesses` and `Shell harnesses (real dune)` run on the daily
   schedule and by dispatch, and the CI-red triage routine owns their reds.
+  `Affected reader no-op audit` runs the full `tools/test-affected-tests.sh --self-check`
+  on the schedule and ordinary dispatches (gh-ocannl-2447). It has its own Ubuntu job and
+  verdict. An accepted no-op or a missing prerequisite fails the job and reaches nightly triage.
   `test/operations/ci_matrix.sh` holds the per-PR job list and the clean room's paths. What the
   local gate does not read waits for the nightly run, the integration loops and the daily sweep:
   a test the change does not reach, a `slow-` or `train-` alias, a reached list past 200

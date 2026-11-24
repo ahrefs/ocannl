@@ -1431,6 +1431,32 @@ jobs:
     - name: Test the real-dune harness checks
       run: tools/test-harnesses.sh --ci-real-dune
 
+  # The affected reader's full no-op audit (gh-ocannl-2447) has its own
+  # verdict so a failure in another harness cannot obscure it.
+  harness-affected-self-check:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'
+    name: Affected reader no-op audit
+    runs-on: ubuntu-latest
+    # Allow for toolchain setup and the full sweep on slower hosted runners.
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ inputs.expected_sha }}
+    - name: Pre-install setup-ocaml's apt packages
+      uses: ./.github/actions/setup-ocaml-debs
+    - uses: ocaml/setup-ocaml@v3
+      with:
+        ocaml-compiler: 5.5.x
+        allow-prerelease-opam: false
+        opam-pin: false
+    - name: Install Dune
+      run: opam install dune
+    - name: Audit the affected reader's negative controls
+      env:
+        OCANNL_TOOL_HARNESS_STRICT: 1
+      run: opam exec -- tools/test-affected-tests.sh --self-check
+
   # Every gated leg of the hand-run harnesses, and every group of legs, run
   # alone (gh-ocannl-1367). A leg that needs what an EARLIER leg's body made
   # passes in every full run, so the job above never sees it; it fails only
@@ -1542,7 +1568,7 @@ jobs:
   # run).
   notify-triage-routine:
     name: Fire CI-red triage routine
-    needs: [run, fmt, promotion-floor, harnesses, harness-real-dune, harness-legs-alone, torch-runner]
+    needs: [run, fmt, promotion-floor, harnesses, harness-real-dune, harness-affected-self-check, harness-legs-alone, torch-runner]
     if: >-
       failure() && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
       && !(github.event_name == 'workflow_dispatch' && inputs.expected_sha)

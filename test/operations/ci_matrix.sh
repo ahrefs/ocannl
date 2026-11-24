@@ -555,8 +555,9 @@ if leg == 'matrix':
         'train 2/2 entries moved; update the mutants below'
     side_guard = "github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'"
     assert source.count(side_guard) == 2, 'side-job guard text moved; update the mutants below'
+    # Other scheduled jobs may share this guard. Each named replacement below
+    # must change the source before it can count as a rejected mutant.
     scheduled_text = scheduled_guard.strip().removeprefix('if: ')
-    assert source.count(scheduled_text) == 4, 'scheduled side-job guard text moved; update the mutants below'
     build_guard = "  run:\n    if: github.event_name != 'pull_request'\n"
     assert source.count(build_guard) == 1, 'build matrix guard moved; update the mutants below'
     compiler_axis = "&& format('[\"{0}\"]', inputs.ocaml_compiler)"
