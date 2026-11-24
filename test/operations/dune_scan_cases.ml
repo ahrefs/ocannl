@@ -2125,7 +2125,77 @@ let scanner_refusal_controls exe =
           in
           Verdict.p claim refused))
 
+let sweep_policy_inventory_cases () =
+  let inventory = Test_scan.Policy_invariance_scan.sweep_inventory in
+  let library = "(library (name fixture) (libraries base stdio))\n" in
+  let reordered_library = "(library (name fixture) (libraries stdio base))\n" in
+  let family deps =
+    "(alias\n (name policy-invariance)\n (deps "
+    ^ String.concat ~sep:" " (List.map deps ~f:(fun name -> "(alias " ^ name ^ ")"))
+    ^ "))\n"
+  in
+  let conditional backend =
+    Printf.sprintf
+      "(alias\n\
+      \ (name policy-invariance)\n\
+      \ (enabled_if (= %%{env:OCANNL_BACKEND=cc} %s))\n\
+      \ (deps (alias runtest-conditional)))\n"
+      backend
+  in
+  let members = family [ "runtest-alpha"; "runtest-beta" ] in
+  let source = library ^ members ^ conditional "cuda" in
+  let baseline = inventory source in
+  Verdict.p "an unrelated library edit keeps the sweep inventory identical"
+    (String.equal baseline (inventory (reordered_library ^ members ^ conditional "cuda")));
+  Verdict.p "regrouping and reordering policy deps keep the sweep inventory identical"
+    (String.equal baseline
+       (inventory (conditional "cuda" ^ family [ "runtest-beta" ] ^ family [ "runtest-alpha" ])));
+  Verdict.p "adding a policy member changes the sweep inventory"
+    (not (String.equal baseline (inventory (source ^ family [ "runtest-added" ]))));
+  Verdict.p "changing a policy member's condition changes the sweep inventory"
+    (not (String.equal baseline (inventory (library ^ members ^ conditional "metal"))));
+  let escaped_condition =
+    {dune|(alias
+ (name policy-invariance)
+ (enabled_if (= "\%{env:OCANNL_BACKEND=cc}" cuda))
+ (deps (alias runtest-conditional)))|dune}
+  in
+  Verdict.p "the sweep inventory preserves an escaped pform in a policy condition"
+    (String.is_substring (inventory escaped_condition)
+       ~substring:{dune|"\%{env:OCANNL_BACKEND=cc}"|dune});
+  let refuses source = match inventory source with exception Failure _ -> true | _ -> false in
+  Verdict.p "a policy alias indirection is refused by the sweep inventory"
+    (refuses "(alias\n (name policy-invariance)\n (deps (include deps.sexp)))");
+  Verdict.p "a policy alias spelling the sweep would miss is refused by the inventory"
+    (refuses "(alias (name policy-invariance) (deps (alias runtest-alpha)))")
+
+(* Pin the live consumer edge as well as the producer's bytes. This reads literal file dependencies
+   and path pforms of the harness's own rule. *)
+let sweep_harness_dependencies dune_file =
+  let module Slot = Test_scan.Slot_kind in
+  let dir = "test/operations" in
+  let rules =
+    Scan.stanzas (Stdio.In_channel.read_all dune_file)
+    |> List.filter ~f:(fun stanza ->
+        List.mem (Scan.aliases_of stanza) "runtest-sweep_harness" ~equal:String.equal)
+  in
+  match rules with
+  | [ rule ] ->
+      let inventory = "sweep_policy_inventory.sexp" in
+      Verdict.p_exists "the sweep harness declares the generated policy inventory as a file input"
+        (Scan.declared_config_paths ~name:inventory (Scan.field rule "deps")
+        |> List.map ~f:Scan.normalize_path)
+        ~f:(String.equal inventory);
+      let reads_local_dune = function
+        | Slot.File_need { in_dir = Some in_dir; base = "dune" } -> String.equal in_dir dir
+        | _ -> false
+      in
+      Verdict.p_none "the sweep harness has no direct file input from its own Dune file"
+        (Slot.file_needs ~dir rule) ~f:reads_local_dune
+  | _ -> fail "expected one rule for runtest-sweep_harness in %s" dune_file
+
 let () =
+  sweep_policy_inventory_cases ();
   let check name expected found =
     if List.equal String.equal found expected then printf "ok: %s\n" name
     else
@@ -2259,6 +2329,8 @@ let () =
     ~f:(fun (name, tree, exemptions, expected) ->
       check ("resolution -- " ^ name) expected (render_resolution ~exemptions tree));
   (match Stdlib.Sys.argv with
-  | [| _; exe |] -> scanner_refusal_controls exe
-  | _ -> Verdict.fail "usage: dune_scan_cases <config_dep_completeness.exe>");
+  | [| _; exe; dune_file |] ->
+      scanner_refusal_controls exe;
+      sweep_harness_dependencies dune_file
+  | _ -> Verdict.fail "usage: dune_scan_cases <config_dep_completeness.exe> DUNE_FILE");
   Test_scan.Refusal_control_manifest.print "config_dep_completeness.ml"

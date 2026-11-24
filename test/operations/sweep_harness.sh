@@ -14,8 +14,9 @@
 # exercised. The guest-identity deadline exhausting all retries is not driven
 # here (it costs 90s); the underlying bounded supervisor has separate controls.
 # Hardware/kernel and actual SSH failures remain fixture inputs.
-# The twin-tile case feeds the live bin/dune to the sweep's literal alias
-# admission check. Fake opam records the requested targets without running Dune.
+# The twin-tile and policy cases feed the live bin/dune and the derived policy
+# stanzas to the sweep's literal alias admission checks. Fake opam records the
+# requested targets without running Dune.
 
 # -E (errtrace) so the ERR trap below also fires inside helper functions,
 # command substitutions and subshells: without it a failing predicate inside a
@@ -338,7 +339,7 @@ printf 'let%%expect_test _ = print_endline "old" [%%expect {| old |}]\n' \
 printf '(rule\n (alias runtest-state-probe)\n (deps unit.cc_expected.ml noise.expected)\n (action (diff "unit.%%{read:../config/ocannl_backend.txt}_expected.ml" unit.actual)))\n(rule\n (alias runtest-pre-diff-probe)\n (deps pre_diff_expected.ml)\n (action (progn (run crashing.exe) (diff pre_diff_expected.ml pre_diff.actual))))\n' \
   >"$main/test/dune"
 # A test/operations/dune with no `@policy-invariance` stanza, as a ref from before the alias has
-# (gh-ocannl-1104): the next commit replaces it with the live one.
+# (gh-ocannl-1104). The policy cases need a history with and without the alias.
 mkdir -p "$main/test/operations"
 printf '; a dune file from before the policy-invariance alias\n' >"$main/test/operations/dune"
 git -C "$main" add test/operations/dune
@@ -349,9 +350,10 @@ git -C "$main" commit -qm fixture
 fixture_sha=$(git -C "$main" rev-parse HEAD)
 mkdir -p "$main/bin"
 cp "$(dirname "$0")/../../bin/dune" "$main/bin/dune"
-# And the live test/operations/dune, whose `@policy-invariance` stanza admits the policy units
-# (gh-ocannl-1104); the fixture commit before this one predates it, as a historical ref would.
-cp "$(dirname "$0")/dune" "$main/test/operations/dune"
+# Remote-only iteration exercises the remote command path with ordinary units.
+if [ "$remote_only" = 0 ]; then
+  cp "$(dirname "$0")/sweep_policy_inventory.sexp" "$main/test/operations/dune"
+fi
 # The sweep reads committed bytes, including on Windows with CRLF checkouts.
 git -C "$main" -c core.autocrlf=input add bin/dune test/operations/dune
 git -C "$main" commit -qm 'declare the twin-tile dry run and the policy alias'

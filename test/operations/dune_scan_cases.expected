@@ -1,3 +1,10 @@
+an unrelated library edit keeps the sweep inventory identical: true
+regrouping and reordering policy deps keep the sweep inventory identical: true
+adding a policy member changes the sweep inventory: true
+changing a policy member's condition changes the sweep inventory: true
+the sweep inventory preserves an escaped pform in a policy condition: true
+a policy alias indirection is refused by the sweep inventory: true
+a policy alias spelling the sweep would miss is refused by the inventory: true
 ok: a test declaring the dep
 ok: a test omitting the dep
 ok: a test with deps but not this one
@@ -339,6 +346,8 @@ config_dep_completeness refuses a tree built to trip its refusals, exiting 1: tr
 config_dep_completeness refuses a run handed no dune file, exiting 1: true
 config_dep_completeness refuses an ambient record that leaves out the host, exiting 1: true
 config_dep_completeness refuses an ambient record whose producer depends on the host record and never reads it, exiting 1: true
+the sweep harness declares the generated policy inventory as a file input: true
+the sweep harness has no direct file input from its own Dune file: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:2ade05f14bd972f85a1792722f8a0ab6] arguments the rule's
