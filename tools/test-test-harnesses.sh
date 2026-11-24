@@ -1206,6 +1206,244 @@ for term_mode in ordinary ci-real-dune; do
     kill -TERM "$(cat "$TMP/relay-member.pid")" 2>/dev/null || :
   fi
 done
+
+# Through fleet_slot_rerun (gh-ocannl-2450): an untrapped TERM or HUP sent to
+# the inner dispatcher PID must propagate 143/129 (never exit 0 or a stale $?)
+# in both ordinary serial mode and --ci-real-dune, leave no relay process
+# behind, and leave $slot_record empty when test-harnesses.sh itself dies on
+# the signal.
+slot_sig_fw=$TMP/slot-sig-fw.sh
+cat >"$slot_sig_fw" <<'SLOT_SIG_FW'
+#!/usr/bin/env bash
+if [ "$1 $2 $3" = "execution slot --probe" ]; then
+  echo "EXECUTION SLOT PROBE fakebox 4 1"
+  exit 0
+fi
+while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+case ${SLOT_SIG_FW_MODE:-} in
+  supervision-255)
+    rc=0
+    "$@" || rc=$?
+    exit 255 ;;
+esac
+exec perl -e '
+  $SIG{TERM} = "DEFAULT";
+  $SIG{HUP} = "DEFAULT";
+  if (defined $ENV{SLOT_INNER_PID} && length $ENV{SLOT_INNER_PID}) {
+    my $tmp = "$ENV{SLOT_INNER_PID}.tmp.$$";
+    open my $fh, ">", $tmp or die $!;
+    print $fh "$$\n";
+    close $fh or die $!;
+    rename $tmp, $ENV{SLOT_INNER_PID} or die $!;
+  }
+  exec @ARGV or exit 127;
+' "$@"
+SLOT_SIG_FW
+chmod +x "$slot_sig_fw"
+for sig in TERM HUP; do
+  case $sig in TERM) want=143 ;; HUP) want=129 ;; esac
+  for term_mode in ordinary ci-real-dune; do
+    relay_tmp="$TMP/slot-sig-$sig-$term_mode"
+    mkdir -p "$relay_tmp"
+    rm -f "$TMP/relay-ready" "$TMP/relay-member.pid" "$TMP/slot-inner.pid"
+    case $term_mode in
+      ordinary)
+        want_relays=1
+        term_args=(--affected --since HEAD --jobs 1) ;;
+      ci-real-dune)
+        want_relays=2
+        term_args=(--ci-real-dune --jobs 1) ;;
+    esac
+    (cd "$TMP" && OCANNL_TOOL_FLEET_WORKER="$slot_sig_fw" SLOT_INNER_PID="$TMP/slot-inner.pid" \
+      TMPDIR="$relay_tmp" RELAY_READY="$TMP/relay-ready" RELAY_MEMBER_PID="$TMP/relay-member.pid" \
+      "$subject" "${term_args[@]}") >"$TMP/slot-sig-$sig-$term_mode.out" 2>&1 &
+    outer_pid=$!
+    before_rows=
+    term_ticks=0
+    while [ "$term_ticks" -lt 100 ]; do
+      if [ -e "$TMP/relay-ready" ] && [ -s "$TMP/slot-inner.pid" ]; then
+        before_rows=$(relay_rows_for "$relay_tmp")
+        before_count=$(printf '%s\n' "$before_rows" | awk 'NF { n++ } END { print n + 0 }')
+        [ "$before_count" -ge "$want_relays" ] && break
+      fi
+      term_ticks=$((term_ticks + 1))
+      sleep 0.05
+    done
+    before_count=$(printf '%s\n' "$before_rows" | awk 'NF { n++ } END { print n + 0 }')
+    before_relays=$(printf '%s\n' "$before_rows" | awk 'NF { print $1 }')
+    inner_pid=$(cat "$TMP/slot-inner.pid" 2>/dev/null)
+    [ -z "$inner_pid" ] || kill "-$sig" "$inner_pid" 2>/dev/null || :
+    wait_ticks=0
+    while pid_alive "$outer_pid" && [ "$wait_ticks" -lt 100 ]; do
+      wait_ticks=$((wait_ticks + 1))
+      sleep 0.05
+    done
+    if pid_alive "$outer_pid"; then
+      kill -KILL "$outer_pid" 2>/dev/null || :
+    fi
+    outer_rc=0
+    wait "$outer_pid" 2>/dev/null || outer_rc=$?
+    after_rows=$(relay_rows_for "$relay_tmp")
+    still_alive=
+    for rpid in $before_relays; do
+      if pid_alive "$rpid"; then
+        still_alive="$still_alive $rpid"
+      fi
+    done
+    if [ "$before_count" = "$want_relays" ] && [ "$outer_rc" = "$want" ] &&
+       grep -qxF "harnesses: FAILED (exit $want): the harnesses under the fleet slot ended without a status" "$TMP/slot-sig-$sig-$term_mode.out" &&
+       [ -z "$after_rows" ] && [ -z "$still_alive" ]; then
+      report 0 "fleet_slot_rerun: $sig to inner dispatcher PID ($term_mode) exits $want and leaves no relay"
+    else
+      report 1 "fleet_slot_rerun: $sig to inner dispatcher PID ($term_mode) exits $want and leaves no relay" \
+        "rc=$outer_rc inner=${inner_pid:-none} before=$before_count after=[$after_rows] alive=[${still_alive# }] out=$(tail -n 3 "$TMP/slot-sig-$sig-$term_mode.out" | tr '\n' '|')"
+    fi
+    for rpid in $before_relays $(printf '%s\n' "$after_rows" | awk 'NF { print $1 }'); do
+      kill -TERM "$rpid" 2>/dev/null || :
+    done
+    if [ -s "$TMP/relay-member.pid" ]; then
+      kill -TERM "$(cat "$TMP/relay-member.pid")" 2>/dev/null || :
+    fi
+  done
+  # Independent pin of test-harnesses.sh's own record handling: untrapped TERM/HUP
+  # must leave $slot_record empty rather than writing the EXIT trap's stale $?.
+  direct_rec=$TMP/direct-slot-$sig.rec
+  direct_tmp=$TMP/direct-slot-$sig
+  mkdir -p "$direct_tmp"
+  rm -f "$direct_rec" "$TMP/relay-ready" "$TMP/relay-member.pid"
+  (cd "$TMP" && OCANNL_TOOL_HARNESSES_IN_SLOT="$direct_rec" TMPDIR="$direct_tmp" \
+    RELAY_READY="$TMP/relay-ready" RELAY_MEMBER_PID="$TMP/relay-member.pid" \
+    exec perl -e '$SIG{TERM} = "DEFAULT"; $SIG{HUP} = "DEFAULT"; exec @ARGV or exit 127;' \
+      "$subject" --ci-real-dune --jobs 1) >"$TMP/direct-slot-$sig.out" 2>&1 &
+  direct_pid=$!
+  term_ticks=0
+  while [ "$term_ticks" -lt 100 ] && [ ! -e "$TMP/relay-ready" ]; do
+    term_ticks=$((term_ticks + 1))
+    sleep 0.05
+  done
+  kill "-$sig" "$direct_pid" 2>/dev/null || :
+  wait_ticks=0
+  while pid_alive "$direct_pid" && [ "$wait_ticks" -lt 100 ]; do
+    wait_ticks=$((wait_ticks + 1))
+    sleep 0.05
+  done
+  if pid_alive "$direct_pid"; then kill -KILL "$direct_pid" 2>/dev/null || :; fi
+  direct_rc=0
+  wait "$direct_pid" 2>/dev/null || direct_rc=$?
+  if [ "$direct_rc" = "$want" ] && [ -e "$direct_rec" ] && [ ! -s "$direct_rec" ]; then
+    report 0 "test-harnesses.sh leaves slot_record empty on untrapped $sig (exit $want)"
+  else
+    report 1 "test-harnesses.sh leaves slot_record empty on untrapped $sig (exit $want)" \
+      "rc=$direct_rc rec=[$(cat "$direct_rec" 2>/dev/null || echo missing)]"
+  fi
+  if [ -s "$TMP/relay-member.pid" ]; then
+    kill -TERM "$(cat "$TMP/relay-member.pid")" 2>/dev/null || :
+  fi
+done
+
+# Independent pin of fleet_slot_rerun's signal-exit guard (gh-ocannl-2450):
+# even if a caller's EXIT trap writes 0 or a stale non-zero status on untrapped
+# TERM/HUP, fleet_slot_rerun refuses to override the signal exit (129..192);
+# meanwhile a supervision exit 255 still yields to a clean recorded 0, and an
+# inner tool that explicitly recorded 143 keeps its own verdict cleanly.
+exit_trap_inner=$TMP/exit-trap-inner.sh
+cat >"$exit_trap_inner" <<'EXIT_TRAP_INNER'
+#!/usr/bin/env bash
+set -u
+slot_record=${TEST_PROBE_IN_SLOT-}
+unset TEST_PROBE_IN_SLOT
+[ -z "$slot_record" ] || : >"$slot_record" || exit 2
+trap '' HUP INT TERM
+trap - HUP INT TERM
+trap 'status=$?; [ -z "$slot_record" ] || echo "$status" >"$slot_record"' EXIT
+case ${INNER_MODE:-} in
+  normal-zero) exit 0 ;;
+  caught-term) exit 143 ;;
+  stale-zero)
+    true
+    "$HOLD_CHILD" ;;
+  stale-one)
+    if true; then false; fi
+    "$HOLD_CHILD" ;;
+esac
+EXIT_TRAP_INNER
+chmod +x "$exit_trap_inner"
+for sig in TERM HUP; do
+  case $sig in TERM) want=143 signum=15 ;; HUP) want=129 signum=1 ;; esac
+  for stale in zero one; do
+    case $stale in zero) stale_val=0 ;; one) stale_val=1 ;; esac
+    probe_dir=$TMP/rerun-guard-$sig-$stale
+    rm -rf "$probe_dir"; mkdir -p "$probe_dir"
+    rm -f "$TMP/inner.ready" "$TMP/inner-hold.pid" "$TMP/slot-inner.pid"
+    (
+      . "$fixture/tools/fleet-worker-candidates.sh"
+      OCANNL_TOOL_FLEET_WORKER="$slot_sig_fw" SLOT_INNER_PID="$TMP/slot-inner.pid" \
+        INNER_MODE="stale-$stale" HOLD_CHILD="$TMP/relay-hold-member" \
+        RELAY_READY="$TMP/inner.ready" RELAY_MEMBER_PID="$TMP/inner-hold.pid" \
+        fleet_slot_rerun TEST_PROBE_IN_SLOT "$probe_dir" probe "the probe" -- \
+          "$subject_bash" "$exit_trap_inner"
+    ) >"$TMP/rerun-guard-$sig-$stale.out" 2>&1 &
+    guard_pid=$!
+    term_ticks=0
+    while [ "$term_ticks" -lt 100 ] && { [ ! -e "$TMP/inner.ready" ] || [ ! -s "$TMP/slot-inner.pid" ]; }; do
+      term_ticks=$((term_ticks + 1))
+      sleep 0.05
+    done
+    inner_pid=$(cat "$TMP/slot-inner.pid" 2>/dev/null)
+    [ -z "$inner_pid" ] || kill "-$sig" "$inner_pid" 2>/dev/null || :
+    wait_ticks=0
+    while pid_alive "$guard_pid" && [ "$wait_ticks" -lt 100 ]; do
+      wait_ticks=$((wait_ticks + 1))
+      sleep 0.05
+    done
+    if pid_alive "$guard_pid"; then
+      kill -KILL "$guard_pid" 2>/dev/null || :
+    fi
+    guard_rc=0
+    wait "$guard_pid" 2>/dev/null || guard_rc=$?
+    if [ -s "$TMP/inner-hold.pid" ]; then
+      kill -TERM "$(cat "$TMP/inner-hold.pid")" 2>/dev/null || :
+    fi
+    want_line="probe: FAILED (exit $want): the probe under the fleet slot died on signal $signum (recorded $stale_val ignored)"
+    if [ "$guard_rc" = "$want" ] && [ "$(tail -n 1 "$TMP/rerun-guard-$sig-$stale.out")" = "$want_line" ]; then
+      report 0 "fleet_slot_rerun refuses stale recorded $stale_val on untrapped $sig (exit $want)"
+    else
+      report 1 "fleet_slot_rerun refuses stale recorded $stale_val on untrapped $sig (exit $want)" \
+        "rc=$guard_rc last=[$(tail -n 1 "$TMP/rerun-guard-$sig-$stale.out")]"
+    fi
+  done
+done
+probe_dir=$TMP/rerun-guard-255
+rm -rf "$probe_dir"; mkdir -p "$probe_dir"
+guard_rc=0
+(
+  . "$fixture/tools/fleet-worker-candidates.sh"
+  OCANNL_TOOL_FLEET_WORKER="$slot_sig_fw" SLOT_SIG_FW_MODE=supervision-255 INNER_MODE=normal-zero \
+    fleet_slot_rerun TEST_PROBE_IN_SLOT "$probe_dir" probe "the probe" -- \
+      "$subject_bash" "$exit_trap_inner"
+) >"$TMP/rerun-guard-255.out" 2>&1 || guard_rc=$?
+if [ "$guard_rc" = 0 ]; then
+  report 0 'fleet_slot_rerun keeps recorded 0 when wrapper supervision exits 255'
+else
+  report 1 'fleet_slot_rerun keeps recorded 0 when wrapper supervision exits 255' "rc=$guard_rc; $(cat "$TMP/rerun-guard-255.out")"
+fi
+probe_dir=$TMP/rerun-guard-caught-term
+rm -rf "$probe_dir"; mkdir -p "$probe_dir"
+guard_rc=0
+(
+  . "$fixture/tools/fleet-worker-candidates.sh"
+  OCANNL_TOOL_FLEET_WORKER="$slot_sig_fw" INNER_MODE=caught-term \
+    fleet_slot_rerun TEST_PROBE_IN_SLOT "$probe_dir" probe "the probe" -- \
+      "$subject_bash" "$exit_trap_inner"
+) >"$TMP/rerun-guard-caught-term.out" 2>&1 || guard_rc=$?
+if [ "$guard_rc" = 143 ] && ! grep -q 'ignored' "$TMP/rerun-guard-caught-term.out"; then
+  report 0 'fleet_slot_rerun preserves an explicit recorded 143 without a spurious ignored line'
+else
+  report 1 'fleet_slot_rerun preserves an explicit recorded 143 without a spurious ignored line' \
+    "rc=$guard_rc; $(cat "$TMP/rerun-guard-caught-term.out")"
+fi
+
 cp "$TMP/control-before-term" "$fixture/$control_member"
 cp "$TMP/rd-member-before-relay" "$fixture/$rd_member"
 

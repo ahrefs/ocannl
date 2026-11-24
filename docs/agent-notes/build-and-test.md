@@ -1224,7 +1224,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   themselves in the slot through one helper beside it, `fleet_slot_rerun`, with a caller-named
   environment variable for the record, a caller-given message prefix, and one set of outcome
   lines; before gh-ocannl-1841 each carried a 30-line copy, and the sweep's probe parsed the line
-  more loosely than the token reader did. `tools/test-test-harnesses.sh` drives the slot with a
+  more loosely than the token reader did. The copy under the slot writes its record only on
+  explicit exits, never from an `EXIT` trap: on an untrapped `TERM` or `HUP` Bash (3.2 and 5.3)
+  runs the `EXIT` trap with the previous command's `$?` (often `0`) before re-raising the signal,
+  which used to turn a killed run into a false green; `fleet_slot_rerun` also refuses to let a
+  non-signal recorded status (`0..128`) override a signal-exit slot status (`129..192`, leaving
+  `255` and other supervision-failure codes to the recorded status, gh-ocannl-2450).
+  `tools/test-test-harnesses.sh` drives the slot with a
   fake fleet-worker.sh (one answering no probe is the negative control) and checks that the askers
   call the shared functions and no tool asks `execution slot --probe` itself (red against the
   pre-gh-ocannl-1841 copies in all four files).

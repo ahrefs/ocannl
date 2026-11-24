@@ -95,19 +95,25 @@ fleet_slot_probe() { # ANSWER [RUNNER...]
 # path) runs under `execution slot --wait <OCANNL_TOOL_SLOT_WAIT, 600> --cpu`, with the caller's
 # environment variable VAR naming DIR/record. The copy under the slot must clear VAR at once (so
 # nothing it runs inherits it), truncate the file it names before anything else, and write its exit
-# status there as it ends. A caller's own enclosing `execution slot` is reused, not doubled (the
-# fleet's nested-slot rule, which the probe proves the deployed version has). DIR is a scratch
-# directory the caller owns and removes; the probe answers through DIR/probe.
+# status there only on an explicit exit -- never from an EXIT trap, where an untrapped TERM or HUP
+# runs the trap with the previous command's $? before Bash re-raises the signal (gh-ocannl-2450). A
+# caller's own enclosing `execution slot` is reused, not doubled (the fleet's nested-slot rule,
+# which the probe proves the deployed version has). DIR is a scratch directory the caller owns and
+# removes; the probe answers through DIR/probe.
 #
 # No probe answer -- CI, a machine outside the fleet, OCANNL_TOOL_FLEET_WORKER=none -- returns 0 at
 # once, silently, and the caller runs its work directly. Otherwise this never returns: it exits
 # with the copy's recorded status, whatever fleet-worker.sh's own after it (a failure of its
 # supervision after the run is not the run's); with 75, after `<PREFIX>: FAILED (exit 75): SLOT
 # REFUSED: ...`, when no record exists -- the slot never ran the copy (refused, or the registry
-# unreachable), so nothing ran; and with fleet-worker.sh's status (1 if that was 0), after `<PREFIX>:
+# unreachable), so nothing ran; with fleet-worker.sh's status (1 if that was 0), after `<PREFIX>:
 # FAILED (exit <n>): <WHAT> under the fleet slot ended without a status`, when the record is there
-# but empty -- the copy was killed. Those lines go to stdout and are the last thing printed, so
-# a tool whose last line is its verdict keeps that form.
+# but empty -- the copy was killed; and with fleet-worker.sh's signal status (129..192, covering
+# every POSIX/Linux/macOS signal while leaving 255 and other supervision codes to the recorded
+# status), after `<PREFIX>: FAILED (exit <n>): <WHAT> under the fleet slot died on signal <sig>
+# (recorded <m> ignored)`, when the record holds a non-signal status (0..128) beside a signal exit.
+# Those lines go to stdout and are the last thing printed, so a tool whose last line is its verdict
+# keeps that form.
 fleet_slot_rerun() { # VAR DIR PREFIX WHAT -- COMMAND...
   local var=$1 dir=$2 prefix=$3 what=$4 wait rc recorded
   shift 4
@@ -131,5 +137,9 @@ fleet_slot_rerun() { # VAR DIR PREFIX WHAT -- COMMAND...
       exit "$rc"
       ;;
   esac
+  if [ "$rc" -gt 128 ] && [ "$rc" -le 192 ] && [ "$recorded" -le 128 ]; then
+    echo "$prefix: FAILED (exit $rc): $what under the fleet slot died on signal $((rc - 128)) (recorded $recorded ignored)"
+    exit "$rc"
+  fi
   exit "$recorded"
 }
