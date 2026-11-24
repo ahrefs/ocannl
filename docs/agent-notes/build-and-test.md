@@ -6046,6 +6046,25 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   merge whose tree is the base's, which changes nothing).
 - **After the merge,** `tools/owed-run.sh prune <head sha>` (or bare `prune`, every merged head)
   deletes the record refs of heads already on master; an open head's record stays.
+- **Scoped owed Linux shell leg (gh-ocannl-2414).** On non-Linux hosts (`uname -s` != `Linux`),
+  `tools/merge-build-check.sh` owes a Linux shell leg when the head side's diff touches a `*.sh`
+  source reached by the harness census (`tools/test-harnesses.sh --affected --list --files`) or by
+  a sweep-driver Dune rule (`tools/affected-tests.sh` emits
+  `affected: PATH: reached by sweep driver alias @ALIAS` for literal `.sh` dependencies of rules
+  executing `test/operations/sweep_harness_driver.exe`). Changes touching no such script (including
+  non-shell files, `# harness: none` scripts, and unreached non-sweep `*.sh` files) owe nothing
+  new, and a merge build running on Linux satisfies the leg by itself. Each reached harness member
+  owes `linux:member:<MEMBER>` (collapsed to `linux:harnesses` when the entire manifest is reached
+  or a census ask fails on a `*.sh`), and each reached sweep-driver alias owes
+  `linux:@<DIR>/runtest-<NAME>`. `tools/merge-build-check.sh --plan --base REV` and `--plan-merge`
+  print the exact `fleet-worker.sh execution leg ... --cpu --wait-window -- tools/linux-shell-leg.sh`
+  command alongside `ship-pr-merge-plan:`. `tools/linux-shell-leg.sh` refuses non-Linux hosts, runs
+  the requested `--dune` aliases under `OCANNL_BACKEND=cc` and `--harness` (`tools/test-harnesses.sh
+  --member`) or `--all-harnesses`, and writes an `os=Linux` receipt outside the worktree that
+  `tools/owed-run-report.sh` (`tools/owed-run.sh leg-record`, via `FLEET_LEG_RECEIPT_DIR` or its
+  per-worktree pointer) publishes as `owed-run: v2 linux-shell ... os=Linux ... targets=...`. A
+  `v2 run` record carries no OS attestation and never satisfies `linux:*` needs, and a `linux-shell`
+  record never satisfies `runtest` or `train`.
 - The gate is witnessed only locally: the nightly `ci` run reads master, where there is no PR head.
 
 ## The cross-machine sweep

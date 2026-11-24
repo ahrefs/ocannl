@@ -735,6 +735,7 @@ tools/hip-wmma-probe.sh parses: true
 tools/isolated-apt.sh parses: true
 tools/kernel-window.sh parses: true
 tools/lab-map.sh parses: true
+tools/linux-shell-leg.sh parses: true
 tools/machine-verify-far.sh parses: true
 tools/machine-verify.sh parses: true
 tools/merge-build-check.sh parses: true

@@ -194,7 +194,7 @@ tools/test-machine-verify.sh	tools/per-test-cap.sh
 tools/test-machine-verify.sh	tools/remote-verify.sh
 tools/test-machine-verify.sh	tools/test-machine-verify.sh
 tools/test-merge-build-check.sh	.github/fleet-leg
-tools/test-merge-build-check.sh	.github/fleet-leg	declares	--only '#owed-record'
+tools/test-merge-build-check.sh	.github/fleet-leg	declares	--only '#owed-record|#linux-shell'
 tools/test-merge-build-check.sh	.github/ship-pr-merge-build
 tools/test-merge-build-check.sh	benchmarks/*.py	declares	--only '#compile-output'
 tools/test-merge-build-check.sh	benchmarks/bench_output.py
@@ -227,9 +227,11 @@ tools/test-merge-build-check.sh	tools/device-probe.sh
 tools/test-merge-build-check.sh	tools/dune-golden-families.sh
 tools/test-merge-build-check.sh	tools/fleet-worker-candidates.sh
 tools/test-merge-build-check.sh	tools/fmt-check.sh
+tools/test-merge-build-check.sh	tools/linux-shell-leg.sh
 tools/test-merge-build-check.sh	tools/merge-build-check.sh
 tools/test-merge-build-check.sh	tools/opam-env.sh
-tools/test-merge-build-check.sh	tools/owed-run-report.sh	declares	--only '#owed-record'
+tools/test-merge-build-check.sh	tools/owed-run-report.sh
+tools/test-merge-build-check.sh	tools/owed-run-report.sh	declares	--only '#owed-record|#linux-shell'
 tools/test-merge-build-check.sh	tools/owed-run.sh
 tools/test-merge-build-check.sh	tools/owed-run.sh	declares	-
 tools/test-merge-build-check.sh	tools/per-test-cap.sh

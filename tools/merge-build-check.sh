@@ -45,13 +45,22 @@
 #            both base versions. An older base alone does not create a mixed-version case.
 #   OWED RECORD  what is OWED must be recorded for the PR's head, or the tier FAILS before it
 #            builds anything: `tools/owed-run.sh check HEAD_SIDE NEED...`, NEED `runtest` for
-#            an OWED list, `train` for an INCOMPLETE one, and each `train-` alias reached. The
-#            record is the ref refs/owed-runs/<head sha> on the PR repository, fetched with a
+#            an OWED list, `train` for an INCOMPLETE one, each `train-` alias reached, and on
+#            non-Linux hosts (`uname -s` != Linux) the scoped Linux shell leg (gh-ocannl-2414):
+#            when the head side changed any `*.sh` path reached by the harness census or a
+#            sweep-driver Dune rule (`affected: PATH: reached by sweep driver alias @ALIAS`),
+#            each reached harness member (`linux:member:<MEMBER>`, or `linux:harnesses` when
+#            the whole manifest is reached or the census ask failed on a `*.sh`) and each
+#            reached sweep-driver alias (`linux:@DIR/runtest-NAME`). A merge build running on
+#            Linux satisfies the Linux shell leg by itself; changes touching no census- or
+#            sweep-reached `*.sh` owe nothing new. The record is the ref
+#            refs/owed-runs/<head sha> on the PR repository, fetched with a
 #            bound and failing closed; tools/owed-run.sh's header is its boundary (what it
 #            admits: a finished, clean, exit-0 `--expect-backend cc` run of the full suite or
-#            of the `train-` aliases, on the head itself, or a waiver for exactly that head;
-#            what it refuses: a missing, unreadable, stale, foreign, dirty, failed, non-cc,
-#            filtered or first-tier record). The record is keyed by the head, not the merged
+#            of the `train-` aliases, a finished, clean, exit-0 `os=Linux` `tools/linux-shell-leg.sh`
+#            run covering the Linux shell targets, on the head itself, or a waiver for exactly that
+#            head; what it refuses: a missing, unreadable, stale, foreign, dirty, failed, non-cc,
+#            non-Linux, filtered or first-tier record). The record is keyed by the head, not the merged
 #            tree: a base that moved since leaves it standing (gh-ocannl-861: a green head
 #            merges as it is), and a push after the run stales it. The refusal names the
 #            MERGED tree, which ship-pr's build of the base alone (the base's tree, the same
@@ -182,6 +191,7 @@ fi
 [ -z "$plan_base" ] || { [ "$plan" = 1 ] && [ "$plan_merge" = 0 ]; } ||
   { echo "$me: --base requires --plan" >&2; exit 2; }
 SHELL_GLOB='*.sh'
+host_os=$(uname -s 2>/dev/null || echo unknown)
 # The harness tier's members run this many at once (tools/test-harnesses.sh --jobs): the width
 # of the `-j 4` build the slot this runs in is sized for, and what the bound was measured at.
 SHELL_JOBS=4
@@ -227,15 +237,23 @@ ask_reach() {
 # A script no member reaches leaves the tier PENDING (`pending` 1, the scripts in `unreached`)
 # unless the ask verifies a hand-run marker. cover_tier settles PENDING once the tests tier is read.
 scope_tier() {
-  local s rc
+  local s rc line m
   for s in ${scripts[@]+"${scripts[@]}"}; do
     ask_reach "$s" || {
       rc=$?
+      linux_harness_all=1
       scope_why="what $s reaches could not be asked (test-harnesses.sh exit $rc)"
       return
     }
-    if [ -z "$reach" ] &&
-       ! grep -qxF -- "affected: $s: verified hand-run harness marker" "$tests_dir/harness-ask"; then
+    if [ -n "$reach" ]; then
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        m=${line%% *}
+        linux_harness_members+=("$m")
+      done <<EOF
+$reach
+EOF
+    elif ! grep -qxF -- "affected: $s: verified hand-run harness marker" "$tests_dir/harness-ask"; then
       unreached+=("$s")
     fi
   done
@@ -294,13 +312,13 @@ cover_tier() {
 # tier it could narrow, `scoped`, `reach` and `asked` (or `scope_why`).
 select_tiers() {
   harness=1 scoped=0 pending=0 scope_why= reach= asked=() scripts=() unreached=() script_line= n_paths=0
+  linux_harness_members=() linux_harness_all=0
   local head_names base_pairs p old new other n=0 rc=0 hit=
   if [ -z "$base" ]; then
     [ "$all" = 0 ] || { why='--all'; return; }
     why='HEAD is not a two-parent merge, so the whole harness tier runs'
     return
   fi
-  if [ "$all" = 1 ]; then why='--all'; return; fi
   [ -n "$mb" ] || rc=1
   # The base side is read for its renames alone: an edit of a path the base renamed lands in the
   # merged tree under the other name.
@@ -309,8 +327,12 @@ select_tiers() {
   [ "$rc" != 0 ] || read_side "$mb" "$head" || rc=$?
   case $rc in
     0) ;;
-    3) why='git quoted a path one side changed, so the whole harness tier runs'; return ;;
-    *) why='the paths each side changed could not be read, so the whole harness tier runs'; return ;;
+    3)
+      if [ "$all" = 1 ]; then why='--all'; else why='git quoted a path one side changed, so the whole harness tier runs'; fi
+      return ;;
+    *)
+      if [ "$all" = 1 ]; then why='--all'; else why='the paths each side changed could not be read, so the whole harness tier runs'; fi
+      return ;;
   esac
   head_names=$(printf '%s' "$side_names" | env LC_ALL=C sort -u)
   while IFS= read -r p; do
@@ -345,11 +367,19 @@ EOF
     script_line="no script changed on the head side -- none of the $n path(s) it changed matches $SHELL_GLOB, by either name of a rename"
   fi
   if [ "$n" = 0 ]; then
-    harness=0 why='the head side changed no path'
+    if [ "$all" = 1 ]; then
+      harness=1 why='--all'
+    else
+      harness=0 why='the head side changed no path'
+    fi
     return
   fi
   n_paths=$n
   scope_tier
+  if [ "$all" = 1 ]; then
+    harness=1 scoped=0 pending=0 why='--all'
+    return
+  fi
   if [ "$scoped" = 1 ]; then
     narrowed
   elif [ "$pending" = 1 ]; then
@@ -517,6 +547,103 @@ owed_needs() {
   [ "$n" = 0 ] || train_why='the change reaches train- aliases, which this build does not run'
 }
 
+# linux_shell_needs appends scoped Linux shell-leg NEEDs (gh-ocannl-2414) to `needs` on non-Linux
+# hosts when the head side changed any `*.sh` path reached by the harness census or a sweep-driver
+# Dune rule. A merge build running on Linux satisfies the Linux leg by itself. Sets `linux_why`
+# and `linux_leg_args` when any Linux need is added; fails closed (`tests=unread`) on an invalid
+# or absent sweep-driver alias line.
+linux_shell_needs() {
+  local s line a dir last_dir= name m sorted_h sorted_d manifest_all
+  local sweep_aliases=() uniq_h=() uniq_d=()
+  linux_why= linux_leg_args=
+  [ "$host_os" != Linux ] || return 0
+  [ ${#scripts[@]} -gt 0 ] || return 0
+  if [ -f "$tests_dir/ask" ]; then
+    for s in "${scripts[@]}"; do
+      while IFS= read -r line; do
+        case $line in
+          "affected: $s: reached by sweep driver alias "*)
+            a=${line#"affected: $s: reached by sweep driver alias "}
+            sweep_aliases+=("$a") ;;
+        esac
+      done <"$tests_dir/ask"
+    done
+  fi
+  if [ ${#sweep_aliases[@]} -gt 0 ]; then
+    sorted_d=$(printf '%s\n' "${sweep_aliases[@]}" | env LC_ALL=C sort -u)
+    while IFS= read -r a; do
+      [ -n "$a" ] || continue
+      case $a in
+        *[!a-zA-Z0-9_@./-]* | *..* | *//* | @/* | *@*@* | '')
+          tests=unread tests_why="affected printed an invalid sweep-driver alias: $a"; return ;;
+        @?*/runtest-?*) ;;
+        *) tests=unread tests_why="affected printed an invalid sweep-driver alias: $a"; return ;;
+      esac
+      dir=${a%/*} dir=${dir#@} name=${a##*/}
+      case $name in runtest-?*) ;; *)
+        tests=unread tests_why="affected printed an invalid sweep-driver alias: $a"; return ;;
+      esac
+      if [ "$dir" != "$last_dir" ]; then
+        if ! dune show aliases --root . "$dir" >"$tests_dir/sweep-aliases" 2>&1 </dev/null; then
+          tests=unread tests_why="Dune could not list sweep-driver aliases in $dir"; return
+        fi
+        last_dir=$dir
+      fi
+      if ! grep -qxF "$name" "$tests_dir/sweep-aliases"; then
+        tests=unread tests_why="affected named a sweep-driver alias this tree does not have: $a"; return
+      fi
+      uniq_d+=("$a")
+    done <<EOF
+$sorted_d
+EOF
+  fi
+  if [ "$linux_harness_all" = 0 ] && [ ${#linux_harness_members[@]} -gt 0 ]; then
+    sorted_h=$(printf '%s\n' "${linux_harness_members[@]}" | env LC_ALL=C sort -u)
+    while IFS= read -r m; do
+      [ -n "$m" ] || continue
+      case $m in
+        '' | /* | *..* | *//* | *[!A-Za-z0-9_./-]*)
+          linux_harness_all=1; uniq_h=(); break ;;
+        *.sh) uniq_h+=("$m") ;;
+        *) linux_harness_all=1; uniq_h=(); break ;;
+      esac
+    done <<EOF
+$sorted_h
+EOF
+    if [ "$linux_harness_all" = 0 ] && [ ${#uniq_h[@]} -gt 0 ]; then
+      if manifest_all=$("${BASH:-bash}" "$root/tools/test-harnesses.sh" --list 2>/dev/null </dev/null) &&
+         [ -n "$manifest_all" ] &&
+         [ "$(printf '%s\n' "$manifest_all" | env LC_ALL=C sort -u)" = "$sorted_h" ]; then
+        linux_harness_all=1
+        uniq_h=()
+      fi
+    fi
+  fi
+  if [ "$linux_harness_all" = 0 ] && [ ${#uniq_h[@]} -eq 0 ] && [ ${#uniq_d[@]} -eq 0 ]; then
+    return 0
+  fi
+  if [ "$linux_harness_all" = 1 ]; then
+    needs+=(linux:harnesses)
+    linux_leg_args+="${linux_leg_args:+ }--all-harnesses"
+  else
+    for m in ${uniq_h[@]+"${uniq_h[@]}"}; do
+      needs+=("linux:member:$m")
+      linux_leg_args+="${linux_leg_args:+ }--harness $m"
+    done
+  fi
+  for a in ${uniq_d[@]+"${uniq_d[@]}"}; do
+    needs+=("linux:$a")
+    linux_leg_args+="${linux_leg_args:+ }--dune $a"
+  done
+  linux_why="the change touches shell source(s) reached by the harness census or sweep driver on non-Linux ($host_os)"
+}
+
+show_linux_leg() {
+  [ -n "${linux_leg_args:-}" ] || return 0
+  printf '%s: linux-shell leg: fleet-worker.sh execution leg --request <id> --rev %s --checkout <linux-clone> --worktree <linux-worktree> --cpu --wait-window -- tools/linux-shell-leg.sh %s\n' \
+    "$me" "$head" "$linux_leg_args"
+}
+
 show_tiers() {
   echo "$me: format tier: tools/fmt-check.sh, its scans off (always)"
   echo "$me: compile tier: dune build @check @test/operations/scans (always)"
@@ -617,6 +744,11 @@ read_tests() {
   owed_needs
   if [ "$tests" = unread ]; then
     [ ! -s "$tests_dir/train-ask" ] || cat "$tests_dir/train-ask" >&2
+    return 1
+  fi
+  linux_shell_needs
+  if [ "$tests" = unread ]; then
+    [ ! -s "$tests_dir/ask" ] || cat "$tests_dir/ask" >&2
     return 1
   fi
 }
@@ -724,6 +856,7 @@ merged_plan() (
       *) echo "$me: owed-run needs: $needs_text (record check failed; owed-run.sh exit $rc)" ;;
     esac
     cat "$tests_dir/owed" || die_plan 'cannot read record-check output'
+    show_linux_leg
     case $rc in
       0) echo "ship-pr-merge-plan: admitted $needs_text" ;;
       1)
@@ -773,11 +906,13 @@ read_tests || finish_tier tests "$started" "$tests_why"
 if [ ${#needs[@]} -gt 0 ]; then
   [ -z "$tests_owed" ] || echo "$me: tests tier: OWED -- $tests_owed did not run here"
   [ "$train_why" = '' ] || echo "$me: tests tier: OWED -- $train_why"
+  [ "$linux_why" = '' ] || echo "$me: tests tier: OWED -- $linux_why"
   rc=0
   check_record >"$tests_dir/owed" 2>&1 </dev/null || rc=$?
   while IFS= read -r line; do [ -z "$line" ] || echo "$me:   $line"; done <"$tests_dir/owed"
   if [ "$rc" != 0 ]; then
     show_cross_reason
+    show_linux_leg
     # The merged tree, which ship-pr's build of the base alone (the base's tree) never prints: a
     # missing record is the merge's own failure, never a shared red `--override` would pass.
     finish_tier tests "$started" "no owed-run record for ${head:0:8} admits the merged tree $(git -C "$root" rev-parse 'HEAD^{tree}'): record the run with tools/owed-run.sh record, or waive it with tools/owed-run.sh waive; tools/owed-run.sh exit $rc"
