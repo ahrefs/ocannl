@@ -4,7 +4,8 @@
    packs. The shared parser inlines a locally defined functor included exactly once at the top
    level. The walk stops at other module applications and at signatures, function, functor, lazy,
    object, attribute and extension bodies. A getter site outside the walk keeps its key out of the
-   startup-only set. The census operates on direct calls in this file, without following aliases or
+   startup-only set. The generator requires at least one recognized eager read before that
+   exclusion. The census operates on direct calls in this file, without following aliases or
    callbacks or expanding PPX. Typed getter names come from the literal arms of
    registered_getter_of_kind. The settings-field census separately covers restore_settings and
    requires a read for every field. Bootstrap keys are owned by profile_ineligible_keys in Utils. *)
@@ -85,6 +86,7 @@ let startup_only_keys source structure =
         | _ -> false)
   in
   let eager, other = List.partition_tf reads ~f:(fun read -> Hash_set.mem eager_offsets read.at) in
+  if List.is_empty eager then failwith "no recognized eager configuration read in Utils";
   let keys reads =
     List.map reads ~f:(fun read -> read.Config_key_scan.read_key) |> Set.of_list (module String)
   in
