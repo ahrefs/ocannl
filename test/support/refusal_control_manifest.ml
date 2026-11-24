@@ -838,6 +838,8 @@ let raw_entries =
         "[scanner-refusal:14853da159c407bfbb2fb7e5a6597d9f] instance until shadowed";
         "[scanner-refusal:3add57bb89dce424f18b91de79486f58] initialization pin must";
         "[scanner-refusal:1941f1fd1c6d01e76c592bdab3261140] search item invalidates";
+        "[scanner-refusal:4aeee97cadd279f1e1d00bd64a116077] search item invalidates";
+        "[scanner-refusal:c3b6672a6f1e65c6ba16b1c987d1a8cb] invalidates an earlier";
         "[scanner-refusal:4b7124f3852d2e10d4a830de32bdedde] carrying cc-vector-width independent";
         "[scanner-refusal:974939e6b89b36d455f0e19ff70a42d3] pinning the variable";
         "[scanner-refusal:687a8e82db5772147024b757deca3cd3] program whose initialization";
