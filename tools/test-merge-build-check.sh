@@ -32,7 +32,10 @@
 # `unadmitted <needs>` on definitive exit 1, and none on transport-unreadable exit 3, other error
 # or `--plan` alone). Push retries in `tools/owed-run.sh` (gh-ocannl-2436) are pinned for transient
 # remote rejections, concurrent `--force-with-lease` contention, exhaustion, exponential backoff,
-# immediate stop on auth/authorization errors, and fleet hook retry recovery.
+# immediate stop on auth/authorization errors, and fleet hook retry recovery. The #plan-locale leg
+# exercises CROSS-CUTTING plans with LANG and LC_ALL unset or empty under LC_CTYPE=UTF-8
+# (gh-ocannl-2462), pinning the exported LANG=C guard, caller-locale preservation, and C-locale
+# reason filtering.
 # The #compile-output leg alone uses real
 # dune and Python in a minimal isolated project: the repository's actual capped-fixture rule
 # runs twice, then with a planted failing case. It compares bytes and rejects the exact unittest
@@ -504,6 +507,99 @@ FAKEGIT
      has 'plan: tests tier unreadable: HEAD has no two sides with a merge base'; then
     report 0 '--plan-merge on a one-parent HEAD exits 1 with no verdict line'
   else report 1 '--plan-merge on a one-parent HEAD exits 1 with no verdict line' "exit $rc; $(cat "$TMP/out")"; fi
+fi
+if harness_leg 'CROSS-CUTTING plans guard an unset locale without breaking C-locale filtering #plan-locale'; then
+  fixture plan-locale
+  cat >"$R/tools/owed-run.sh" <<'FAKE'
+#!/bin/sh
+if [ -n "${FAKE_LOCALE_OUT:-}" ]; then
+  printf 'LANG=%s LC_ALL=%s LC_CTYPE=%s\n' \
+    "${LANG-<unset>}" "${LC_ALL-<unset>}" "${LC_CTYPE-<unset>}" >"$FAKE_LOCALE_OUT"
+fi
+echo 'owed-run: admitted fixture'
+exit 0
+FAKE
+  chmod +x "$R/tools/owed-run.sh"
+  first x.ml && commit_on base
+  locale_base=$(git -C "$R" rev-parse HEAD)
+  git -C "$R" checkout -q side && last x.ml && commit_on side
+  locale_side=$(git -C "$R" rev-parse HEAD)
+  merge_side
+  run_locale() { # ENV_ARGS... -- PLAN_ARGS...
+    local env_args=()
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do env_args+=("$1"); shift; done
+    shift
+    rc=0
+    : >"$TMP/record"
+    : >"$TMP/record.tiers"
+    rm -f "$TMP/locale-seen"
+    (cd "$R" && env ${env_args[@]+"${env_args[@]}"} PATH="$TMP/dunebin:$TMP/gitbin:$SYS_PATH" \
+      FAKE_RECORD="$TMP/record" FAKE_LOCALE_OUT="$TMP/locale-seen" \
+      "$BASH" tools/merge-build-check.sh "$@") >"$TMP/out" 2>&1 || rc=$?
+  }
+  FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_REASON='x.ml (6 aliases)' \
+    run_locale -u LANG -u LC_ALL LC_CTYPE=UTF-8 -- --plan-merge
+  if [ "$rc" = 0 ] && [ ! -s "$TMP/record" ] &&
+     has 'tests plan: CROSS-CUTTING (first tier selected)' &&
+     grep -qxF 'merge-build-check: tests tier: CROSS-CUTTING reason: x.ml (6 aliases)' "$TMP/out" &&
+     has 'owed-run needs: runtest (record admits)' &&
+     grep -qxF 'ship-pr-merge-plan: admitted runtest' "$TMP/out" &&
+     [ "$(cat "$TMP/locale-seen" 2>/dev/null)" = 'LANG=C LC_ALL=<unset> LC_CTYPE=UTF-8' ]; then
+    report 0 '--plan-merge on a CROSS-CUTTING merge with unset LANG/LC_ALL prints reason and verdict and exports LANG=C'
+  else report 1 '--plan-merge on a CROSS-CUTTING merge with unset LANG/LC_ALL prints reason and verdict and exports LANG=C' \
+    "exit $rc; locale=$(cat "$TMP/locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
+  FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_REASON='x.ml (6 aliases)' \
+    run_locale LANG= LC_ALL= LC_CTYPE=UTF-8 -- --plan-merge
+  if [ "$rc" = 0 ] && grep -qxF 'ship-pr-merge-plan: admitted runtest' "$TMP/out" &&
+     [ "$(cat "$TMP/locale-seen" 2>/dev/null)" = 'LANG=C LC_ALL= LC_CTYPE=UTF-8' ]; then
+    report 0 '--plan-merge with empty LANG/LC_ALL exports LANG=C while keeping LC_CTYPE'
+  else report 1 '--plan-merge with empty LANG/LC_ALL exports LANG=C while keeping LC_CTYPE' \
+    "exit $rc; locale=$(cat "$TMP/locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
+  non_ascii_reason=$(printf 'x\303\251.ml (6 aliases)')
+  utf8_ctype=
+  for cand in UTF-8 C.UTF-8 en_US.UTF-8; do
+    if env -u LANG -u LC_ALL "LC_CTYPE=$cand" grep -qx '[[:print:]][[:print:]]*' <<<"$non_ascii_reason" 2>/dev/null; then
+      utf8_ctype=$cand
+      break
+    fi
+  done
+  if [ -z "$utf8_ctype" ]; then
+    skip 'show_cross_reason still rejects non-ASCII bytes under a UTF-8 LC_CTYPE' \
+      'no UTF-8 LC_CTYPE candidate (UTF-8, C.UTF-8, en_US.UTF-8) makes unforced grep accept non-ASCII bytes on this host'
+  else
+    FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_REASON=$non_ascii_reason \
+      run_locale -u LANG -u LC_ALL "LC_CTYPE=$utf8_ctype" -- --plan-merge
+    if [ "$rc" = 0 ] && ! has 'CROSS-CUTTING reason:' &&
+       grep -qxF 'ship-pr-merge-plan: admitted runtest' "$TMP/out"; then
+      report 0 'show_cross_reason still rejects non-ASCII bytes under a UTF-8 LC_CTYPE'
+    else report 1 'show_cross_reason still rejects non-ASCII bytes under a UTF-8 LC_CTYPE' \
+      "LC_CTYPE=$utf8_ctype; exit $rc; $(cat "$TMP/out")"; fi
+  fi
+  FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_REASON='x.ml (6 aliases)' \
+    run_locale -u LC_ALL LANG=en_US.UTF-8 LC_CTYPE=UTF-8 -- --plan-merge
+  if [ "$rc" = 0 ] && [ "$(cat "$TMP/locale-seen" 2>/dev/null)" = 'LANG=en_US.UTF-8 LC_ALL=<unset> LC_CTYPE=UTF-8' ]; then
+    report 0 'a caller-supplied LANG is preserved untouched'
+  else report 1 'a caller-supplied LANG is preserved untouched' \
+    "exit $rc; locale=$(cat "$TMP/locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
+  FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_REASON='x.ml (6 aliases)' \
+    run_locale -u LANG LC_ALL=POSIX LC_CTYPE=UTF-8 -- --plan-merge
+  if [ "$rc" = 0 ] && [ "$(cat "$TMP/locale-seen" 2>/dev/null)" = 'LANG=<unset> LC_ALL=POSIX LC_CTYPE=UTF-8' ]; then
+    report 0 'a caller-supplied LC_ALL is preserved untouched'
+  else report 1 'a caller-supplied LC_ALL is preserved untouched' \
+    "exit $rc; locale=$(cat "$TMP/locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
+  git -C "$R" checkout -q "$locale_side"
+  FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_REASON='x.ml (6 aliases)' \
+    run_locale -u LANG -u LC_ALL LC_CTYPE=UTF-8 -- --plan --base "$locale_base"
+  if [ "$rc" = 0 ] && [ ! -s "$TMP/record" ] &&
+     has 'tests plan: CROSS-CUTTING (first tier selected)' &&
+     grep -qxF 'merge-build-check: tests tier: CROSS-CUTTING reason: x.ml (6 aliases)' "$TMP/out" &&
+     has 'owed-run needs: runtest (record admits)' &&
+     grep -qxF 'ship-pr-merge-plan: admitted runtest' "$TMP/out" &&
+     [ "$(cat "$TMP/locale-seen" 2>/dev/null)" = 'LANG=C LC_ALL=<unset> LC_CTYPE=UTF-8' ]; then
+    report 0 '--plan --base on a CROSS-CUTTING branch with unset LANG/LC_ALL prints reason and verdict and exports LANG=C'
+  else report 1 '--plan --base on a CROSS-CUTTING branch with unset LANG/LC_ALL prints reason and verdict and exports LANG=C' \
+    "exit $rc; locale=$(cat "$TMP/locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
+  git -C "$R" checkout -q base
 fi
 if harness_leg 'the format tier runs first, its scans off, and a red one ends the run #tiers'; then
   R=$APART run "$TMP/dunebin"

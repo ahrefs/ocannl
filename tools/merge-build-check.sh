@@ -148,6 +148,12 @@
 # 1 a tier failed or the plan could not be read, including a merge conflict or record-check error;
 # 2 a usage error.
 set -u
+# Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462): with neither LANG
+# nor LC_ALL set (e.g. macOS Terminal/SSH with only LC_CTYPE=UTF-8), Homebrew Bash's libintl
+# calls CoreFoundation's preferred-languages lookup when tearing down a temporary or local
+# locale assignment, which segfaults inside a forked subshell or under concurrent runs.
+# LANG=C matches unset LANG in POSIX while letting caller-set categories (LC_CTYPE) win.
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 me=merge-build-check
 plan=0 all=0 plan_base= plan_merge=0 compile_only=0
@@ -306,7 +312,7 @@ select_tiers() {
     3) why='git quoted a path one side changed, so the whole harness tier runs'; return ;;
     *) why='the paths each side changed could not be read, so the whole harness tier runs'; return ;;
   esac
-  head_names=$(printf '%s' "$side_names" | LC_ALL=C sort -u)
+  head_names=$(printf '%s' "$side_names" | env LC_ALL=C sort -u)
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     n=$((n + 1))
@@ -619,7 +625,9 @@ show_cross_reason() {
   local reason
   case $tests_verdict in cross-cutting | cross-cutting,incomplete) ;; *) return 0 ;; esac
   reason=$(sed -n 's/^affected: CROSS-CUTTING reason: //p' "$tests_dir/ask")
-  if [ -n "$reason" ] && LC_ALL=C grep -qx '[[:print:]][[:print:]]*' <<<"$reason" &&
+  # Pass LC_ALL=C through env, not a shell prefix assignment, so a forked subshell (merged_plan)
+  # never triggers Homebrew Bash's dispose_temporary_env -> libintl_setlocale path (gh-ocannl-2462).
+  if [ -n "$reason" ] && env LC_ALL=C grep -qx '[[:print:]][[:print:]]*' <<<"$reason" &&
      [ "$(grep -c '^affected: CROSS-CUTTING reason: ' "$tests_dir/ask")" = 1 ]; then
     printf '%s: tests tier: CROSS-CUTTING reason: %s\n' "$me" "$reason"
   fi
