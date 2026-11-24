@@ -106,10 +106,7 @@ let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~d
    kernel differently, which is a different rounding, not a different order, and failed the
    claims. *)
 let () = Unix.putenv "OCANNL_FP_CONTRACT" "true"
-
-let seeds_here =
-  String.is_substring backend_name ~substring:"cuda"
-  || String.is_substring backend_name ~substring:"hip"
+let seeds_here = (Context.backend_facts_of_name backend_name).Ir.Backend_intf.seeds_untuned_default
 
 let nb = 4
 and ns = 64

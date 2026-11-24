@@ -50,7 +50,7 @@ module Generated = Test_utils.Generated
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let () = Generated.init ~backend_name
-let gpu = match backend_name with "metal" | "cuda" | "hip" -> true | _ -> false
+let gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 
 (* The comment the all-reduce rendering opens with ([C_syntax.try_lane_all_reduce]). *)
 let all_reduce_marker = "lane all-reduce into a scope local"

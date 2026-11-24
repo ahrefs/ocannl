@@ -51,8 +51,8 @@ let () = Utils.state_config ~key:"hip_fast_math" ~data:"false"
 let () = Utils.state_config ~key:"metal_fp_contract" ~data:"off"
 let () = Utils.state_config ~key:"tf32_matmuls" ~data:"false"
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
-let on_cc = List.mem [ "cc"; "multidev_cc" ] backend_name ~equal:String.equal
-let on_gpu = List.mem [ "cuda"; "hip"; "metal" ] backend_name ~equal:String.equal
+let on_cc = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
+let on_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 let accum_prec = Ll_test.backend_accum_prec
 
 let named name (comp : Asgns.comp) : Asgns.comp =

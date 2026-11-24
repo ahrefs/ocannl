@@ -9412,7 +9412,8 @@
   arrayjit.verdict
   ll_test
   test_utils
-  arrayjit.utils))
+  arrayjit.utils
+  arrayjit.context))
 
 (test
  (name gpu_parallel_prefix)
@@ -18483,7 +18484,15 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries base ocannl stdio arrayjit.verdict ll_test unix arrayjit.utils))
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  unix
+  arrayjit.utils
+  arrayjit.context))
 
 ; gh-ocannl-1710: the same executable under the reproducible profile, which turns CUDA's fast math
 ; off (cuda_fast_math=false): there CUDA's f32 and bfloat16 functions are held to the stated ulps

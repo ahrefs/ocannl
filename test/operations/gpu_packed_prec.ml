@@ -39,7 +39,7 @@ let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~d
 let () = Stdio.eprintf "gpu-packed-prec backend: %s (not part of the golden)\n%!" backend_name
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let () = Generated.init ~backend_name
-let is_gpu = List.mem [ "cuda"; "hip"; "metal" ] backend_name ~equal:String.equal
+let is_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 let is_metal = String.equal backend_name "metal"
 let len = 27
 
