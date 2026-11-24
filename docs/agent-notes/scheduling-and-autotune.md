@@ -6,6 +6,12 @@ Part of the agent notes; the [index](../agent-notes.md) carries the scope discip
 files.
 
 ## GPU mapping and companion coverage
+- The CUDA/HIP fission prelude prepares eligible f32 embedding scatters with `packetize_scatter`
+  (gh-ocannl-2443). An integer word per row and 16-position packet records guarded selector
+  matches once for all channels. Each static row/channel owner visits its hits in the original
+  order and stores only hit cells. The shape and selector-work caps bound scratch and duplicated
+  selector reads. The prelude runs after seeded split-reduce and before deriving or replaying
+  fission, with the compile's placement table so the packet buffer can link.
 - Small leading GPU axes can starve the default schedule even when later axes have ample work
   (gh-ocannl-995). `gpu_parallel_suffix` chooses a better-populated pair before
   `analyze_parallel_chains` proves ownership, with the original selection as a conservative

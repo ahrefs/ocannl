@@ -3009,8 +3009,9 @@ let segment_preset ?block_size ~presets ~is_gpu ~is_cpu ~limits seg =
    pipeline ([Sched.maybe_default_schedules]) has them, and the same schedule-aware merge probes
    ([Sched.fission_keep_mapping]), so a fissioned candidate and the untuned baseline schedule the
    same code. *)
-let tuner_fission ?arity_cuts ?fold_zeros ?replay ~is_gpu ~limits ~preset ~static_indices opt =
-  Sched.fission_segmented ~promote_locals:is_gpu ?arity_cuts ?fold_zeros
+let tuner_fission ?arity_cuts ?fold_zeros ?replay ?(scatter_packets = false) ~is_gpu ~limits ~preset
+    ~static_indices opt =
+  Sched.fission_segmented ~scatter_packets ~promote_locals:is_gpu ?arity_cuts ?fold_zeros
     ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
     ?replay ~preset
     ~zero_sched:(fun tns -> if is_gpu then Sched.zero_expansion ~limits tns else [])
@@ -3019,8 +3020,9 @@ let tuner_fission ?arity_cuts ?fold_zeros ?replay ~is_gpu ~limits ~preset ~stati
 (* gh-ocannl-1483: the segmentation the per-segment sketch candidates are enumerated, modeled and
    explained under, derived on a hermetic copy of [opt]: {!tuner_fission} with the zero fold
    (gh-ocannl-1175) and the default presets [presets] names. *)
-let sketch_segmentation ?arity_cuts ~presets ~is_gpu ~is_cpu ~limits ~static_indices opt =
-  tuner_fission ?arity_cuts ~fold_zeros:true ~is_gpu ~limits
+let sketch_segmentation ?arity_cuts ?(scatter_packets = false) ~presets ~is_gpu ~is_cpu ~limits
+    ~static_indices opt =
+  tuner_fission ?arity_cuts ~fold_zeros:true ~scatter_packets ~is_gpu ~limits
     ~preset:(segment_preset ~presets ~is_gpu ~is_cpu ~limits)
     ~static_indices (scratch_of opt)
 
@@ -4214,9 +4216,11 @@ let fiss_sketch_label ?(staff = []) ~fine entries =
    shipped pipeline worse than leaving the segment out. [None] where fission exposes no site; raises
    {!Outcome.Cause_at} as {!Sched.fission_segmented} does. [tune] enumerates its per-segment seeds
    on it ({!search_segment_entries}, gh-ocannl-1490), its finer pass with [arity_cuts]. *)
-let model_segments ?arity_cuts ~is_gpu ~is_cpu ~limits ~static_indices (base : LL.optimized) =
+let model_segments ?arity_cuts ~scatter_packets ~is_gpu ~is_cpu ~limits ~static_indices
+    (base : LL.optimized) =
   match
-    sketch_segmentation ?arity_cuts ~presets:`Search ~is_gpu ~is_cpu ~limits ~static_indices base
+    sketch_segmentation ?arity_cuts ~presets:`Search ~scatter_packets ~is_gpu ~is_cpu ~limits
+      ~static_indices base
   with
   | _, tuples when not (fission_exposes_sites ~static_indices base tuples) -> None
   | plan, tuples -> Some (plan, keyed_segments ~static_indices plan tuples)
@@ -4254,11 +4258,13 @@ let search_seed_params ?census ~capabilities ~is_gpu ~is_cpu ~limits ~where opt 
    one): the keyed segments of {!sketch_segmentation} at the search's presets, each with the seeds
    it admits; a segment with none is left out. Empty off the C and GPU backends, where the
    segmentation refuses, and where fission exposes no site the whole-routine seeds miss. *)
-let search_segment_entries ?census ~capabilities ~arity_cuts ~is_gpu ~is_cpu ~limits ~static_indices
-    base_opt =
+let search_segment_entries ?census ~capabilities ~arity_cuts ~scatter_packets ~is_gpu ~is_cpu
+    ~limits ~static_indices base_opt =
   if not (is_gpu || is_cpu) then ([], [])
   else
-    match model_segments ~arity_cuts ~is_gpu ~is_cpu ~limits ~static_indices base_opt with
+    match
+      model_segments ~arity_cuts ~scatter_packets ~is_gpu ~is_cpu ~limits ~static_indices base_opt
+    with
     | exception Outcome.Cause_at _ -> ([], [])
     | None -> ([], [])
     | Some (plan, keyed) ->
@@ -4284,14 +4290,15 @@ type search_seeding = {
   ss_fine_new : segment_seeds list;
 }
 
-let search_seeding ?census ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices base_opt =
+let search_seeding ?census ?(scatter_packets = false) ~capabilities ~is_gpu ~is_cpu ~limits
+    ~static_indices base_opt =
   let ss_whole =
     search_seed_params ?census ~capabilities ~is_gpu ~is_cpu ~limits ~where:"tune whole-routine"
       base_opt
   in
   let entries ~arity_cuts =
-    search_segment_entries ?census ~capabilities ~arity_cuts ~is_gpu ~is_cpu ~limits ~static_indices
-      base_opt
+    search_segment_entries ?census ~capabilities ~arity_cuts ~scatter_packets ~is_gpu ~is_cpu
+      ~limits ~static_indices base_opt
   in
   let ss_coarse_plan, ss_coarse = entries ~arity_cuts:false in
   (* The finer segmentation (gh-ocannl-574) is GPU-only, and is dropped whole when it cuts nothing
@@ -4503,12 +4510,12 @@ let seeded_sunk_schedule ~limits ~accum_prec ~admit_narrow ~static_indices seg =
    refuse. With [~fallback:false] (a seeded single, gh-ocannl-1664) a plan that does not apply
    raises its cause instead of compiling the default segments: the single is then a decline, not a
    second timing of the default pipeline under the single's label. *)
-let seeded_replay ?(fallback = true) ~limits ~accum_prec ~admit_narrow ~static_indices segments
-    (opt : LL.optimized) =
+let seeded_replay ?(fallback = true) ~scatter_packets ~limits ~accum_prec ~admit_narrow
+    ~static_indices segments (opt : LL.optimized) =
   let preset = seeded_preset ~limits in
   let zero_sched tns = Sched.zero_expansion ~limits tns in
   let default () =
-    Sched.fission_segmented ~promote_locals:true
+    Sched.fission_segmented ~scatter_packets ~promote_locals:true
       ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:true ~limits)
       ~preset ~zero_sched ~static_indices opt
   in
@@ -4528,8 +4535,8 @@ let seeded_replay ?(fallback = true) ~limits ~accum_prec ~admit_narrow ~static_i
         | Seeded_preset | Seeded_sketch _ | Seeded_sunk _ -> None
       in
       match
-        Sched.fission_segmented ~promote_locals:true ~replay:(plan, schedule) ~preset ~zero_sched
-          ~static_indices opt
+        Sched.fission_segmented ~scatter_packets ~promote_locals:true ~replay:(plan, schedule)
+          ~preset ~zero_sched ~static_indices opt
       with
       | (_, tuples) as segmented ->
           ignore
@@ -4564,8 +4571,8 @@ let apply_before_fission ~static_indices prelude (opt : LL.optimized) =
    whole-routine, then its recorded segmentation replayed), each with the seeds the search proposes
    for a segment ({!search_seed_params}). Hermetic. Empty where the plan has no segmentation of its
    own or its segmentation no longer applies. *)
-let seeded_single_seeds ?census ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices
-    (plan : seeded_plan) (opt : LL.optimized) : segment_seeds list =
+let seeded_single_seeds ?census ?(scatter_packets = false) ~capabilities ~is_gpu ~is_cpu ~limits
+    ~static_indices (plan : seeded_plan) (opt : LL.optimized) : segment_seeds list =
   match plan.sp_segments with
   | None -> []
   | Some (segmentation, _) -> (
@@ -4573,7 +4580,7 @@ let seeded_single_seeds ?census ~capabilities ~is_gpu ~is_cpu ~limits ~static_in
         let opt =
           apply_before_fission ~static_indices (split_reduce_prelude plan.sp_split) (scratch_of opt)
         in
-        Sched.fission_segmented ~promote_locals:true
+        Sched.fission_segmented ~scatter_packets ~promote_locals:true
           ~replay:(segmentation, fun _ _ -> None)
           ~preset:(seeded_preset ~limits)
           ~zero_sched:(fun tns -> Sched.zero_expansion ~limits tns)
@@ -4636,8 +4643,8 @@ let strict_replay_enabled () =
    (gh-ocannl-1480's CUDA shape, where the first candidate's link uploads the index tensor) and any
    encoding asymmetry between what a candidate records and what a replay reads back
    (gh-ocannl-1480's single-kernel head zero), not state a later, unrelated link changes. *)
-let strict_replay_refusal ~static_indices ~canon ~limits ~is_gpu ~(base_opt : LL.optimized)
-    ~pristine form =
+let strict_replay_refusal ~static_indices ~canon ~limits ~scatter_packets ~is_gpu
+    ~(base_opt : LL.optimized) ~pristine form =
   match form with
   | Whole_saved _ -> None
   | Fiss_saved segs | Split_saved (_, segs) -> (
@@ -4655,7 +4662,7 @@ let strict_replay_refusal ~static_indices ~canon ~limits ~is_gpu ~(base_opt : LL
               apply_before_fission ~static_indices (fst (SC.of_saved canon psaved)) opt
           | Whole_saved _ | Fiss_saved _ -> opt
         in
-        tuner_fission ~is_gpu ~limits
+        tuner_fission ~scatter_packets ~is_gpu ~limits
           ~replay:(saved_fission_replay ~static_indices segs)
           ~preset:(fun _ -> [])
           ~static_indices opt
@@ -6094,8 +6101,8 @@ let seeded_segment_params ~capabilities ~limits ~accum_prec ~static_indices ~gat
     (seeded_segment_judgment ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below
        pre)
 
-let seeded_decisions ?memo ?(census = true) ~capabilities ~limits ~accum_prec ~admit_narrow
-    ~static_indices ~gate ~ranked_below ~sink_enabled (opt : LL.optimized) =
+let seeded_decisions ?memo ?(census = true) ~scatter_packets ~capabilities ~limits ~accum_prec
+    ~admit_narrow ~static_indices ~gate ~ranked_below ~sink_enabled (opt : LL.optimized) =
   let preset = seeded_preset ~limits in
   let zero_sched tns = Sched.zero_expansion ~limits tns in
   let keep_mapping = Sched.fission_keep_mapping ~is_gpu:true ~limits in
@@ -6172,8 +6179,8 @@ let seeded_decisions ?memo ?(census = true) ~capabilities ~limits ~accum_prec ~a
      per segment. *)
   let derive ~arity_cuts =
     match
-      Sched.fission_segmented ~promote_locals:true ?keep_mapping ~arity_cuts ~preset ~zero_sched
-        ~static_indices (scratch_of opt)
+      Sched.fission_segmented ~scatter_packets ~promote_locals:true ?keep_mapping ~arity_cuts
+        ~preset ~zero_sched ~static_indices (scratch_of opt)
     with
     | exception Outcome.Cause_at _ -> None
     | plan, tuples ->
@@ -6246,11 +6253,11 @@ let seeded_plan_choice (plan : seeded_plan) =
       }
 
 (* The plan on [opt], the routine [split] was applied to. *)
-let seeded_plan_on ?memo ?census ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices
-    ~gate ~ranked_below ~sink_enabled ~split opt =
+let seeded_plan_on ?memo ?census ~scatter_packets ~capabilities ~limits ~accum_prec ~admit_narrow
+    ~static_indices ~gate ~ranked_below ~sink_enabled ~split opt =
   match
-    seeded_decisions ?memo ?census ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices
-      ~gate ~ranked_below ~sink_enabled opt
+    seeded_decisions ?memo ?census ~scatter_packets ~capabilities ~limits ~accum_prec ~admit_narrow
+      ~static_indices ~gate ~ranked_below ~sink_enabled opt
   with
   | None ->
       {
@@ -6281,6 +6288,7 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narr
   | Some (gate, min_serial, sink_enabled, admit_narrow) -> (
       (* Hermetic, prelude included: deriving the plan must leave the caller's lowering as it
          was. *)
+      let scatter_packets = Sched.scatter_packets_enabled ~facts in
       let opt, split = seeded_split ~facts ~min_serial ~static_indices (scratch_of opt) in
       let ranked_below = seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices in
       let report_plan label =
@@ -6292,8 +6300,8 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narr
             ]
       in
       match
-        seeded_plan_on ?memo ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices ~gate
-          ~ranked_below ~sink_enabled ~split opt
+        seeded_plan_on ?memo ~scatter_packets ~capabilities ~limits ~accum_prec ~admit_narrow
+          ~static_indices ~gate ~ranked_below ~sink_enabled ~split opt
       with
       | { sp_split = []; sp_segments = None; _ } ->
           (* [seeded_settings] requires automatic scheduling and fission here. The tuner's serial
@@ -6325,9 +6333,9 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narr
                   | split_opt ->
                       Some
                         {
-                          (seeded_plan_on ~memo ~census:false ~capabilities ~limits ~accum_prec
-                             ~admit_narrow ~static_indices ~gate ~ranked_below ~sink_enabled ~split
-                             split_opt)
+                          (seeded_plan_on ~memo ~census:false ~scatter_packets ~capabilities ~limits
+                             ~accum_prec ~admit_narrow ~static_indices ~gate ~ranked_below
+                             ~sink_enabled ~split split_opt)
                           with
                           sp_start = Some start;
                         });
@@ -6353,6 +6361,7 @@ let seeded_apply ?(on_choice = fun (_ : seeded_choice) -> ()) ~capabilities ~fac
     ~accum_prec ~static_indices ~gate ~min_serial ~sink_enabled ~admit_narrow (opt : LL.optimized) :
     LL.optimized list =
   let t0 = Unix.gettimeofday () in
+  let scatter_packets = Sched.scatter_packets_enabled ~facts in
   let opt, split = seeded_split ~facts ~min_serial ~static_indices opt in
   on_choice
     (seeded_plan_choice
@@ -6364,7 +6373,8 @@ let seeded_apply ?(on_choice = fun (_ : seeded_choice) -> ()) ~capabilities ~fac
          sp_admit_narrow = admit_narrow;
        });
   let plan =
-    seeded_plan_on ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices ~gate
+    seeded_plan_on ~scatter_packets ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices
+      ~gate
       ~ranked_below:(seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices)
       ~sink_enabled ~split opt
   in
@@ -6373,7 +6383,8 @@ let seeded_apply ?(on_choice = fun (_ : seeded_choice) -> ()) ~capabilities ~fac
   logf "seeded_default: plan derived in %.3f s" (Unix.gettimeofday () -. t0);
   logf "seeded_default: gate %s" (seed_gate_tag gate);
   let (_, tuples), applied =
-    seeded_replay ~limits ~accum_prec ~admit_narrow ~static_indices plan.sp_segments opt
+    seeded_replay ~scatter_packets ~limits ~accum_prec ~admit_narrow ~static_indices
+      plan.sp_segments opt
   in
   if applied then (
     let choice = seeded_plan_choice plan in
@@ -7028,6 +7039,7 @@ module Make (D : Driver) = struct
   let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> ()) ?retain ?reuse
       ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec :
       gated_compile =
+    let scatter_packets = Sched.scatter_packets_enabled ~facts:(D.backend_facts ctx) in
     let candidate = match label with Some l -> l | None -> spec_label spec in
     let duplicate = ref None in
     let gate ~digest_after opts =
@@ -7183,8 +7195,8 @@ module Make (D : Driver) = struct
                   (* The untuned compile's own replay, so the candidate is the step it ships, its
                      fallback to the default segments included. *)
                   let segmented, applied =
-                    seeded_replay ~limits ~accum_prec ~admit_narrow:plan.sp_admit_narrow
-                      ~static_indices plan.sp_segments opt
+                    seeded_replay ~scatter_packets ~limits ~accum_prec
+                      ~admit_narrow:plan.sp_admit_narrow ~static_indices plan.sp_segments opt
                   in
                   if Option.is_some plan.sp_segments && not applied then
                     logf "%s: the plan's segments did not apply; compiled the default segments"
@@ -7194,19 +7206,19 @@ module Make (D : Driver) = struct
                   (* gh-ocannl-1664: the same replay of the swapped plan, without its fallback: a
                      swap that does not apply is this single's decline. *)
                   fst
-                    (seeded_replay ~fallback:false ~limits ~accum_prec
+                    (seeded_replay ~fallback:false ~scatter_packets ~limits ~accum_prec
                        ~admit_narrow:plan.sp_admit_narrow ~static_indices
                        (seeded_swap plan (entries @ staff)).sp_segments opt)
               | F_resplit { plan; _ } ->
                   (* gh-ocannl-1697: the re-derived plan's replay, likewise without the fallback. *)
                   fst
-                    (seeded_replay ~fallback:false ~limits ~accum_prec
+                    (seeded_replay ~fallback:false ~scatter_packets ~limits ~accum_prec
                        ~admit_narrow:plan.sp_admit_narrow ~static_indices plan.sp_segments opt)
               | F_preset _ | F_saved _ | F_sketch _ | F_split _ | F_split_saved _ ->
                   (* Match the default pipeline's placements (statement-crossing [Local]s promoted
                      on GPU), so fissioned candidates and the untuned baseline schedule the same
                      code. *)
-                  tuner_fission ~is_gpu ~limits ?replay ~preset ~static_indices opt
+                  tuner_fission ~scatter_packets ~is_gpu ~limits ?replay ~preset ~static_indices opt
             in
             let saved_with_registries = SC.save_segments ~static_indices segmentation tuples in
             let posts = List.map tuples ~f:(fun (_, _, _, post) -> post) in
@@ -7253,8 +7265,8 @@ module Make (D : Driver) = struct
             let refusal =
               match !pristine with
               | Some pristine when strict_replay ->
-                  strict_replay_refusal ~static_indices ~canon ~limits ~is_gpu ~base_opt ~pristine
-                    form
+                  strict_replay_refusal ~static_indices ~canon ~limits ~scatter_packets ~is_gpu
+                    ~base_opt ~pristine form
               | Some _ | None -> None
             in
             match refusal with
@@ -7665,7 +7677,10 @@ module Make (D : Driver) = struct
             plan entries
         in
         List.map
-          (snd (tuner_fission ~is_gpu ~limits ~replay ~preset ~static_indices opt))
+          (snd
+             (tuner_fission
+                ~scatter_packets:(Sched.scatter_packets_enabled ~facts)
+                ~is_gpu ~limits ~replay ~preset ~static_indices opt))
           ~f:(fun (_, _, _, post) -> post)
       in
       (* The model-argmin pipeline choice for one lowering — label, roofline score (seconds), and
@@ -7748,7 +7763,11 @@ module Make (D : Driver) = struct
                  derived segmentation replayed, keyed segments found in it by position
                  (gh-ocannl-1243), a digest mismatch degrading to the configured preset. *)
               let fiss =
-                match model_segments ~is_gpu ~is_cpu ~limits ~static_indices base with
+                match
+                  model_segments
+                    ~scatter_packets:(Sched.scatter_packets_enabled ~facts)
+                    ~is_gpu ~is_cpu ~limits ~static_indices base
+                with
                 | exception Outcome.Cause_at _ ->
                     Int.incr n_rejected;
                     None
@@ -8325,7 +8344,11 @@ module Make (D : Driver) = struct
          and the segment under the configured preset; its sketches must strictly beat the lower of
          the two presets (gh-ocannl-1687). *)
       let x_segments =
-        match model_segments ~is_gpu ~is_cpu ~limits ~static_indices base with
+        match
+          model_segments
+            ~scatter_packets:(Sched.scatter_packets_enabled ~facts)
+            ~is_gpu ~is_cpu ~limits ~static_indices base
+        with
         | exception Outcome.Cause_at _ -> []
         | None -> []
         | Some (plan, keyed) ->
@@ -11102,8 +11125,10 @@ module Make (D : Driver) = struct
                prepared hermetically from the same lowering, its candidates' schedules carry their
                structural [Coalesce] prefix. *)
             let seeding =
-              search_seeding ~capabilities:(D.codegen_capabilities ctx) ~is_gpu ~is_cpu ~limits
-                ~static_indices base_opt
+              search_seeding
+                ~scatter_packets:(Sched.scatter_packets_enabled ~facts)
+                ~capabilities:(D.codegen_capabilities ctx) ~is_gpu ~is_cpu ~limits ~static_indices
+                base_opt
             in
             let block_size_presets mk =
               mk None
@@ -11187,7 +11212,9 @@ module Make (D : Driver) = struct
                changed. *)
             let seeded_menu plan =
               let seeds =
-                seeded_single_seeds ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices plan
+                seeded_single_seeds
+                  ~scatter_packets:(Sched.scatter_packets_enabled ~facts)
+                  ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices plan
                   (Option.value !base_pristine ~default:base_opt)
               in
               ( prefilter_entries ~tag:"seeded segment " seeds,

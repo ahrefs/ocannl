@@ -24,9 +24,6 @@
    [scatter_acc] buffer where [accum_prec] stays narrow (HIP, Metal). - Hand-built IR allowlist and
    decline negative controls for [Low_level.widen_narrow_scatters]. *)
 
-(* cc-fp-contract: exact-operands -- every input is a small dyadic float whose products and f32 sums
-   fit the f32 significand exactly. *)
-
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -38,6 +35,7 @@ module Idx = Ir.Indexing
 module Sched = Ir.Schedule
 module MP = Mixed_prec
 
+let () = Utils.state_config ~key:"cc_backend_fp_contract" ~data:"off"
 let bf16 = Ops.bfloat16
 let f16 = Ops.half
 let bitwise a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
@@ -1017,3 +1015,148 @@ let () =
             bf_wte once_wte ~f:bitwise;
           p_all2 "dual-table GPT-2 shape: bf16 wpe.grad equals f32 narrowed once, cell for cell"
             bf_wpe once_wpe ~f:bitwise))
+
+let original_scatter_schedule ctx =
+  let facts = Context.backend_facts ctx in
+  let limits = Context.hardware_limits ctx in
+  let gpu = Ir.Backend_intf.binds_hardware_grid facts in
+  let preset opt = if gpu then Sched.default_gpu ~limits opt else Sched.cpu_preset opt in
+  let zero_sched tns = if gpu then Sched.zero_expansion ~limits tns else [] in
+  fun opt ->
+    Sched.fission_scheduled ~promote_locals:gpu
+      ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:gpu ~limits)
+      ~preset ~zero_sched ~static_indices:[] opt
+    |> List.map ~f:(fun (_, _, _, post) -> post)
+
+let row_owned_kernels routine =
+  List.filter routine.Context.segments ~f:(fun seg ->
+      List.exists (LL.touched_tns_in_order seg.LL.llc) ~f:(fun tn ->
+          List.mem tn.Tn.label "scatter_mask" ~equal:String.equal))
+
+let row_owned_launch routine =
+  match (row_owned_kernels routine, scatter_targets routine) with
+  | [ masks; rows ], [] ->
+      let blocks seg = Array.fold (LL.launch_dims seg.LL.llc).grid ~init:1 ~f:( * ) in
+      blocks masks > 1 && blocks rows > 1
+  | _ -> false
+
+let () =
+  Test_utils.with_policy
+    (fun policy ->
+      { policy with Ir.Numerics.bf16_arithmetic = Ir.Numerics.Bf16_auto; narrow_compute_f32 = true })
+    (fun () ->
+      case "GPU row-owned embedding scatter keeps the original recurrence" (fun () ->
+          let batch = 2 and seq = 513 and vocab = 64 and d_model = 32 in
+          let ctx = Context.auto () in
+          let backend = Context.backend_name ctx in
+          let owners =
+            Verdict.leg
+              ~when_:(String.equal backend "cuda" || String.equal backend "hip")
+              ~on:"CUDA and HIP" ()
+          in
+          let ids_rows =
+            Array.init batch ~f:(fun b ->
+                Array.init seq ~f:(fun s ->
+                    let pos = (b * seq) + s in
+                    match pos with
+                    | 0 | 16 | 512 | 513 | 1025 -> 0
+                    | 2 -> vocab
+                    | 3 -> 4_294_967_295
+                    | _ -> 1 + (pos % (vocab - 2))))
+          in
+          let coeff_vals =
+            Array.init
+              (batch * seq * d_model)
+              ~f:(fun i ->
+                let pos = i / d_model and d = i % d_model in
+                let scale = Float.of_int (d + 1) in
+                match pos with
+                | 0 -> 16_777_216. *. scale
+                | 16 | 512 | 513 | 1025 -> scale
+                | _ ->
+                    Ll_test.weighted ~weights:[| 1; 3 |] ~modulus:19 ~offset:1. ~stride:0.125
+                      [| pos; d |])
+          in
+          let table_dims = [| d_model; vocab |] in
+          let incoming =
+            Array.init (d_model * vocab) ~f:(fun i ->
+                match i % vocab with
+                | 0 -> 0.
+                | r when r = vocab - 1 -> -0.
+                | _ -> Ll_test.cycle_flat ~dims:table_dims ~modulus:23 ~offset:1. ~stride:0.25 i)
+          in
+          let run_f32 ~name ?lowered_transform () =
+            Tensor.unsafe_reinitialize ();
+            let ids = ids_tensor_2d ~label:"packet_ids" ids_rows in
+            let onehot = Nn_blocks.one_hot_of_ids ~num_classes:vocab ids in
+            let wte =
+              Operation.init ~l:"packet_wte" ~prec:Ops.single ~i:[ vocab ] ~o:[ d_model ]
+                ~f:(fun _ -> 0.)
+                ~grad_spec:Tensor.Require_grad ()
+            in
+            let%op emb = wte * onehot in
+            let coeff =
+              TDSL.ndarray coeff_vals ~label:[ "packet_coeff" ] ~batch_dims:[ batch; seq ]
+                ~output_dims:[ d_model ] ()
+            in
+            let%op loss = (emb *. coeff) ++ "...|... => |->0" in
+            let grad = grad_of wte in
+            Train.set_materialized grad;
+            let update = Train.grad_update ~accum_steps:1 loss in
+            let ctx, routine = compile_routine ~name ?lowered_transform (Context.auto ()) update in
+            let ctx = Context.set_values ctx grad incoming in
+            let ctx = Context.run ctx routine in
+            Context.sync ctx;
+            (Context.get_values ctx grad, routine)
+          in
+          let original = original_scatter_schedule ctx in
+          let baseline, baseline_routine =
+            run_f32 ~name:"nsr_packets_f32_base" ~lowered_transform:original ()
+          in
+          let rewritten, routine = run_f32 ~name:"nsr_packets_f32_default" () in
+          let round x = Int32.float_of_bits (Int32.bits_of_float x) in
+          let serial =
+            host_scatter ~vocab ~d_model ~ids_rows ~coeff_vals ~init:incoming ~step:round
+          in
+          let reverse =
+            host_scatter ~vocab ~d_model
+              ~ids_rows:(Array.rev (Array.map ids_rows ~f:Array.rev))
+              ~coeff_vals:
+                (Array.init (Array.length coeff_vals) ~f:(fun i ->
+                     let reverse_pos = (batch * seq) - 1 - (i / d_model) in
+                     coeff_vals.((reverse_pos * d_model) + (i % d_model))))
+              ~init:incoming ~step:round
+          in
+          p_exists "the ordered f32 fixture distinguishes reversing the hits"
+            (List.zip_exn (Array.to_list serial) (Array.to_list reverse))
+            ~f:(fun (a, b) -> not (bitwise a b));
+          p_all2 "original scatter agrees bitwise with the host recurrence" baseline serial
+            ~f:bitwise;
+          p_all2 "default f32 scatter agrees bitwise with the original scatter" rewritten baseline
+            ~f:bitwise;
+          in_leg ~leg:owners
+            "f32 uses separate parallel mask and row kernels and the original uses Set_dynamic"
+            (fun label ->
+              p label
+                (row_owned_launch routine && not (List.is_empty (scatter_targets baseline_routine))));
+          let run_bf16 ~name ?lowered_transform () =
+            let wte_vals =
+              Array.init (d_model * vocab)
+                ~f:(Ll_test.cycle_flat ~dims:table_dims ~modulus:11 ~offset:0. ~stride:0.125)
+            in
+            run_cast_twin_step ~name ?lowered_transform ~vocab ~d_model ~ids_rows ~wte_vals
+              ~coeff_vals
+              ~prec:(Some (bf16, MP.Twin_virtual))
+              ()
+          in
+          let original_bf16, _ =
+            run_bf16 ~name:"nsr_packets_bf16_base" ~lowered_transform:original ()
+          in
+          let seeded = Autotune.seeded_transform ctx Idx.Empty in
+          let packed_bf16, routine =
+            run_bf16 ~name:"nsr_packets_bf16_seeded" ?lowered_transform:seeded ()
+          in
+          p_all2 "seeded bf16 cast-twin gradient agrees bitwise with the original scatter"
+            packed_bf16 original_bf16 ~f:bitwise;
+          in_leg ~leg:owners "seeded bf16 owns the f32 scatter accumulator rows" (fun label ->
+              p label (row_owned_launch routine))))

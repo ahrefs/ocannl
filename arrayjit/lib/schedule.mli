@@ -1155,6 +1155,9 @@ val default_pipeline_fissions : unit -> bool
     default pipeline fissions into per-segment kernels (subject to {!automatic_schedule_active}), or
     applies the whole-routine {!maybe_default_schedule} instead. *)
 
+val scatter_packets_enabled : facts:Backend_intf.backend_facts -> bool
+(** Whether the automatic fission pipeline uses row-owned packets for eligible scatters. *)
+
 val default_schedule_fingerprint : facts:Backend_intf.backend_facts -> string
 (** A stable summary of the policy and configuration that shape the untuned default pipeline on this
     backend: the {!automatic_schedule_active} gate (["inactive"] when it is off — the untuned
@@ -1326,6 +1329,7 @@ val segment_class : segment_kind -> [ `Normal | `Zeros | `Solo ]
 (** The kind a recorded segment is replayed as: [`Unfolded] is a [`Normal] segment. *)
 
 val fission_segmented :
+  ?scatter_packets:bool ->
   ?promote_locals:bool ->
   ?arity_cuts:bool ->
   ?fold_zeros:bool ->
@@ -1339,16 +1343,17 @@ val fission_segmented :
   * ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * schedule * Low_level.optimized) list
 (** {!fission_scheduled}, also returning the segmentation of its result (one element per tuple), or
     — given [replay = (segmentation, schedule)] — applying that recorded segmentation instead of
-    deriving one. A recorded segmentation is neither re-grouped nor coalesced, so [arity_cuts] and
-    [keep_mapping] do not reach it; the promotions and scope-local replicas are recomputed for its
-    boundaries exactly as for derived ones, and the [i]th segment's (pre-schedule) slice gets
-    [schedule i] whatever its kind — by position, because segments of one structure can differ in
-    placements, hence in kind and schedule. Where [schedule i] is [None] the segment gets its kind's
-    schedule as in a derived segmentation ([preset], [zero_sched], or none for a [`Solo]): a
-    per-segment substitution over a recorded segmentation (the autotuner's sketch candidates,
-    gh-ocannl-1243) names only the segments it schedules. A segmentation that does not fit the
-    routine — its lengths do not sum to the routine's units, a segment is empty, or a boundary
-    separates a scope-local definition from a use it cannot be replicated for — raises
+    deriving one. [scatter_packets] prepares the same row-owned scatter statements before deriving
+    or replaying the segmentation. A recorded segmentation is neither re-grouped nor coalesced, so
+    [arity_cuts] and [keep_mapping] do not reach it; the promotions and scope-local replicas are
+    recomputed for its boundaries exactly as for derived ones, and the [i]th segment's
+    (pre-schedule) slice gets [schedule i] whatever its kind — by position, because segments of one
+    structure can differ in placements, hence in kind and schedule. Where [schedule i] is [None] the
+    segment gets its kind's schedule as in a derived segmentation ([preset], [zero_sched], or none
+    for a [`Solo]): a per-segment substitution over a recorded segmentation (the autotuner's sketch
+    candidates, gh-ocannl-1243) names only the segments it schedules. A segmentation that does not
+    fit the routine — its lengths do not sum to the routine's units, a segment is empty, or a
+    boundary separates a scope-local definition from a use it cannot be replicated for — raises
     {!Schedule_outcome.Cause_at} with an [Illegal_schedule] cause, a candidate's ordinary decline;
     it is never repaired into another segmentation. Whatever raises, the promotions made so far are
     restored first. *)

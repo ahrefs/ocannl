@@ -9818,11 +9818,260 @@ let segments_of_plan (units : funit list) (plan : segmentation) : segment list =
             } )
       | _ -> misfit_segmentation "has an empty segment")
 
-let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?(fold_zeros = false)
-    ?keep_mapping ?replay ~(preset : Low_level.optimized -> schedule)
+(* gh-ocannl-2443: the scatter's selector work is independent of the channel. A word of matches
+   computed once per row and packet lets the row's channel workers skip empty packets, while a
+   static row gives the usual affine proof of ownership. Packet order and bit order are the original
+   position order for each cell. *)
+let packetize_scatter (opt : Low_level.optimized) : Low_level.optimized =
+  let open Low_level in
+  let exception Decline in
+  let plc = opt.optimize_ctx.placements in
+  let packet_size = 16 in
+  let min_parallel = Utils.registered_int ~arg_name:"gpu_schedule_min_parallel" in
+  let traced_store = lazy (Hashtbl.copy opt.traced_store) in
+  let independent tn = Option.is_none (Tn.slice_of tn) && Option.is_none (Tn.alias_of tn) in
+  let rewrite stmt =
+    let rec peel loops = function
+      | For_loop { index; from_ = 0; to_; axis = Serial; body } when to_ >= 0 && to_ < 4096 ->
+          peel ((index, to_ + 1) :: loops) body
+      | guarded -> (List.rev loops, guarded)
+    in
+    let loops, guarded = peel [] stmt in
+    let guard, leaf =
+      match guarded with If { cond; body } -> (Some cond, body) | leaf -> (None, leaf)
+    in
+    match (List.rev loops, leaf) with
+    | ( (channel, channels) :: (position, positions) :: outer_rev,
+        Set_dynamic { tn; idcs; dyn_axis; dyn_value = selector, prec; llsc; debug } )
+      when List.length outer_rev <= 1
+           && channels >= 32 && channels <= 1024 && positions >= packet_size
+           && Array.length idcs = 2
+           && (dyn_axis = 0 || dyn_axis = 1) ->
+        let dims = Lazy.force tn.Tn.dims in
+        let other_axis = 1 - dyn_axis in
+        if
+          Array.length dims <> 2
+          || dims.(other_axis) <> channels
+          || (not (Indexing.equal_axis_index idcs.(other_axis) (Iterator channel)))
+          || (not (Indexing.equal_axis_index idcs.(dyn_axis) (Fixed_idx 0)))
+          || (not (Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ops.single))
+          || (not (independent tn))
+          || not (Tn.Placements.is_materialized_peek plc tn)
+        then raise Decline;
+        let rows = dims.(dyn_axis) in
+        let outer = List.rev outer_rev in
+        let tokens = List.fold outer ~init:positions ~f:(fun n (_, extent) -> n * extent) in
+        if rows < 32 || rows > 4096 || tokens < 128 || tokens > 4096 || rows * tokens > 4_194_304
+        then raise Decline;
+        (* Selectors are storage-typed integer reads. Comparing at a wide integer precision keeps a
+           high selector or a row outside that storage width from becoming a hit via a narrowing
+           conversion. *)
+        let compare_prec =
+          match (selector, prec) with
+          | Get (ids, _), (Ops.Byte_prec _ | Uint16_prec _ | Uint32_prec _ | Uint64_prec _)
+            when Ops.equal_prec (Lazy.force ids.Tn.storage_prec) prec ->
+              Ops.uint64
+          | Get (ids, _), (Ops.Int32_prec _ | Int64_prec _)
+            when Ops.equal_prec (Lazy.force ids.Tn.storage_prec) prec ->
+              Ops.int64
+          | _ -> raise Decline
+        in
+        let plain_index = function
+          | Indexing.Fixed_idx _ | Iterator _ | Affine _ -> true
+          | Concat _ | Sub_axis -> false
+        in
+        let rec plain_scalar = function
+          | Constant _ | Constant_bits _ -> true
+          | Embed_index idx -> plain_index idx
+          | Get (src, idx) ->
+              (not (Tn.equal tn src)) && independent src && Array.for_all idx ~f:plain_index
+          | Unop (_, (x, _)) -> plain_scalar x
+          | Binop (_, (x, _), (y, _)) -> plain_scalar x && plain_scalar y
+          | Ternop (_, (x, _), (y, _), (z, _)) -> plain_scalar x && plain_scalar y && plain_scalar z
+          | Get_local _ | Get_dynamic _ | Get_merge_buffer _ | Local_scope _ -> false
+        in
+        (* A guard on a loop coordinate can make a payload access legal. Keep the rewrite to the
+           one-hot selector's range tests, which prove no such bound. *)
+        let rec selector_guard = function
+          | Binop (Ops.And, (a, _), (b, _)) -> selector_guard a && selector_guard b
+          | Binop (Ops.Cmple, (Constant zero, _), (id, _)) ->
+              Float.equal zero 0. && equal_scalar_t id selector
+          | Binop (Ops.Cmplt, (id, _), (Constant bound, _)) ->
+              Float.equal bound (Float.of_int rows) && equal_scalar_t id selector
+          | _ -> false
+        in
+        if
+          (not (plain_scalar selector))
+          || List.mem
+               (scalar_value_syms ~locals:(Hashtbl.create (module Int)) selector)
+               channel ~equal:Indexing.equal_symbol
+          || not (Option.for_all guard ~f:(fun (g, _) -> selector_guard g))
+        then raise Decline;
+        let self_read = function
+          | Get_dynamic { tn = src; idcs = read; dyn_axis = axis; dyn_value = v, p } ->
+              Tn.equal tn src && axis = dyn_axis
+              && Array.equal Indexing.equal_axis_index read idcs
+              && Ops.equal_prec p prec && equal_scalar_t v selector
+          | _ -> false
+        in
+        let update =
+          match llsc with
+          | Binop (Ops.Add, (lhs, p), ((rhs, _) as arg))
+            when self_read lhs && plain_scalar rhs && not (mentions_rng_conversion rhs) ->
+              fun acc -> Binop (Ops.Add, (acc, p), arg)
+          | Binop (Ops.Add, ((lhs, _) as arg), (rhs, p))
+            when self_read rhs && plain_scalar lhs && not (mentions_rng_conversion lhs) ->
+              fun acc -> Binop (Ops.Add, arg, (acc, p))
+          | _ -> raise Decline
+        in
+        let packets = (positions + packet_size - 1) / packet_size in
+        let dims = Array.of_list (List.map outer ~f:snd @ [ packets; rows ]) in
+        if Int.min (Array.fold dims ~init:1 ~f:( * )) (rows * channels) < min_parallel then
+          raise Decline;
+        let masks =
+          Tn.create ~namespace:tile_namespace (Tn.Specified Ops.uint32) ~id:(fresh_tile_id ())
+            ~label:("scatter_mask" :: tn.Tn.label)
+            ~unpadded_dims:(lazy dims)
+            ~padding:(lazy None)
+            ()
+        in
+        Tn.Placements.update plc masks On_device (Site "2443:scatter-mask");
+        let st = get_node (Lazy.force traced_store) masks in
+        st.has_assignment <- true;
+        st.read_by_other <- true;
+        st.is_accessing <- true;
+        let it s = Indexing.Iterator s in
+        let index s = Embed_index (it s) in
+        let loop (index, extent) body =
+          For_loop { index; from_ = 0; to_ = extent - 1; axis = Serial; body }
+        in
+        let nest loops body = List.fold_right loops ~init:body ~f:loop in
+        let word = Ops.uint32 in
+        let uint n = (Constant (Float.of_int n), word) in
+        let bin op a b = Binop (op, (a, word), (b, word)) in
+        let zero = fst (uint 0) and one = fst (uint 1) and two = fst (uint 2) in
+        let when_ cond body = If { cond = (cond, word); body } in
+        let read_word id = Get_local id in
+        let declare id = Declare_local { id; needs_init = true } in
+        let mask_idcs outer packet row =
+          Array.of_list (List.map outer ~f:(fun (s, _) -> it s) @ [ it packet; it row ])
+        in
+        let build_outer =
+          List.map outer ~f:(fun (s, extent) -> (s, (Indexing.get_symbol (), extent)))
+        in
+        let build_loops = List.map build_outer ~f:snd in
+        let packet = Indexing.get_symbol () and row = Indexing.get_symbol () in
+        let bit = Indexing.get_symbol () in
+        let back_index =
+          subst_axis_index ~sym:position
+            ~by:{ terms = [ (packet_size, packet); (-1, bit) ]; offset = packet_size - 1 }
+        in
+        let fidx idx =
+          rename_index idx ~f:(fun s ->
+              List.Assoc.find build_outer s ~equal:Indexing.equal_symbol
+              |> Option.value_map ~default:s ~f:fst)
+          |> back_index
+        in
+        let match_row =
+          Binop (Ops.Cmpeq, (map_scalar ~fidx selector, compare_prec), (index row, compare_prec))
+        in
+        let hit = Ternop (Ops.Where, (match_row, compare_prec), uint 1, uint 0) in
+        let hit =
+          Option.value_map guard ~default:hit ~f:(fun (cond, p) ->
+              Ternop (Ops.Where, (map_scalar ~fidx cond, p), (hit, word), uint 0))
+        in
+        let mask = get_scope masks in
+        let set_bit = Set_local (mask, bin Ops.Add (bin Ops.Mul (read_word mask) two) hit) in
+        let set_bit =
+          if positions % packet_size = 0 then set_bit
+          else
+            when_
+              (bin Ops.Cmplt (Embed_index (back_index (it position))) (fst (uint positions)))
+              set_bit
+        in
+        let idcs_mask = mask_idcs build_loops packet row in
+        let build =
+          let llsc =
+            Local_scope
+              {
+                id = mask;
+                body = Seq (Set_local (mask, zero), loop (bit, packet_size) set_bit);
+                orig_indices = idcs_mask;
+                mint = Schedule_minted;
+              }
+          in
+          nest
+            (build_loops @ [ (packet, packets); (row, rows) ])
+            (Set { tn = masks; idcs = idcs_mask; llsc; debug = "" })
+        in
+        let packet = Indexing.get_symbol () and row = Indexing.get_symbol () in
+        let idcs = Array.copy idcs in
+        idcs.(dyn_axis) <- it row;
+        let mask = get_scope masks and seen = get_scope masks and acc = get_scope tn in
+        let forward_index =
+          subst_axis_index ~sym:position
+            ~by:{ terms = [ (packet_size, packet); (1, position) ]; offset = 0 }
+        in
+        let hit = Set_local (acc, map_scalar ~fidx:forward_index (update (Get_local acc))) in
+        let hit =
+          if positions % packet_size = 0 then hit
+          else
+            (* The mask excludes tail positions, but the access proof needs the affine bound at the
+               read site. *)
+            when_
+              (bin Ops.Cmplt (Embed_index (forward_index (it position))) (fst (uint positions)))
+              hit
+        in
+        let decode =
+          loop (position, packet_size)
+            (Seq
+               ( when_ (bin Ops.Cmpne (bin Ops.Mod (read_word mask) two) zero) hit,
+                 Set_local (mask, bin Ops.Div (read_word mask) two) ))
+        in
+        let apply_packet =
+          unflat_lines
+            [
+              declare mask;
+              Set_local (mask, Get (masks, mask_idcs outer packet row));
+              when_
+                (bin Ops.Cmpne (read_word mask) zero)
+                (Seq
+                   ( when_
+                       (bin Ops.Cmpeq (read_word seen) zero)
+                       (Seq (Set_local (acc, Get (tn, idcs)), Set_local (seen, one))),
+                     decode ));
+            ]
+        in
+        let apply =
+          nest
+            [ (row, rows); (channel, channels) ]
+            (unflat_lines
+               [
+                 declare seen;
+                 declare acc;
+                 nest (outer @ [ (packet, packets) ]) apply_packet;
+                 when_
+                   (bin Ops.Cmpne (read_word seen) zero)
+                   (Set { tn; idcs; llsc = Get_local acc; debug });
+               ])
+        in
+        [ build; apply ]
+    | _ -> raise Decline
+  in
+  let lines =
+    List.concat_map (flat_lines [ opt.llc ]) ~f:(fun stmt ->
+        try rewrite stmt with Decline -> [ stmt ])
+  in
+  if Lazy.is_val traced_store then
+    { opt with llc = unflat_lines lines; traced_store = Lazy.force traced_store }
+  else opt
+
+let fission_segmented ?(scatter_packets = false) ?(promote_locals = false) ?(arity_cuts = false)
+    ?(fold_zeros = false) ?keep_mapping ?replay ~(preset : Low_level.optimized -> schedule)
     ~(zero_sched : Tn.t list -> schedule) ~static_indices (opt : Low_level.optimized) :
     segmentation
     * ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * schedule * Low_level.optimized) list =
+  let opt = if scatter_packets then packetize_scatter opt else opt in
   let plc = opt.Low_level.optimize_ctx.placements in
   let stmts = Low_level.flat_lines [ opt.Low_level.llc ] in
   (* Every promotion made so far, restored if anything below raises: a refused segmentation (or a
@@ -9987,9 +10236,12 @@ let fission_scheduled ?promote_locals ?arity_cuts ?fold_zeros ?keep_mapping ~pre
     (fission_segmented ?promote_locals ?arity_cuts ?fold_zeros ?keep_mapping ~preset ~zero_sched
        ~static_indices opt)
 
-let fission_default ?promote_locals ?keep_mapping ~preset ~zero_sched ~static_indices
-    (opt : Low_level.optimized) : Low_level.optimized list =
-  List.map (fission_scheduled ?promote_locals ?keep_mapping ~preset ~zero_sched ~static_indices opt)
+let fission_default ~scatter_packets ?promote_locals ?keep_mapping ~preset ~zero_sched
+    ~static_indices (opt : Low_level.optimized) : Low_level.optimized list =
+  List.map
+    (snd
+       (fission_segmented ~scatter_packets ?promote_locals ?keep_mapping ~preset ~zero_sched
+          ~static_indices opt))
     ~f:(fun (_kind, _pre, _sched, post) -> post)
 
 (** {2 Wiring: the implicit transform for GPU and CPU backends} *)
@@ -10062,6 +10314,9 @@ let automatic_schedule_active ~facts =
 
 let default_pipeline_fissions () = Lazy.force schedule_fission
 
+let scatter_packets_enabled ~(facts : Backend_intf.backend_facts) =
+  facts.seeds_untuned_default && automatic_schedule_active ~facts && default_pipeline_fissions ()
+
 let default_schedule_fingerprint ~facts =
   if not (automatic_schedule_active ~facts) then "inactive"
   else
@@ -10098,12 +10353,13 @@ let default_schedule_fingerprint ~facts =
       let all_reduce =
         match gpu_lane_all_reduce_simdgroups () with None -> "auto" | Some k -> Int.to_string k
       in
+      let scatter = if scatter_packets_enabled ~facts then "+scatter-packets-v1" else "" in
       (* [zero-topology-v1] (gh-ocannl-1169): under [keep_mapping], zero segments cut where a node
          would lose its lane plan, over shape-sorted zero runs. *)
       (* [lane-trade-v1] (gh-ocannl-1239): under [admitted], a merge bringing a nest with no lane
          path into a kernel is judged on the lanes too. *)
       [%string
-        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1+lane-all-reduce-v1+zero-topology-v1+lane-trade-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs#Int}:min_parallel=%{mp#Int}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}:all_reduce_simdgroups=%{all_reduce}"]
+        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1+lane-all-reduce-v1+zero-topology-v1+lane-trade-v1%{scatter}:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs#Int}:min_parallel=%{mp#Int}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}:all_reduce_simdgroups=%{all_reduce}"]
     else
       let mw = Utils.registered_int ~arg_name:"cpu_schedule_min_work" in
       (* [channel-vectors-v1] (gh-ocannl-1630): direct conv nests take per-channel vector
@@ -10140,7 +10396,7 @@ let maybe_default_schedules ~facts ?(limits = Backend_intf.no_hardware_limits) ~
       (* Statement-crossing [Local]s are promoted on GPU only: a serial (or per-thread redundant)
          producer nest costs little next to CPU cores but is catastrophic next to GPU threads, and
          keeping CPU placements unchanged keeps small-routine codegen stable. *)
-      fission_default ~promote_locals:gpu
+      fission_default ~scatter_packets:(scatter_packets_enabled ~facts) ~promote_locals:gpu
         ?keep_mapping:(fission_keep_mapping ~is_gpu:gpu ~limits)
         ~preset ~zero_sched ~static_indices opt
 
