@@ -926,8 +926,7 @@ exercise() {
       sleep 15 >/dev/null &
       printf '%s\n' "$!" >"$LINGER_PID" ;;
     stalled-downstream)
-      # Exceed both the 64 KiB default pipe and the 1 MiB pipe size uutils cat sets via F_SETPIPE_SZ.
-      perl -e 'print STDERR (("x" x 63) . "\n") x 32768'
+      perl -e 'print STDERR (("x" x 63) . "\n") x 8192'
       ocannl_fixture_undefined_function
       [ -z "${STALL_DONE:-}" ] || : >"$STALL_DONE" ;;
   esac
@@ -1018,9 +1017,11 @@ fi
 if [ -s "$LINGER_PID" ]; then kill -TERM "$(cat "$LINGER_PID")" 2>/dev/null || :; fi
 
 # Even when downstream stderr stops reading past the drain bound (filling the
-# pipe buffer), verdict capture still reads the complete stderr file and catches
+# socket buffer), verdict capture still reads the complete stderr file and catches
 # the trailing missing-command diagnostic. Synchronize on member progress and
-# live-relay teardown rather than a fixed startup delay.
+# live-relay teardown rather than a fixed startup delay. Read PID, parent PID
+# and state as process rows, then read each live dispatcher child's command
+# as a whole for the private capture path. Command text may contain newlines.
 MISSING_FORM=stalled-downstream
 stall_tmp="$TMP/stall-tmp"
 mkdir -p "$stall_tmp"
@@ -1028,28 +1029,29 @@ rm -f "$TMP/stall-done"
 stall_rc=0
 TMPDIR="$stall_tmp" STALL_DONE="$TMP/stall-done" \
   python3 - "$TMP" "$subject" "$TMP/stall.out" "$TMP/stall.err" "$stall_tmp" "$TMP/stall-done" <<'PY_STALL' || stall_rc=$?
-import os, select, subprocess, sys, time
+import os, select, socket, subprocess, sys, time
 cwd, subj, out_path, err_path, stall_tmp, done_path = sys.argv[1:7]
 needle = stall_tmp + "/test-harnesses-output."
 def relay_live():
-    out = subprocess.check_output(["ps", "-ww", "-eo", "pid=,stat=,command="], text=True)
+    out = subprocess.check_output(["ps", "-eo", "pid=,ppid=,stat="], text=True)
     for line in out.splitlines():
-        parts = line.split(None, 2)
-        if len(parts) < 3:
+        pid, ppid, stat = line.split()
+        if int(ppid) != proc.pid or stat.startswith(("Z", "z")):
             continue
-        pid_s, stat, cmd = parts
-        if stat[:1] in ("Z", "z"):
-            continue
-        if int(pid_s) != os.getpid() and needle in cmd:
+        # The child can exit between the two ps calls.
+        cmd = subprocess.run(["ps", "-ww", "-p", pid, "-o", "command="],
+                             stdout=subprocess.PIPE, text=True)
+        if cmd.returncode == 0 and needle in cmd.stdout:
             return True
     return False
 def stderr_ready():
-    return bool(select.select([r_fd], [], [], 0)[0])
-r_fd, w_fd = os.pipe()
-with open(out_path, "wb") as out_f:
+    return bool(select.select([reader], [], [], 0)[0])
+# A child can enlarge a Linux pipe enough to absorb the entire fixture.
+reader, writer = socket.socketpair()
+writer.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 16384)
+with writer, open(out_path, "wb") as out_f:
     proc = subprocess.Popen([subj, "--affected", "--since", "HEAD", "--jobs", "1"],
-                            cwd=cwd, stdout=out_f, stderr=w_fd)
-os.close(w_fd)
+                            cwd=cwd, stdout=out_f, stderr=writer)
 deadline = time.monotonic() + 20.0
 while time.monotonic() < deadline and not (os.path.exists(done_path) and stderr_ready()) and proc.poll() is None:
     time.sleep(0.05)
@@ -1057,11 +1059,11 @@ while time.monotonic() < deadline and relay_live() and proc.poll() is None:
     time.sleep(0.05)
 chunks = []
 while True:
-    data = os.read(r_fd, 65536)
+    data = reader.recv(65536)
     if not data:
         break
     chunks.append(data)
-os.close(r_fd)
+reader.close()
 rc = proc.wait(timeout=10)
 with open(err_path, "wb") as err_f:
     err_f.write(b"".join(chunks))

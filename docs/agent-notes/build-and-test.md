@@ -1224,6 +1224,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   and stops any survivor (TERM, 0.5 s grace, KILL) before reaping; interruption
   or dispatcher exit stops and reaps all live serial relays immediately
   (gh-ocannl-2388).
+  The stalled-reader fixture polls live direct children of its dispatcher by PID,
+  parent PID and state, then matches the private capture path against each candidate's
+  complete command (gh-ocannl-2469). Linux `ps` can print the relay's multiline Perl
+  program with literal newlines, putting the capture path on a continuation line.
+  Its downstream socket has a small send buffer so the fixture stalls even on
+  hosts where a dispatcher startup command enlarges a pipe enough to absorb the
+  entire fixture (64 KiB to 1 MiB on rog-nv-linux).
 - On a fleet box a harness run is a test batch like any other, and like `tools/test-run.sh` and
   `tools/fmt-check.sh` it takes one of the box's correctness slots itself, as `--cpu`
   (gh-ocannl-1576): after its arguments and skip lists pass, it runs itself again under `fleet-worker.sh execution
