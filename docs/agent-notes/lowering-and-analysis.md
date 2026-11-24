@@ -541,9 +541,9 @@ files.
   shared decision (backend-precision-and-simd.md). `test/operations/lowered_nest_order` pins both
   halves, roles read off each nest's accumulating write, with an interchanged negative control, and
   the narrow half: bf16 weight and input gradients raw reduction-outer, optimized output-first.
-  A bf16 input gradient over one affine window axis gains a cell loop owning every visit
-  (gh-ocannl-2423). An f32 gradient and a bf16 input gradient over two independent affine
-  window axes keep the lowered order.
+  A bf16 input gradient over independent affine window axes (1-D or 2-D) gains cell loops owning
+  every visit before all reductions (gh-ocannl-2423, gh-ocannl-2464). An f32 gradient keeps the
+  lowered order.
 - **A gh-490 extent guard is per-ITERATOR, so an axis with no product iterator gets none**, and
   `Accum_op` reaches that shape from ordinary `%op` code: a maximum-one symbolic axis has an empty
   product space, both sides indexed at `Fixed_idx 0`. Reducing over one bound to zero returned the

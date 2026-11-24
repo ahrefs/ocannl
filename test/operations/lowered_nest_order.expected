@@ -8,4 +8,5 @@ the optimized routine opens every output loop of both bf16 gradients before its 
 an f32 weight gradient keeps its batch reduction outermost in the optimized routine: true
 the bf16 window input gradient lowers over the forward window and channel loops: true
 the optimized bf16 window input gradient opens its cell loop before all reductions: true
-the bf16 input gradient with two independent affine pairs keeps the lowered order: true
+the bf16 two-dimensional window input gradient lowers over the forward window and channel loops: true
+the optimized bf16 two-dimensional window input gradient opens both cell loops before all reductions: true

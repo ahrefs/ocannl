@@ -765,17 +765,23 @@ files.
   CPU and Metal backward's streaming rank-1 updates for strided dot products, a perf question of its
   own. The allowlist is fail-closed (perfect serial chain, the target read only at its own cell,
   pure index guards that move with the loop they mention). Plain cell loops interchange.
-  A cell with one supported positive affine pair (gh-ocannl-2423) is reparametrized by cell
-  and residue, with the reduction preserving its original visit order across windows. Separate
-  residues own disjoint cells, with a code-size budget on materializing residue nests. A signed
-  split mask that dominates the whole reduction can bound its transfers on a padded tail.
-  After one residue is privatized, an untouched sibling write still identifies its entry width
-  by statement identity. If the surviving entry width is ambiguous, the candidate declines.
-  Multiple affine pairs and dynamic scatters keep per-step rounding. The affine path is pinned by
-  `narrow_conv_grad_residency`, including a split tail, a disjoint window with gaps, and the
-  once-rounded f32 twin. Its overlapping FP16 fixture selects `Fp16_wide` explicitly and starts at
-  2048 to match the BF16 fixture's spacing of two at 256, so the same window contributions expose
-  per-window rounding in both formats. The plain path is pinned by
+  A cell with independent supported positive affine pairs, one per axis (gh-ocannl-2423,
+  gh-ocannl-2464), is reparametrized per overlapping axis by owner and residue while preserving
+  each cell's original contribution order across windows and interleaved reductions (each
+  overlapping pair's step replaces its earlier iterator in traversal order; injective pairs stay
+  outer cell loops after `Affine.separates` certification). Separate residue tuples own disjoint
+  cells, with a code-size budget on the residue-tuple product (64). A signed split mask that
+  dominates the whole reduction can bound its transfers on a padded tail. After one residue is
+  privatized, an untouched sibling write still identifies its entry width by statement identity.
+  If the surviving entry width is ambiguous, the candidate declines. Coupled affine pairs sharing
+  an iterator across axes, other affine forms, any axis whose shorter-scan frame exceeds 64
+  residues or residue-tuple products above 64, and dynamic scatters keep per-step rounding. The
+  affine path is pinned by `narrow_conv_grad_residency` (1-D including a split tail, a disjoint
+  window with gaps, FP16, and the shorter-scan-over-64 decline; 2-D overlapping, mixed, and
+  all-injective bf16 parity against the once-rounded f32 twin, privatized f32 tiles, a hand-built
+  mixed-frame 2-D order witness, and coupled-pair / residue-budget boundary controls). The 1-D overlapping FP16 fixture selects `Fp16_wide`
+  explicitly and starts at 2048 to match the BF16 fixture's spacing of two at 256, so the same
+  window contributions expose per-window rounding in both formats. The plain path is pinned by
   `lowered_nest_order`'s narrow legs and `narrow_grad_residency` (a bf16 dense layer's three
   gradients onto nonzero incoming values equal an f32 twin's exact sums narrowed once on the default,
   the privatized preset and the seeded CUDA/HIP default, whose shipped `acc` tiles are f32).

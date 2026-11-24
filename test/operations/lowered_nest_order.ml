@@ -197,8 +197,8 @@ let () =
    gradient's batch reduction is outermost raw, and the input gradient's contraction loop sits
    BETWEEN its two output loops ([x.grad[b,i] += w[o,i] * y.grad[b,o]] runs [b, o, i]). An f32
    gradient keeps the lowered order in the optimized routine. A bf16 window input gradient with one
-   affine pair gets a loop owning each cell before any reductions, while a two-dimensional window
-   has two independent affine pairs and keeps the lowered order. *)
+   or two independent affine pairs gets cell loops owning each cell before any reductions
+   (gh-ocannl-2423, gh-ocannl-2464). *)
 let grad_nests ~name ~prec ~input_grad =
   let x =
     Operation.init ~l:(name ^ "_x") ~prec:Ir.Ops.single ~b:[ 3 ] ~o:[ 5 ]
@@ -281,8 +281,13 @@ let () =
     ~f:(fun nest -> has_both nest && outputs_first nest);
   let source, llc = conv ~two_dims:true in
   report "bf16 two-dimensional window input gradient" (source, llc);
-  p "the bf16 input gradient with two independent affine pairs keeps the lowered order"
-    (List.exists source ~f:(fun nest -> has_both nest && not (outputs_first nest))
-    && List.equal
-         (List.equal (fun (s, r) (s', r') -> Idx.equal_symbol s s' && Poly.equal r r'))
-         source llc)
+  p_all
+    "the bf16 two-dimensional window input gradient lowers over the forward window and channel \
+     loops"
+    source ~f:(fun nest -> has_both nest && not (outputs_first nest));
+  p_all
+    "the optimized bf16 two-dimensional window input gradient opens both cell loops before all \
+     reductions"
+    llc ~f:(fun nest ->
+      has_both nest && outputs_first nest
+      && List.count nest ~f:(fun (_, r) -> Poly.equal r Output) = 2)
