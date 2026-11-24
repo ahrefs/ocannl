@@ -2698,6 +2698,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   still takes one top-level directory name per flag, as above. This set covers disposable
   test output, not arbitrary ignored data: leave local switches, caches and benchmark fixtures
   for separate judgment, and inspect `git status --short --ignored` before extending it.
+- `.github/fleet-regenerable` declares the project's default regenerable directories for
+  `board close` and `farside-close` (read from `origin/master`; `--regenerable` adds to it): it
+  may hold only ignored build-output, log, or Python bytecode directories disposable after a
+  merge, never local switches, autotune caches, or benchmark fixtures.
 - Dune tracks an environment variable only where a stanza declares it, and the tracking reaches
   further than the stanza: `dune rules test/operations/<name>.exe.output` shows the `(Env
   OCANNL_BACKEND)` dependency travelling from the `(test)` stanza's `(deps ...)` into the
