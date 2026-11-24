@@ -176,7 +176,16 @@ let () =
     Verdict.sub_leg cuda_leg ~aggregation:`Environment ~on:"cuda with tf32_matmuls=false"
       ~when_:(lazy (Ir.Numerics.get ()).Ir.Numerics.tf32_matmuls)
   in
-  let cuda_tf32_ampere = Ll_test.cuda_arm_leg cuda_tf32 (Ir.Cuda_mma.Wmma Wmma_tf32) in
+  (* Gate directly on the Ampere hardware minimum (SM80) rather than [Ll_test.cuda_arm_leg], which
+     queries [Ir.Cuda_mma.arm_floor] — the same floor [Cuda_mma.capability] uses to decide whether
+     to advertise [Mma_tf32]. *)
+  let cuda_tf32_ampere =
+    Verdict.sub_leg ~aggregation:`Environment cuda_tf32 ~on:"a CUDA device below Ampere (SM80)"
+      ~when_:
+        (lazy
+          (Option.value_map (Ll_test.cuda_min_compute_capability ()) ~default:false ~f:(fun cc ->
+               cc >= 80)))
+  in
   in_leg ~leg:cuda_tf32_ampere
     "CUDA Ampere+ with tf32_matmuls enabled advertises Mma_tf32 in a persistent-fragment scope"
     (fun label ->

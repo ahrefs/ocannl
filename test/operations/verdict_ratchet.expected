@@ -74,12 +74,21 @@ Uncompared leg claims exempted, with the reason each stays outside the gate read
   (none: every complete leg claim is followed to its gates)
 
 Non-allowlisted leg-gate calls exempted, with the independent reason each is not the value under test:
+  test/operations/autotune_mma_companion.ml:Ll_test.cycle_flat (1 site) -- initializes the test fixture tensor passed to Ll_test.tensorized_matmul_capability to query its precision metadata
+  test/operations/autotune_mma_companion.ml:TDSL.ndarray (1 site) -- builds the test fixture tensor passed to Ll_test.tensorized_matmul_capability to query its precision metadata
+  test/operations/autotune_mma_companion.ml:Tensor.value (1 site) -- reads the operand/output Tnode from the test fixture tensor passed to Ll_test.tensorized_matmul_capability
   test/operations/autotune_seeded_singles.ml:Autotune.seeded_default_backend (1 site) -- delegates to Backend_intf.backend_facts.seeds_untuned_default, a static backend fact independent of the seeded-singles schedule logic under test
   test/operations/bench_line_samples.ml:Autotune.seeded_default_backend (1 site) -- delegates to Backend_intf.backend_facts.seeds_untuned_default, a static backend fact independent of the untuned matmul execution under test
   test/operations/bench_seed_parity_smoke.ml:Bench_seed_parity.f32_reads_tf32 (1 site) -- reads hardware_limits.mma for whether f32 maps to tf32 under the active policy, independent of the parity runner under test
   test/operations/bench_seed_parity_smoke.ml:Bench_seed_parity.f32_reads_tf32_under_tf32_policy (1 site) -- classifies an unavailable tf32 leg as Environment vs Backend skip aggregation from hardware_limits.mma
   test/operations/bench_self_test.ml:Bench_harness.instrument_preemptible (1 site) -- host OS preemption-instrument capability constant (Linux vs macOS), independent of the self-test assertions
+  test/operations/cc_half_excess_precision.ml:<unresolved-param:lib> (2 sites) -- local bracket helper with_probe passes a Ctypes Dl.dlopen handle of a standalone host C compiler probe, independent of OCANNL codegen
   test/operations/cost_model_fill.ml:Autotune.ranking_fill_model (1 site) -- pre-existing gate checking whether the running backend defines a fill model before comparing ranking_ms against thread_only; tracked for follow-up audit
+  test/operations/launch_predicate_parity.ml:Autotune.c_a (1 site) -- reads the conv site's input precision node from the test fixture lowering for Ll_test.tensorized_matmul_capability, independent of the sketch seed list under test
+  test/operations/launch_predicate_parity.ml:Autotune.c_b (1 site) -- reads the conv site's kernel precision node from the test fixture lowering for Ll_test.tensorized_matmul_capability, independent of the sketch seed list under test
+  test/operations/launch_predicate_parity.ml:Autotune.c_d (1 site) -- reads the conv site's output precision node from the test fixture lowering for Ll_test.tensorized_matmul_capability, independent of the sketch seed list under test
+  test/operations/launch_predicate_parity.ml:Autotune.detect_conv (1 site) -- reads the conv site's operand/output precision nodes from the test fixture lowering for Ll_test.tensorized_matmul_capability, independent of the sketch seed list under test
+  test/operations/launch_predicate_parity.ml:Ir.Low_level.llc (1 site) -- reads the lowered IR body of the conv test fixture passed to Autotune.detect_conv
   test/operations/masked_persistent_fragment.ml:Autotune.mma_tile_for_precisions_in_scope (2 sites) -- reads hardware_limits.mma's advertised fragment-scope tiles to gate masked-fragment execution legs
   test/operations/model_seeded_anchor.ml:Autotune.model_seeding (2 sites) -- checks the untuned-seeding configuration gate for the CUDA stand-in target before comparing model_pick against seeded_plan
   test/operations/model_seeded_anchor.ml:Autotune.mt_facts (1 site) -- field projection off Ll_test.cuda_model_target's static stand-in target record
@@ -103,6 +112,7 @@ Non-allowlisted leg-gate calls exempted, with the independent reason each is not
   test/operations/seeded_default.ml:Autotune.mt_limits (1 site) -- field projection off Ll_test.cuda_model_target's static stand-in target record
   test/operations/tile_mma_geometry.ml:Ir.Register_tile.rn_cap (1 site) -- pure vector-register-file capacity bound deciding whether a narrower SIMD width can still hold a register tile
   test/operations/tile_mma_geometry.ml:Ir.Register_tile.simd_lane_ladder (1 site) -- pure vector-width ladder selecting the next narrower SIMD width for the down-step leg
+  test/support/ll_test.ml:<unresolved-param:arm> (1 site) -- exported test-support helper Ll_test.cuda_arm_leg whose callers live in other test files and supply static Ir.Cuda_mma.arm constructors
 
 Literal floors below one exempted, with the reason each keeps its floor:
   test/operations/verdict_quantified.ml:Verdict.p_all:every seed is even -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
@@ -811,10 +821,20 @@ refuses a leg claim it cannot complete, a planted hand-written skip list, a skip
 refuses a leg claim it leaves uncompared outside its exemption, counts one under it, and refuses a stale exemption: true
 refuses a sub_leg gated on a production function under test: true
 refuses a leg gated on a production function reached through a module alias: true
+refuses a leg whose condition is destructured from a match over a production call: true
+refuses a helper-parameterized leg whose call site supplies a production call: true
+refuses a leg gated on an unresolved helper parameter with no local callers: true
+refuses a production call in a non-handle argument or condition of a context query: true
 accepts a sub_leg gated on an allowlisted independent MMA ISA capability and config: true
 refuses a leg calling Ll_test.advertised without ~policy outside Test_utils.with_policy: true
 refuses an ambient-policy leg used inside Test_utils.with_policy applied with @@: true
 accepts a leg passing ~policy explicitly to Ll_test.advertised outside Test_utils.with_policy: true
+accepts a partially applied Ll_test.advertised alias when the full call supplies ~policy: true
+refuses ?policy:None and unchanged ~policy:(Ir.Numerics.get ()) on Ll_test.advertised outside Test_utils.with_policy: true
+refuses an eager ambient read hoisted before Test_utils.with_policy even when Verdict.leg sits inside: true
+accepts a deferred lazy sub_leg first forced inside Test_utils.with_policy: true
+refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy: true
+refuses an inline parent leg reading ambient policy when its sub_leg is used inside Test_utils.with_policy: true
 accepts a leg calling Ll_test.advertised without ~policy inside the same Test_utils.with_policy: true
 accepts a policy-independent leg built outside Test_utils.with_policy and used inside it: true
 refuses a leg gated on pinned workgroup alignment and granule fields of codegen_capabilities: true

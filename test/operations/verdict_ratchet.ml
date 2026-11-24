@@ -6216,6 +6216,18 @@ let run_uncompared_leg_refusal_control () =
    stated reason, stale-checked in both directions. *)
 let exempt_leg_gate_calls : (string * int * string) list =
   [
+    ( "test/operations/autotune_mma_companion.ml:Ll_test.cycle_flat",
+      1,
+      "initializes the test fixture tensor passed to Ll_test.tensorized_matmul_capability to query \
+       its precision metadata" );
+    ( "test/operations/autotune_mma_companion.ml:TDSL.ndarray",
+      1,
+      "builds the test fixture tensor passed to Ll_test.tensorized_matmul_capability to query its \
+       precision metadata" );
+    ( "test/operations/autotune_mma_companion.ml:Tensor.value",
+      1,
+      "reads the operand/output Tnode from the test fixture tensor passed to \
+       Ll_test.tensorized_matmul_capability" );
     ( "test/operations/autotune_seeded_singles.ml:Autotune.seeded_default_backend",
       1,
       "delegates to Backend_intf.backend_facts.seeds_untuned_default, a static backend fact \
@@ -6236,10 +6248,33 @@ let exempt_leg_gate_calls : (string * int * string) list =
       1,
       "host OS preemption-instrument capability constant (Linux vs macOS), independent of the \
        self-test assertions" );
+    ( "test/operations/cc_half_excess_precision.ml:<unresolved-param:lib>",
+      2,
+      "local bracket helper with_probe passes a Ctypes Dl.dlopen handle of a standalone host C \
+       compiler probe, independent of OCANNL codegen" );
     ( "test/operations/cost_model_fill.ml:Autotune.ranking_fill_model",
       1,
       "pre-existing gate checking whether the running backend defines a fill model before \
        comparing ranking_ms against thread_only; tracked for follow-up audit" );
+    ( "test/operations/launch_predicate_parity.ml:Autotune.c_a",
+      1,
+      "reads the conv site's input precision node from the test fixture lowering for \
+       Ll_test.tensorized_matmul_capability, independent of the sketch seed list under test" );
+    ( "test/operations/launch_predicate_parity.ml:Autotune.c_b",
+      1,
+      "reads the conv site's kernel precision node from the test fixture lowering for \
+       Ll_test.tensorized_matmul_capability, independent of the sketch seed list under test" );
+    ( "test/operations/launch_predicate_parity.ml:Autotune.c_d",
+      1,
+      "reads the conv site's output precision node from the test fixture lowering for \
+       Ll_test.tensorized_matmul_capability, independent of the sketch seed list under test" );
+    ( "test/operations/launch_predicate_parity.ml:Autotune.detect_conv",
+      1,
+      "reads the conv site's operand/output precision nodes from the test fixture lowering for \
+       Ll_test.tensorized_matmul_capability, independent of the sketch seed list under test" );
+    ( "test/operations/launch_predicate_parity.ml:Ir.Low_level.llc",
+      1,
+      "reads the lowered IR body of the conv test fixture passed to Autotune.detect_conv" );
     ( "test/operations/masked_persistent_fragment.ml:Autotune.mma_tile_for_precisions_in_scope",
       2,
       "reads hardware_limits.mma's advertised fragment-scope tiles to gate masked-fragment \
@@ -6320,6 +6355,10 @@ let exempt_leg_gate_calls : (string * int * string) list =
     ( "test/operations/tile_mma_geometry.ml:Ir.Register_tile.simd_lane_ladder",
       1,
       "pure vector-width ladder selecting the next narrower SIMD width for the down-step leg" );
+    ( "test/support/ll_test.ml:<unresolved-param:arm>",
+      1,
+      "exported test-support helper Ll_test.cuda_arm_leg whose callers live in other test files \
+       and supply static Ir.Cuda_mma.arm constructors" );
   ]
 
 let leg_gate_call_key ~source (call : Scan.leg_gate_call) = source ^ ":" ^ call.Scan.callee
@@ -6398,9 +6437,52 @@ let () = in_leg ~leg:peak_leg "live f16 ceiling" (fun label -> p label true)|oca
     ( "refuses a leg gated on a production function reached through a module alias",
       {ocaml|open Verdict.Claims
 module H = Bench_harness
-let leg = Verdict.leg ~when_:(Option.is_some (H.mma_ceiling_of ~backend ~limits mma)) ~on:"cc" ()
+let leg =
+  Verdict.leg
+    ~when_:
+      (match H.mma_ceiling_of ~backend ~limits mma with
+      | Bench_json.Mma_peak _ -> true
+      | Bench_json.Mma_no_peak _ -> false)
+    ~on:"cc" ()
 let () = in_leg ~leg "ceiling" (fun label -> p label true)|ocaml},
       [ "call:Bench_harness.mma_ceiling_of" ] );
+    ( "refuses a leg whose condition is destructured from a match over a production call",
+      {ocaml|open Verdict.Claims
+let capability = Autotune.detect_conv llc
+let when_, aggregation =
+  match capability with
+  | Some _ -> (true, `Backend)
+  | None -> (false, `Backend)
+let leg = Verdict.leg ~when_ ~aggregation ~on:"cuda" ()
+let () = in_leg ~leg "conv" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses a helper-parameterized leg whose call site supplies a production call",
+      {ocaml|open Verdict.Claims
+let case ~when_ label =
+  let leg = Verdict.leg ~when_ ~on:"cuda" () in
+  in_leg ~leg label (fun l -> p l true)
+let () = case ~when_:(Option.is_some (Autotune.detect_conv llc)) "conv"|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses a leg gated on an unresolved helper parameter with no local callers",
+      {ocaml|open Verdict.Claims
+let case ~when_ label =
+  let leg = Verdict.leg ~when_ ~on:"cuda" () in
+  in_leg ~leg label (fun l -> p l true)|ocaml},
+      [ "call:<unresolved-param:when_>" ] );
+    ( "refuses a production call in a non-handle argument or condition of a context query",
+      {ocaml|open Verdict.Claims
+let leg1 =
+  Verdict.leg
+    ~when_:(Ll_test.debug_counter ctx (if Option.is_some (Autotune.detect_conv llc) then "a" else "b") > 0)
+    ~on:"cuda" ()
+let leg2 =
+  Verdict.leg
+    ~when_:(Ir.Backend_intf.binds_hardware_grid (Context.backend_facts (if Option.is_some (Autotune.detect_matmul llc) then ctx1 else ctx2)))
+    ~on:"cuda" ()
+let () =
+  in_leg ~leg:leg1 "c1" (fun l -> p l true);
+  in_leg ~leg:leg2 "c2" (fun l -> p l true)|ocaml},
+      [ "call:Autotune.detect_conv"; "call:Autotune.detect_matmul" ] );
     ( "accepts a sub_leg gated on an allowlisted independent MMA ISA capability and config",
       {ocaml|open Verdict.Claims
 module BI = Ir.Backend_intf
@@ -6446,6 +6528,86 @@ let () =
     (fun _ -> tf32)
     (fun () -> in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
       [] );
+    ( "accepts a partially applied Ll_test.advertised alias when the full call supplies ~policy",
+      {ocaml|open Verdict.Claims
+let advertised = Ll_test.advertised ~backend_name:"cuda"
+let tf32 = { (Ir.Numerics.get ()) with Ir.Numerics.tf32_matmuls = true }
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:(advertised ~policy:tf32 ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+    ()
+let () =
+  Test_utils.with_policy
+    (fun _ -> tf32)
+    (fun () -> in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
+      [] );
+    ( "refuses ?policy:None and unchanged ~policy:(Ir.Numerics.get ()) on Ll_test.advertised \
+       outside Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let leg1 =
+  Verdict.leg ~on:"cuda"
+    ~when_:(Ll_test.advertised ?policy:None ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+    ()
+let leg2 =
+  Verdict.leg ~on:"cuda"
+    ~when_:(Ll_test.advertised ~policy:(Ir.Numerics.get ()) ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+    ()
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () ->
+      in_leg ~leg:leg1 "c1" (fun label -> p label true);
+      in_leg ~leg:leg2 "c2" (fun label -> p label true))|ocaml},
+      [
+        "policy:Test_utils.with_policy:Ll_test.advertised (?policy:None)";
+        "policy:Test_utils.with_policy:Ir.Numerics.get";
+      ] );
+    ( "refuses an eager ambient read hoisted before Test_utils.with_policy even when Verdict.leg \
+       sits inside",
+      {ocaml|open Verdict.Claims
+let available =
+  Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ()
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () ->
+      let leg = Verdict.leg ~on:"cuda" ~when_:available () in
+      in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
+    ( "accepts a deferred lazy sub_leg first forced inside Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub =
+  Verdict.sub_leg gpu ~on:"cuda"
+    ~when_:(lazy (Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ()))
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg:sub "tf32 replay" (fun label -> p label true))|ocaml},
+      [] );
+    ( "refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:(Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+    ()
+let check () = in_leg ~leg "tf32 replay" (fun label -> p label true)
+let () = Test_utils.with_policy (fun p -> { p with Ir.Numerics.tf32_matmuls = true }) check|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
+    ( "refuses an inline parent leg reading ambient policy when its sub_leg is used inside \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let sub =
+  Verdict.sub_leg
+    (Verdict.leg ~on:"cuda"
+       ~when_:(Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+       ())
+    ~on:"cuda" ~when_:(lazy true)
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg:sub "tf32 replay" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
     ( "accepts a leg calling Ll_test.advertised without ~policy inside the same \
        Test_utils.with_policy",
       {ocaml|open Verdict.Claims

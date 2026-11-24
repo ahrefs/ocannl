@@ -6898,26 +6898,31 @@ let folded_gate_census content =
     [Verdicts] or [Ambiguous], and every [in_leg]/[in_legf] application resolved the same way:
 
     - {b Disallowed external calls and capability fields ({!disallowed_calls})}: walks each leg's
-      [~when_] expression, following local [let] bindings (including [lazy], functions and [:=]
-      writes) in lexical scope ({!Lexical_scope}) and resolving local module aliases
+      [~when_] expression, following local [let] bindings (including destructured tuple/record
+      bindings, [lazy], functions, [:=] writes, local helper call-site arguments and [List]/[Array]
+      iterator callbacks) in lexical scope ({!Lexical_scope}) and resolving local module aliases
       ([module A = Path]) and known re-export opens ([open Ir], [open Test_utils]). Every external
       qualified value path ([M.x]) and qualified record field projection ([e.M.field]), as well as
       every unqualified field projection or record pattern over a value bound from
       [Context.codegen_capabilities], [Context.hardware_limits], [Context.backend_facts] or
       [Context.backend_facts_of_name], must belong to the closed allowlist of standard-library
       modules ({!leg_gate_stdlib_modules}) or independent platform, backend, configuration and
-      capability queries ({!leg_gate_allowed_paths}). Any other external path is reported;
-      legitimate sites that call a production module for an independent reason belong in
-      [verdict_ratchet.ml]'s [exempt_leg_gate_calls] with that stated reason.
+      capability queries ({!leg_gate_allowed_paths}). A gate parameter with no resolvable local call
+      site is reported as [<unresolved-param:name>] rather than counted clean. Any other external
+      path is reported; legitimate sites that call a production module for an independent reason
+      belong in [verdict_ratchet.ml]'s [exempt_leg_gate_calls] with that stated reason.
     - {b Ambient-policy mismatch ({!policy_mismatches})}: tracks the enclosing calls to
       [Test_utils]'s policy wrappers ([?policy_wrappers], derived by [verdict_ratchet] from
-      [Policy_invariance_scan.wrappers] on [test/support/test_utils.ml]). A leg whose [~when_]
-      reaches an ambient-policy reader — [Ll_test.advertised] without a [~policy]/[?policy] argument
-      (directly or through a local alias), [Ll_test.tensorized_capability],
-      [Ll_test.tensorized_matmul_capability], or [Ir.Numerics.get] outside a [~policy] argument to
-      [Ll_test.advertised] — is refused when an [in_leg]/[in_legf] using that leg (directly or
-      through local [let] bindings and [sub_leg] parents) runs inside a policy-wrapper callback that
-      did not enclose the leg's construction.
+      [Policy_invariance_scan.wrappers] on [test/support/test_utils.ml]), scoping only the wrapper's
+      callback (including named callbacks and local helpers) and not its policy-adjuster argument. A
+      leg whose [~when_] reaches an ambient-policy reader — [Ll_test.advertised] at full application
+      (accumulated across partial-application aliases) without a supplied pinned [~policy] (missing,
+      [?policy:None], or an unchanged [Ir.Numerics.get ()]), [Ll_test.tensorized_capability],
+      [Ll_test.tensorized_matmul_capability], or [Ir.Numerics.get] outside an adjusted [~policy]
+      argument to [Ll_test.advertised] — is refused when an [in_leg]/[in_legf] using that leg
+      (directly or through local [let] bindings and [sub_leg] parents, including inline parent legs)
+      runs inside a policy-wrapper callback that did not enclose the ambient read's evaluation (the
+      binding site for eager reads, or the first force site for [sub_leg] [lazy] reads).
 
     {2 What is deliberately not read}
 
@@ -7006,6 +7011,8 @@ let leg_gate_stdlib_modules =
       "List";
       "Map";
       "Monad";
+      "Mtime";
+      "Mtime_clock";
       "Mutex";
       "Nativeint";
       "Nvrtc";
@@ -7089,12 +7096,14 @@ let leg_gate_allowed_paths =
       "Context.host_capabilities";
       "Context.static_properties";
       "Context.thread_scratch_limit";
+      "Context.timing_identity";
       "Context.Cc_backend.compiler_command";
       "Context.Cc_backend.host_capabilities";
       "Context.Cc_backend.pool_parallel_grid";
       "Context.Cc_backend.vector_bytes_setting";
       "Descriptors.count";
       "Fresh_process.nested_dune_environment";
+      "Fresh_process.report";
       "Fresh_process.run";
       "Gpu_recovery.recovery_count";
       "Ir.Backend_intf.Mma_bf16";
@@ -7201,6 +7210,7 @@ let leg_gate_allowed_paths =
       "Test_utils.with_fp16_narrow";
       "Test_utils.with_policy";
       "Utils.debug_log_from_routines";
+      "Utils.default_exit_stream_teardown_timeout";
       "Utils.get_global_arg";
       "Utils.get_global_flag";
       "Utils.registered_flag";
@@ -7224,26 +7234,43 @@ let leg_gate_context_queries =
       "Context.host_capabilities";
       "Context.static_properties";
       "Context.thread_scratch_limit";
+      "Context.timing_identity";
       "Ll_test.debug_counter";
     ]
 
-type lg_mod =
+type lg_proj_step = P_tuple of int | P_field of string | P_opaque
+
+type lg_param_info = {
+  pm_fn_id : int;
+  pm_label : Ppxlib.Asttypes.arg_label;
+  pm_nolabel_idx : int;
+  pm_default : (expression * (lg_val, lg_mod) Lexical_scope.env) option;
+  pm_proj : lg_proj_step list;
+  pm_name : string;
+  pm_line : int;
+}
+
+and lg_eval_kind = Lg_eager of (int * string) list | Lg_deferred of int option
+
+and lg_mod =
   | Lg_local of { values : (string * lg_val) list; modules : (string * lg_mod) list }
   | Lg_alias of string list
 
 and lg_leg_rec = {
+  lg_leg_key : string;
   lg_leg_line : int;
-  lg_leg_scopes : (int * string) list;
-  lg_ambient : string list;
-  lg_parents : lg_leg_rec list;
+  lg_ambient : (string * lg_eval_kind) list;
+  mutable lg_parents : lg_leg_rec list;
 }
 
 and lg_val = {
   lg_id : int;
   mutable lg_rhs : (expression * (lg_val, lg_mod) Lexical_scope.env) option;
-  mutable lg_leg : lg_leg_rec option;
+  mutable lg_proj : lg_proj_step list;
+  mutable lg_eval_scopes : (int * string) list;
+  mutable lg_is_call_arg : bool;
+  mutable lg_param : lg_param_info option;
   mutable lg_cap_record : bool;
-  mutable lg_advertised_alias : bool;
 }
 
 let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
@@ -7255,11 +7282,74 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
     | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> strip inner
     | _ -> expr
   in
-  let writes : (int, (expression * (lg_val, lg_mod) Lexical_scope.env) list) Hashtbl.t =
+  let rec flatten_apply expr =
+    let expr = strip expr in
+    match expr.pexp_desc with
+    | Pexp_apply
+        ({ pexp_desc = Pexp_ident { txt = Lident "@@"; _ }; _ }, [ (Nolabel, lhs); (Nolabel, rhs) ])
+      ->
+        let base, args = flatten_apply lhs in
+        (base, args @ [ (Ppxlib.Asttypes.Nolabel, rhs) ])
+    | Pexp_apply
+        ({ pexp_desc = Pexp_ident { txt = Lident "|>"; _ }; _ }, [ (Nolabel, lhs); (Nolabel, rhs) ])
+      ->
+        let base, args = flatten_apply rhs in
+        (base, args @ [ (Ppxlib.Asttypes.Nolabel, lhs) ])
+    | Pexp_apply (callee, args) ->
+        let base, prefix = flatten_apply callee in
+        (base, prefix @ args)
+    | _ -> (expr, [])
+  in
+  let rec extract_pat_projs pat =
+    match pat.ppat_desc with
+    | Ppat_var { txt; _ } -> [ (txt, []) ]
+    | Ppat_alias (inner, { txt; _ }) -> (txt, []) :: extract_pat_projs inner
+    | Ppat_constraint (inner, _) -> extract_pat_projs inner
+    | Ppat_tuple pats ->
+        List.concat_mapi pats ~f:(fun i p ->
+            List.map (extract_pat_projs p) ~f:(fun (n, steps) -> (n, P_tuple i :: steps)))
+    | Ppat_record (fields, _) ->
+        List.concat_map fields ~f:(fun ({ txt; _ }, p) ->
+            let fname = Ppxlib.Longident.last_exn txt in
+            List.map (extract_pat_projs p) ~f:(fun (n, steps) -> (n, P_field fname :: steps)))
+    | _ -> List.map (Lexical_scope.pattern_vars [ pat ]) ~f:(fun n -> (n, [ P_opaque ]))
+  in
+  let leg_key pos wrapper_ids =
+    Printf.sprintf "%d:%s" pos (String.concat ~sep:"," (List.map wrapper_ids ~f:Int.to_string))
+  in
+  let writes :
+      (int, (expression * (lg_val, lg_mod) Lexical_scope.env * (int * string) list) list) Hashtbl.t
+      =
+    Hashtbl.create (module Int)
+  in
+  let fn_id_by_expr_pos : (int, int) Hashtbl.t = Hashtbl.create (module Int) in
+  let fn_def_by_id :
+      ( int,
+        (Ppxlib.Asttypes.arg_label * expression option * pattern) list
+        * expression
+        * (lg_val, lg_mod) Lexical_scope.env )
+      Hashtbl.t =
+    Hashtbl.create (module Int)
+  in
+  let anon_fn_id_by_pos : (int, int) Hashtbl.t = Hashtbl.create (module Int) in
+  let curried_fn_cont : (int, int * int) Hashtbl.t = Hashtbl.create (module Int) in
+  let local_calls :
+      ( int,
+        (int
+        * (Ppxlib.Asttypes.arg_label * expression * (lg_val, lg_mod) Lexical_scope.env) list
+        * (int * string) list)
+        list )
+      Hashtbl.t =
+    Hashtbl.create (module Int)
+  in
+  let lazy_forces : (int, (int * (int * string) list) list) Hashtbl.t =
     Hashtbl.create (module Int)
   in
   let disallowed = ref [] and mismatches = ref [] and sites = ref 0 in
-  let pending_legs = ref [] and pending_uses = ref [] in
+  let seen_leg_sites : int Hash_set.t = Hash_set.create (module Int) in
+  let seen_mismatches : string Hash_set.t = Hash_set.create (module String) in
+  let seen_callback_walks : string Hash_set.t = Hash_set.create (module String) in
+  let pending_legs = ref [] and pending_parent_links = ref [] and pending_uses = ref [] in
   let ir_opened_marker = "__ocannl_ir_opened__" in
   let tu_opened_marker = "__ocannl_tu_opened__" in
   let is_stdlib_path = function
@@ -7318,6 +7408,12 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
         | `Local (Lg_alias target) -> `External (target @ [ name ])
         | `Local_missing -> `Local_other)
   in
+  let lookup_local_val env lid =
+    match resolve_longident env lid with
+    | `Local_val v -> Some v
+    | `Unqualified name -> Lexical_scope.lookup env name
+    | `External _ | `Local_other -> None
+  in
   let is_cap_producer_path path =
     match String.concat ~sep:"." path with
     | "Context.codegen_capabilities" | "Context.hardware_limits" | "Context.backend_facts"
@@ -7336,52 +7432,15 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
             match resolve_longident env txt with
             | `External path when is_cap_producer_path path -> true
             | `External [ "Lazy"; "force" ] | `External [ "Base"; "Lazy"; "force" ] -> (
-                match expr.pexp_desc with
+                match (strip expr).pexp_desc with
                 | Pexp_apply (_, [ (Nolabel, arg) ]) -> expr_is_cap_record env arg
                 | _ -> false)
             | `Unqualified "force" -> (
-                match expr.pexp_desc with
+                match (strip expr).pexp_desc with
                 | Pexp_apply (_, [ (Nolabel, arg) ]) -> expr_is_cap_record env arg
                 | _ -> false)
             | _ -> false)
         | _ -> false)
-    | _ -> false
-  in
-  let expr_is_advertised_alias env expr =
-    match (strip expr).pexp_desc with
-    | Pexp_ident { txt; _ } -> (
-        match resolve_longident env txt with
-        | `External [ "Ll_test"; "advertised" ] -> true
-        | `Unqualified name -> (
-            match Lexical_scope.lookup env name with
-            | Some v -> v.lg_advertised_alias
-            | None -> false)
-        | _ -> false)
-    | Pexp_apply (callee, args) -> (
-        let has_policy =
-          List.exists args ~f:(function
-            | (Ppxlib.Asttypes.Labelled "policy" | Optional "policy"), _ -> true
-            | _ -> false)
-        in
-        let has_unit =
-          List.exists args ~f:(function
-            | ( Ppxlib.Asttypes.Nolabel,
-                { pexp_desc = Pexp_construct ({ txt = Lident "()"; _ }, None); _ } ) ->
-                true
-            | _ -> false)
-        in
-        if has_policy || has_unit then false
-        else
-          match (strip callee).pexp_desc with
-          | Pexp_ident { txt; _ } -> (
-              match resolve_longident env txt with
-              | `External [ "Ll_test"; "advertised" ] -> true
-              | `Unqualified name -> (
-                  match Lexical_scope.lookup env name with
-                  | Some v -> v.lg_advertised_alias
-                  | None -> false)
-              | _ -> false)
-          | _ -> false)
     | _ -> false
   in
   let policy_wrapper_of env callee =
@@ -7398,21 +7457,202 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
         | _ -> None)
     | _ -> None
   in
+  let is_unit_expr expr =
+    match (strip expr).pexp_desc with
+    | Pexp_construct ({ txt = Lident "()"; _ }, None) -> true
+    | _ -> false
+  in
+  (* Recognize a full invocation of a [Test_utils] policy wrapper (direct, via [@@]/[|>], or via a
+     local 1-argument wrapper like [let wide f = Test_utils.with_policy (...) f] or [let wide =
+     Test_utils.with_policy (...)]), splitting its non-callback arguments (which execute BEFORE the
+     policy changes) from the callback argument (which executes UNDER the new policy). *)
+  let split_policy_wrapper_call env expr =
+    let base, all_args = flatten_apply expr in
+    let split_last_nolabel ~min_nolabel args =
+      let nolabel_indices =
+        List.filter_mapi args ~f:(fun i (lbl, _) ->
+            match lbl with Ppxlib.Asttypes.Nolabel -> Some i | _ -> None)
+      in
+      if List.length nolabel_indices < min_nolabel then None
+      else
+        let cb_idx = List.last_exn nolabel_indices in
+        let cb = snd (List.nth_exn args cb_idx) in
+        let non_cb =
+          List.filter_mapi args ~f:(fun i (_, a) -> if i = cb_idx then None else Some a)
+        in
+        Some (non_cb, cb)
+    in
+    match policy_wrapper_of env base with
+    | Some wname ->
+        let min_nolabel = if String.equal wname "Test_utils.with_policy" then 2 else 1 in
+        Option.map (split_last_nolabel ~min_nolabel all_args) ~f:(fun (non_cb, cb) ->
+            (wname, non_cb, cb))
+    | None -> (
+        match (strip base).pexp_desc with
+        | Pexp_ident { txt; _ } -> (
+            match lookup_local_val env txt with
+            | Some { lg_rhs = Some (rhs, rhs_env); lg_proj = []; _ } -> (
+                let rhs_base, rhs_args = flatten_apply rhs in
+                match policy_wrapper_of rhs_env rhs_base with
+                | Some wname ->
+                    let min_nolabel =
+                      if String.equal wname "Test_utils.with_policy" then 2 else 1
+                    in
+                    let nolabel_rhs =
+                      List.count rhs_args ~f:(function
+                        | Ppxlib.Asttypes.Nolabel, _ -> true
+                        | _ -> false)
+                    in
+                    let nolabel_all =
+                      List.count all_args ~f:(function
+                        | Ppxlib.Asttypes.Nolabel, _ -> true
+                        | _ -> false)
+                    in
+                    if nolabel_all >= 1 && nolabel_rhs + nolabel_all >= min_nolabel then
+                      Option.map (split_last_nolabel ~min_nolabel:1 all_args)
+                        ~f:(fun (non_cb, cb) -> (wname, non_cb, cb))
+                    else None
+                | None -> (
+                    match (strip rhs).pexp_desc with
+                    | Pexp_function
+                        ( [
+                            {
+                              pparam_desc =
+                                Pparam_val
+                                  (Nolabel, None, { ppat_desc = Ppat_var { txt = param; _ }; _ });
+                              _;
+                            };
+                          ],
+                          _,
+                          Pfunction_body body ) -> (
+                        let b_base, b_args = flatten_apply body in
+                        match policy_wrapper_of rhs_env b_base with
+                        | Some wname ->
+                            let min_nolabel =
+                              if String.equal wname "Test_utils.with_policy" then 2 else 1
+                            in
+                            let forwards_param =
+                              match split_last_nolabel ~min_nolabel b_args with
+                              | Some (_, cb_expr) -> (
+                                  match (strip cb_expr).pexp_desc with
+                                  | Pexp_ident { txt = Lident x; _ } -> String.equal x param
+                                  | _ -> false)
+                              | None -> false
+                            in
+                            if forwards_param then
+                              Option.map (split_last_nolabel ~min_nolabel:1 all_args)
+                                ~f:(fun (non_cb, cb) -> (wname, non_cb, cb))
+                            else None
+                        | None -> None)
+                    | _ -> None))
+            | _ -> None)
+        | _ -> None)
+  in
+  let resolve_advertised_chain env expr =
+    let seen = Hash_set.create (module Int) in
+    let rec peel env expr =
+      let base, args = flatten_apply expr in
+      let tagged = List.map args ~f:(fun (l, a) -> (l, a, env)) in
+      match (strip base).pexp_desc with
+      | Pexp_ident { txt; _ } -> (
+          match resolve_longident env txt with
+          | `External [ "Ll_test"; "advertised" ] -> Some tagged
+          | `Local_val v -> peel_val v tagged
+          | `Unqualified name -> (
+              match Lexical_scope.lookup env name with Some v -> peel_val v tagged | None -> None)
+          | _ -> None)
+      | _ -> None
+    and peel_val v tagged =
+      if Hash_set.mem seen v.lg_id || not (List.is_empty v.lg_proj) then None
+      else (
+        Hash_set.add seen v.lg_id;
+        match v.lg_rhs with
+        | Some (rhs, rhs_env) -> Option.map (peel rhs_env rhs) ~f:(fun prev -> prev @ tagged)
+        | None -> None)
+    in
+    peel env expr
+  in
+  let resolve_local_fn_chain env expr =
+    let seen = Hash_set.create (module Int) in
+    let rec peel env expr =
+      let base, args = flatten_apply expr in
+      let tagged = List.map args ~f:(fun (l, a) -> (l, a, env)) in
+      match (strip base).pexp_desc with
+      | Pexp_ident { txt; _ } -> (
+          match lookup_local_val env txt with
+          | Some v when (not (Hash_set.mem seen v.lg_id)) && List.is_empty v.lg_proj -> (
+              Hash_set.add seen v.lg_id;
+              match v.lg_rhs with
+              | Some (rhs, rhs_env) -> (
+                  match (strip rhs).pexp_desc with
+                  | Pexp_function _ -> Some (v.lg_id, tagged)
+                  | _ ->
+                      Option.map (peel rhs_env rhs) ~f:(fun (fn_id, prev) -> (fn_id, prev @ tagged))
+                  )
+              | None -> None)
+          | _ -> None)
+      | _ -> None
+    in
+    peel env expr
+  in
+  let rec extract_list_literal env seen expr =
+    let expr = strip expr in
+    match expr.pexp_desc with
+    | Pexp_construct ({ txt = Lident "[]"; _ }, None) -> Some []
+    | Pexp_construct ({ txt = Lident "::"; _ }, Some { pexp_desc = Pexp_tuple [ hd; tl ]; _ }) ->
+        Option.map (extract_list_literal env seen tl) ~f:(fun rest -> (hd, env) :: rest)
+    | Pexp_array elems -> Some (List.map elems ~f:(fun e -> (e, env)))
+    | Pexp_ident { txt; _ } -> (
+        match lookup_local_val env txt with
+        | Some v when (not (Hash_set.mem seen v.lg_id)) && List.is_empty v.lg_proj -> (
+            Hash_set.add seen v.lg_id;
+            match v.lg_rhs with
+            | Some (rhs, rhs_env) -> extract_list_literal rhs_env seen rhs
+            | None -> None)
+        | _ -> None)
+    | _ -> None
+  in
+  let iterator_kind env callee =
+    match (strip callee).pexp_desc with
+    | Pexp_ident { txt; _ } -> (
+        match resolve_longident env txt with
+        | `External
+            ( [ "List"; fn ]
+            | [ "Base"; "List"; fn ]
+            | [ "Array"; fn ]
+            | [ "Base"; "Array"; fn ]
+            | [ "Sequence"; fn ]
+            | [ "Base"; "Sequence"; fn ]
+            | [ "Option"; fn ]
+            | [ "Base"; "Option"; fn ] ) -> (
+            match fn with
+            | "iter" | "map" | "filter_map" | "concat_map" | "for_all" | "exists" | "filter" ->
+                Some `Unary
+            | "iteri" | "mapi" | "fold" -> Some `Indexed
+            | "iter2" | "iter2_exn" | "map2" | "map2_exn" | "for_all2" | "for_all2_exn" ->
+                Some `Binary
+            | _ -> None)
+        | _ -> None)
+    | _ -> None
+  in
   let walker =
     object (self)
       inherit [lg_val, lg_mod] Lexical_scope.scoped as super
       val mutable next_id = 0
       val mutable active_wrappers : (int * string) list = []
-      val leg_by_pos : (int, lg_leg_rec) Hashtbl.t = Hashtbl.create (module Int)
+      val leg_by_key : (string, lg_leg_rec) Hashtbl.t = Hashtbl.create (module String)
+      val seen_apply_spines : int Hash_set.t = Hash_set.create (module Int)
 
       method local =
         next_id <- next_id + 1;
         {
           lg_id = next_id;
           lg_rhs = None;
-          lg_leg = None;
+          lg_proj = [];
+          lg_eval_scopes = active_wrappers;
+          lg_is_call_arg = false;
+          lg_param = None;
           lg_cap_record = false;
-          lg_advertised_alias = false;
         }
 
       method module_path env path =
@@ -7420,6 +7660,32 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
         | `External canon -> Some (Lg_alias canon)
         | `Local m -> Some m
         | `Local_missing -> None
+
+      method! bind_group env bindings denotes =
+        let env =
+          self#forget env
+            (Lexical_scope.pattern_unpacks (List.map bindings ~f:(fun b -> b.pvb_pat)))
+        in
+        List.fold2_exn bindings denotes ~init:env ~f:(fun acc b base_v ->
+            let pairs = extract_pat_projs b.pvb_pat in
+            if List.is_empty pairs then acc
+            else
+              let frame =
+                List.fold pairs
+                  ~init:(Map.empty (module String))
+                  ~f:(fun m (name, proj) ->
+                    let v =
+                      if List.is_empty proj then base_v
+                      else
+                        let fresh = self#local in
+                        fresh.lg_rhs <- base_v.lg_rhs;
+                        fresh.lg_proj <- proj;
+                        fresh.lg_eval_scopes <- base_v.lg_eval_scopes;
+                        fresh
+                    in
+                    Map.set m ~key:name ~data:v)
+              in
+              Lexical_scope.push_frame acc frame)
 
       method! module_of env module_expr =
         match module_expr.pmod_desc with
@@ -7432,8 +7698,9 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                       let denotes = self#denotations env rec_flag bindings in
                       let scope = self#bind_group env bindings denotes in
                       let exported =
-                        List.concat_map (List.zip_exn bindings denotes) ~f:(fun (b, d) ->
-                            List.map (Lexical_scope.pattern_vars [ b.pvb_pat ]) ~f:(fun n -> (n, d)))
+                        List.concat_map bindings ~f:(fun b ->
+                            List.filter_map (Lexical_scope.pattern_vars [ b.pvb_pat ]) ~f:(fun n ->
+                                Option.map (Lexical_scope.lookup scope n) ~f:(fun d -> (n, d))))
                       in
                       (scope, exports @ exported)
                   | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
@@ -7478,13 +7745,36 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
             Lexical_scope.bind_values env [ tu_opened_marker ] self#local
         | _ -> env
 
+      method register_fn_binding env v expr =
+        let stripped = strip expr in
+        let rec collect_params acc e =
+          match (strip e).pexp_desc with
+          | Pexp_function (params, _, Pfunction_body body) ->
+              let ps =
+                List.filter_map params ~f:(fun p ->
+                    match p.pparam_desc with
+                    | Pparam_val (lbl, default, pat) -> Some (lbl, default, pat)
+                    | Pparam_newtype _ -> None)
+              in
+              collect_params (acc @ ps) body
+          | _ -> (acc, e)
+        in
+        match stripped.pexp_desc with
+        | Pexp_function _ ->
+            Hashtbl.set fn_id_by_expr_pos ~key:stripped.pexp_loc.loc_start.pos_cnum ~data:v.lg_id;
+            let params, body = collect_params [] stripped in
+            if not (List.is_empty params) then
+              Hashtbl.set fn_def_by_id ~key:v.lg_id ~data:(params, body, env)
+        | _ -> ()
+
       method! binding_denotes env binding =
         let v = self#local in
+        v.lg_rhs <- Some (binding.pvb_expr, env);
+        v.lg_eval_scopes <- active_wrappers;
         (match Read.pattern_name binding.pvb_pat with
         | Some _ ->
-            v.lg_rhs <- Some (binding.pvb_expr, env);
             v.lg_cap_record <- expr_is_cap_record env binding.pvb_expr;
-            v.lg_advertised_alias <- expr_is_advertised_alias env binding.pvb_expr
+            self#register_fn_binding env v binding.pvb_expr
         | None -> ());
         v
 
@@ -7495,11 +7785,24 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
             let denotes = List.map bindings ~f:(fun _ -> self#local) in
             let scope = self#bind_group env bindings denotes in
             List.iter2_exn denotes bindings ~f:(fun v binding ->
+                v.lg_rhs <- Some (binding.pvb_expr, scope);
+                v.lg_eval_scopes <- active_wrappers;
                 if Option.is_some (Read.pattern_name binding.pvb_pat) then (
-                  v.lg_rhs <- Some (binding.pvb_expr, scope);
                   v.lg_cap_record <- expr_is_cap_record scope binding.pvb_expr;
-                  v.lg_advertised_alias <- expr_is_advertised_alias scope binding.pvb_expr));
+                  self#register_fn_binding scope v binding.pvb_expr));
             denotes
+
+      (* Compute denotations BEFORE walking each binding's RHS so [fn_id_by_expr_pos] already maps
+         top-level [let f ...] functions to the exact [lg_id] that later call sites resolve. *)
+      method! define ~top:_ env rec_flag bindings ~walk =
+        let denotes = self#denotations env rec_flag bindings in
+        let inner =
+          match rec_flag with
+          | Nonrecursive -> env
+          | Recursive -> self#bind_group env bindings denotes
+        in
+        List.iter bindings ~f:(walk inner);
+        denotes
 
       method! attribute _ attr = attr
 
@@ -7528,7 +7831,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
               find scope b
           | Pexp_ident { txt = Lident name; _ } -> (
               match Lexical_scope.lookup env name with
-              | Some v when not (Hash_set.mem seen v.lg_id) ->
+              | Some v when (not (Hash_set.mem seen v.lg_id)) && List.is_empty v.lg_proj ->
                   Hash_set.add seen v.lg_id;
                   Option.bind v.lg_rhs ~f:(fun (rhs, rhs_env) -> find rhs_env rhs)
               | _ -> None)
@@ -7556,34 +7859,196 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
         in
         find env record
 
-      (* Walk a gate expression to collect: (1) any disallowed external qualified calls or
-         capability-record field accesses, and (2) any ambient-policy reads. *)
-      method inspect_gate env expr =
+      method resolve_option_arg env expr =
+        let seen = Hash_set.create (module Int) in
+        let rec go env expr =
+          let expr = strip expr in
+          match expr.pexp_desc with
+          | Pexp_construct ({ txt = Lident "None" | Ldot (_, "None"); _ }, None) -> `None_lit
+          | Pexp_construct ({ txt = Lident "Some" | Ldot (_, "Some"); _ }, Some inner) ->
+              `Some_expr (inner, env)
+          | Pexp_ident { txt; _ } -> (
+              match lookup_local_val env txt with
+              | Some v when (not (Hash_set.mem seen v.lg_id)) && List.is_empty v.lg_proj -> (
+                  Hash_set.add seen v.lg_id;
+                  match v.lg_rhs with Some (rhs, rhs_env) -> go rhs_env rhs | None -> `Opaque)
+              | _ -> `Opaque)
+          | Pexp_let (rec_flag, bindings, body) ->
+              let denotes = self#denotations env rec_flag bindings in
+              let scope = self#bind_group env bindings denotes in
+              go scope body
+          | Pexp_sequence (_, b) -> go env b
+          | _ -> `Opaque
+        in
+        go env expr
+
+      (* Returns [true] if [expr] evaluates to an UNCHANGED ambient [Ir.Numerics.get ()] rather than
+         an adjusted/pinned policy record (e.g. [{ (Ir.Numerics.get ()) with tf32_matmuls = true
+         }]). *)
+      method is_unchanged_ambient_policy env expr =
+        let seen = Hash_set.create (module Int) in
+        let rec check env expr =
+          let expr = strip expr in
+          match expr.pexp_desc with
+          | Pexp_record _ -> false
+          | Pexp_apply _ -> (
+              let base, _ = flatten_apply expr in
+              match (strip base).pexp_desc with
+              | Pexp_ident { txt; _ } -> (
+                  match resolve_longident env txt with
+                  | `External [ "Ir"; "Numerics"; "get" ] -> true
+                  | `Local_val v -> check_fn_result v
+                  | `Unqualified name -> (
+                      match Lexical_scope.lookup env name with
+                      | Some v -> check_fn_result v
+                      | None -> false)
+                  | _ -> false)
+              | _ -> false)
+          | Pexp_ident { txt; _ } -> (
+              match lookup_local_val env txt with
+              | Some v when (not (Hash_set.mem seen v.lg_id)) && List.is_empty v.lg_proj -> (
+                  Hash_set.add seen v.lg_id;
+                  match v.lg_rhs with Some (rhs, rhs_env) -> check rhs_env rhs | None -> false)
+              | _ -> false)
+          | Pexp_let (rec_flag, bindings, body) ->
+              let denotes = self#denotations env rec_flag bindings in
+              let scope = self#bind_group env bindings denotes in
+              check scope body
+          | Pexp_sequence (_, b) | Pexp_lazy b -> check env b
+          | Pexp_ifthenelse (_, t, Some f) -> check env t || check env f
+          | Pexp_match (_, cases) -> List.exists cases ~f:(fun c -> check env c.pc_rhs)
+          | _ -> false
+        and check_fn_result v =
+          if Hash_set.mem seen v.lg_id then false
+          else (
+            Hash_set.add seen v.lg_id;
+            match v.lg_rhs with
+            | Some (rhs, rhs_env) -> (
+                match (strip rhs).pexp_desc with
+                | Pexp_function (_, _, Pfunction_body body) -> check rhs_env body
+                | _ -> false)
+            | None -> false)
+        in
+        check env expr
+
+      (* Walk a gate expression to collect: (1) any disallowed external qualified calls, capability
+         record field accesses, or unresolved gate parameters, and (2) any ambient-policy reads
+         together with their evaluation scope (eager binding/call scope or deferred [sub_leg] force
+         site). *)
+      method inspect_gate ~is_sub_leg ~leg_scopes env expr =
         let seen_vals = Hash_set.create (module Int) in
+        let seen_param_calls = Hash_set.create (module String) in
+        let seen_fn_calls = Hash_set.create (module String) in
+        let bind_local_call fn_env params all_args =
+          let nolabel_args =
+            List.filter_map all_args ~f:(fun (albl, aexpr, aenv) ->
+                match albl with Ppxlib.Asttypes.Nolabel -> Some (aexpr, aenv) | _ -> None)
+          in
+          let nl_idx = ref 0 in
+          let call_env =
+            List.fold params ~init:fn_env ~f:(fun acc (plbl, default_opt, pat) ->
+                let matched =
+                  match plbl with
+                  | Ppxlib.Asttypes.Labelled l ->
+                      List.find_map all_args ~f:(fun (albl, aexpr, aenv) ->
+                          match albl with
+                          | Ppxlib.Asttypes.Labelled al when String.equal al l -> Some (aexpr, aenv)
+                          | _ -> None)
+                  | Ppxlib.Asttypes.Optional l -> (
+                      match
+                        List.find_map all_args ~f:(fun (albl, aexpr, aenv) ->
+                            match albl with
+                            | (Ppxlib.Asttypes.Labelled al | Optional al) when String.equal al l ->
+                                Some (aexpr, aenv)
+                            | _ -> None)
+                      with
+                      | Some hit -> Some hit
+                      | None -> Option.map default_opt ~f:(fun d -> (d, acc)))
+                  | Ppxlib.Asttypes.Nolabel ->
+                      let k = !nl_idx in
+                      Int.incr nl_idx;
+                      List.nth nolabel_args k
+                in
+                let acc = self#forget acc (Lexical_scope.pattern_unpacks [ pat ]) in
+                let pairs = extract_pat_projs pat in
+                if List.is_empty pairs then acc
+                else
+                  let frame =
+                    List.fold pairs
+                      ~init:(Map.empty (module String))
+                      ~f:(fun m (name, proj) ->
+                        let v = self#local in
+                        v.lg_is_call_arg <- true;
+                        Option.iter matched ~f:(fun (aexpr, aenv) ->
+                            v.lg_rhs <- Some (aexpr, aenv);
+                            v.lg_proj <- proj;
+                            v.lg_cap_record <- List.is_empty proj && expr_is_cap_record aenv aexpr);
+                        Map.set m ~key:name ~data:v)
+                  in
+                  Lexical_scope.push_frame acc frame)
+          in
+          let extra_nolabels = List.drop nolabel_args !nl_idx in
+          (call_env, extra_nolabels)
+        in
         let found_disallowed = ref [] in
         let found_ambient = ref [] in
         let record_path ~line path =
           if not (is_allowed_path path) then
             found_disallowed := (String.concat ~sep:"." path, line) :: !found_disallowed
         in
-        let rec walk env ~in_explicit_policy expr =
+        let record_raw_disallowed ~line name =
+          found_disallowed := (name, line) :: !found_disallowed
+        in
+        let record_ambient ~in_explicit_policy ~eval_kind reader =
+          if not in_explicit_policy then found_ambient := (reader, eval_kind) :: !found_ambient
+        in
+        let check_cap_pat rhs_env pat =
+          let rec go pat =
+            match pat.ppat_desc with
+            | Ppat_record (fields, _) ->
+                List.iter fields ~f:(fun ({ txt; loc }, inner) ->
+                    (match resolve_longident rhs_env txt with
+                    | `External path -> record_path ~line:loc.loc_start.pos_lnum path
+                    | `Unqualified field ->
+                        record_path ~line:loc.loc_start.pos_lnum [ "Ir"; "Backend_intf"; field ]
+                    | `Local_val _ | `Local_other -> ());
+                    go inner)
+            | Ppat_alias (inner, _) | Ppat_constraint (inner, _) -> go inner
+            | _ -> ()
+          in
+          go pat
+        in
+        let rec walk ~eval_kind ~in_explicit_policy env expr =
           let line = expr.pexp_loc.loc_start.pos_lnum in
           let visit_val v =
             if not (Hash_set.mem seen_vals v.lg_id) then (
               Hash_set.add seen_vals v.lg_id;
-              Option.iter v.lg_rhs ~f:(fun (rhs, rhs_env) -> walk rhs_env ~in_explicit_policy rhs);
-              List.iter (Hashtbl.find_multi writes v.lg_id) ~f:(fun (written, w_env) ->
-                  walk w_env ~in_explicit_policy written))
+              (match v.lg_param with
+              | Some pm -> visit_param ~eval_kind ~in_explicit_policy pm
+              | None -> ());
+              Option.iter v.lg_rhs ~f:(fun (rhs, rhs_env) ->
+                  let rhs_eval_kind =
+                    if v.lg_is_call_arg then eval_kind
+                    else
+                      match (strip rhs).pexp_desc with
+                      | Pexp_function _ -> eval_kind
+                      | Pexp_lazy _ -> (
+                          match eval_kind with
+                          | Lg_deferred None -> Lg_deferred (Some v.lg_id)
+                          | _ -> eval_kind)
+                      | _ -> Lg_eager v.lg_eval_scopes
+                  in
+                  walk_projected ~eval_kind:rhs_eval_kind ~in_explicit_policy rhs_env v.lg_proj rhs);
+              List.iter (Hashtbl.find_multi writes v.lg_id) ~f:(fun (written, w_env, w_scopes) ->
+                  walk ~eval_kind:(Lg_eager w_scopes) ~in_explicit_policy w_env written))
           in
           match expr.pexp_desc with
           | Pexp_ident { txt; _ } -> (
               match resolve_longident env txt with
               | `External path ->
                   record_path ~line path;
-                  if
-                    (not in_explicit_policy)
-                    && String.equal (String.concat ~sep:"." path) "Ir.Numerics.get"
-                  then found_ambient := "Ir.Numerics.get" :: !found_ambient
+                  if String.equal (String.concat ~sep:"." path) "Ir.Numerics.get" then
+                    record_ambient ~in_explicit_policy ~eval_kind "Ir.Numerics.get"
               | `Local_val v -> visit_val v
               | `Unqualified name -> (
                   match Lexical_scope.lookup env name with Some v -> visit_val v | None -> ())
@@ -7593,197 +8058,254 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
               let field_name = Ppxlib.Longident.last_exn txt in
               let resolved_field = self#resolve_record_field env record field_name in
               (match resolved_field with
-              | Some (field_expr, field_env) -> walk field_env ~in_explicit_policy field_expr
-              | None -> walk env ~in_explicit_policy record);
+              | Some (field_expr, field_env) ->
+                  walk ~eval_kind ~in_explicit_policy field_env field_expr
+              | None ->
+                  walk_projected ~eval_kind ~in_explicit_policy env [ P_field field_name ] record);
               match resolve_longident env txt with
               | `External path -> record_path ~line:fline path
               | `Unqualified field ->
                   if expr_is_cap_record env record then
                     record_path ~line:fline [ "Ir"; "Backend_intf"; field ]
               | `Local_val _ | `Local_other -> ())
-          | Pexp_apply (callee, args) ->
-              let callee_stripped = strip callee in
-              let is_context_query =
-                match callee_stripped.pexp_desc with
-                | Pexp_ident { txt; _ } -> (
-                    match resolve_longident env txt with
-                    | `External path ->
-                        Set.mem leg_gate_context_queries (String.concat ~sep:"." path)
-                    | `Unqualified name -> (
-                        (* A local 1-parameter wrapper [let gpu ctx = ... Context.backend_facts ctx]
-                           whose parameter is only passed to an allowlisted context query. *)
-                        match Lexical_scope.lookup env name with
-                        | Some { lg_rhs = Some (rhs, rhs_env); _ } -> (
-                            match (strip rhs).pexp_desc with
-                            | Pexp_function
-                                ( [
-                                    {
-                                      pparam_desc =
-                                        Pparam_val
-                                          ( Nolabel,
-                                            None,
-                                            { ppat_desc = Ppat_var { txt = param; _ }; _ } );
-                                      _;
-                                    };
-                                  ],
-                                  _,
-                                  Pfunction_body body ) ->
-                                let only_in_ctx_query = ref true
-                                and used_in_ctx_query = ref false in
-                                let rec scan ~in_ctx e =
-                                  match e.pexp_desc with
-                                  | Pexp_ident { txt = Lident x; _ } when String.equal x param ->
-                                      if in_ctx then used_in_ctx_query := true
-                                      else only_in_ctx_query := false
-                                  | Pexp_apply (c, a) ->
-                                      let c_is_ctx =
-                                        match (strip c).pexp_desc with
-                                        | Pexp_ident { txt; _ } -> (
-                                            match resolve_longident rhs_env txt with
-                                            | `External p ->
-                                                Set.mem leg_gate_context_queries
-                                                  (String.concat ~sep:"." p)
-                                            | _ -> false)
-                                        | _ -> false
-                                      in
-                                      scan ~in_ctx c;
-                                      List.iter a ~f:(fun (_, arg) ->
-                                          scan ~in_ctx:(in_ctx || c_is_ctx) arg)
-                                  | Pexp_constraint (i, _) | Pexp_coerce (i, _, _) | Pexp_lazy i ->
-                                      scan ~in_ctx i
-                                  | Pexp_ifthenelse (c, t, f) ->
-                                      scan ~in_ctx c;
-                                      scan ~in_ctx t;
-                                      Option.iter f ~f:(scan ~in_ctx)
-                                  | Pexp_tuple es | Pexp_array es -> List.iter es ~f:(scan ~in_ctx)
-                                  | _ -> ()
-                                in
-                                scan ~in_ctx:false body;
-                                !used_in_ctx_query && !only_in_ctx_query
+          | Pexp_apply (callee, args) -> (
+              (* A policy wrapper invoked INSIDE the gate expression explicitly scopes its callback,
+                 so ambient reads inside that callback are locally policy-scoped, not ambient. *)
+              match split_policy_wrapper_call env expr with
+              | Some (_, non_cb, cb) ->
+                  List.iter non_cb ~f:(walk ~eval_kind ~in_explicit_policy env);
+                  walk ~eval_kind ~in_explicit_policy:true env cb
+              | None -> (
+                  (* Classify [Ll_test.advertised] across partial-application chains only when the
+                     trailing unit [()] is supplied. *)
+                  match resolve_advertised_chain env expr with
+                  | Some all_args ->
+                      let has_unit =
+                        List.exists all_args ~f:(fun (lbl, a, _) ->
+                            match lbl with Ppxlib.Asttypes.Nolabel -> is_unit_expr a | _ -> false)
+                      in
+                      if has_unit then
+                        let policy_arg =
+                          List.fold all_args ~init:None ~f:(fun acc (lbl, a, a_env) ->
+                              match lbl with
+                              | Ppxlib.Asttypes.Labelled "policy" | Optional "policy" ->
+                                  Some (lbl, a, a_env)
+                              | _ -> acc)
+                        in
+                        let explicit_adjusted_policy =
+                          match policy_arg with
+                          | None ->
+                              record_ambient ~in_explicit_policy ~eval_kind
+                                "Ll_test.advertised (without ~policy)";
+                              false
+                          | Some (Optional "policy", p_expr, p_env) -> (
+                              match self#resolve_option_arg p_env p_expr with
+                              | `None_lit ->
+                                  record_ambient ~in_explicit_policy ~eval_kind
+                                    "Ll_test.advertised (?policy:None)";
+                                  false
+                              | `Opaque ->
+                                  record_ambient ~in_explicit_policy ~eval_kind
+                                    "Ll_test.advertised (?policy may be None)";
+                                  false
+                              | `Some_expr (inner, inner_env) ->
+                                  if self#is_unchanged_ambient_policy inner_env inner then (
+                                    record_ambient ~in_explicit_policy ~eval_kind "Ir.Numerics.get";
+                                    false)
+                                  else true)
+                          | Some (Labelled "policy", p_expr, p_env) ->
+                              if self#is_unchanged_ambient_policy p_env p_expr then (
+                                record_ambient ~in_explicit_policy ~eval_kind "Ir.Numerics.get";
+                                false)
+                              else true
+                          | Some _ -> false
+                        in
+                        List.iter all_args ~f:(fun (lbl, a, a_env) ->
+                            let arg_explicit =
+                              in_explicit_policy
+                              || explicit_adjusted_policy
+                                 &&
+                                 match lbl with
+                                 | Ppxlib.Asttypes.Labelled "policy" | Optional "policy" -> true
+                                 | _ -> false
+                            in
+                            walk ~eval_kind ~in_explicit_policy:arg_explicit a_env a)
+                      else
+                        (* Partial application: creates a function and reads no policy yet; still
+                           inspect its arguments for disallowed calls. *)
+                        List.iter args ~f:(fun (_, a) -> walk ~eval_kind ~in_explicit_policy env a)
+                  | None -> (
+                      let callee_stripped = strip callee in
+                      let is_context_query =
+                        match callee_stripped.pexp_desc with
+                        | Pexp_ident { txt; _ } -> (
+                            match resolve_longident env txt with
+                            | `External path ->
+                                Set.mem leg_gate_context_queries (String.concat ~sep:"." path)
+                            | `Unqualified name -> (
+                                match Lexical_scope.lookup env name with
+                                | Some { lg_rhs = Some (rhs, rhs_env); _ } -> (
+                                    match (strip rhs).pexp_desc with
+                                    | Pexp_function
+                                        ( [
+                                            {
+                                              pparam_desc =
+                                                Pparam_val
+                                                  ( Nolabel,
+                                                    None,
+                                                    { ppat_desc = Ppat_var { txt = param; _ }; _ }
+                                                  );
+                                              _;
+                                            };
+                                          ],
+                                          _,
+                                          Pfunction_body body ) ->
+                                        let only_in_ctx_query = ref true
+                                        and used_in_ctx_query = ref false in
+                                        let rec scan ~in_ctx e =
+                                          match e.pexp_desc with
+                                          | Pexp_ident { txt = Lident x; _ }
+                                            when String.equal x param ->
+                                              if in_ctx then used_in_ctx_query := true
+                                              else only_in_ctx_query := false
+                                          | Pexp_apply (c, a) ->
+                                              let c_is_ctx =
+                                                match (strip c).pexp_desc with
+                                                | Pexp_ident { txt; _ } -> (
+                                                    match resolve_longident rhs_env txt with
+                                                    | `External p ->
+                                                        Set.mem leg_gate_context_queries
+                                                          (String.concat ~sep:"." p)
+                                                    | _ -> false)
+                                                | _ -> false
+                                              in
+                                              scan ~in_ctx c;
+                                              let nl_idx = ref 0 in
+                                              List.iter a ~f:(fun (lbl, arg) ->
+                                                  let is_handle_pos =
+                                                    match lbl with
+                                                    | Ppxlib.Asttypes.Nolabel ->
+                                                        let k = !nl_idx in
+                                                        Int.incr nl_idx;
+                                                        c_is_ctx && k = 0
+                                                    | _ -> false
+                                                  in
+                                                  scan ~in_ctx:(in_ctx || is_handle_pos) arg)
+                                          | Pexp_constraint (i, _)
+                                          | Pexp_coerce (i, _, _)
+                                          | Pexp_lazy i ->
+                                              scan ~in_ctx i
+                                          | Pexp_ifthenelse (c, t, f) ->
+                                              scan ~in_ctx c;
+                                              scan ~in_ctx t;
+                                              Option.iter f ~f:(scan ~in_ctx)
+                                          | Pexp_tuple es | Pexp_array es ->
+                                              List.iter es ~f:(scan ~in_ctx)
+                                          | _ -> ()
+                                        in
+                                        scan ~in_ctx:false body;
+                                        !used_in_ctx_query && !only_in_ctx_query
+                                    | _ -> false)
+                                | _ -> false)
                             | _ -> false)
-                        | _ -> false)
-                    | _ -> false)
-                | _ -> false
-              in
-              let is_advertised_call =
-                match callee_stripped.pexp_desc with
-                | Pexp_ident { txt; _ } -> (
-                    match resolve_longident env txt with
-                    | `External [ "Ll_test"; "advertised" ] -> true
-                    | `Unqualified name -> (
-                        match Lexical_scope.lookup env name with
-                        | Some v -> v.lg_advertised_alias
-                        | None -> false)
-                    | _ -> false)
-                | _ -> false
-              in
-              let is_cap_ambient_call =
-                match callee_stripped.pexp_desc with
-                | Pexp_ident { txt; _ } -> (
-                    match resolve_longident env txt with
-                    | `External [ "Ll_test"; "tensorized_capability" ] ->
-                        Some "Ll_test.tensorized_capability"
-                    | `External [ "Ll_test"; "tensorized_matmul_capability" ] ->
-                        Some "Ll_test.tensorized_matmul_capability"
-                    | _ -> None)
-                | _ -> None
-              in
-              let has_policy_arg =
-                List.exists args ~f:(function
-                  | (Ppxlib.Asttypes.Labelled "policy" | Optional "policy"), _ -> true
-                  | _ -> false)
-              in
-              if is_advertised_call && not has_policy_arg then
-                found_ambient := "Ll_test.advertised (without ~policy)" :: !found_ambient;
-              Option.iter is_cap_ambient_call ~f:(fun name ->
-                  found_ambient := name :: !found_ambient);
-              walk env ~in_explicit_policy callee;
-              if not is_context_query then
-                List.iter args ~f:(fun (lbl, arg) ->
-                    let arg_explicit_policy =
-                      in_explicit_policy
-                      || is_advertised_call
-                         &&
-                         match lbl with
-                         | Ppxlib.Asttypes.Labelled "policy" | Optional "policy" -> true
-                         | _ -> false
-                    in
-                    walk env ~in_explicit_policy:arg_explicit_policy arg)
+                        | _ -> false
+                      in
+                      let is_cap_ambient_call =
+                        match callee_stripped.pexp_desc with
+                        | Pexp_ident { txt; _ } -> (
+                            match resolve_longident env txt with
+                            | `External [ "Ll_test"; "tensorized_capability" ] ->
+                                Some "Ll_test.tensorized_capability"
+                            | `External [ "Ll_test"; "tensorized_matmul_capability" ] ->
+                                Some "Ll_test.tensorized_matmul_capability"
+                            | _ -> None)
+                        | _ -> None
+                      in
+                      Option.iter is_cap_ambient_call
+                        ~f:(record_ambient ~in_explicit_policy ~eval_kind);
+                      match
+                        if is_context_query then None
+                        else
+                          Option.bind (resolve_local_fn_chain env expr) ~f:(fun (fn_id, all_args) ->
+                              Option.map (Hashtbl.find fn_def_by_id fn_id) ~f:(fun def ->
+                                  (fn_id, all_args, def)))
+                      with
+                      | Some (fn_id, all_args, (params, body, fn_env)) ->
+                          let call_key =
+                            Printf.sprintf "%d:%d" fn_id expr.pexp_loc.loc_start.pos_cnum
+                          in
+                          if not (Hash_set.mem seen_fn_calls call_key) then (
+                            Hash_set.add seen_fn_calls call_key;
+                            let call_env, extra_args = bind_local_call fn_env params all_args in
+                            walk ~eval_kind ~in_explicit_policy call_env body;
+                            List.iter extra_args ~f:(fun (aexpr, aenv) ->
+                                walk ~eval_kind ~in_explicit_policy aenv aexpr))
+                      | None ->
+                          walk ~eval_kind ~in_explicit_policy env callee;
+                          let nolabel_idx = ref 0 in
+                          List.iter args ~f:(fun (lbl, arg) ->
+                              let is_handle_arg =
+                                match lbl with
+                                | Ppxlib.Asttypes.Nolabel ->
+                                    let k = !nolabel_idx in
+                                    Int.incr nolabel_idx;
+                                    is_context_query && k = 0
+                                | _ -> false
+                              in
+                              if is_handle_arg then
+                                walk_ctx_handle ~eval_kind ~in_explicit_policy env arg
+                              else walk ~eval_kind ~in_explicit_policy env arg))))
           | Pexp_let (rec_flag, bindings, body) ->
               let denotes = self#denotations env rec_flag bindings in
               let scope = self#bind_group env bindings denotes in
               let rhs_env = match rec_flag with Recursive -> scope | Nonrecursive -> env in
               List.iter bindings ~f:(fun b ->
-                  (if expr_is_cap_record rhs_env b.pvb_expr then
-                     let rec check_pat pat =
-                       match pat.ppat_desc with
-                       | Ppat_record (fields, _) ->
-                           List.iter fields ~f:(fun ({ txt; loc }, inner) ->
-                               (match resolve_longident rhs_env txt with
-                               | `External path -> record_path ~line:loc.loc_start.pos_lnum path
-                               | `Unqualified field ->
-                                   record_path ~line:loc.loc_start.pos_lnum
-                                     [ "Ir"; "Backend_intf"; field ]
-                               | `Local_val _ | `Local_other -> ());
-                               check_pat inner)
-                       | Ppat_alias (inner, _) | Ppat_constraint (inner, _) -> check_pat inner
-                       | _ -> ()
-                     in
-                     check_pat b.pvb_pat);
-                  walk rhs_env ~in_explicit_policy b.pvb_expr);
-              walk scope ~in_explicit_policy body
+                  if expr_is_cap_record rhs_env b.pvb_expr then check_cap_pat rhs_env b.pvb_pat;
+                  walk ~eval_kind ~in_explicit_policy rhs_env b.pvb_expr);
+              walk ~eval_kind ~in_explicit_policy scope body
           | Pexp_match (scrutinee, cases) ->
-              walk env ~in_explicit_policy scrutinee;
+              walk ~eval_kind ~in_explicit_policy env scrutinee;
               let scrut_cap = expr_is_cap_record env scrutinee in
               List.iter cases ~f:(fun c ->
-                  (if scrut_cap then
-                     let rec check_pat pat =
-                       match pat.ppat_desc with
-                       | Ppat_record (fields, _) ->
-                           List.iter fields ~f:(fun ({ txt; loc }, inner) ->
-                               (match resolve_longident env txt with
-                               | `External path -> record_path ~line:loc.loc_start.pos_lnum path
-                               | `Unqualified field ->
-                                   record_path ~line:loc.loc_start.pos_lnum
-                                     [ "Ir"; "Backend_intf"; field ]
-                               | `Local_val _ | `Local_other -> ());
-                               check_pat inner)
-                       | Ppat_alias (inner, _) | Ppat_constraint (inner, _) -> check_pat inner
-                       | _ -> ()
-                     in
-                     check_pat c.pc_lhs);
+                  if scrut_cap then check_cap_pat env c.pc_lhs;
                   let c_env = self#bind_patterns env [ c.pc_lhs ] in
-                  Option.iter c.pc_guard ~f:(walk c_env ~in_explicit_policy);
-                  walk c_env ~in_explicit_policy c.pc_rhs)
+                  Option.iter c.pc_guard ~f:(walk ~eval_kind ~in_explicit_policy c_env);
+                  walk ~eval_kind ~in_explicit_policy c_env c.pc_rhs)
           | Pexp_ifthenelse (c, t, f) ->
-              walk env ~in_explicit_policy c;
-              walk env ~in_explicit_policy t;
-              Option.iter f ~f:(walk env ~in_explicit_policy)
+              walk ~eval_kind ~in_explicit_policy env c;
+              walk ~eval_kind ~in_explicit_policy env t;
+              Option.iter f ~f:(walk ~eval_kind ~in_explicit_policy env)
           | Pexp_sequence (a, b) ->
-              walk env ~in_explicit_policy a;
-              walk env ~in_explicit_policy b
-          | Pexp_tuple es | Pexp_array es -> List.iter es ~f:(walk env ~in_explicit_policy)
+              walk ~eval_kind ~in_explicit_policy env a;
+              walk ~eval_kind ~in_explicit_policy env b
+          | Pexp_tuple es | Pexp_array es ->
+              List.iter es ~f:(walk ~eval_kind ~in_explicit_policy env)
           | Pexp_construct ({ txt; loc }, payload) ->
               (match resolve_longident env txt with
               | `External path -> record_path ~line:loc.loc_start.pos_lnum path
               | _ -> ());
-              Option.iter payload ~f:(walk env ~in_explicit_policy)
-          | Pexp_variant (_, payload) -> Option.iter payload ~f:(walk env ~in_explicit_policy)
+              Option.iter payload ~f:(walk ~eval_kind ~in_explicit_policy env)
+          | Pexp_variant (_, payload) ->
+              Option.iter payload ~f:(walk ~eval_kind ~in_explicit_policy env)
           | Pexp_record (fields, base) ->
-              List.iter fields ~f:(fun (_, e) -> walk env ~in_explicit_policy e);
-              Option.iter base ~f:(walk env ~in_explicit_policy)
-          | Pexp_lazy inner
+              List.iter fields ~f:(fun (_, e) -> walk ~eval_kind ~in_explicit_policy env e);
+              Option.iter base ~f:(walk ~eval_kind ~in_explicit_policy env)
+          | Pexp_lazy inner ->
+              let inner_eval =
+                match eval_kind with Lg_deferred _ -> eval_kind | Lg_eager _ -> eval_kind
+              in
+              walk ~eval_kind:inner_eval ~in_explicit_policy env inner
           | Pexp_constraint (inner, _)
           | Pexp_coerce (inner, _, _)
           | Pexp_newtype (_, inner)
           | Pexp_assert inner
           | Pexp_letexception (_, inner) ->
-              walk env ~in_explicit_policy inner
+              walk ~eval_kind ~in_explicit_policy env inner
           | Pexp_open ({ popen_expr; _ }, inner) ->
               let inner_env =
                 self#opened ~top:false ~include_:false env (self#module_of env popen_expr)
               in
-              walk inner_env ~in_explicit_policy inner
+              walk ~eval_kind ~in_explicit_policy inner_env inner
           | Pexp_letmodule ({ txt = Some name; _ }, mod_expr, inner) ->
               let inner_env =
                 match self#module_of env mod_expr with
@@ -7794,51 +8316,246 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                     }
                 | None -> env
               in
-              walk inner_env ~in_explicit_policy inner
-          | Pexp_letmodule ({ txt = None; _ }, _, inner) -> walk env ~in_explicit_policy inner
+              walk ~eval_kind ~in_explicit_policy inner_env inner
+          | Pexp_letmodule ({ txt = None; _ }, _, inner) ->
+              walk ~eval_kind ~in_explicit_policy env inner
           | Pexp_function (params, _, body) -> (
               let f_env =
                 List.fold params ~init:env ~f:(fun acc p ->
                     match p.pparam_desc with
                     | Pparam_val (_, default, pat) ->
-                        Option.iter default ~f:(walk acc ~in_explicit_policy);
+                        Option.iter default ~f:(walk ~eval_kind ~in_explicit_policy acc);
                         self#bind_patterns acc [ pat ]
                     | Pparam_newtype _ -> acc)
               in
               match body with
-              | Pfunction_body b -> walk f_env ~in_explicit_policy b
+              | Pfunction_body b -> walk ~eval_kind ~in_explicit_policy f_env b
               | Pfunction_cases (cases, _, _) ->
                   List.iter cases ~f:(fun c ->
                       let c_env = self#bind_patterns f_env [ c.pc_lhs ] in
-                      Option.iter c.pc_guard ~f:(walk c_env ~in_explicit_policy);
-                      walk c_env ~in_explicit_policy c.pc_rhs))
+                      Option.iter c.pc_guard ~f:(walk ~eval_kind ~in_explicit_policy c_env);
+                      walk ~eval_kind ~in_explicit_policy c_env c.pc_rhs))
           | Pexp_try (body, cases) ->
-              walk env ~in_explicit_policy body;
+              walk ~eval_kind ~in_explicit_policy env body;
               List.iter cases ~f:(fun c ->
                   let c_env = self#bind_patterns env [ c.pc_lhs ] in
-                  Option.iter c.pc_guard ~f:(walk c_env ~in_explicit_policy);
-                  walk c_env ~in_explicit_policy c.pc_rhs)
+                  Option.iter c.pc_guard ~f:(walk ~eval_kind ~in_explicit_policy c_env);
+                  walk ~eval_kind ~in_explicit_policy c_env c.pc_rhs)
           | Pexp_letop { let_; ands; body } ->
               let scope =
                 List.fold (let_ :: ands) ~init:env ~f:(fun acc op ->
-                    walk env ~in_explicit_policy op.pbop_exp;
+                    walk ~eval_kind ~in_explicit_policy env op.pbop_exp;
                     self#bind_patterns acc [ op.pbop_pat ])
               in
-              walk scope ~in_explicit_policy body
+              walk ~eval_kind ~in_explicit_policy scope body
           | Pexp_setfield (r, _, v) ->
-              walk env ~in_explicit_policy r;
-              walk env ~in_explicit_policy v
+              walk ~eval_kind ~in_explicit_policy env r;
+              walk ~eval_kind ~in_explicit_policy env v
           | Pexp_for (pat, lo, hi, _, body) ->
-              walk env ~in_explicit_policy lo;
-              walk env ~in_explicit_policy hi;
-              walk (self#bind_patterns env [ pat ]) ~in_explicit_policy body
+              walk ~eval_kind ~in_explicit_policy env lo;
+              walk ~eval_kind ~in_explicit_policy env hi;
+              walk ~eval_kind ~in_explicit_policy (self#bind_patterns env [ pat ]) body
           | Pexp_while (c, body) ->
-              walk env ~in_explicit_policy c;
-              walk env ~in_explicit_policy body
+              walk ~eval_kind ~in_explicit_policy env c;
+              walk ~eval_kind ~in_explicit_policy env body
           | _ -> ()
+        and walk_ctx_handle ~eval_kind ~in_explicit_policy env expr =
+          let expr = strip expr in
+          match expr.pexp_desc with
+          | Pexp_ident _ -> ()
+          | Pexp_field (r, _)
+            when match (strip r).pexp_desc with Pexp_ident _ -> true | _ -> false ->
+              ()
+          | Pexp_apply (c, [ (Nolabel, arg) ])
+            when match (strip c).pexp_desc with
+                 | Pexp_ident { txt; _ } -> (
+                     match resolve_longident env txt with
+                     | `External ([ "Lazy"; "force" ] | [ "Base"; "Lazy"; "force" ])
+                     | `Unqualified "force" ->
+                         true
+                     | _ -> false)
+                 | _ -> false ->
+              walk_ctx_handle ~eval_kind ~in_explicit_policy env arg
+          | Pexp_ifthenelse (cond, t, f) ->
+              walk ~eval_kind ~in_explicit_policy env cond;
+              walk_ctx_handle ~eval_kind ~in_explicit_policy env t;
+              Option.iter f ~f:(walk_ctx_handle ~eval_kind ~in_explicit_policy env)
+          | Pexp_match (scrut, cases) ->
+              walk ~eval_kind ~in_explicit_policy env scrut;
+              List.iter cases ~f:(fun c ->
+                  let c_env = self#bind_patterns env [ c.pc_lhs ] in
+                  Option.iter c.pc_guard ~f:(walk ~eval_kind ~in_explicit_policy c_env);
+                  walk_ctx_handle ~eval_kind ~in_explicit_policy c_env c.pc_rhs)
+          | _ -> walk ~eval_kind ~in_explicit_policy env expr
+        and walk_projected ~eval_kind ~in_explicit_policy env proj expr =
+          match proj with
+          | [] | P_opaque :: _ -> walk ~eval_kind ~in_explicit_policy env expr
+          | step :: rest -> (
+              let expr = strip expr in
+              match expr.pexp_desc with
+              | Pexp_match (scrut, cases) ->
+                  walk ~eval_kind ~in_explicit_policy env scrut;
+                  let scrut_cap = expr_is_cap_record env scrut in
+                  List.iter cases ~f:(fun c ->
+                      if scrut_cap then check_cap_pat env c.pc_lhs;
+                      let c_env = self#bind_patterns env [ c.pc_lhs ] in
+                      Option.iter c.pc_guard ~f:(walk ~eval_kind ~in_explicit_policy c_env);
+                      walk_projected ~eval_kind ~in_explicit_policy c_env proj c.pc_rhs)
+              | Pexp_ifthenelse (c, t, f) ->
+                  walk ~eval_kind ~in_explicit_policy env c;
+                  walk_projected ~eval_kind ~in_explicit_policy env proj t;
+                  Option.iter f ~f:(walk_projected ~eval_kind ~in_explicit_policy env proj)
+              | Pexp_let (rec_flag, bindings, body) ->
+                  let denotes = self#denotations env rec_flag bindings in
+                  let scope = self#bind_group env bindings denotes in
+                  let rhs_env = match rec_flag with Recursive -> scope | Nonrecursive -> env in
+                  List.iter bindings ~f:(fun b ->
+                      if expr_is_cap_record rhs_env b.pvb_expr then check_cap_pat rhs_env b.pvb_pat);
+                  walk_projected ~eval_kind ~in_explicit_policy scope proj body
+              | Pexp_sequence (_, b) -> walk_projected ~eval_kind ~in_explicit_policy env proj b
+              | Pexp_tuple es -> (
+                  match step with
+                  | P_tuple i when i < List.length es ->
+                      walk_projected ~eval_kind ~in_explicit_policy env rest (List.nth_exn es i)
+                  | _ -> walk ~eval_kind ~in_explicit_policy env expr)
+              | Pexp_record (fields, base) -> (
+                  match step with
+                  | P_field fname -> (
+                      match
+                        List.find_map fields ~f:(fun ({ txt; _ }, v) ->
+                            if String.equal (Ppxlib.Longident.last_exn txt) fname then Some v
+                            else None)
+                      with
+                      | Some f_expr -> walk_projected ~eval_kind ~in_explicit_policy env rest f_expr
+                      | None -> (
+                          match base with
+                          | Some b -> walk_projected ~eval_kind ~in_explicit_policy env proj b
+                          | None -> walk ~eval_kind ~in_explicit_policy env expr))
+                  | _ -> walk ~eval_kind ~in_explicit_policy env expr)
+              | Pexp_ident { txt; _ } -> (
+                  (match step with
+                  | P_field fname when expr_is_cap_record env expr ->
+                      record_path ~line:expr.pexp_loc.loc_start.pos_lnum
+                        [ "Ir"; "Backend_intf"; fname ]
+                  | _ -> ());
+                  match lookup_local_val env txt with
+                  | Some v when not (Hash_set.mem seen_vals v.lg_id) -> (
+                      Hash_set.add seen_vals v.lg_id;
+                      (match v.lg_param with
+                      | Some pm ->
+                          visit_param ~eval_kind ~in_explicit_policy
+                            { pm with pm_proj = pm.pm_proj @ proj }
+                      | None -> ());
+                      match v.lg_rhs with
+                      | Some (rhs, rhs_env) ->
+                          let rhs_eval_kind =
+                            if v.lg_is_call_arg then eval_kind
+                            else
+                              match (strip rhs).pexp_desc with
+                              | Pexp_function _ | Pexp_lazy _ -> eval_kind
+                              | _ -> Lg_eager v.lg_eval_scopes
+                          in
+                          walk_projected ~eval_kind:rhs_eval_kind ~in_explicit_policy rhs_env
+                            (v.lg_proj @ proj) rhs
+                      | None -> ())
+                  | _ -> walk ~eval_kind ~in_explicit_policy env expr)
+              | Pexp_apply _ -> (
+                  match
+                    Option.bind (resolve_local_fn_chain env expr) ~f:(fun (fn_id, all_args) ->
+                        Option.map (Hashtbl.find fn_def_by_id fn_id) ~f:(fun def ->
+                            (fn_id, all_args, def)))
+                  with
+                  | Some (fn_id, all_args, (params, body, fn_env)) ->
+                      let call_key =
+                        Printf.sprintf "p:%d:%d" fn_id expr.pexp_loc.loc_start.pos_cnum
+                      in
+                      if not (Hash_set.mem seen_fn_calls call_key) then (
+                        Hash_set.add seen_fn_calls call_key;
+                        let call_env, _ = bind_local_call fn_env params all_args in
+                        walk_projected ~eval_kind ~in_explicit_policy call_env proj body)
+                  | None ->
+                      (match step with
+                      | P_field fname when expr_is_cap_record env expr ->
+                          record_path ~line:expr.pexp_loc.loc_start.pos_lnum
+                            [ "Ir"; "Backend_intf"; fname ]
+                      | _ -> ());
+                      walk ~eval_kind ~in_explicit_policy env expr)
+              | _ ->
+                  (match step with
+                  | P_field fname when expr_is_cap_record env expr ->
+                      record_path ~line:expr.pexp_loc.loc_start.pos_lnum
+                        [ "Ir"; "Backend_intf"; fname ]
+                  | _ -> ());
+                  walk ~eval_kind ~in_explicit_policy env expr)
+        and visit_param ~eval_kind ~in_explicit_policy pm =
+          let calls = Hashtbl.find_multi local_calls pm.pm_fn_id in
+          if List.is_empty calls then
+            record_raw_disallowed ~line:pm.pm_line
+              (Printf.sprintf "<unresolved-param:%s>" pm.pm_name)
+          else
+            let matched_any = ref false in
+            List.iter calls ~f:(fun (call_pos, call_args, call_wrappers) ->
+                let ckey = Printf.sprintf "%d:%s:%d" pm.pm_fn_id pm.pm_name call_pos in
+                if not (Hash_set.mem seen_param_calls ckey) then (
+                  Hash_set.add seen_param_calls ckey;
+                  let arg_opt =
+                    match pm.pm_label with
+                    | Ppxlib.Asttypes.Labelled l ->
+                        List.find_map call_args ~f:(fun (albl, aexpr, aenv) ->
+                            match albl with
+                            | Ppxlib.Asttypes.Labelled al when String.equal al l ->
+                                Some (aexpr, aenv)
+                            | _ -> None)
+                    | Ppxlib.Asttypes.Optional l -> (
+                        match
+                          List.find_map call_args ~f:(fun (albl, aexpr, aenv) ->
+                              match albl with
+                              | (Ppxlib.Asttypes.Labelled al | Optional al) when String.equal al l
+                                ->
+                                  Some (aexpr, aenv)
+                              | _ -> None)
+                        with
+                        | Some hit -> Some hit
+                        | None -> pm.pm_default)
+                    | Ppxlib.Asttypes.Nolabel ->
+                        let nolabels =
+                          List.filter_map call_args ~f:(fun (albl, aexpr, aenv) ->
+                              match albl with
+                              | Ppxlib.Asttypes.Nolabel -> Some (aexpr, aenv)
+                              | _ -> None)
+                        in
+                        List.nth nolabels pm.pm_nolabel_idx
+                  in
+                  match arg_opt with
+                  | Some (arg_expr, arg_env) ->
+                      matched_any := true;
+                      let arg_eval =
+                        match (strip arg_expr).pexp_desc with
+                        | Pexp_lazy _ -> eval_kind
+                        | _ -> Lg_eager call_wrappers
+                      in
+                      walk_projected ~eval_kind:arg_eval ~in_explicit_policy arg_env pm.pm_proj
+                        arg_expr
+                  | None -> ()));
+            if not !matched_any then
+              Option.iter pm.pm_default ~f:(fun (def_expr, def_env) ->
+                  walk_projected ~eval_kind ~in_explicit_policy def_env pm.pm_proj def_expr)
         in
-        walk env ~in_explicit_policy:false expr;
-        (* Keep one finding per disallowed canonical path within one leg (the earliest line). *)
+        let initial_eval =
+          if is_sub_leg then
+            match (strip expr).pexp_desc with
+            | Pexp_lazy _ -> Lg_deferred None
+            | Pexp_ident { txt; _ } -> (
+                match lookup_local_val env txt with
+                | Some ({ lg_rhs = Some (rhs, _); lg_proj = []; _ } as v) -> (
+                    match (strip rhs).pexp_desc with
+                    | Pexp_lazy _ -> Lg_deferred (Some v.lg_id)
+                    | _ -> Lg_eager leg_scopes)
+                | _ -> Lg_eager leg_scopes)
+            | _ -> Lg_eager leg_scopes
+          else Lg_eager leg_scopes
+        in
+        walk ~eval_kind:initial_eval ~in_explicit_policy:false env expr;
         let deduped_disallowed =
           List.rev !found_disallowed
           |> List.fold
@@ -7847,19 +8564,29 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                  Map.update acc path ~f:(function None -> line | Some prev -> Int.min prev line))
           |> Map.to_alist
         in
-        (deduped_disallowed, List.dedup_and_sort (List.rev !found_ambient) ~compare:String.compare)
+        (deduped_disallowed, List.rev !found_ambient)
 
-      method resolve_legs env expr =
+      method find_leg_at pos wrapper_ids =
+        let rec try_suffixes = function
+          | [] -> Hashtbl.find leg_by_key (leg_key pos [])
+          | _ :: tl as ids -> (
+              match Hashtbl.find leg_by_key (leg_key pos ids) with
+              | Some r -> Some r
+              | None -> try_suffixes tl)
+        in
+        try_suffixes wrapper_ids
+
+      method resolve_legs ~wrapper_ids env expr =
         let seen = Hash_set.create (module Int) in
         let rec go env expr =
           let expr = strip expr in
-          match Hashtbl.find leg_by_pos expr.pexp_loc.loc_start.pos_cnum with
+          match self#find_leg_at expr.pexp_loc.loc_start.pos_cnum wrapper_ids with
           | Some rec_ -> [ rec_ ]
           | None -> (
               match expr.pexp_desc with
               | Pexp_ident { txt = Lident name; _ } -> (
                   match Lexical_scope.lookup env name with
-                  | Some v when not (Hash_set.mem seen v.lg_id) -> (
+                  | Some v when (not (Hash_set.mem seen v.lg_id)) && List.is_empty v.lg_proj -> (
                       Hash_set.add seen v.lg_id;
                       match v.lg_rhs with Some (rhs, rhs_env) -> go rhs_env rhs | None -> [])
                   | _ -> [])
@@ -7874,6 +8601,27 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
         in
         go env expr
 
+      method mark_apply_spine expr =
+        let rec go e =
+          let e = strip e in
+          match e.pexp_desc with
+          | Pexp_apply
+              ( { pexp_desc = Pexp_ident { txt = Lident "@@"; _ }; _ },
+                [ (Nolabel, lhs); (Nolabel, _) ] ) ->
+              Hash_set.add seen_apply_spines lhs.pexp_loc.loc_start.pos_cnum;
+              go lhs
+          | Pexp_apply
+              ( { pexp_desc = Pexp_ident { txt = Lident "|>"; _ }; _ },
+                [ (Nolabel, _); (Nolabel, rhs) ] ) ->
+              Hash_set.add seen_apply_spines rhs.pexp_loc.loc_start.pos_cnum;
+              go rhs
+          | Pexp_apply (callee, _) ->
+              Hash_set.add seen_apply_spines callee.pexp_loc.loc_start.pos_cnum;
+              go callee
+          | _ -> ()
+        in
+        go expr
+
       method! expression env expr =
         (* Track [x := e] writes so gate inspection follows ref mutations too. *)
         (match expr.pexp_desc with
@@ -7883,37 +8631,280 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                 (Nolabel, { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }); (Nolabel, written);
               ] ) -> (
             match Lexical_scope.lookup env name with
-            | Some v -> Hashtbl.add_multi writes ~key:v.lg_id ~data:(written, env)
+            | Some v -> Hashtbl.add_multi writes ~key:v.lg_id ~data:(written, env, active_wrappers)
             | None -> ())
         | _ -> ());
+        (* Track [Lazy.force x] sites so deferred [sub_leg] checks know where [x] was forced. *)
+        (match expr.pexp_desc with
+        | Pexp_apply (callee, [ (Nolabel, arg) ]) -> (
+            match (strip callee).pexp_desc with
+            | Pexp_ident { txt; _ } -> (
+                match resolve_longident env txt with
+                | `External ([ "Lazy"; "force" ] | [ "Base"; "Lazy"; "force" ])
+                | `Unqualified "force" -> (
+                    match (strip arg).pexp_desc with
+                    | Pexp_ident { txt = lid; _ } -> (
+                        match lookup_local_val env lid with
+                        | Some v ->
+                            Hashtbl.add_multi lazy_forces ~key:v.lg_id
+                              ~data:(expr.pexp_loc.loc_start.pos_cnum, active_wrappers)
+                        | None -> ())
+                    | _ -> ())
+                | _ -> ())
+            | _ -> ())
+        | _ -> ());
         match expr.pexp_desc with
-        | Pexp_apply (callee, arguments) -> (
-            (* Track enclosing policy-wrapper calls ([Test_utils.with_policy], ...), including
-               [Test_utils.with_policy adjust @@ fun () -> ...] and [(fun () -> ...) |> ...]. *)
-            let wrapper_match =
-              match policy_wrapper_of env callee with
-              | Some w -> Some w
+        | Pexp_function (params, constraint_, body) ->
+            let pos = expr.pexp_loc.loc_start.pos_cnum in
+            let fn_id, start_nolabel =
+              match Hashtbl.find curried_fn_cont pos with
+              | Some pair -> pair
               | None -> (
-                  match ((strip callee).pexp_desc, arguments) with
-                  | Pexp_ident { txt = Lident "@@"; _ }, [ (Nolabel, lhs); (Nolabel, _) ] -> (
-                      match (strip lhs).pexp_desc with
-                      | Pexp_ident _ -> policy_wrapper_of env lhs
-                      | Pexp_apply (inner_callee, _) -> policy_wrapper_of env inner_callee
-                      | _ -> None)
-                  | Pexp_ident { txt = Lident "|>"; _ }, [ (Nolabel, _); (Nolabel, rhs) ] -> (
-                      match (strip rhs).pexp_desc with
-                      | Pexp_ident _ -> policy_wrapper_of env rhs
-                      | Pexp_apply (inner_callee, _) -> policy_wrapper_of env inner_callee
-                      | _ -> None)
-                  | _ -> None)
+                  match Hashtbl.find fn_id_by_expr_pos pos with
+                  | Some id -> (id, 0)
+                  | None -> (
+                      match Hashtbl.find anon_fn_id_by_pos pos with
+                      | Some id -> (id, 0)
+                      | None ->
+                          next_id <- next_id + 1;
+                          (next_id, 0)))
             in
-            match wrapper_match with
-            | Some wrapper_name ->
+            let nolabel_idx = ref start_nolabel in
+            let f_env =
+              List.fold params ~init:env ~f:(fun acc param ->
+                  match param.pparam_desc with
+                  | Pparam_val (label, default, pat) ->
+                      Option.iter default ~f:(fun d -> ignore (self#expression acc d : expression));
+                      ignore (self#pattern acc pat : pattern);
+                      let my_nolabel =
+                        match label with
+                        | Ppxlib.Asttypes.Nolabel ->
+                            let k = !nolabel_idx in
+                            Int.incr nolabel_idx;
+                            k
+                        | _ -> -1
+                      in
+                      let acc = self#forget acc (Lexical_scope.pattern_unpacks [ pat ]) in
+                      let pairs = extract_pat_projs pat in
+                      if List.is_empty pairs then acc
+                      else
+                        let frame =
+                          List.fold pairs
+                            ~init:(Map.empty (module String))
+                            ~f:(fun m (name, proj) ->
+                              let v = self#local in
+                              v.lg_param <-
+                                Some
+                                  {
+                                    pm_fn_id = fn_id;
+                                    pm_label = label;
+                                    pm_nolabel_idx = my_nolabel;
+                                    pm_default = Option.map default ~f:(fun d -> (d, acc));
+                                    pm_proj = proj;
+                                    pm_name = name;
+                                    pm_line = pat.ppat_loc.loc_start.pos_lnum;
+                                  };
+                              Map.set m ~key:name ~data:v)
+                        in
+                        Lexical_scope.push_frame acc frame
+                  | Pparam_newtype _ -> acc)
+            in
+            Option.iter constraint_ ~f:(fun c ->
+                ignore (self#type_constraint f_env c : type_constraint));
+            (match body with
+            | Pfunction_body b ->
+                (match (strip b).pexp_desc with
+                | Pexp_function _ ->
+                    Hashtbl.set curried_fn_cont ~key:(strip b).pexp_loc.loc_start.pos_cnum
+                      ~data:(fn_id, !nolabel_idx)
+                | _ -> ());
+                ignore (self#expression f_env b : expression)
+            | Pfunction_cases (cases, _, _) ->
+                let my_nolabel = !nolabel_idx in
+                List.iter cases ~f:(fun c ->
+                    let c_env =
+                      let acc = self#forget f_env (Lexical_scope.pattern_unpacks [ c.pc_lhs ]) in
+                      let pairs = extract_pat_projs c.pc_lhs in
+                      if List.is_empty pairs then acc
+                      else
+                        let frame =
+                          List.fold pairs
+                            ~init:(Map.empty (module String))
+                            ~f:(fun m (name, proj) ->
+                              let v = self#local in
+                              v.lg_param <-
+                                Some
+                                  {
+                                    pm_fn_id = fn_id;
+                                    pm_label = Ppxlib.Asttypes.Nolabel;
+                                    pm_nolabel_idx = my_nolabel;
+                                    pm_default = None;
+                                    pm_proj = P_opaque :: proj;
+                                    pm_name = name;
+                                    pm_line = c.pc_lhs.ppat_loc.loc_start.pos_lnum;
+                                  };
+                              Map.set m ~key:name ~data:v)
+                        in
+                        Lexical_scope.push_frame acc frame
+                    in
+                    ignore (self#pattern f_env c.pc_lhs : pattern);
+                    Option.iter c.pc_guard ~f:(fun g ->
+                        ignore (self#expression c_env g : expression));
+                    ignore (self#expression c_env c.pc_rhs : expression)));
+            expr
+        | Pexp_apply (callee, arguments) -> (
+            let pos = expr.pexp_loc.loc_start.pos_cnum in
+            (* Record flattened local function applications and iterator callbacks so helper
+               parameters reaching [Verdict.leg ~when_] resolve at their call sites. *)
+            if not (Hash_set.mem seen_apply_spines pos) then (
+              self#mark_apply_spine expr;
+              (match resolve_local_fn_chain env expr with
+              | Some (fn_id, all_args) when not (List.is_empty all_args) ->
+                  Hashtbl.add_multi local_calls ~key:fn_id ~data:(pos, all_args, active_wrappers)
+              | _ -> ());
+              let base, all_args = flatten_apply expr in
+              match iterator_kind env base with
+              | Some kind ->
+                  let f_arg =
+                    match
+                      List.find_map all_args ~f:(function
+                        | Ppxlib.Asttypes.Labelled "f", a -> Some a
+                        | _ -> None)
+                    with
+                    | Some a -> Some a
+                    | None -> (
+                        match List.rev all_args with
+                        | (Ppxlib.Asttypes.Nolabel, a) :: _ -> Some a
+                        | _ -> None)
+                  in
+                  let colls =
+                    List.filter_map all_args ~f:(function
+                      | Ppxlib.Asttypes.Nolabel, a
+                        when not (Option.exists f_arg ~f:(fun f -> phys_equal f a)) ->
+                          Some a
+                      | _ -> None)
+                  in
+                  Option.iter f_arg ~f:(fun f_expr ->
+                      let f_stripped = strip f_expr in
+                      let target_fn_id =
+                        match f_stripped.pexp_desc with
+                        | Pexp_function _ ->
+                            let fpos = f_stripped.pexp_loc.loc_start.pos_cnum in
+                            let id =
+                              match Hashtbl.find anon_fn_id_by_pos fpos with
+                              | Some id -> id
+                              | None ->
+                                  next_id <- next_id + 1;
+                                  Hashtbl.set anon_fn_id_by_pos ~key:fpos ~data:next_id;
+                                  next_id
+                            in
+                            Some id
+                        | Pexp_ident { txt; _ } ->
+                            Option.map (lookup_local_val env txt) ~f:(fun v -> v.lg_id)
+                        | _ -> None
+                      in
+                      Option.iter target_fn_id ~f:(fun fn_id ->
+                          let dummy_idx =
+                            {
+                              pexp_desc = Pexp_constant (Pconst_integer ("0", None));
+                              pexp_loc = expr.pexp_loc;
+                              pexp_loc_stack = [];
+                              pexp_attributes = [];
+                            }
+                          in
+                          let record_elems c_expr ~prefix =
+                            match
+                              extract_list_literal env (Hash_set.create (module Int)) c_expr
+                            with
+                            | Some elems ->
+                                List.iteri elems ~f:(fun idx (el, el_env) ->
+                                    Hashtbl.add_multi local_calls ~key:fn_id
+                                      ~data:
+                                        ( (pos * 1009) + idx + 1,
+                                          prefix @ [ (Ppxlib.Asttypes.Nolabel, el, el_env) ],
+                                          active_wrappers ))
+                            | None ->
+                                Hashtbl.add_multi local_calls ~key:fn_id
+                                  ~data:
+                                    ( pos,
+                                      prefix @ [ (Ppxlib.Asttypes.Nolabel, c_expr, env) ],
+                                      active_wrappers )
+                          in
+                          match (kind, colls) with
+                          | `Unary, c1 :: _ -> record_elems c1 ~prefix:[]
+                          | `Indexed, c1 :: _ ->
+                              record_elems c1 ~prefix:[ (Ppxlib.Asttypes.Nolabel, dummy_idx, env) ]
+                          | `Binary, c1 :: c2 :: _ -> (
+                              let e1 = extract_list_literal env (Hash_set.create (module Int)) c1
+                              and e2 = extract_list_literal env (Hash_set.create (module Int)) c2 in
+                              match (e1, e2) with
+                              | Some xs, Some ys when List.length xs = List.length ys ->
+                                  List.iteri (List.zip_exn xs ys) ~f:(fun idx ((x, xe), (y, ye)) ->
+                                      Hashtbl.add_multi local_calls ~key:fn_id
+                                        ~data:
+                                          ( (pos * 1009) + idx + 1,
+                                            [
+                                              (Ppxlib.Asttypes.Nolabel, x, xe);
+                                              (Ppxlib.Asttypes.Nolabel, y, ye);
+                                            ],
+                                            active_wrappers ))
+                              | Some xs, _ ->
+                                  List.iteri xs ~f:(fun idx (x, xe) ->
+                                      Hashtbl.add_multi local_calls ~key:fn_id
+                                        ~data:
+                                          ( (pos * 1009) + idx + 1,
+                                            [
+                                              (Ppxlib.Asttypes.Nolabel, x, xe);
+                                              (Ppxlib.Asttypes.Nolabel, c2, env);
+                                            ],
+                                            active_wrappers ))
+                              | _, Some ys ->
+                                  List.iteri ys ~f:(fun idx (y, ye) ->
+                                      Hashtbl.add_multi local_calls ~key:fn_id
+                                        ~data:
+                                          ( (pos * 1009) + idx + 1,
+                                            [
+                                              (Ppxlib.Asttypes.Nolabel, c1, env);
+                                              (Ppxlib.Asttypes.Nolabel, y, ye);
+                                            ],
+                                            active_wrappers ))
+                              | None, None ->
+                                  Hashtbl.add_multi local_calls ~key:fn_id
+                                    ~data:
+                                      ( pos,
+                                        [
+                                          (Ppxlib.Asttypes.Nolabel, c1, env);
+                                          (Ppxlib.Asttypes.Nolabel, c2, env);
+                                        ],
+                                        active_wrappers ))
+                          | _ -> ()))
+              | None -> ());
+            (* Track enclosing policy-wrapper calls ([Test_utils.with_policy], ...), scoping ONLY
+               the callback (including named callbacks) and NOT the policy-adjuster argument. *)
+            match split_policy_wrapper_call env expr with
+            | Some (wrapper_name, non_cb, cb) ->
+                List.iter non_cb ~f:(fun arg -> ignore (self#expression env arg : expression));
                 let saved = active_wrappers in
-                active_wrappers <- (expr.pexp_loc.loc_start.pos_cnum, wrapper_name) :: saved;
+                active_wrappers <- (pos, wrapper_name) :: saved;
                 Exn.protect
                   ~finally:(fun () -> active_wrappers <- saved)
-                  ~f:(fun () -> super#expression env expr)
+                  ~f:(fun () ->
+                    ignore (self#expression env cb : expression);
+                    (* If [cb] is a named callback [let check () = ... in with_policy adj check],
+                       re-walk its body under [active_wrappers] so [in_leg] calls inside it are
+                       checked against this policy wrapper while inner legs get this wrapper's
+                       scope. *)
+                    match (strip cb).pexp_desc with
+                    | Pexp_ident { txt; _ } -> (
+                        match lookup_local_val env txt with
+                        | Some ({ lg_rhs = Some (fn_expr, fn_env); lg_proj = []; _ } as v) ->
+                            let cb_key = Printf.sprintf "%d:%d" pos v.lg_id in
+                            if not (Hash_set.mem seen_callback_walks cb_key) then (
+                              Hash_set.add seen_callback_walks cb_key;
+                              ignore (self#expression fn_env fn_expr : expression))
+                        | _ -> ())
+                    | _ -> ());
+                expr
             | None ->
                 (match Verdict_callee.resolve_leg owners callee with
                 | Some { member; ownership = (Verdicts | Ambiguous) as ownership; spelled }
@@ -7923,8 +8914,9 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                         | Ppxlib.Asttypes.Labelled "when_", arg -> Some arg
                         | _ -> None)
                     in
+                    let is_sub_leg = String.equal member "sub_leg" in
                     let parent_arg =
-                      if String.equal member "sub_leg" then
+                      if is_sub_leg then
                         List.find_map arguments ~f:(function
                           | Ppxlib.Asttypes.Nolabel, arg -> Some arg
                           | _ -> None)
@@ -7932,35 +8924,46 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                     in
                     match when_arg with
                     | Some gate_expr ->
-                        Int.incr sites;
+                        let first_time = not (Hash_set.mem seen_leg_sites pos) in
+                        if first_time then (
+                          Hash_set.add seen_leg_sites pos;
+                          Int.incr sites);
                         let line = expr.pexp_loc.loc_start.pos_lnum in
-                        let pos = expr.pexp_loc.loc_start.pos_cnum in
                         let wrappers_snapshot = active_wrappers in
+                        let wrapper_ids = List.map wrappers_snapshot ~f:fst in
+                        let lkey = leg_key pos wrapper_ids in
                         let ambiguous = Poly.equal ownership Ambiguous in
                         pending_legs :=
                           (fun () ->
-                            let bad_calls, ambient = self#inspect_gate env gate_expr in
-                            List.iter bad_calls ~f:(fun (callee_path, callee_line) ->
-                                disallowed :=
-                                  {
-                                    leg_call_form = spelled;
-                                    leg_call_ambiguous = ambiguous;
-                                    leg_call_line = line;
-                                    callee = callee_path;
-                                    callee_line;
-                                  }
-                                  :: !disallowed);
-                            let parents =
-                              Option.value_map parent_arg ~default:[] ~f:(self#resolve_legs env)
+                            let bad_calls, ambient =
+                              self#inspect_gate ~is_sub_leg ~leg_scopes:wrappers_snapshot env
+                                gate_expr
                             in
-                            Hashtbl.set leg_by_pos ~key:pos
-                              ~data:
-                                {
-                                  lg_leg_line = line;
-                                  lg_leg_scopes = wrappers_snapshot;
-                                  lg_ambient = ambient;
-                                  lg_parents = parents;
-                                })
+                            if first_time then
+                              List.iter bad_calls ~f:(fun (callee_path, callee_line) ->
+                                  disallowed :=
+                                    {
+                                      leg_call_form = spelled;
+                                      leg_call_ambiguous = ambiguous;
+                                      leg_call_line = line;
+                                      callee = callee_path;
+                                      callee_line;
+                                    }
+                                    :: !disallowed);
+                            let rec_ =
+                              {
+                                lg_leg_key = lkey;
+                                lg_leg_line = line;
+                                lg_ambient = ambient;
+                                lg_parents = [];
+                              }
+                            in
+                            Hashtbl.set leg_by_key ~key:lkey ~data:rec_;
+                            Option.iter parent_arg ~f:(fun parg ->
+                                pending_parent_links :=
+                                  (fun () ->
+                                    rec_.lg_parents <- self#resolve_legs ~wrapper_ids env parg)
+                                  :: !pending_parent_links))
                           :: !pending_legs
                     | None -> ())
                 | _ -> (
@@ -7975,31 +8978,17 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                         | Some leg_arg ->
                             let use_line = expr.pexp_loc.loc_start.pos_lnum in
                             let use_wrappers = active_wrappers in
+                            let wrapper_ids = List.map use_wrappers ~f:fst in
                             let ambiguous = Poly.equal ownership Ambiguous in
                             pending_uses :=
-                              (fun () ->
-                                let rec check_rec r =
-                                  List.iter r.lg_parents ~f:check_rec;
-                                  if not (List.is_empty r.lg_ambient) then
-                                    List.iter use_wrappers ~f:(fun (wpos, wname) ->
-                                        if
-                                          not
-                                            (List.exists r.lg_leg_scopes ~f:(fun (lpos, _) ->
-                                                 lpos = wpos))
-                                        then
-                                          List.iter r.lg_ambient ~f:(fun reader ->
-                                              mismatches :=
-                                                {
-                                                  mismatch_form = spelled;
-                                                  mismatch_ambiguous = ambiguous;
-                                                  mismatch_line = use_line;
-                                                  leg_line = r.lg_leg_line;
-                                                  wrapper = wname;
-                                                  ambient_reader = reader;
-                                                }
-                                                :: !mismatches))
-                                in
-                                List.iter (self#resolve_legs env leg_arg) ~f:check_rec)
+                              ( pos,
+                                use_line,
+                                spelled,
+                                ambiguous,
+                                use_wrappers,
+                                wrapper_ids,
+                                env,
+                                leg_arg )
                               :: !pending_uses
                         | None -> ())
                     | _ -> ()));
@@ -8010,9 +8999,78 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
   ignore
     (walker#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
       : structure);
-  (* Process legs in source order so [sub_leg] parents exist before children resolve them. *)
+  (* Pass 1: inspect every leg gate and index all constructors (including inline parents). *)
   List.iter (List.rev !pending_legs) ~f:(fun f -> f ());
-  List.iter (List.rev !pending_uses) ~f:(fun f -> f ());
+  (* Pass 2: resolve [sub_leg] parent edges now that every constructor is indexed. *)
+  List.iter (List.rev !pending_parent_links) ~f:(fun f -> f ());
+  (* Pass 3: collect all [in_leg]/[in_legf] uses per leg (including ancestors) so deferred [lazy]
+     [sub_leg] gates can tell where they are first forced, then check policy alignment. *)
+  let leg_uses_by_key : (string, (int * (int * string) list) list) Hashtbl.t =
+    Hashtbl.create (module String)
+  in
+  let resolved_uses =
+    List.rev !pending_uses
+    |> List.map
+         ~f:(fun (use_pos, use_line, spelled, ambiguous, use_wrappers, wrapper_ids, env, leg_arg) ->
+           let legs = walker#resolve_legs ~wrapper_ids env leg_arg in
+           let rec record_use seen_keys r =
+             if not (Hash_set.mem seen_keys r.lg_leg_key) then (
+               Hash_set.add seen_keys r.lg_leg_key;
+               Hashtbl.add_multi leg_uses_by_key ~key:r.lg_leg_key ~data:(use_pos, use_wrappers);
+               List.iter r.lg_parents ~f:(record_use seen_keys))
+           in
+           List.iter legs ~f:(record_use (Hash_set.create (module String)));
+           (use_pos, use_line, spelled, ambiguous, use_wrappers, legs))
+  in
+  List.iter resolved_uses ~f:(fun (use_pos, use_line, spelled, ambiguous, use_wrappers, legs) ->
+      let seen_keys = Hash_set.create (module String) in
+      let rec check_rec r =
+        if not (Hash_set.mem seen_keys r.lg_leg_key) then (
+          Hash_set.add seen_keys r.lg_leg_key;
+          List.iter r.lg_parents ~f:check_rec;
+          List.iter use_wrappers ~f:(fun (wpos, wname) ->
+              List.iter r.lg_ambient ~f:(fun (reader, eval_kind) ->
+                  let mismatched =
+                    match eval_kind with
+                    | Lg_eager read_scopes ->
+                        not (List.exists read_scopes ~f:(fun (lpos, _) -> lpos = wpos))
+                    | Lg_deferred lazy_id_opt ->
+                        (* A deferred [sub_leg] [lazy] thunk is forced at its earliest use (or
+                           earlier [Lazy.force] on a named lazy binding): it mismatches [wpos] if an
+                           earlier use or [Lazy.force] happened outside [wpos]. *)
+                        let earlier_use_outside =
+                          List.exists (Hashtbl.find_multi leg_uses_by_key r.lg_leg_key)
+                            ~f:(fun (other_pos, other_wrappers) ->
+                              other_pos < use_pos
+                              && not (List.exists other_wrappers ~f:(fun (p, _) -> p = wpos)))
+                        in
+                        let force_outside =
+                          match lazy_id_opt with
+                          | None -> false
+                          | Some lid ->
+                              List.exists (Hashtbl.find_multi lazy_forces lid)
+                                ~f:(fun (fpos, fwrappers) ->
+                                  fpos < use_pos
+                                  && not (List.exists fwrappers ~f:(fun (p, _) -> p = wpos)))
+                        in
+                        earlier_use_outside || force_outside
+                  in
+                  if mismatched then
+                    let mkey = Printf.sprintf "%d:%d:%s:%s" use_line r.lg_leg_line wname reader in
+                    if not (Hash_set.mem seen_mismatches mkey) then (
+                      Hash_set.add seen_mismatches mkey;
+                      mismatches :=
+                        {
+                          mismatch_form = spelled;
+                          mismatch_ambiguous = ambiguous;
+                          mismatch_line = use_line;
+                          leg_line = r.lg_leg_line;
+                          wrapper = wname;
+                          ambient_reader = reader;
+                        }
+                        :: !mismatches))))
+      in
+      List.iter legs ~f:check_rec);
   {
     disallowed_calls = List.rev !disallowed;
     policy_mismatches = List.rev !mismatches;

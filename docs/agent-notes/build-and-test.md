@@ -3146,15 +3146,20 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   read).
 - `Verdict_scan.leg_gate_census` (gh-ocannl-2434) enforces two further invariants on `Verdict.leg`
   and `Verdict.sub_leg` conditions (`~when_`): (1) every external qualified call or capability
-  record field projection reachable from `~when_` (including unqualified projections on values bound
-  from `Context.codegen_capabilities`/`hardware_limits`/`backend_facts`) must belong to the closed
-  independent-gate allowlist (`leg_gate_allowed_paths`) or carry a counted exemption with a stated
-  independent reason in `verdict_ratchet.ml`'s `exempt_leg_gate_calls`, so a gate cannot silently
-  skip on a regression in the production function or pinned capability constant under test; and (2)
-  a leg whose `~when_` calls an ambient-policy reader (`Ll_test.advertised` without `~policy`,
-  `Ll_test.tensorized_capability`, `Ir.Numerics.get`) outside an enclosing `Test_utils.with_*`
-  policy wrapper cannot be used by `in_leg`/`in_legf` inside that wrapper (pass `~policy` explicitly
-  to `Ll_test.advertised`, or build the leg inside the wrapper). The reader's header in
+  record field projection reachable from `~when_` (following destructured bindings, local helper
+  call sites, `List`/`Array` iterator callbacks, and unqualified projections on values bound from
+  `Context.codegen_capabilities`/`hardware_limits`/`backend_facts`; unresolved gate parameters are
+  reported as `<unresolved-param:name>`) must belong to the closed independent-gate allowlist
+  (`leg_gate_allowed_paths`) or carry a counted exemption with a stated independent reason in
+  `verdict_ratchet.ml`'s `exempt_leg_gate_calls`, so a gate cannot silently skip on a regression in
+  the production function or pinned capability constant under test; and (2) a leg whose `~when_`
+  evaluates an ambient-policy reader (`Ll_test.advertised` at full application without a supplied
+  pinned `~policy` — missing, `?policy:None`, or unchanged `Ir.Numerics.get ()` — plus
+  `Ll_test.tensorized_capability` and `Ir.Numerics.get`) outside an enclosing `Test_utils.with_*`
+  policy-wrapper callback (inline or named, eager reads tracked at their binding site and deferred
+  `sub_leg` `lazy` reads tracked at their force sites, across inline and named `sub_leg` parents)
+  cannot be used by `in_leg`/`in_legf` inside that wrapper (pass a pinned `~policy` explicitly to
+  `Ll_test.advertised`, or evaluate the gate inside the wrapper). The reader's header in
   `test/support/verdict_scan.ml` states its closed allowlist and boundary.
 - `verdict_ratchet`'s fifth reader is about a gate FOLDED INTO THE VALUE (gh-ocannl-1310):
   `p "…" ((not on_cpu) || ok)` prints `true` on a GPU, a pass byte-identical to a CPU run that
