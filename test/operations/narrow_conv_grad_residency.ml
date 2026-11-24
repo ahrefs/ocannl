@@ -105,7 +105,9 @@ let run_fixture ~stride ~initial ~tag ?schedule prec =
         | LL.Set { tn; _ } ->
             if List.equal String.equal tn.Tn.label ("acc" :: dx.Tn.label) then Hash_set.add tiles tn
         | _ -> ()));
-  (Context.get_values ctx dx, Hash_set.to_list tiles)
+  let values = Context.get_values ctx dx in
+  Context.release ctx;
+  (values, Hash_set.to_list tiles)
 
 let terms ~stride cell =
   List.filter_map (List.range 0 positions) ~f:(fun o ->
@@ -194,11 +196,11 @@ type geom2d = {
 let input_extent_2d g =
   (((g.pos_h - 1) * g.stride_h) + g.taps_h, ((g.pos_w - 1) * g.stride_w) + g.taps_w)
 
-let weight_2d k t d = Float.of_int (1 + (((3 * k) + (5 * t) + d) % 5)) /. 8.
+let weight_2d k t d = Float.of_int (1 + (((3 * k) + (2 * t) + d) % 5)) /. 8.
 
 let cotangent_2d g o p d =
   let scale = if g.stride_h < g.taps_h || g.stride_w < g.taps_w then 1 else 3 in
-  Float.of_int (scale * (1 + (((5 * o) + (3 * p) + (7 * d)) % 7))) /. 16.
+  Float.of_int (scale * (1 + (((5 * o) + (3 * p) + (2 * d)) % 7))) /. 16.
 
 let incoming_2d ~base g =
   let in_h, in_w = input_extent_2d g in
@@ -211,7 +213,7 @@ let gradient_2d g prec =
   let stride_h = g.stride_h and stride_w = g.stride_w in
   let x =
     Operation.init ~l:"ncgr2d_x" ~prec:Ir.Ops.single ~o:[ in_h; in_w ]
-      ~f:(fun idx -> Float.of_int (1 + idx.(0) + idx.(1)) /. 8.)
+      ~f:(fun idx -> Float.of_int (1 + (2 * idx.(0)) + idx.(1)) /. 8.)
       ~grad_spec:Tensor.Require_grad ()
   in
   let w =
@@ -259,7 +261,9 @@ let run_fixture_2d g ~initial ~tag ?(privatize = false) prec =
         | LL.Set { tn; _ } ->
             if List.equal String.equal tn.Tn.label ("acc" :: dx.Tn.label) then Hash_set.add tiles tn
         | _ -> ()));
-  (Context.get_values ctx dx, Hash_set.to_list tiles)
+  let values = Context.get_values ctx dx in
+  Context.release ctx;
+  (values, Hash_set.to_list tiles)
 
 let terms_2d g ih iw =
   List.concat_map (List.range 0 g.pos_h) ~f:(fun o ->
@@ -481,4 +485,12 @@ let () =
   let over_src = loop_n i1 11 (loop_n i2 11 (loop_n c 2 (loop_n j1 10 (loop_n j2 10 over_body)))) in
   let over_rw = LL.sink_narrow_reduction_loops over_src in
   p "independent pairs whose residue product exceeds 64 decline"
-    (equal_paths (nest_paths over_rw) (nest_paths over_src))
+    (equal_paths (nest_paths over_rw) (nest_paths over_src));
+  let p1 = sym () and k1 = sym () and p2 = sym () and k2 = sym () and ch = sym () in
+  let amp_out = node_factory ~prec:bf16 ~first_id:24647 ~dims:[| 7000; 16 |] () "ncgr_amp_cap" in
+  let a0 = aff [ (65, p1); (1, k1) ] 0 and a1 = aff [ (1, p2); (1, k2) ] 0 in
+  let amp_body = set amp_out [| a0; a1 |] (add_own (get amp_out [| a0; a1 |]) (embed ch)) in
+  let amp_src = loop_n p1 100 (loop_n p2 6 (loop_n ch 2 (loop_n k1 66 (loop_n k2 3 amp_body)))) in
+  let amp_rw = LL.sink_narrow_reduction_loops amp_src in
+  p "a pair whose shorter-scan frame exceeds 64 declines instead of amplifying the scan"
+    (equal_paths (nest_paths amp_rw) (nest_paths amp_src))

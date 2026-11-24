@@ -53,3 +53,4 @@ every residue nest of the guarded 2-D nonunit-stride pair widens: true
 the 2-D affine rewrite preserves the source contribution order and guarded cells: true
 coupled affine pairs sharing an iterator across axes decline: true
 independent pairs whose residue product exceeds 64 decline: true
+a pair whose shorter-scan frame exceeds 64 declines instead of amplifying the scan: true

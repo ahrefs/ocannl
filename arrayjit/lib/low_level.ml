@@ -13922,21 +13922,20 @@ let sink_narrow_reduction_loops (llc : t) : t =
             ignore (checked dims.(axis) : int);
             let na = a / g and nb = b / g in
             if imax < nb || jmax < na then None
-            else (
-              (* Each residue tuple duplicates the body. Keep the per-axis frame choice, then bound
-                 the product across axes before allocating. *)
-              if min na nb > max_residue_nests then raise Unsupported;
+            else
+              (* Each residue tuple duplicates the body. Choose the shorter-scan frame first (ties
+                 to fewer residues), then refuse if its residue count exceeds the cap rather than
+                 falling back to a high-scan frame that turns a linear nest into a quadratic guard
+                 scan. The product across axes is capped separately below. *)
               let qa = jmax / na and qb = imax / nb in
               let (a, i, imax), (b, j, jmax), descending =
-                if
-                  na <= max_residue_nests
-                  && (nb > max_residue_nests || qa < qb || (qa = qb && na <= nb))
-                then ((a, i, imax), (b, j, jmax), true)
+                if qa < qb || (qa = qb && na <= nb) then ((a, i, imax), (b, j, jmax), true)
                 else ((b, j, jmax), (a, i, imax), false)
               in
               let a_step = a / g and b_step = b / g in
+              if a_step > max_residue_nests then raise Unsupported;
               Some
-                { F.axis; offset; early; late; a; i; imax; b; j; jmax; a_step; b_step; descending }))
+                { F.axis; offset; early; late; a; i; imax; b; j; jmax; a_step; b_step; descending })
       in
       let is_write s = Array.exists di ~f:(Indexing.axis_index_mentions_symbol s) in
       match frames with
