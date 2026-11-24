@@ -1469,8 +1469,10 @@ files.
   conversion is part of the value. The lane conversion's operands keep their own precisions; and
   arithmetic at `uint4x32` has no rendering, so its folds are out of scope. So OCANNL never
   contracts an inlined producer with its consumer, and a placement flip cannot change a result at
-  uniform f32 -- with the C compiler's own contraction off; `fp_licence_values` executes that
-  claim (cc, `a = b = 1 + 2^-12`, `c = -(1 + 2^-11)`: 0 either way, `2^-24` fused). Backend
+  uniform f32 with compiler contraction off. `fp_licence_values` (gh-ocannl-2459) states each
+  backend's contraction-off pin before creating the context and executes the same witness on cc,
+  CUDA, HIP and Metal (`a = b = 1 + 2^-12`, `c = -(1 + 2^-11)`: 0 for either placement,
+  `2^-24` fused). Backend
   compilers keep their licences (`cc_backend_fp_contract`, NVRTC's `--use_fast_math` implies
   `--fmad=true`), so production-wide neutrality would need backend enforcement too. The trade:
   folds that existed only after inlining (a consumer contracting its producer's product, a scalar

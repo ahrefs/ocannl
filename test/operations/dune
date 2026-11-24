@@ -8794,10 +8794,10 @@
   base
   ocannl
   stdio
-  unix
   arrayjit.verdict
   ll_test
   arrayjit.ir
+  arrayjit.context
   arrayjit.utils))
 
 (test
