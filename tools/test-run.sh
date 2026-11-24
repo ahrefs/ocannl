@@ -4171,9 +4171,19 @@ failure_diagnostics() {
       short_status = " \\((exit -?[0-9]+|got signal [[:alnum:]]+|had unexpected output on [^)]+)\\)$"
       line_limit = 40
     }
-    function single_quotes(s,   tmp) {
-      tmp = s
-      return gsub(sq, "&", tmp)
+    function advance_sq(s, state,   i, n, c) {
+      n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (state) {
+          if (c == sq) state = 0
+        } else if (c == "\\") {
+          i++
+        } else if (c == sq) {
+          state = 1
+        }
+      }
+      return state
     }
     function add(line,   owner) {
       owner = active ? block : 0
@@ -4191,9 +4201,9 @@ failure_diagnostics() {
       gsub(sgr, "")
       sub(/\r$/, "")
       if (in_cmd_quote) {
-        if (cmd_quote_lines < 64 && !/^(exit: |=== |test-run: |(Entering|Leaving) directory )/) {
+        if (cmd_quote_lines < 64 && !/^(File "|exit: |=== |test-run: |(Entering|Leaving) directory )/) {
           cmd_quote_lines++
-          if (single_quotes($0) % 2 == 1) in_cmd_quote = 0
+          in_cmd_quote = advance_sq($0, 1)
           next
         }
         in_cmd_quote = 0
@@ -4206,7 +4216,7 @@ failure_diagnostics() {
       verbose_fail = /^Command \[[0-9]+\] (exited with code -?[0-9]+|got signal [[:alnum:]]+):$/
       short_fail = short && $0 ~ short_status
       command_single = /^\(cd .+ && .+\)( (<|>|2>|&>) .+)?$/
-      command_multi = !command_single && /^\(cd .+ && / && (single_quotes($0) % 2 == 1)
+      command_multi = !command_single && /^\(cd .+ && / && advance_sq($0, 0)
       command = command_single || command_multi
       chained = /^-> required by /
       boundary = short || command || chained ||

@@ -886,16 +886,17 @@ leg_36_quiet_boundaries_real() {
   cat >"$qroot/t/dune" <<'DUNE'
 (test (name fail_claim) (modules fail_claim))
 (test (name pass_stderr) (modules pass_stderr))
+(test (name quiet_ok) (modules quiet_ok))
 (rule
  (alias runtest-multi-fail)
  (action
   (chdir "sub dir"
-   (bash "echo 'step 1' >&2\necho 'FAILED: multiline failing claim' >&2\nexit 1"))))
+   (bash "echo \"can't open\" >&2\n# don't retry\necho 'FAILED: multiline failing claim' >&2\nexit 1 # won't pass"))))
 (rule
  (alias runtest-multi-pass)
  (action
   (chdir "sub dir"
-   (bash "echo 'step 1' >&2\necho 'Fatal error: multiline passing stderr' >&2"))))
+   (bash "echo \"it's ok\" >&2\n# don't fail\necho 'Fatal error: multiline passing stderr' >&2"))))
 DUNE
   cat >"$qroot/t/fail_claim.ml" <<'ML'
 let () =
@@ -909,6 +910,10 @@ let () =
   print_endline "ok"
 ML
   printf 'ok\n' >"$qroot/t/pass_stderr.expected"
+  cat >"$qroot/t/quiet_ok.ml" <<'ML'
+let () = print_endline "ok"
+ML
+  printf 'ok\n' >"$qroot/t/quiet_ok.expected"
   qrun() { # tag args...
     local tag=$1
     shift
@@ -933,11 +938,14 @@ ML
       qdetail="$tag: batch context misattributed: fp=[$qfp] ctx=[$qctx]"
     fi
   }
-  # 1. Default managed quiet run: fail_claim then pass_stderr in one batch.
-  qrun default run build --build-dir=_b_default --cache=disabled -j 1 @t/runtest-fail_claim @t/runtest-pass_stderr
+  # 1. Default managed quiet run: fail_claim, pass_stderr and silent quiet_ok in one batch.
+  qrun default run build --build-dir=_b_default --cache=disabled -j 1 @t/runtest-fail_claim @t/runtest-pass_stderr @t/runtest-quiet_ok
   qcheck_split default 'FAILED: 1 check did not hold: "wall time".' 'Fatal error: archive refusal caught by passing action'
   if [ -z "$qdetail" ] && { ! grep -qF './fail_claim.exe' "$qdir/log" || ! grep -qF './pass_stderr.exe' "$qdir/log"; }; then
     qdetail="default: raw log missing action command boundaries: $(cat "$qdir/log")"
+  fi
+  if [ -z "$qdetail" ] && grep -qF 'quiet_ok.exe' "$qdir/log"; then
+    qdetail="default: silent passing action unexpectedly appeared in log: $(cat "$qdir/log")"
   fi
   # 2. Explicit --display=quiet still records action boundaries.
   if [ -z "$qdetail" ]; then
