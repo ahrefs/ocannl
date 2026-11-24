@@ -18,7 +18,8 @@ let () =
   Utils.state_config ~key:"metal_fp_contract" ~data:"off"
 
 let () =
-  Stdio.eprintf "fp-licence values backend: %s\n" (Context.backend_name (Lazy.force base_ctx))
+  Stdio.eprintf "fp-licence values backend: %s\n" (Context.backend_name (Lazy.force base_ctx));
+  p "the selected backend compiles with contraction off" (backend_contraction_off ())
 
 let bitwise a b =
   if Float.is_nan a || Float.is_nan b then Float.is_nan a && Float.is_nan b

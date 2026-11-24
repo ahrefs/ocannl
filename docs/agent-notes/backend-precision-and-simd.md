@@ -1472,9 +1472,10 @@ files.
   uniform f32 with compiler contraction off. `fp_licence_values` (gh-ocannl-2459) states each
   backend's contraction-off pin before creating the context and executes the same witness on cc,
   CUDA, HIP and Metal (`a = b = 1 + 2^-12`, `c = -(1 + 2^-11)`: 0 for either placement,
-  `2^-24` fused). Backend
-  compilers keep their licences (`cc_backend_fp_contract`, NVRTC's `--use_fast_math` implies
-  `--fmad=true`), so production-wide neutrality would need backend enforcement too. The trade:
+  `2^-24` fused). The test checks the selected backend's compiler contraction capability before
+  executing the witnesses. Backend compilers keep their licences (`cc_backend_fp_contract`,
+  NVRTC's `--use_fast_math` implies `--fmad=true`), so production-wide neutrality would need backend
+  enforcement too. The trade:
   folds that existed only after inlining (a consumer contracting its producer's product, a scalar
   constant node folding into a quotient, algebra a materializing unroll exposes) are gone. The keys
   are `Code_borne` (the rewritten code carries them; no transform consults them), and the cache
