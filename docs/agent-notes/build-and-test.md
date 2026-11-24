@@ -2688,20 +2688,21 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Benchmark fixtures regenerate only at real cost and are never passed. What a value may name, and the helper's refusals, are ship-pr's SKILL.md, *After it
   lands* (lukstafi/ludics-lite#534).
 - **Far-side wave worktrees also carry nested test artifacts** (gh-ocannl-2179).
-  For the coordinator's close-out, use `fleet-worker.sh farside-close <wave> --regenerable _build --regenerable '**/log_files' --regenerable '**/build_files'`.
-  Tests leave regenerable runtime logs and generated kernel/debug files outside `_build`:
-  `git status --short --ignored` in a checkout that ran tests showed `arrayjit/test/log_files/`,
-  `test/config/log_files/`, top-level `log_files/` and `build_files/`. Without naming them,
-  far-side close-out preserves the worktree for its ignored data (85 of 86 worktrees in one wave,
-  all in the next). The quoted `**/` form matches the named directory at any depth, including
-  the top level; it belongs to `farside-close` alone. `post-merge-cleanup.sh --regenerable`
-  still takes one top-level directory name per flag, as above. This set covers disposable
-  test output, not arbitrary ignored data: leave local switches, caches and benchmark fixtures
-  for separate judgment, and inspect `git status --short --ignored` before extending it.
-- `.github/fleet-regenerable` declares the project's default regenerable directories for
-  `board close` and `farside-close` (read from `origin/master`; `--regenerable` adds to it): it
-  may hold only ignored build-output, log, or Python bytecode directories disposable after a
-  merge, never local switches, autotune caches, or benchmark fixtures.
+  For the coordinator's close-out, run `fleet-worker.sh farside-close <wave>` (and `board close`
+  runs it per merged task): both read `.github/fleet-regenerable` from `origin/master` by default,
+  reserving `--regenerable` for deliberate one-off additions so the policy has one owner.
+  Tests leave regenerable runtime logs, generated kernel/debug files, and Python bytecode outside
+  `_build`: `git status --short --ignored` in a checkout that ran tests showed
+  `arrayjit/test/log_files/`, `test/config/log_files/`, top-level `log_files/` and `build_files/`,
+  plus `benchmarks/__pycache__`, `benchmarks/runners/__pycache__`, `benchmarks/log_files/`, and
+  `benchmarks/build_files/`. Without listing them, far-side close-out preserves the worktree for
+  its ignored data (85 of 86 worktrees in one wave, all in the next). The `**/` form matches the
+  named directory at any depth, including the top level; it belongs to `farside-close` (and
+  `.github/fleet-regenerable`) alone. `post-merge-cleanup.sh --regenerable` still takes one
+  top-level directory name per flag, as above. `.github/fleet-regenerable` may hold only ignored
+  build-output, log, or Python bytecode directories disposable after a merge — never local
+  switches, autotune caches, or benchmark fixtures — and inspect `git status --short --ignored`
+  before extending it.
 - Dune tracks an environment variable only where a stanza declares it, and the tracking reaches
   further than the stanza: `dune rules test/operations/<name>.exe.output` shows the `(Env
   OCANNL_BACKEND)` dependency travelling from the `(test)` stanza's `(deps ...)` into the
