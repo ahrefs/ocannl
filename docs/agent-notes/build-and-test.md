@@ -430,7 +430,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   The rule reads no further than
   the dune file: a script a rule lists in its `(deps)` only so a text scan can read it counts as
   covered too, so naming a `.sh` in a scan rule's deps takes that script out of the harness
-  fallback. The tests tier runs `runtest-sweep_leg_scripts` for an edit to
+  fallback. Name benchmark drivers that a test executes literally in its rule's `deps`
+  (gh-ocannl-2439). The orchestrator alias passes its named dependency group to the tests,
+  which check that the drivers they launch are declared. Scan-only scripts stay glob inputs
+  and earn no coverage credit.
+  The tests tier runs `runtest-sweep_leg_scripts` for an edit to
   `test/operations/sweep_leg_scripts.sh` alone. A header marker `# harness: none -- REASON`
   covers an unreached hand-run script (gh-ocannl-2413). The harness reader verifies it against
   the harness graph and literal script names in Dune stanzas and existing stanza or dependency

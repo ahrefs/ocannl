@@ -17,7 +17,7 @@ arrayjit/vendor_stubs/hipjit/dune: nothing that runs a test executable
 arrayjit/vendor_stubs/hipjit/typecheck/dune: nothing that runs a test executable
 arrayjit/vendor_stubs/metal/dune: nothing that runs a test executable
 arrayjit/vendor_stubs/metal/typecheck/dune: nothing that runs a test executable
-benchmarks/dune: exempt rules (python3, handed %{dep:test_orchestrate.py})
+benchmarks/dune: exempt rules (python3, handed %{dep:test_orchestrate.py}, python3, handed %{dep:test_orchestrate.py}, %{shell_drivers})
 benchmarks/runners/ocannl/dune: exe-running rules, exempt rules (metal_queue_probe.exe)
 bin/dune: exe-running rules
 dune: nothing that runs a test executable
@@ -57,7 +57,8 @@ Exempt from the dependency, running an executable that reads no configuration:
   test/operations:gen_codec_header.exe -- the codec header generator for half_codec_exhaustive and bf16_codec_exhaustive (gh-ocannl-985, gh-ocannl-1069) links only the OCaml stdlib and a copy of the same pure C definition table; it reads no OCANNL configuration
   test/ppx:pp.exe -- the ppx driver, run to expand a source file and diff the expansion: `ppx_ocannl` links base, ppxlib, str and einsum_parser -- no configuration reader -- so no `ocannl_config` can reach its output
   benchmarks/runners/ocannl:metal_queue_probe.exe -- the standalone Metal queue probe, run on `@bin-smoke` as the bindings' runtime canary (gh-ocannl-905): it links `metal`, `ctypes` and `unix` and no arrayjit at all -- no configuration reader, so no `ocannl_config` can reach what it does
-  benchmarks:python3, handed %{dep:test_orchestrate.py} -- the benchmark orchestrator's own unit tests, in Python: the interpreter runs a script that imports orchestrate.py and runners/bench_common.py and calls no OCANNL executable, so there is no configuration in reach -- and a Python process would not read one anyway
+  benchmarks:python3, handed %{dep:test_orchestrate.py} -- the benchmark orchestrator's unit tests import Python modules and run drivers with stub benchmarks. No OCANNL executable or configuration reader is in reach
+  benchmarks:python3, handed %{dep:test_orchestrate.py}, %{shell_drivers} -- the benchmark orchestrator's unit tests import Python modules and run drivers with stub benchmarks. No OCANNL executable or configuration reader is in reach
 
 the scan places every test stanza, inline-test library and run executable the dune sources show: true
 that floor applies to more than one dune file: true

@@ -78,6 +78,11 @@ module Scan = Test_scan.Dune_stanza_scan
    and each entry has to earn its place on every run (see the staleness check): an exemption is a
    claim about what a program links, and a claim that stops being true is not a free pass. *)
 let exempt_sites =
+  let orchestrator_site = "benchmarks:python3, handed %{dep:test_orchestrate.py}" in
+  let orchestrator_reason =
+    "the benchmark orchestrator's unit tests import Python modules and run drivers with stub \
+     benchmarks. No OCANNL executable or configuration reader is in reach"
+  in
   [
     ( "test/operations:python3, handed %{dep:gh1133_summary.py}, \
        %{dep:../../benchmarks/gh1133_summary.py}",
@@ -129,10 +134,8 @@ let exempt_sites =
       "the standalone Metal queue probe, run on `@bin-smoke` as the bindings' runtime canary \
        (gh-ocannl-905): it links `metal`, `ctypes` and `unix` and no arrayjit at all -- no \
        configuration reader, so no `ocannl_config` can reach what it does" );
-    ( "benchmarks:python3, handed %{dep:test_orchestrate.py}",
-      "the benchmark orchestrator's own unit tests, in Python: the interpreter runs a script that \
-       imports orchestrate.py and runners/bench_common.py and calls no OCANNL executable, so there \
-       is no configuration in reach -- and a Python process would not read one anyway" );
+    (orchestrator_site, orchestrator_reason);
+    (orchestrator_site ^ ", %{shell_drivers}", orchestrator_reason);
   ]
 
 module Resolution = Test_scan.Config_dep_resolution

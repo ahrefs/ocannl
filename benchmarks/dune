@@ -19,12 +19,8 @@
  ; test.test_fixture_compare and test_cells, runs gh1003_summary.py, gh612_parity.py,
  ; gh728_protocol.py and ab.py by path, and its venv-interpreter scan, like its bench-line reader
  ; scan, reads every `*.py` here and under runners/ at any depth -- hence the recursive glob, the
- ; same population as the scan's `runners/**/*.py`. The shell scripts are listed for the same
- ; reason: the test drives
- ; gh612_cells.sh's parity step, gh1003_fold_cells.sh's summary step, and gh1343_ab.sh and
- ; gh1180_tie_ab.sh end to end on stub benches (test_cells.py) themselves, and its
- ; json.loads inventory and its table-row scan read every `*.py` and `*.sh` here and under runners/
- ; (an unlisted script is one they silently cannot see).
+ ; same population as the scan's `runners/**/*.py`. The json.loads inventory and table-row scan
+ ; read every `*.py` and `*.sh` here and under runners/ (an unlisted script is invisible to them).
  ; fixtures/DIGESTS.txt and the workload specs are data it reads (gh-ocannl-645), pinned so a
  ; change to them fails the suite rather than drifting -- and so is the golden of
  ; test/operations/bench_result_line, which holds OCANNL result lines this orchestrator's own
@@ -38,6 +34,17 @@
   (glob_files test/*.py)
   (glob_files_rec runners/*.py)
   (glob_files *.sh)
+  ; Name executed benchmark drivers for merge-plan coverage. The globs supply scan-only inputs.
+  (:shell_drivers
+   gh1003_fold_cells.sh
+   gh1051_bf16_ab.sh
+   gh1180_tie_ab.sh
+   gh1253_flip_cells.sh
+   gh1279_cells.sh
+   gh1343_ab.sh
+   gh1557_cells.sh
+   gh612_cells.sh
+   gh740_cells.sh)
   ../scripts/process-group.sh
   ../tools/action-durations.sh
   ../tools/gpu-memory-census-trace.sh
@@ -59,7 +66,11 @@
   (glob_files workloads/*.json)
   (sandbox always preserve_file_kind))
  (action
-  (run python3 %{dep:test_orchestrate.py})))
+  (run
+   python3
+   %{dep:test_orchestrate.py}
+   --dune-shell-drivers
+   %{shell_drivers})))
 
 ; This directory's golden-diff rules, aggregated back onto `runtest` (gh-ocannl-726). Each of them
 ; attaches to its own `runtest-<name>` alias and to NOTHING else, so that `dune build
