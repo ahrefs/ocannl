@@ -38,6 +38,8 @@
   (glob_files test/*.py)
   (glob_files_rec runners/*.py)
   (glob_files *.sh)
+  ; The merge plan credits a literal dependency for the driver exercised by Gh1180DriverTest.
+  gh1180_tie_ab.sh
   ../scripts/process-group.sh
   ../tools/action-durations.sh
   ../tools/gpu-memory-census-trace.sh
