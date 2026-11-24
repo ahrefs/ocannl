@@ -23,14 +23,18 @@ Usage: gh1442_agreement.py TSV NAME=EXPLAIN [NAME=EXPLAIN ...] [--pick NAME=OUT 
            A marked TSV requires a separate stock snapshot; otherwise replay exits 2 with
            `stock_snapshot_missing` on stderr and no report. Archive provenance comes solely from
            this marker. Supply --stock-tsv explicitly for older mixed TSVs without the marker.
-           A digest join needs a positive measurement in a current 12-column stock row.
+           Stock explain arms and --fit-mma read only the stock rows; explicit --pick arms read
+           TSV so profile picks can join their own rows. A digest join needs a positive
+           measurement in a current 12-column stock row.
 
 The explain lines and the rows join by label: model_explain labels its sketch leaves as the tuner
 does. The stock `seeded` uses the census's plan, which can be a configured preset when seeding
 makes no changes. The `default` and that preset join using the tuner's preset digest, including
 schedules timed under another label (`timed_as` in the report). A needed preset with a missing
-timing is reported as `preset_unmatched`. A serial `default` uses `baseline`. With no census,
-`seeded` uses a single `F_seeded[...]` label if available. Repeated readings keep the fastest.
+timing is reported as `preset_unmatched`, and a census-selected `F_seeded[...]` incumbent missing
+from the stock rows is reported as `seeded_unmatched` (both exit 1). A serial `default` uses
+`baseline`. With no census, `seeded` uses a single `F_seeded[...]` label if available. Repeated
+readings keep the fastest.
 
 Per score: the joined candidates; the DECIDED pairs (measured apart by more than the band); how
 many of them the score orders as measured (a score tie orders none); and the score's argmin, with
@@ -102,6 +106,11 @@ class StockTiming(NamedTuple):
         if label == "seeded":
             return preset_plan
         return label == "default" and (preset_plan or self.digest is not None)
+
+    def uses_seeded_plan(self, label):
+        return (label == "seeded"
+                and self.plan is not None
+                and self.plan.startswith("F_seeded["))
 
 
 # The rank-site lines are read by bench_output's one reader of them (gh-ocannl-1767): fields by
@@ -358,10 +367,13 @@ def main():
     if not times:
         print(f"gh1442_agreement: no calibration rows in {args.tsv}", file=sys.stderr)
         return 2
+    if not stock_times:
+        print(f"gh1442_agreement: no calibration rows in {args.stock_tsv}", file=sys.stderr)
+        return 2
     if args.fit_mma is not None:
         # A site with no timed tensorized leaf (a backend with no fp8 arm) has nothing to fit: the
         # `mma-fit: none` line says so, and the agreement analysis goes on.
-        fit_mma(args.fit_mma, times, stock)
+        fit_mma(args.fit_mma, stock.times, stock)
     results = []
     report_ok = True
     for spec in args.pick:
@@ -379,7 +391,7 @@ def main():
         order = {}
         admitted = set()
         for label, (rank, pos, adm) in scores(path).items():
-            row = measured_row(label, times, stock)
+            row = measured_row(label, stock.times, stock)
             if row is not None:
                 joined[label] = (row.ms, rank)
                 order[label] = pos
@@ -387,6 +399,9 @@ def main():
                     admitted.add(label)
             elif stock.uses_preset(label):
                 print(f"{name}: preset_unmatched label={label!r} digest={stock.digest or 'unavailable'}")
+                report_ok = False
+            elif stock.uses_seeded_plan(label):
+                print(f"{name}: seeded_unmatched label={label!r} plan={stock.plan!r}")
                 report_ok = False
         if len(joined) < 2:
             print(f"gh1442_agreement: {name}: fewer than two candidates join the rows",
@@ -420,7 +435,7 @@ def main():
                   f" fastest={set_best!r} fastest_ms={joined[set_best][0]:.6f}"
                   f" rank_ms_of_fastest={joined[set_best][1]:.6f}"
                   f" argmin_slowdown={joined[set_pick][0] / joined[set_best][0]:.3f}")
-        report_ok = report_pick(name, path, times, stock, required=False) and report_ok
+        report_ok = report_pick(name, path, stock.times, stock, required=False) and report_ok
         results.append((name, set(pairs), right))
     if len(results) > 1:
         first, first_pairs, first_right = results[0]
