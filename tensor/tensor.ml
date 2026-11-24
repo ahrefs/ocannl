@@ -1695,8 +1695,9 @@ let ndarray ?prec ?(grad_spec = Prohibit_grad) values ?(label = []) ?top_down_pr
   t
 
 (* Keep precision initialization in step with ndarray: host data first, then the value node. *)
-let term_init ?prec ?grad_spec values ?(label = []) ?top_down_prec ?batch_dims ?batch_axes
-    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
+let term_init_with_prec get_prec ?grad_spec values ?(label = []) ?top_down_prec ?batch_dims
+    ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
+  let prec = get_prec () in
   let init_data, fetch_op = constant_fill ?prec ~debug:"Tensor.term_init" values in
   let t =
     term ?init_data ?fetch_op ?grad_spec ?batch_dims ?batch_axes ~label ?top_down_prec ?input_dims
@@ -1704,6 +1705,15 @@ let term_init ?prec ?grad_spec values ?(label = []) ?top_down_prec ?batch_dims ?
   in
   Option.iter prec ~f:(Tn.update_prec t.value);
   t
+
+let term_init ?prec = term_init_with_prec (fun () -> prec)
+
+let param_value_prec : Ir.Ops.prec option ref = ref None
+[@@mutation_serial.exempt "a scoped default for new parameter initializers, not inference state"]
+
+let param_value_init ~require_grad values =
+  let get_prec () = if require_grad then !param_value_prec else None in
+  term_init_with_prec get_prec ~grad_spec:Prohibit_grad values
 
 let force_param_diff t =
   Option.iter t.diff ~f:(fun _ -> remove_bprop_root t);
@@ -2703,6 +2713,7 @@ let%track5_sexp unsafe_reinitialize ?(namespace = Tn.default_namespace) () : uni
   Weak_discards.clean (discarded_nodes ());
   install_validity_check ();
   param_postprocess := Fn.id;
+  param_value_prec := None;
   random_seed := None;
   random_seeds_created := [];
   Tn.Registry.clear Tn.registry;

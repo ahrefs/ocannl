@@ -31,9 +31,35 @@ let cast_param ?(placement = Twin_auto) ?(master_prec = Ops.single) ~prec (p : T
       twin
 
 let with_master_weights ?placement ?master_prec ~prec f =
-  let saved = !Tensor.param_postprocess in
-  (Tensor.param_postprocess := fun p -> cast_param ?placement ?master_prec ~prec (saved p));
-  Exn.protect ~f ~finally:(fun () -> Tensor.param_postprocess := saved)
+  let saved_hook = !Tensor.param_postprocess and saved_value_prec = !Tensor.param_value_prec in
+  (match (master_prec, saved_value_prec) with
+  | Some requested, Some enclosing when not (Ops.equal_prec requested enclosing) ->
+      raise
+        (Utils.User_error
+           (Printf.sprintf
+              "Mixed_prec.with_master_weights: master_prec %s conflicts with enclosing master_prec \
+               %s"
+              (Ops.prec_string requested) (Ops.prec_string enclosing)))
+  | _ -> ());
+  Tensor.param_value_prec := Option.first_some master_prec saved_value_prec;
+  (Tensor.param_postprocess :=
+     fun p ->
+       (* The enclosing hook casts first, so it reads the innermost scope's request. Check any
+          specified precision on the original parameter, before the hook returns a twin. *)
+       let scope_prec = !Tensor.param_value_prec in
+       (match (scope_prec, p.Tensor.diff, Tn.get_specified_prec p.Tensor.value) with
+       | Some requested, Some _, Some actual when not (Ops.equal_prec requested actual) ->
+           raise
+             (Utils.User_error
+                (Printf.sprintf
+                   "Mixed_prec.with_master_weights: parameter %s has precision %s, expected %s"
+                   (Tn.label_name p.Tensor.value) (Ops.prec_string actual)
+                   (Ops.prec_string requested)))
+       | _ -> ());
+       cast_param ?placement ?master_prec:scope_prec ~prec (saved_hook p));
+  Exn.protect ~f ~finally:(fun () ->
+      Tensor.param_postprocess := saved_hook;
+      Tensor.param_value_prec := saved_value_prec)
 
 module Loss_scaler = struct
   type t = {

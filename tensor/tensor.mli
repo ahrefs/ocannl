@@ -314,6 +314,14 @@ val param_postprocess : (t -> t) ref
     which remains the sole member of the result's {!field:params}. Reset by {!unsafe_reinitialize}.
 *)
 
+val param_value_prec : Ir.Ops.prec option ref
+(** Precision override for {!param_value_init}. Defaults to [None] and is reset by
+    {!unsafe_reinitialize}. *)
+
+val param_value_init : require_grad:bool -> float array -> op_fun
+(** Initialize a DSL parameter from raw values. For differentiable parameters, read
+    {!param_value_prec} when the parameter is built, before allocating host storage. *)
+
 val term_init : ?prec:Ir.Ops.prec -> ?grad_spec:grad_spec -> float array -> op_fun
 (** A {!term} wrapper that sets up the value node initialization (it generalizes {!ndarray} to
     tensors with inferred shapes). [prec] fixes the value precision at construction, with the same

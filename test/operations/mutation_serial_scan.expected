@@ -88,6 +88,7 @@ tensor/tensor.ml: forward_handouts (Ephemeron) -- exempt: a weak memo of a tenso
 tensor/tensor.ml: default_value_prec (ref) -- exempt: user configuration read when a tensor is built, not inference state
 tensor/tensor.ml: default_grad_prec (ref) -- exempt: user configuration read when a tensor is built, not inference state
 tensor/tensor.ml: max_sublabel_length (ref) -- exempt: user configuration of label printing, not inference state
+tensor/tensor.ml: param_value_prec (ref) -- exempt: a scoped default for new parameter initializers, not inference state
 tensor/tensor.ml: param_postprocess (ref) -- exempt: a user-installed hook applied to new parameters, not inference state
 tensor/tensor.ml: applications (unread state) -- exempt
 tensor/tensor.ml: reserved_next_id (unread state) -- exempt
