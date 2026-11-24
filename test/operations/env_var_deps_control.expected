@@ -235,7 +235,13 @@ checks, and to a run handed nothing at all.
 a dune file built to trip the marker grammar and the declaration checks is refused: true
 a run handed no dune file and no source is refused: true
 
+Synthetic controls: captured stderr from Verdict-linked programs.
+a captured Verdict run is refused when only a sibling run clears the variable: true
+an inner nonempty binding undoes the clear for a captured Verdict run: true
+a captured Verdict run passes with an empty binding or its own dependency: true
+
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:57263e03b8b032365fbd586bbd2705a3] stderr from Verdict-linked
   [scanner-refusal:2b65edf20e36d983c1a016b72c2aadd1] plugged-in check receives
   [scanner-refusal:35bab4283cd8b87d51ca3476cb0e971e] source_tree
   [scanner-refusal:51b4c42723bc3fa6bfc678d091151ed9] source_tree
@@ -440,6 +446,9 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:9b37c5d94470adf77d607d70645a584a] interpreter handed only
   [scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks
   [scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused
+  [scanner-refusal:fac99db54dbc751b212940875f53c769] captured Verdict run
+  [scanner-refusal:edc4786c103754e1274b9e12cf08fa3f] nonempty binding undoes
+  [scanner-refusal:e41ce36dfe9ad79d2112520081833ba9] captured Verdict run
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
   [scanner-refusal:f11c09a8318b3a7863444256973f57d4] running an executable
   [scanner-refusal:941a9fb77d867c7b1576a0f19ee5db3b] declares

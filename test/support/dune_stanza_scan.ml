@@ -278,11 +278,10 @@ let rec atoms = function Sexp.Atom a -> [ a ] | Sexp.List l -> List.concat_map l
 (** A stanza's [(select <target> from (<libs> -> <arm>) … (-> <arm>))] choices in its [libraries],
     as [(target, condition, arm)] triples: [condition] is the library list before the [->], each
     forbidden one spelled with its [!], and empty for the fallback [(-> <arm>)]. *)
-let select_choices stanza =
+let library_select_choices stanza =
   Option.value (field stanza "libraries") ~default:[]
   |> List.concat_map ~f:(function
-    | Sexp.List (Sexp.Atom "select" :: Sexp.Atom target :: Sexp.Atom "from" :: arms)
-      when String.is_suffix target ~suffix:".ml" ->
+    | Sexp.List (Sexp.Atom "select" :: Sexp.Atom target :: Sexp.Atom "from" :: arms) ->
         List.filter_map arms ~f:(function
           | Sexp.List terms -> (
               let condition, rest =
@@ -297,6 +296,11 @@ let select_choices stanza =
               | _ -> None)
           | _ -> None)
     | _ -> [])
+
+(** The choices that generate implementation modules. *)
+let select_choices stanza =
+  List.filter (library_select_choices stanza) ~f:(fun (target, _, _) ->
+      String.is_suffix target ~suffix:".ml")
 
 (** {!select_choices} as [(target, arm)] pairs: an arm is source for the generated target module,
     never a module named [*.real] or [*.missing] (gh-ocannl-964). *)
@@ -716,16 +720,26 @@ type command_site =
       (** a rewritten PATH, wrapping what runs under it: there a bare command name no longer says
           what it names *)
 
+type stderr_capture = { variable : string; captured : bool; cleared : bool }
+
 (* Every command an action runs, at any depth: [(with-stdout-to … (run …))], [(no-infer (progn (run
    …) …))] and the rest nest the one that matters. Each comes with the directory the process will
    run in, relative to the stanza's own: [chdir] moves it, and the configuration an OCANNL
    executable finds is the one it searches upward from THERE, not the one next to the dune file
    (Codex P2, round 6 of PR #343). *)
-let rec commands_in ?(cwd = "") ?(pinned = Set.empty (module String)) sexp =
-  let nested =
-    match sexp with Sexp.List l -> List.concat_map l ~f:(commands_in ~cwd ~pinned) | _ -> []
-  in
+let rec commands_in ?(cwd = "") ?(pinned = Set.empty (module String)) ?stderr_capture sexp =
+  let descend = commands_in ~cwd ~pinned ?stderr_capture in
+  let nested () = match sexp with Sexp.List l -> List.concat_map l ~f:descend | _ -> [] in
   match sexp with
+  | Sexp.List [ Sexp.Atom ("with-stderr-to" | "with-outputs-to"); Sexp.Atom destination; action ]
+    when Option.is_some stderr_capture ->
+      let scope = Option.value_exn stderr_capture in
+      let captured = not (String.equal destination "%{null}") in
+      commands_in ~cwd ~pinned ~stderr_capture:{ scope with captured } action
+  | Sexp.List [ Sexp.Atom ("ignore-stderr" | "ignore-outputs"); action ]
+    when Option.is_some stderr_capture ->
+      let scope = Option.value_exn stderr_capture in
+      commands_in ~cwd ~pinned ~stderr_capture:{ scope with captured = false } action
   (* A destination built out of a pform ([%{workspace_root}]) is not a path this scan can resolve,
      and treating it as a literal directory name would have the process searching from a directory
      that does not exist -- possibly landing back on the stanza's own config (Codex P2, round 12).
@@ -737,7 +751,7 @@ let rec commands_in ?(cwd = "") ?(pinned = Set.empty (module String)) sexp =
   | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: value :: rest)
     when String.equal (String.uppercase name) "PATH" ->
       let value = match value with Sexp.Atom v -> v | _ -> "..." in
-      List.concat_map rest ~f:(commands_in ~cwd ~pinned:(Set.add pinned "PATH"))
+      List.concat_map rest ~f:(commands_in ~cwd ~pinned:(Set.add pinned "PATH") ?stderr_capture)
       (* The directory a nested `chdir` chose is still where the process runs; PATH says nothing
          about it (Codex P2, round 17). *)
       |> List.map ~f:(fun (inner_cwd, inner_pinned, command) ->
@@ -765,11 +779,26 @@ let rec commands_in ?(cwd = "") ?(pinned = Set.empty (module String)) sexp =
                 String.is_substring (String.lowercase v)
                   ~substring:(String.lowercase ("%{env:" ^ name ^ stop))))
       in
+      let stderr_capture =
+        Option.map stderr_capture ~f:(fun scope ->
+            (* A deeper binding can undo the clear. Treat case variants as possible overrides
+               because Windows folds case, but require the portable uppercase spelling to clear. *)
+            if String.Caseless.equal name scope.variable || String.is_substring name ~substring:"%{"
+            then
+              {
+                scope with
+                cleared = String.equal name scope.variable && Sexp.equal value (Sexp.Atom "");
+              }
+            else scope)
+      in
       List.concat_map rest
-        ~f:(commands_in ~cwd ~pinned:(if reads_itself then pinned else Set.add pinned name))
+        ~f:
+          (commands_in ~cwd
+             ~pinned:(if reads_itself then pinned else Set.add pinned name)
+             ?stderr_capture)
   | Sexp.List (Sexp.Atom "chdir" :: Sexp.Atom dir :: rest)
     when String.is_substring dir ~substring:"%{" ->
-      List.concat_map rest ~f:(commands_in ~cwd ~pinned)
+      List.concat_map rest ~f:descend
       |> List.map ~f:(fun (_, inner_pinned, command) ->
           let named =
             match command with
@@ -784,12 +813,15 @@ let rec commands_in ?(cwd = "") ?(pinned = Set.empty (module String)) sexp =
             inner_pinned,
             Elsewhere (Printf.sprintf "%s, under `(chdir %s ...)`" named dir, command) ))
   | Sexp.List (Sexp.Atom "chdir" :: Sexp.Atom dir :: rest) ->
-      List.concat_map rest ~f:(commands_in ~cwd:(in_subdir cwd dir) ~pinned)
+      List.concat_map rest ~f:(commands_in ~cwd:(in_subdir cwd dir) ~pinned ?stderr_capture)
+  | Sexp.List (Sexp.Atom ("run" | "dynamic-run" | "bash" | "system") :: _)
+    when Option.exists stderr_capture ~f:(fun scope -> (not scope.captured) || scope.cleared) ->
+      []
   | Sexp.List (Sexp.Atom ("run" | "dynamic-run") :: Sexp.Atom cmd :: args) ->
       ( cwd,
         pinned,
         Program (cmd, List.filter_map args ~f:(function Sexp.Atom a -> Some a | _ -> None)) )
-      :: nested
+      :: nested ()
   (* A shell action hands a command line to a shell, and this scan does not parse shell. Splitting
      it on whitespace looked like reading it and was not: `if ready; then ./probe.exe; fi` yields
      `./probe.exe;`, which ends in no extension and passes for an external tool -- so the rule runs
@@ -799,8 +831,8 @@ let rec commands_in ?(cwd = "") ?(pinned = Set.empty (module String)) sexp =
      whose config the process will find is unknown too (round 8). *)
   | Sexp.List (Sexp.Atom ("bash" | "system") :: args) ->
       List.filter_map args ~f:(function Sexp.Atom a -> Some (cwd, pinned, Shell a) | _ -> None)
-      @ nested
-  | _ -> nested
+      @ nested ()
+  | _ -> nested ()
 
 (** Heads inside a stanza's [(action …)] that are on neither action list, each once. *)
 let unclassified_action_heads stanza =
@@ -841,7 +873,7 @@ let unclassified_action_heads stanza =
 (** Every command site in a stanza, including commands classified as external tools. The original
     site, directory, enclosing environment pins, and classification are preserved so a closed-world
     consumer can distinguish a verified no-argument helper from an opaque launcher. *)
-let classified_command_sites_with_pins_preserving_multiplicity stanza =
+let classified_command_sites_with_pins_preserving_multiplicity ?stderr_capture stanza =
   let named_deps = named_deps_of stanza in
   let rec classify command =
     match command with
@@ -879,8 +911,20 @@ let classified_command_sites_with_pins_preserving_multiplicity stanza =
     | Unnameable (what, command) -> (
         match classify command with External -> Path_rewritten what | other -> other)
   in
-  List.map (commands_in stanza) ~f:(fun (cwd, pinned, command) ->
-      (cwd, pinned, command, classify command))
+  let commands =
+    match stderr_capture with
+    | None -> commands_in stanza
+    | Some variable ->
+        let actions =
+          match (field stanza "action", stanza) with
+          | Some actions, _ -> actions
+          | None, Sexp.List [ Sexp.Atom "rule"; action ] -> [ action ]
+          | None, _ -> []
+        in
+        List.concat_map actions
+          ~f:(commands_in ~stderr_capture:{ variable; captured = false; cleared = false })
+  in
+  List.map commands ~f:(fun (cwd, pinned, command) -> (cwd, pinned, command, classify command))
 
 let classified_commands_with_pins_preserving_multiplicity stanza =
   List.map (classified_command_sites_with_pins_preserving_multiplicity stanza)

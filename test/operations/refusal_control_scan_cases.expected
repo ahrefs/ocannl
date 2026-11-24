@@ -443,6 +443,7 @@ limits_field_classes.ml: [scanner-refusal:ca0e056f71e7b3b2d315db155984df89] defi
 limits_field_classes.ml: [scanner-refusal:34c994839232ad03792cf504a0770b5a] definition tune reaches (claim) is catalogued beside limits_field_classes.expected: true
 limits_field_classes.ml: [scanner-refusal:2c95f25304a68db188b11a98b9b6df51] Autotune.tune (claim) is catalogued beside limits_field_classes.expected: true
 env_var_deps.ml has exactly the explicitly assigned refusal controls: true
+env_var_deps.ml: [scanner-refusal:57263e03b8b032365fbd586bbd2705a3] stderr from Verdict-linked (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:2b65edf20e36d983c1a016b72c2aadd1] plugged-in check receives (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:35bab4283cd8b87d51ca3476cb0e971e] source_tree (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:51b4c42723bc3fa6bfc678d091151ed9] source_tree (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -661,6 +662,9 @@ env_var_deps.ml: [scanner-refusal:28d540b06acc9c02ad1d408123cc27ae] text-valued 
 env_var_deps.ml: [scanner-refusal:9b37c5d94470adf77d607d70645a584a] interpreter handed only (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:fac99db54dbc751b212940875f53c769] captured Verdict run (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:edc4786c103754e1274b9e12cf08fa3f] nonempty binding undoes (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:e41ce36dfe9ad79d2112520081833ba9] captured Verdict run (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 refused_action_streams.ml has exactly the explicitly assigned refusal controls: true
 ll_test_ratchet.ml has exactly the explicitly assigned refusal controls: true
 exact_partials_ratchet.ml has exactly the explicitly assigned refusal controls: true
