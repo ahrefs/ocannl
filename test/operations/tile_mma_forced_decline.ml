@@ -2,22 +2,28 @@
    OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE) is the negative control of every census claim, so it has
    to decline the way a real decline does -- and keep compiling while it does.
 
-   One f32 matmul, scheduled two ways and compiled under both regimes in one process (the override,
-   not the variable, so this test reads the same whatever the ambient environment says):
+   One f32 matmul, scheduled two ways, and an f16->f32 staged matmul, compiled under both regimes in
+   one process (the override, not the variable, so this test reads the same whatever the ambient
+   environment says):
 
-   - the plain tensorized schedule, on every backend: the C backends' register tiling, Metal's
-   simdgroup intrinsics, CUDA's wmma; - on a GPU, the staged schedule, whose split-k accumulator the
-   backend's fragment hook holds in registers across the whole reduction (a persistent-fragment
-   scope). This is the leg the hook exists for: forcing the decline only per statement, inside a
-   scope the hook already rendered, emits scalar code over an intrinsic fragment with no local array
-   -- a kernel Metal refuses.
+   - the plain tensorized f32 schedule, on every backend: the C backends' register tiling, Metal's
+   simdgroup intrinsics, CUDA's wmma; - on a GPU, the staged f32 schedule, whose split-k accumulator
+   the backend's fragment hook holds in registers across the whole reduction (a persistent-fragment
+   scope) where uniform f32/tf32 is advertised (Metal, CUDA with tf32_matmuls=true); - on a GPU, the
+   staged f16->f32 schedule (gh-ocannl-2402): every MMA-capable GPU (HIP RDNA3+ with rocWMMA, CUDA
+   sm_70+, Metal Apple7+) advertises (Mma_f16, Mma_f16, Mma_f32) in Mma_fragment_scope regardless of
+   the numerics policy, so HIP exercises the persistent-fragment forced-decline hook rather than
+   skipping it. This is the leg the hook exists for: forcing the decline only per statement, inside
+   a scope the hook already rendered, emits scalar code over an intrinsic fragment with no local
+   array -- a kernel Metal and hiprtc refuse.
 
-   Unforced, each renders tensorized (the staged one with a fragment scope); forced, each renders
-   every statement as the lane-0 scalar fallback with no fragment scope, and the values stay bitwise
-   the serial twin's (quarters 0 to 3 times integers -8 to 8: every product a quarter multiple below
-   25 in magnitude, so any summation order over k = 32 gives one f32 value). The forced regime also
-   moves the schedule cache's codegen identity, so a forced routine is never stored or replayed
-   under the normal key. *)
+   Unforced, each renders tensorized (the staged ones with a fragment scope where advertised);
+   forced, each renders every statement as the lane-0 scalar fallback with no fragment scope, and
+   the values stay bitwise the serial twin's (quarters times small integers: every product and every
+   sum over k = 32 gives one exact f32 value in any summation order; the f16->f32 operands are
+   strictly positive so gfx11 WMMA cannot leave a cancellation residue, gh-ocannl-1420). The forced
+   regime also moves the schedule cache's codegen identity, so a forced routine is never stored or
+   replayed under the normal key. *)
 
 (* cc-fp-contract: exact-operands -- quarters times small integers, every sum exact in f32 *)
 
@@ -104,8 +110,9 @@ let () =
   in
   let ma = TDSL.ndarray mav ~label:[ "ma" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let mb = TDSL.ndarray mbv ~label:[ "mb" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
-  let run ~name ?schedule () =
-    let%op c = ma * mb in
+  let run_matmul ~a ~b ?out_prec ~name ?schedule () =
+    let%op c = a * b in
+    Option.iter out_prec ~f:(Tn.update_prec c.Tensor.value);
     let transform opt =
       match schedule with
       | None -> opt
@@ -125,6 +132,7 @@ let () =
     let ctx = Context.set_values ctx tn (Array.init numel ~f:(fun i -> Float.of_int (1000 + i))) in
     (Context.get_values (Context.run ctx routine) tn, routine.Context.mma)
   in
+  let run ~name ?schedule () = run_matmul ~a:ma ~b:mb ~name ?schedule () in
   let want, _ = with_forced false (fun () -> run ~name:"fd_serial" ()) in
   p "the serial twin computes a nonzero product" (Array.exists want ~f:(fun x -> Float.(x <> 0.)));
   let legs ~what ~schedule =
@@ -216,6 +224,83 @@ let () =
         match Lazy.force staged_forced with
         | None -> false
         | Some (got_forced, _) -> Array.equal Float.equal got_forced want));
+  (* gh-ocannl-2402: f16 -> f32 staged leg. Every MMA-capable GPU (HIP RDNA3+ with rocWMMA, CUDA
+     sm_70+, Metal Apple7+) advertises (Mma_f16, Mma_f16, Mma_f32) in Mma_fragment_scope regardless
+     of the numerics policy, so gating on [limits.mma] keeps the descriptor claim non-vacuous and
+     ensures HIP exercises its persistent-fragment forced-decline path. Strictly positive quarters
+     times small positive integers keep every 32-term sum in [8, 728]: exact in f32, free of gfx11
+     WMMA cancellation residue (gh-ocannl-1420), and below the [1000, 2023] prefill. *)
+  let half = Ir.Ops.half in
+  let ha_fn = Ll_test.cycle ~dims:[| n; n |] ~modulus:13 ~offset:1. ~stride:0.25 in
+  let hb_fn = Ll_test.cycle ~dims:[| n; n |] ~modulus:7 ~offset:1. ~stride:1. in
+  let ha = NTDSL.init ~l:"ha" ~prec:half ~i:[ n ] ~o:[ n ] ~f:ha_fn () in
+  let hb = NTDSL.init ~l:"hb" ~prec:half ~i:[ n ] ~o:[ n ] ~f:hb_fn () in
+  let want_f16, _ =
+    with_forced false (fun () -> run_matmul ~a:ha ~b:hb ~out_prec:single ~name:"fd_f16_serial" ())
+  in
+  p_all "the f16->f32 serial twin is positive and below the prefill" (Array.to_list want_f16)
+    ~f:(fun x -> Float.(x > 0. && x < 1000.));
+  let gpu_mma =
+    Verdict.sub_leg gpu ~on:backend_name
+      ~when_:(lazy (Option.is_some (Context.hardware_limits (Context.auto ())).BI.mma))
+  in
+  let f16_staged = staged_schedule ~src_a:ha.Tensor.value ~src_b:hb.Tensor.value in
+  let f16_staged_unforced =
+    lazy
+      (with_forced false (fun () ->
+           run_matmul ~a:ha ~b:hb ~out_prec:single ~name:"fd_f16_staged_unforced"
+             ~schedule:f16_staged ()))
+  in
+  let f16_staged_forced =
+    lazy
+      (match
+         with_forced true (fun () ->
+             run_matmul ~a:ha ~b:hb ~out_prec:single ~name:"fd_f16_staged_forced"
+               ~schedule:f16_staged ())
+       with
+      | result -> Some result
+      | exception exn ->
+          Stdio.eprintf "fd_f16_staged forced: %s\n%!" (Exn.to_string exn);
+          None)
+  in
+  in_leg ~leg:gpu_mma "an MMA-capable GPU advertises f16->f32 in a persistent-fragment scope"
+    (fun label ->
+      p label
+        (Ll_test.advertised ~backend_name ~a_prec:half ~b_prec:half ~d_prec:single
+        && BI.advertises_mma_format_in_scope
+             (Context.hardware_limits (Context.auto ()))
+             ~policy:(Ir.Numerics.get ()) ~scope:BI.Mma_fragment_scope ~a:BI.Mma_f16 ~b:BI.Mma_f16
+             ~d:BI.Mma_f32));
+  in_leg ~leg:gpu_mma
+    "unforced, the f16->f32 staged schedule renders tensorized in a persistent-fragment scope"
+    (fun label ->
+      let _, mma = Lazy.force f16_staged_unforced in
+      census "fd_f16_staged unforced" mma;
+      p label
+        (Ll_test.all_tensorized ~what:"fd_f16_staged unforced" (Ll_test.renderings mma)
+        && mma.Ir.C_syntax.fragment_scopes > 0));
+  in_leg ~leg:gpu "forced, the f16->f32 staged schedule compiles and runs" (fun label ->
+      p label (Option.is_some (Lazy.force f16_staged_forced)));
+  in_leg ~leg:gpu
+    "forced, the f16->f32 staged schedule declines at the fragment scope: every Tile_mma falls \
+     back, no scope renders" (fun label ->
+      p label
+        (match Lazy.force f16_staged_forced with
+        | None -> false
+        | Some (_, mma) ->
+            census "fd_f16_staged forced" mma;
+            Ll_test.all_declined ~what:"fd_f16_staged forced" (Ll_test.renderings mma)
+            && mma.Ir.C_syntax.fragment_scopes = 0));
+  in_leg ~leg:gpu "unforced, the f16->f32 staged tensorized matmul matches the serial twin bitwise"
+    (fun label ->
+      let got_unforced, _ = Lazy.force f16_staged_unforced in
+      p_all2 label got_unforced want_f16 ~f:Float.equal);
+  in_leg ~leg:gpu
+    "forced, the f16->f32 staged tensorized matmul's fallback matches the serial twin bitwise"
+    (fun label ->
+      match Lazy.force f16_staged_forced with
+      | None -> p label false
+      | Some (got_forced, _) -> p_all2 label got_forced want_f16 ~f:Float.equal);
   (* The schedule cache's codegen identity: the forced regime has its own, so neither regime's
      crowns replay into the other. *)
   let ctx = Context.auto () in
