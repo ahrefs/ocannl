@@ -187,8 +187,11 @@ native_select_lines() { # mode (driver|slept|display) -- kernel lines on stdin
     {
       msg = $0
       has_prefix = 0
-      if (sub(/^([^ ]+ +[0-9]+ [0-9][0-9]:[0-9][0-9]:[0-9][0-9] [^ ]+ |[0-9][0-9][0-9][0-9]-[^ ]+ [^ ]+ )?kernel: /, "", msg) ||
-          sub(/^\[[^]]*\] /, "", msg)) {
+      if (sub(/^([^ ]+ +[0-9]+ [0-9][0-9]:[0-9][0-9]:[0-9][0-9] [^ ]+ |[0-9][0-9][0-9][0-9]-[^ ]+ [^ ]+ )?kernel: /, "", msg)) {
+        has_prefix = 1
+      } else if (substr(msg, 1, 1) == "[" && (dmesg_end = index(msg, "] ")) > 1) {
+        # String slice rather than /^\[[^]]*\] /: older one-true-awk builds close `[^]]` early.
+        msg = substr(msg, dmesg_end + 2)
         has_prefix = 1
       }
       is_fault = has_prefix && (msg ~ segfault_re || msg ~ trap_re)
@@ -207,33 +210,30 @@ native_select_lines() { # mode (driver|slept|display) -- kernel lines on stdin
   '
 }
 
-# POSIX BRE sed script normalizing native kernel lines for bytewise fingerprint comparison:
+# POSIX BRE sed script normalizing native kernel lines for bytewise fingerprint comparison.
+# A fingerprint compares signatures bytewise against the previous failure, so per-run volatile
+# fields -- KFD `pid 85562`, NVIDIA `pid=1234`, and a userspace crash's PID, fault address, ip,
+# sp, VMA ASLR base and CPU/core/socket -- must be normalized so a standing red does not report
+# `fingerprint moved` on every run. Sleep lines (`PM: ...`) become signatures too, because the
+# stable fact that moves a fingerprint is that the box slept.
 #   - strips syslog/ISO `kernel: `, bare `kernel: `, and `dmesg -T` `[...]` prefixes;
-#   - on userspace `segfault at` / `traps:` lines, replaces per-run volatile fields (PID, fault
-#     address, ip, sp, VMA ASLR base, and CPU/core/socket numbers) while keeping comm, trap kind,
-#     error code, VMA name, relative offset and mapping size;
+#   - on userspace `segfault at` / `traps:` lines, normalizes PID, fault address, ip, sp, VMA ASLR
+#     base and CPU/core/socket via the shared `:fault` block while keeping comm, trap kind, error
+#     code, VMA name, relative offset and mapping size;
 #   - on `Code:` lines, preserves opcode bytes verbatim and normalizes an unreadable-address
 #     message;
-#   - on driver and sleep lines, normalizes KFD `pid N` and NVIDIA `pid=N` as before.
+#   - on driver and sleep lines, replaces KFD `pid <n>` and NVIDIA `pid=<n>` with `N`.
 NATIVE_SIGNATURE_SED='
 s/^[^:]*:[0-9][0-9]:[0-9][0-9][^ ]* [^ ]* kernel: //
 s/^kernel: //
 s/^\[[^]]*\] //
 /\[[0-9][0-9]*\]: segfault at [0-9a-f][0-9a-f]* ip [0-9a-f][0-9a-f]* sp [0-9a-f][0-9a-f]* error [0-9a-f]/{
   s/\[[0-9][0-9]*\]: segfault at [0-9a-f][0-9a-f]* ip [0-9a-f][0-9a-f]* sp [0-9a-f][0-9a-f]* error /[N]: segfault at ADDR ip ADDR sp ADDR error /
-  s/\( in .*\)\[\([0-9a-f][0-9a-f]*\),[0-9a-f][0-9a-f]*+\([0-9a-f][0-9a-f]*\)\]/\1[\2,ADDR+\3]/
-  s/\( in .*\)\[[0-9a-f][0-9a-f]*+\([0-9a-f][0-9a-f]*\)\]/\1[ADDR+\2]/
-  s/ likely on CPU [0-9][0-9]* (core [0-9][0-9]*, socket [0-9][0-9]*)$/ likely on CPU N (core N, socket N)/
-  s/ likely on CPU [0-9][0-9]*$/ likely on CPU N/
-  b
+  b fault
 }
 /^traps: .*\[[0-9][0-9]*\] .* ip:[0-9a-f][0-9a-f]* sp:[0-9a-f][0-9a-f]* error:[0-9a-f]/{
   s/^\(traps: .*\)\[[0-9][0-9]*\]\( .* \)ip:[0-9a-f][0-9a-f]* sp:[0-9a-f][0-9a-f]* error:/\1[N]\2ip:ADDR sp:ADDR error:/
-  s/\( in .*\)\[\([0-9a-f][0-9a-f]*\),[0-9a-f][0-9a-f]*+\([0-9a-f][0-9a-f]*\)\]/\1[\2,ADDR+\3]/
-  s/\( in .*\)\[[0-9a-f][0-9a-f]*+\([0-9a-f][0-9a-f]*\)\]/\1[ADDR+\2]/
-  s/ likely on CPU [0-9][0-9]* (core [0-9][0-9]*, socket [0-9][0-9]*)$/ likely on CPU N (core N, socket N)/
-  s/ likely on CPU [0-9][0-9]*$/ likely on CPU N/
-  b
+  b fault
 }
 /^Code: /{
   s/^Code: Unable to access opcode bytes at 0x[0-9a-f][0-9a-f]*\. *$/Code: Unable to access opcode bytes at 0xADDR./
@@ -241,6 +241,12 @@ s/^\[[^]]*\] //
 }
 s/pid [0-9][0-9]*/pid N/g
 s/pid=[0-9][0-9]*/pid=N/g
+b
+:fault
+s/\( in .*\)\[\([0-9a-f][0-9a-f]*\),[0-9a-f][0-9a-f]*+\([0-9a-f][0-9a-f]*\)\]/\1[\2,ADDR+\3]/
+s/\( in .*\)\[[0-9a-f][0-9a-f]*+\([0-9a-f][0-9a-f]*\)\]/\1[ADDR+\2]/
+s/ likely on CPU [0-9][0-9]* (core [0-9][0-9]*, socket [0-9][0-9]*)$/ likely on CPU N (core N, socket N)/
+s/ likely on CPU [0-9][0-9]*$/ likely on CPU N/
 '
 
 native_window_summary() { # start-utc end-utc [boot-verdict] -- kernel lines on stdin, block on stdout
