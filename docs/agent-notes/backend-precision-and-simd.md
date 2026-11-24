@@ -1528,14 +1528,15 @@ files.
   gh-ocannl-2412) runs on every backend with no key and refuses any `Mod (_, K)` lane operand with
   fixed integer `K > Ops.vec_unop_lanes` of the rendered precision (pre- or post-simplification,
   naming the node, `K`, the precision and its lane count); `lane_bounds_static` pins it across
-  `Ops.scalar_precs`, scopes, projections, fissioned segments and backend `compute_prec`.
-  Buffer stores and the lane check share `Low_level.rendered_store_prec` (gh-ocannl-2437).
-  A local with an RNG write takes the scope's storage precision by the renderer's scope census,
-  which pins its declaration and reads along with its writes.
+  `Ops.scalar_precs`, scopes, projections, fissioned segments and backend `compute_prec`. Buffer
+  stores and the lane check share `Low_level.rendered_store_prec` (gh-ocannl-2437). For a local with
+  an RNG write, the renderer's scope census pins the declaration, reads and writes to storage
+  precision.
   `scope_collapse_rounding` fixes a packed draw's `Where` condition at single while varying the
-  store between single and half. Disabling `rng_collapsible` drops the scope in the half row
-  and loses a subtraction residual on cc when half computes in single. The materialized packed
-  draw and early-rounding control show when that difference is observable.
+  store between single and half. When cc computes half in single, disabling `rng_collapsible`
+  drops the scope and loses the subtraction residual. Removing the shared RNG storage pin lets
+  the inlined draw keep that residual. On Metal, CUDA and HIP, the subtraction already computes
+  in half, and the test checks the lane bits and the scope decision.
   The older float rows are also protected by gh-ocannl-1788's exact-collapse rule. The integer scope
   exactness check (gh-ocannl-1884) independently retains the uint16 draw across widths. The
   isolated controls for these rows and for the render-time RNG check are in
