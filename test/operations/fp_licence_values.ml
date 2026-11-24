@@ -3,25 +3,23 @@
    on the raw lowering ([Ir.Fp_algebra]), a placement flip cannot change a result at uniform f32: an
    inlined producer is never contracted with its consumer.
 
-   cc only, with the C compiler's own contraction pinned off ([cc_backend_fp_contract=off]): the
-   claims are about OCANNL's algebra, and a compiler free to fuse [a * b + c] -- the platform
-   default of clang, nvcc, hipcc and Metal -- would fuse the inlined read itself. Elsewhere every
-   claim is skipped. Mixed-precision witnesses are left out: on cc a narrow product is computed in
-   f32 ([narrow_compute_f32]), so where it rounds is a codegen question, not a licence's. *)
+   Pin backend compiler contraction off because otherwise the compiler can fuse the inlined [a * b +
+   c] itself. The witnesses use uniform f32 so placement introduces no precision conversions. *)
 open Base
 open Verdict.Claims
 open Ll_test
 module LL = Ir.Low_level
 module Ops = Ir.Ops
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
-let on_cc = List.mem [ "cc"; "multidev_cc" ] backend_name ~equal:String.equal
-let () = Stdio.eprintf "fp-licence values backend: %s\n" backend_name
-let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
-let claim label f = if on_cc then p label (f ()) else Verdict.skipped ~backend:backend_name label
+let () =
+  Utils.state_config ~key:"cc_backend_fp_contract" ~data:"off";
+  Utils.state_config ~key:"cuda_fast_math" ~data:"false";
+  Utils.state_config ~key:"hip_fast_math" ~data:"false";
+  Utils.state_config ~key:"metal_fp_contract" ~data:"off"
 
-let claim_all label xs ~f =
-  if on_cc then p_all label xs ~f else Verdict.skipped ~backend:backend_name label
+let () =
+  Stdio.eprintf "fp-licence values backend: %s\n" (Context.backend_name (Lazy.force base_ctx));
+  p "the selected backend compiles with contraction off" (backend_contraction_off ())
 
 let bitwise a b =
   if Float.is_nan a || Float.is_nan b then Float.is_nan a && Float.is_nan b
@@ -96,7 +94,7 @@ let () =
             (key, run ~first_id:(1099820 + (10 * i)) key (licence_of key))) )
   in
   let ieee = [ 0.; 0.; 1.; 1.; p2 100; p2 (-100); Float.nan; Float.nan; 0. ] in
-  claim_all "the exact run computes the IEEE values"
+  p_all "the exact run computes the IEEE values"
     (List.mapi ieee ~f:(fun k want -> (k, want)))
     ~f:(fun (k, want) ->
       let exact, _ = Lazy.force runs in
@@ -105,7 +103,7 @@ let () =
     List.concat_map licence_name ~f:(fun key ->
         List.mapi witnesses ~f:(fun k (owner, what, _) -> (key, k, owner, what)))
   in
-  claim_all "each licence changes its own witnesses and leaves the others' values" cells
+  p_all "each licence changes its own witnesses and leaves the others' values" cells
     ~f:(fun (key, k, owner, what) ->
       let exact, licensed = Lazy.force runs in
       let got = (List.Assoc.find_exn licensed key ~equal:String.equal).(k) in
@@ -156,17 +154,16 @@ let () =
          (List.hd_exn
             (execute ~name:"fpv_late" o ~seed:[ (input, inputs); (z, blank 1) ] ~read:[ z ])).(0) ))
   in
-  claim "the inlined leg's producer is virtual" (fun () ->
-      let (o, y, _), _, _, _ = Lazy.force legs in
-      known_virtual o y);
-  claim "an inlined and a materialized producer agree bitwise under the contraction licence"
-    (fun () ->
-      let _, inlined, stored, _ = Lazy.force legs in
-      bitwise inlined stored && bitwise stored 0.);
-  claim "contracting after virtualization, the old order, would fuse the inlined read" (fun () ->
-      let _, _, stored, late = Lazy.force legs in
-      bitwise late (p2 (-24)) && not (bitwise late stored));
-  claim "fusion is detectable: the single-assignment control rounds once" (fun () ->
-      let exact, licensed = Lazy.force runs in
-      bitwise (List.Assoc.find_exn licensed "fp_contract" ~equal:String.equal).(0) (p2 (-24))
-      && bitwise exact.(0) 0.)
+  p "the inlined leg's producer is virtual"
+    (let (o, y, _), _, _, _ = Lazy.force legs in
+     known_virtual o y);
+  p "an inlined and a materialized producer agree bitwise under the contraction licence"
+    (let _, inlined, stored, _ = Lazy.force legs in
+     bitwise inlined stored && bitwise stored 0.);
+  p "contracting after virtualization, the old order, would fuse the inlined read"
+    (let _, _, stored, late = Lazy.force legs in
+     bitwise late (p2 (-24)) && not (bitwise late stored));
+  p "fusion is detectable: the single-assignment control rounds once"
+    (let exact, licensed = Lazy.force runs in
+     bitwise (List.Assoc.find_exn licensed "fp_contract" ~equal:String.equal).(0) (p2 (-24))
+     && bitwise exact.(0) 0.)

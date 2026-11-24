@@ -1,3 +1,4 @@
+the selected backend compiles with contraction off: true
 the exact run computes the IEEE values: true
 each licence changes its own witnesses and leaves the others' values: true
 the inlined leg's producer is virtual: true
