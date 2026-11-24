@@ -3385,8 +3385,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   population rows out of in-process stderr captures (`ppx_expect`, `Stderr_capture`), while still
   reaching the process's real stderr and spawn-time captures (`Fresh_process`). Failing, skipped,
   bypassed, and non-quantified claims print nothing; unmatched selectors do not fail the run; stdout
-  goldens and exit statuses are unchanged, and stderr-golden dune rules clear the variable with
-  `(setenv OCANNL_TOOL_VERDICT_POPULATION "" …)`. Because `verdict.ml` is a library and the variable
+  goldens and exit statuses are unchanged. Dune actions that capture stderr for a golden or parser
+  clear the variable with `(setenv OCANNL_TOOL_VERDICT_POPULATION "" …)`. The `env_var_deps` scan
+  checks each directly named Verdict-linked run under `with-stderr-to` or `with-outputs-to`
+  (gh-ocannl-2451). It accepts an empty binding in force at the run or an `env_var` declaration in
+  the action's own deps when the consumer intentionally tracks the population setting. A binding
+  on a sibling action never covers the run. Because `verdict.ml` is a library and the variable
   changes neither verdict nor any golden, `env_var_deps` exempts it alongside
   `OCANNL_TOOL_VERDICT_RECORDS` — a source control invalidates the test rule automatically, and an
   unchanged tree observes counts via `tools/test-run.sh fresh` (or by invoking the built executable

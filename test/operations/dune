@@ -1326,11 +1326,16 @@
   ocannl_config
   (alias runtest-env_spelling_gate))
  (action
-  (with-stdout-to
-   autotune_cache_dir_records.claims
-   (with-stderr-to
-    autotune_cache_dir_records.stream
-    (run %{dep:autotune_cache_dir_records.exe} --ocannl_log_config_json=true)))))
+  (setenv
+   OCANNL_TOOL_VERDICT_POPULATION
+   ""
+   (with-stdout-to
+    autotune_cache_dir_records.claims
+    (with-stderr-to
+     autotune_cache_dir_records.stream
+     (run
+      %{dep:autotune_cache_dir_records.exe}
+      --ocannl_log_config_json=true))))))
 
 (rule
  ; ocannl-backend: none -- runs the stream reader in Python over the stream the rule above kept.
@@ -2671,11 +2676,14 @@
       (setenv
        BENCH_KERNEL_TABLE
        1
-       (run
-        %{dep:bench_line_samples.exe}
-        harness
-        --ocannl_backend=cc
-        --ocannl_schedule_log_launches=true))))
+       (setenv
+        OCANNL_TOOL_VERDICT_POPULATION
+        ""
+        (run
+         %{dep:bench_line_samples.exe}
+         harness
+         --ocannl_backend=cc
+         --ocannl_schedule_log_launches=true)))))
     (with-stdout-to
      bench_lines_trace.out
      (with-stderr-to
@@ -2683,7 +2691,10 @@
       (setenv
        BENCH_TIMING_TRACE
        1
-       (run %{dep:bench_line_samples.exe} trace --ocannl_backend=cc))))
+       (setenv
+        OCANNL_TOOL_VERDICT_POPULATION
+        ""
+        (run %{dep:bench_line_samples.exe} trace --ocannl_backend=cc)))))
     (with-stdout-to
      bench_lines_trace_raise.out
      (with-stderr-to
@@ -2693,11 +2704,14 @@
        1
        ; The injection needs a candidate's window past the baseline's: no ambient budget may
        ; stop the search first.
-       (run
-        %{dep:bench_line_samples.exe}
-        trace-raise
-        --ocannl_backend=cc
-        --ocannl_autotune_budget_seconds=0))))
+       (setenv
+        OCANNL_TOOL_VERDICT_POPULATION
+        ""
+        (run
+         %{dep:bench_line_samples.exe}
+         trace-raise
+         --ocannl_backend=cc
+         --ocannl_autotune_budget_seconds=0)))))
     (with-stdout-to
      bench_lines_trace_cut.out
      (with-stderr-to
@@ -2714,11 +2728,14 @@
         (setenv
          OCANNL_CC_VECTOR_REGISTERS
          16
-         (run
-          %{dep:bench_line_samples.exe}
-          trace-cut
-          --ocannl_backend=cc
-          --ocannl_autotune_budget_seconds=0))))))
+         (setenv
+          OCANNL_TOOL_VERDICT_POPULATION
+          ""
+          (run
+           %{dep:bench_line_samples.exe}
+           trace-cut
+           --ocannl_backend=cc
+           --ocannl_autotune_budget_seconds=0)))))))
     (with-stdout-to
      bench_lines_trace_stop.out
      (with-stderr-to
@@ -2735,11 +2752,14 @@
         (setenv
          OCANNL_CC_VECTOR_REGISTERS
          16
-         (run
-          %{dep:bench_line_samples.exe}
-          trace-stop
-          --ocannl_backend=cc
-          --ocannl_autotune_budget_seconds=100))))))
+         (setenv
+          OCANNL_TOOL_VERDICT_POPULATION
+          ""
+          (run
+           %{dep:bench_line_samples.exe}
+           trace-stop
+           --ocannl_backend=cc
+           --ocannl_autotune_budget_seconds=100)))))))
     (with-stdout-to
      bench_line_readers.actual
      (run python3 %{dep:bench_line_readers.py} ../..))
@@ -2795,19 +2815,22 @@
   (env_var OCANNL_BACKEND))
  (action
   (no-infer
-   (with-stdout-to
-    bench_lines_seeded.out
-    (with-stderr-to
-     bench_lines_seeded.log
-     (run
-      %{dep:bench_line_samples.exe}
-      seeded
-      --ocannl_autotune_log=true
-      --ocannl_model_default_schedule=false
-      --ocannl_gpu_default_sketch_min_reduction=32
-      --ocannl_automatic_gpu_schedule=true
-      --ocannl_schedule_fission=true
-      --ocannl_debug_log_from_routines=false))))))
+   (setenv
+    OCANNL_TOOL_VERDICT_POPULATION
+    ""
+    (with-stdout-to
+     bench_lines_seeded.out
+     (with-stderr-to
+      bench_lines_seeded.log
+      (run
+       %{dep:bench_line_samples.exe}
+       seeded
+       --ocannl_autotune_log=true
+       --ocannl_model_default_schedule=false
+       --ocannl_gpu_default_sketch_min_reduction=32
+       --ocannl_automatic_gpu_schedule=true
+       --ocannl_schedule_fission=true
+       --ocannl_debug_log_from_routines=false)))))))
 
 ; Tensor-core kernels must name their accumulator destination in the shipped table, even when
 ; their zeroing kernel is separate. This compiles two tiny matmuls; it runs no timing window.

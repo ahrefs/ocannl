@@ -86,6 +86,20 @@
    pins from a closed list of forms, refusing anything else in a pinning position as unread, and a
    directory-wide `env-vars` binding of the backend is refused outright.
 
+   {1 Verdict population output in captured stderr}
+
+   This check reads explicit rule and test actions in the scanned dune files, including [subdir]
+   stanzas. It follows [with-stderr-to] and [with-outputs-to] to directly named [run] and
+   [dynamic-run] commands using the shared executable resolver (including [%{test}] in a custom test
+   action and bare workspace public names). A program is in scope when its literal Dune library
+   dependencies, including re-exports and positive [select] alternatives, reach the Verdict library.
+   This is a declaration check: shell and external launchers, computed paths and dependencies,
+   unevaluated includes, and pipe-only stderr transfers are outside its corpus.
+
+   Every covered run needs an enclosing literal empty [setenv] of the population variable or an
+   [env_var] in the action's own [deps]. A shadowing binding or a clear on a sibling branch cannot
+   protect a run. This applies to parsed stderr streams as well as goldens.
+
    {1 What decides "addressed to the configuration"}
 
    `Utils.classify_env_var`, the same function the startup check uses (gh-ocannl-629), so a name a
@@ -112,6 +126,7 @@ module Refusal_manifest = Test_scan.Refusal_control_manifest
 (* gh-ocannl-1425: the stable fragment of the refusal of a declaration the ambient record makes
    redundant, which the controls look for. *)
 let recorded_diagnostic = "which the ambient record already carries"
+let verdict_population = "OCANNL_TOOL_VERDICT_POPULATION"
 
 (* Run-time reads of a reserved tooling variable that deliberately decide nothing a stanza could
    track -- or, for the one entry saying so, a library read whose consumers declare it -- keyed by
@@ -124,7 +139,7 @@ let recorded_diagnostic = "which the ambient record already carries"
    fires on a tree that holds no library source (gh-ocannl-1233). *)
 let exempt_reads =
   [
-    ( "test/support/verdict.ml:OCANNL_TOOL_VERDICT_POPULATION",
+    ( "test/support/verdict.ml:" ^ verdict_population,
       "selects passing quantified claims whose population and floor Verdict echoes to its \
        pre-capture stderr descriptor (gh-ocannl-2390); stderr-golden actions clear it explicitly, \
        so the verdict and every golden are the same with it set or not, and a control editing the \
@@ -640,6 +655,98 @@ let normalize_path path =
             | _ -> ".." :: acc)
         | component -> component :: acc)
     |> List.rev |> String.concat ~sep:"/")
+
+let library_dependencies stanza =
+  let direct =
+    Option.value (Scan.field stanza "libraries") ~default:[]
+    |> List.filter_map ~f:(function
+      | Sexp.Atom name | Sexp.List [ Sexp.Atom "re_export"; Sexp.Atom name ] -> Some name
+      | _ -> None)
+  in
+  let selected =
+    List.concat_map (Scan.library_select_choices stanza) ~f:(fun (_, conditions, _) ->
+        List.filter conditions ~f:(fun name -> not (String.is_prefix name ~prefix:"!")))
+  in
+  direct @ selected
+
+let verdict_linkage dune_files =
+  let stanzas =
+    List.concat_map dune_files ~f:(fun (path, content) ->
+        Scan.walk (Stdlib.Filename.dirname path) (Scan.stanzas content) ~f:(fun dir stanza ->
+            [ (normalize_path dir, stanza) ]))
+  in
+  let owners, edges =
+    List.fold stanzas ~init:([], []) ~f:(fun (owners, edges) (dir, stanza) ->
+        match Scan.head stanza with
+        | Some "library" ->
+            let names = Scan.names_of stanza in
+            let aliases = names @ Scan.public_names stanza in
+            if String.equal dir "test/support" && List.mem names "verdict" ~equal:String.equal then
+              (aliases @ owners, edges)
+            else
+              ( owners,
+                List.map (library_dependencies stanza) ~f:(fun name -> (name, aliases)) @ edges )
+        | _ -> (owners, edges))
+  in
+  let edges = Map.of_alist_multi (module String) edges in
+  let rec closure seen = function
+    | [] -> seen
+    | name :: rest when Set.mem seen name -> closure seen rest
+    | name :: rest ->
+        let dependents = List.concat (Map.find_multi edges name) in
+        closure (Set.add seen name) (dependents @ rest)
+  in
+  let libraries = closure (Set.empty (module String)) owners in
+  let links_verdict stanza = List.exists (library_dependencies stanza) ~f:(Set.mem libraries) in
+  let programs =
+    List.concat_map stanzas ~f:(fun (dir, stanza) ->
+        match Scan.head stanza with
+        | Some head
+          when List.mem Scan.program_heads head ~equal:String.equal && links_verdict stanza ->
+            let names =
+              match Scan.names_of stanza with [] -> Scan.public_names stanza | names -> names
+            in
+            List.mapi names ~f:(fun index name ->
+                if String.equal name "-" then []
+                else
+                  `File (normalize_path (Scan.in_subdir dir (name ^ ".exe")))
+                  :: Option.to_list
+                       (Option.map (Scan.program_public_name stanza ~index) ~f:(fun n -> `Public n)))
+            |> List.concat
+        | _ -> [])
+    |> Set.Poly.of_list
+  in
+  (links_verdict, programs)
+
+let check_verdict_capture ~links_verdict ~programs ~public_names ~where ~dir stanza =
+  match Scan.head stanza with
+  | Some (("rule" | "test" | "tests") as head)
+    when not (Scan.declares_env_var (Scan.field stanza "deps") verdict_population) ->
+      let linked_program (cwd, _, site, command) =
+        match (site, command) with
+        | Scan.Program (name, _), _ when Scan.is_path_lookup_token name && Set.mem public_names name
+          ->
+            Option.some_if (Set.mem programs (`Public name)) name
+        | _, Scan.Runs name when String.equal name Scan.test_pform ->
+            Option.some_if ((not (String.equal head "rule")) && links_verdict stanza) name
+        | _, Scan.Runs_public name -> Option.some_if (Set.mem programs (`Public name)) name
+        | _, command ->
+            Option.bind (Scan.command_file_path ~cwd command) ~f:(fun path ->
+                let file = normalize_path (Scan.in_subdir dir path) in
+                Option.some_if ((not (Scan.is_absolute path)) && Set.mem programs (`File file)) file)
+      in
+      Scan.classified_command_sites_with_pins_preserving_multiplicity
+        ~stderr_capture:verdict_population stanza
+      |> List.filter_map ~f:linked_program
+      |> List.dedup_and_sort ~compare:String.compare
+      |> List.iter ~f:(fun program ->
+          fail
+            (Printf.sprintf
+               "%s captures stderr from Verdict-linked `%s` without clearing or declaring \
+                `OCANNL_TOOL_VERDICT_POPULATION` -- wrap this run in `(setenv \
+                OCANNL_TOOL_VERDICT_POPULATION \"\" ...)` or declare it in this action's deps"
+               where program))
+  | _ -> ()
 
 (* An executable's identities: the file dune builds, and the public name it installs under. A
    companion rule may run either -- `%{dep:probe.exe}` or `%{bin:pkg.probe}`, which
@@ -1788,6 +1895,7 @@ let main () =
   let lifecycle_dune_files =
     List.map dune_files ~f:(fun (path, on_disk) -> (path, In_channel.read_all on_disk))
   in
+  let links_verdict, verdict_programs = verdict_linkage lifecycle_dune_files in
   List.iter dune_files ~f:(fun (dune_file, on_disk) ->
       let dir = match Stdlib.Filename.dirname dune_file with "." -> "" | dir -> dir in
       let content = In_channel.read_all on_disk in
@@ -1797,6 +1905,12 @@ let main () =
       let marked =
         List.map marker_contract.Scan.contract_stanzas ~f:(fun m -> m.Scan.marker_stanza)
       in
+      List.iter marked ~f:(fun m ->
+          check_verdict_capture ~links_verdict ~programs:verdict_programs
+            ~public_names:declared_public_names
+            ~where:(Printf.sprintf "%s:%d" dune_file m.Scan.marked_line)
+            ~dir:(Scan.in_subdir dir m.Scan.marked_subdir)
+            m.Scan.marked_sexp);
       (* gh-ocannl-1518: a directory-wide pin reaches stanzas in other dune files, whose markers
          this one cannot speak for. *)
       List.iter (Scan.backend_env_vars_scopes content) ~f:(fun subdir ->
@@ -6537,6 +6651,93 @@ let malformed_tree_control () =
   Verdict.p "a run handed no dune file and no source is refused" (exited 1 empty);
   try remove_tree root with Unix.Unix_error _ -> ()
 
+let verdict_capture_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_verdict_capture" "" in
+  Exn.protect
+    ~finally:(fun () -> remove_tree root)
+    ~f:(fun () ->
+      let context = control_context () in
+      let write file contents = write_file (Stdlib.Filename.concat root file) contents in
+      List.iter context ~f:(fun (file, contents) -> write file contents);
+      List.iter [ "t/gate.ml"; "t/probe.ml"; "t/child/probe.ml"; "t/bridge.ml" ] ~f:(fun file ->
+          write file control_probe);
+      let paths =
+        [ "t/dune"; "t/gate.ml"; "t/probe.ml"; "t/child/probe.ml"; "t/bridge.ml" ]
+        @ List.map context ~f:fst
+      in
+      let run ~deps ~action =
+        write "t/dune"
+          (family_gate ~elsewhere:false
+          ^ Printf.sprintf
+              {dune|
+(executable (name probe) (modules probe))
+(library
+ (name bridge)
+ (modules bridge)
+ (libraries (select bridge.mli from (verdict -> bridge.with.mli) (-> bridge.without.mli))))
+(subdir child (executable (public_name probe) (modules probe) (libraries bridge)))
+
+(rule
+ ; ocannl-backend: none -- these synthetic programs open no device.
+ (deps ocannl_config (alias runtest-gate) %s)
+ (action
+  (with-outputs-to probe.log
+   (progn
+    (run %%{dep:probe.exe})
+    (ignore-stderr (run %%{dep:child/probe.exe}))
+    (with-stderr-to %%{null} (run %%{dep:child/probe.exe}))
+    (setenv %s "" (run %%{dep:child/probe.exe}))
+    %s))))
+|dune}
+              deps verdict_population action);
+        run_checker ~root ~exe ("." :: paths)
+      in
+      let child = "(chdir child (run ./probe.exe))" in
+      let bind value action = Printf.sprintf "(setenv %s %S %s)" verdict_population value action in
+      let unprotected = run ~deps:"" ~action:child in
+      let unprotected_bare = run ~deps:"" ~action:"(run probe)" in
+      let unprotected_bin = run ~deps:"" ~action:"(run %{bin:probe})" in
+      let shadowed = run ~deps:"" ~action:(bind "" (bind "*" child)) in
+      let cleared = run ~deps:"" ~action:(bind "" child) in
+      let declared = run ~deps:("(env_var " ^ verdict_population ^ ")") ~action:child in
+      let refusal = "captures stderr from Verdict-linked" in
+      let refuses program (status, text) =
+        Poly.equal status (Unix.WEXITED 1)
+        && String.is_substring text ~substring:(Printf.sprintf "%s `%s`" refusal program)
+      in
+      let passes (status, text) =
+        Poly.equal status (Unix.WEXITED 0) && not (String.is_substring text ~substring:refusal)
+      in
+      let file = "t/child/probe.exe" in
+      let file_refused = refuses file unprotected in
+      let bare_refused = refuses "probe" unprotected_bare in
+      let bin_refused = refuses "probe" unprotected_bin in
+      printf "\nSynthetic controls: captured stderr from Verdict-linked programs.\n";
+      attribute "a captured Verdict run is refused when only a sibling run clears the variable"
+        [ unprotected; unprotected_bare; unprotected_bin ];
+      Verdict.p "a captured Verdict run is refused when only a sibling run clears the variable"
+        (file_refused && bare_refused && bin_refused);
+      Verdict.p "an inner nonempty binding undoes the clear for a captured Verdict run"
+        (refuses file shadowed);
+      Verdict.p "a captured Verdict run passes with an empty binding or its own dependency"
+        (passes cleared && passes declared);
+      List.iter
+        [
+          (file_refused, unprotected);
+          (bare_refused, unprotected_bare);
+          (bin_refused, unprotected_bin);
+          (refuses file shadowed, shadowed);
+          (passes cleared, cleared);
+          (passes declared, declared);
+        ]
+        ~f:(fun (ok, (status, text)) ->
+          if not ok then eprintf "Verdict capture control %s:\n%s\n" (describe_status status) text))
+
 let () =
   match Array.to_list argv with
   | _ :: [ "--control" ] ->
@@ -6555,6 +6756,7 @@ let () =
       gateless_scope_control ();
       module_reads_control ();
       malformed_tree_control ();
+      verdict_capture_control ();
       (* Dune's repository-wide rule hands the same source to [main] as [./env_var_deps.ml] after a
          full build has materialized the local build-tree copy. Exercise that spelling here too: the
          manifest identity is repository-relative even when the file used to extract the diagnostics

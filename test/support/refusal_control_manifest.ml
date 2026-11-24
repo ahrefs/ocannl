@@ -660,6 +660,7 @@ let raw_entries =
       ] );
     ( "env_var_deps.ml",
       [
+        "[scanner-refusal:57263e03b8b032365fbd586bbd2705a3] stderr from Verdict-linked";
         "[scanner-refusal:2b65edf20e36d983c1a016b72c2aadd1] plugged-in check receives";
         "[scanner-refusal:35bab4283cd8b87d51ca3476cb0e971e] source_tree";
         "[scanner-refusal:51b4c42723bc3fa6bfc678d091151ed9] source_tree";
@@ -879,6 +880,9 @@ let raw_entries =
         "[scanner-refusal:9b37c5d94470adf77d607d70645a584a] interpreter handed only";
         "[scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks";
         "[scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused";
+        "[scanner-refusal:fac99db54dbc751b212940875f53c769] captured Verdict run";
+        "[scanner-refusal:edc4786c103754e1274b9e12cf08fa3f] nonempty binding undoes";
+        "[scanner-refusal:e41ce36dfe9ad79d2112520081833ba9] captured Verdict run";
       ] );
     ( "ocamlformat_ignore_scan.ml",
       [
@@ -1168,6 +1172,8 @@ let sources = List.map entries ~f:fst
 
 let raw_direct_evidence =
   [
+    ( "env_var_deps.ml:57263e03b8b032365fbd586bbd2705a3",
+      "a captured Verdict run is refused when only a sibling run clears the variable: true" );
     ( "codegen_text_inventory.ml:123bedafe19167d3536ddb2ca1115d21",
       "a scan handed a source that does not parse refuses it, exiting 1: true" );
     ( "codegen_text_inventory.ml:532d3ed986dd6559fec87d780769ee1f",
