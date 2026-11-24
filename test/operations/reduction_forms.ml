@@ -2556,6 +2556,17 @@ let () =
               (* Exhaustive over {!Cs.loop_rendering}; these arms are [Out_of_scope] above. *)
               assert false))
 
+type half_simd_fma_evidence = {
+  extent : int;
+  lanes : int;
+  chains : int;
+  loops : Cs.loop_render_entry list;
+  got : float;
+  fused : float;
+  separate : float;
+  scalar_tail : float;
+}
+
 let () =
   let vector_bytes = (Lazy.force hardware_limits).simd_vector.bytes in
   let leg =
@@ -2573,7 +2584,13 @@ let () =
        in
        let chains = Ir.Backend_intf.simd_reduce_chains ~lanes ~extent in
        let step = lanes * chains in
-       let node = Ll_test.node_factory ~prec ~first_id:!next_id ~dims:[| extent |] () in
+       let node ?(dims = [| extent |]) label =
+         Int.incr next_id;
+         Tn.create (Tn.Specified prec) ~id:!next_id ~label:[ label ]
+           ~unpadded_dims:(lazy dims)
+           ~padding:(lazy None)
+           ()
+       in
        let out = node ~dims:[| 1 |] "rffmaout" and x = node "rffmax" in
        List.iter [ out; x ] ~f:Ll_test.materialize;
        let k = Ll_test.sym () in
@@ -2628,10 +2645,19 @@ let () =
          \  half SIMD FMA result %h, fused %h, separately rounded %h, scalar tail %h (not part of \
           the golden)\n"
          extent (Cs.render_summary_string render) values.(0) fused separate scalar_tail;
-       (extent, lanes, chains, render.Cs.loops, values.(0), fused, separate, scalar_tail))
+       {
+         extent;
+         lanes;
+         chains;
+         loops = render.Cs.loops;
+         got = values.(0);
+         fused;
+         separate;
+         scalar_tail;
+       })
   in
   in_leg ~leg "the half SIMD reduction renders a grid with a complete vector update" (fun label ->
-      let extent, lanes, chains, loops, _, _, _, _ = Lazy.force evidence in
+      let { extent; lanes; chains; loops; _ } = Lazy.force evidence in
       p_exists label loops ~f:(fun loop ->
           match loop.Cs.rendering with
           | Cs.Render_simd_reduce { target = `Cell; lanes = actual_lanes; chains = actual_chains }
@@ -2640,7 +2666,7 @@ let () =
           | _ -> false));
   in_leg ~leg "the half SIMD update preserves the fused product's residue through the fold"
     (fun label ->
-      let _, _, _, _, got, fused, separate, scalar_tail = Lazy.force evidence in
+      let { got; fused; separate; scalar_tail; _ } = Lazy.force evidence in
       p label
         (Float.equal got fused
         && (not (Float.equal fused separate))
