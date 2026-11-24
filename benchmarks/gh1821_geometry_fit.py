@@ -5,8 +5,13 @@ carry no stg= (gh1253_cells.sh outputs from before the term existed).
 Usage: gh1821_geometry_fit.py OUT [--arm ARM] [--multiprocessors P] [--warp W] [--band B]
                               [--copy-rate R|sweep] [--regress]
 
-  OUT   a gh1253_cells.sh output directory: per cell, rank_<site>_<dims>.tsv (every candidate's
-        timing rows) and rank_<site>_<dims>_<ARM>.out (bench_rank_site.exe's rank-site lines).
+  OUT   a gh1253_cells.sh output directory: per cell, rank_<site>_<dims>.tsv (and
+        rank_<site>_<dims>.tsv.stock when profile timing cells appended to the main TSV) and
+        rank_<site>_<dims>_<ARM>.out (bench_rank_site.exe's rank-site lines). Reads `.tsv.stock`
+        when present so profile timings never enter the stock fit; refuses a marked mixed TSV
+        (`# gh1253_cells: stock snapshot required`) whose `.tsv.stock` is missing (exit 2,
+        `stock_snapshot_missing` on stderr, no stdout). Archive provenance comes solely from this
+        marker.
   --arm the listing to re-score (default `shipped`): the fill-only reference F, i.e. scored with no
         staged-copy term and a continuous fill (`shipped` before gh-ocannl-1821 on CUDA; `noocc`
         on HIP, whose shipped listing carries an occupancy factor).
@@ -47,8 +52,16 @@ import statistics
 import sys
 
 import bench_output
+from gh1600_txn_fit import replicates, row_label
 
 GEO = re.compile(r"gpu (\d+)x(\d+)x(\d+)/(\d+)x(\d+)( bgrid)?( coal-[kn])?")
+
+
+def stock_tsv_path(tsv):
+    """Prefer the archived .tsv.stock snapshot when present; otherwise read tsv, which
+    replicates() refuses if marked as mixed."""
+    stock = f"{tsv}.stock"
+    return stock if os.path.isfile(stock) else tsv
 
 
 def dims(cell):
@@ -74,15 +87,10 @@ def load(out, arm):
         if not os.path.exists(listing):
             continue
         m, n, k = dims(cell)
-        times = {}
-        for line in open(tsv):
-            cols = line.rstrip("\n").split("\t")
-            if len(cols) < 5 or line.startswith("#"):
-                continue
-            try:
-                times.setdefault(cols[3], []).append(float(cols[4]))
-            except ValueError:
-                pass
+        src = stock_tsv_path(tsv)
+        times = replicates(src)
+        if not times:
+            raise ValueError(f"{src}: no calibration rows")
         explain, kernels, order = {}, {}, []
         with open(listing) as f:
             # bench_output's one reader of the rank-site lines (gh-ocannl-1767).
@@ -98,14 +106,8 @@ def load(out, arm):
                                             for spec in fields.get("kernels", "").split(";") if spec]
         rows = []
         for pos, label in enumerate(order):
-            row = label
-            if label == "default":
-                # The untuned candidate: `baseline` in the timing rows (gh1600_txn_fit's row_label).
-                row = "baseline" if "baseline" in times else None
-            if label == "seeded":
-                seeded = [t for t in times if t.startswith("F_seeded[")]
-                row = seeded[0] if len(seeded) == 1 else None
-            if row not in times or label not in kernels:
+            row = row_label(label, times)
+            if row is None or label not in kernels:
                 continue
             fills = explain[label][2]
             ks = [{"c": float(x["c"]), "m": float(x["m"]), "wg": int(x["wg"]), "thr": int(x["thr"]),
@@ -117,6 +119,8 @@ def load(out, arm):
                          "adm": explain[label][1], "kernels": ks,
                          "geo": tuple(map(int, g.groups()[:5])) if g else None,
                          "bgrid": bool(g and g.group(6)), "coal": bool(g and g.group(7))})
+        if not rows:
+            raise ValueError(f"{cell}: no candidates join")
         # The seeded plan borrows the geometry of a leaf whose main kernel matches its own.
         for r in rows:
             if r["geo"] is None and r["kernels"]:
@@ -262,7 +266,11 @@ def main():
     ap.add_argument("--copy-rate", dest="copy_rate")
     ap.add_argument("--regress", action="store_true")
     args = ap.parse_args()
-    cells = load(args.out, args.arm)
+    try:
+        cells = load(args.out, args.arm)
+    except (OSError, ValueError) as e:
+        print(f"gh1821_geometry_fit: {e}", file=sys.stderr)
+        return 2
     if not cells:
         print(f"gh1821_geometry_fit: no cell with a {args.arm} listing in {args.out}",
               file=sys.stderr)

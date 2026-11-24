@@ -5,12 +5,16 @@ Usage: gh1600_txn_fit.py CELL [CELL ...] [--band B] [--sector 32|64|128] [--rate
                          [--occupancy CAP,TPM] [--staged-rate R|sweep --listed-staged-rate L]
                          [--shared-rate R|sweep [--listed-shared-rate L]] [--pairs]
 
-  CELL      NAME=TSV,EXPLAIN: one site's timing rows (config autotune_calibration_file, every
-            candidate timed by gh1253_cells.sh's `time` cell) and a bench_rank_site.exe stdout
+  CELL      NAME=TSV,EXPLAIN: one site's stock timing rows (config autotune_calibration_file,
+            every candidate timed by gh1253_cells.sh's `time` cell; pass the `.tsv.stock` snapshot
+            when profile timing cells appended to the main TSV) and a bench_rank_site.exe stdout
             listed WITHOUT a transaction rate (model_transaction_rate unset or none): its
             `rank-site: explain` lines (rank, admitted) and `rank-site: kernels` lines (per kernel:
             compute leg c, memory leg m, the fill-weighted excess transactions txn / txn64 /
-            txn128, uncovered accesses, workgroup bytes, block threads).
+            txn128, uncovered accesses, workgroup bytes, block threads). Archive provenance comes
+            solely from the exact `# gh1253_cells: stock snapshot required` comment line: a marked
+            TSV is refused (exit 2, `stock_snapshot_missing` on stderr, no stdout) so profile rows
+            cannot enter a stock fit; pass `.tsv.stock` explicitly for older unmarked mixed TSVs.
   --band    relative measured difference below which a pair counts as tied (default 0.10).
   --sector  the counting unit whose excess is priced (default 32: what the score counts).
   --rate    evaluate this one rate (sectors/s; `none`: no transaction term) instead of sweeping:
@@ -76,15 +80,21 @@ import statistics
 import sys
 
 import bench_output
-
+from gh1442_agreement import STOCK_SNAPSHOT_REQUIRED
 
 
 def replicates(path):
     times = {}
     with open(path) as f:
         for line in f:
-            cols = line.rstrip("\n").split("\t")
-            if len(cols) < 5 or line.startswith("#"):
+            line = line.rstrip("\n")
+            if line.startswith("#"):
+                if line == STOCK_SNAPSHOT_REQUIRED:
+                    raise ValueError(f"{path}: stock_snapshot_missing: pass the separate"
+                                     f" {path}.stock snapshot instead of a mixed TSV")
+                continue
+            cols = line.split("\t")
+            if len(cols) < 5:
                 continue
             try:
                 ms = float(cols[4])
@@ -277,8 +287,13 @@ def main():
         cap, tpm = args.occupancy.split(",")
         occ = (int(cap), int(tpm))
     cells = []
+    summaries = []
     for spec in args.cells:
-        name, cands, bad, reference = load_cell(spec)
+        try:
+            name, cands, bad, reference = load_cell(spec)
+        except (OSError, ValueError) as e:
+            print(f"gh1600_txn_fit: {e}", file=sys.stderr)
+            return 2
         if args.no_coalesced:
             cands = {l: c for l, c in cands.items() if "coal-" not in l}
         if bad:
@@ -311,7 +326,11 @@ def main():
                 print(f"gh1600_txn_fit: {name}: --staged-rate needs the cell's nostg listing as"
                       " NAME=TSV,LISTING,NOSTG_LISTING", file=sys.stderr)
                 return 2
-            _, ref_cands, ref_bad, _ = load_cell(f"{name}={reference[0]},{reference[1]}")
+            try:
+                _, ref_cands, ref_bad, _ = load_cell(f"{name}={reference[0]},{reference[1]}")
+            except (OSError, ValueError) as e:
+                print(f"gh1600_txn_fit: {e}", file=sys.stderr)
+                return 2
             # The same population as the re-scored listing's.
             if args.no_coalesced:
                 ref_cands = {l: c for l, c in ref_cands.items() if "coal-" not in l}
@@ -320,10 +339,13 @@ def main():
                       " legs", file=sys.stderr)
                 return 2
             base = evaluate(ref_cands, None, args.sector, args.band)
-        print(f"{name}: joined={len(cands)} spread={spread:.3f} uncovered_accesses={unc}"
-              f" off_agreement={base[0]:.1f}% decided={base[1]}"
-              + "".join(f" off_{s}={p!r}@{sl:.3f}" for s, (p, sl, _) in base[2].items()))
+        summaries.append(
+            f"{name}: joined={len(cands)} spread={spread:.3f} uncovered_accesses={unc}"
+            f" off_agreement={base[0]:.1f}% decided={base[1]}"
+            + "".join(f" off_{s}={p!r}@{sl:.3f}" for s, (p, sl, _) in base[2].items()))
         cells.append((name, cands, spread, base))
+    for line in summaries:
+        print(line)
 
     def judge(rate, staged=None, shared=None):
         rows = []

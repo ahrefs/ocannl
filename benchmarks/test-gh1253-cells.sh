@@ -18,7 +18,8 @@ exe="$tree/_build/default/benchmarks/runners/ocannl/bench_rank_site.exe"
 mkdir -p "$tree/benchmarks" "$(dirname "$exe")" "$TMP/shims" "$TMP/runs"
 cp "$here/cells.py" "$here/cell_group.py" "$here/config_records.py" "$here/display_safe.py" \
   "$here/strict_json.py" "$here/bench_output.py" "$here/gh1253_gate_compare.py" \
-  "$here/gh1442_agreement.py" "$tree/benchmarks/" || exit 2
+  "$here/gh1442_agreement.py" "$here/gh1600_txn_fit.py" "$here/gh1821_geometry_fit.py" \
+  "$tree/benchmarks/" || exit 2
 git -C "$tree" init -q &&
   git -C "$tree" -c user.name=Fixture -c user.email=fixture@example.invalid \
     -c commit.gpgsign=false commit -q --allow-empty -m "Initialize scratch tree" || exit 2
@@ -54,22 +55,32 @@ preset = "F_preset[bs=cfg cfg-thresh]"
 if arm == "32":
     stock_seed = "F_seeded[stock]"
     profile_seed = "F_seeded[profile]"
-    serial = scenario in (None, "stock-serial-ambiguous")
+    serial = scenario in (None, "stock-serial-ambiguous", "stock-serial-profile")
     preset_untimed = scenario in ("stock-preset-unused", "stock-preset-needed")
     incumbent = "seeded" if scenario in ("stock-seeded-preset", "stock-preset-unused") else "default"
     if os.environ.get("BENCH_TUNE") != "1":
-        print(f'rank-site: explain label="{incumbent}" rank_ms=0.5 admitted=true')
+        def emit(label, rank_ms):
+            print(f'rank-site: explain label="{label}" rank_ms={rank_ms} admitted=true')
+            print(f'rank-site: kernels label="{label}" kernels="c={rank_ms},m=0.0,txn=0,txn64=0,txn128=0,unc=0,wg=0,thr=32"')
+        emit(incumbent, "0.5")
         if serial:
-            print('rank-site: explain label="seeded" rank_ms=0.75 admitted=true')
-        print('rank-site: explain label="W_sketch[control]" rank_ms=1.25 admitted=true')
+            emit("seeded", "0.75")
+        emit("W_sketch[control]", "1.25")
         if preset_untimed:
-            print('rank-site: explain label="W_sketch[second]" rank_ms=1.50 admitted=true')
+            emit("W_sketch[second]", "1.50")
         if os.environ.get("BENCH_PICK") == "1":
             seeded_label = profile_seed if "profile" in opts else "none"
             print(f'rank-site: pick label="seeded" seeded_label="{seeded_label}"')
         sys.exit()
     if "profile" in opts:
-        rows = [(preset_timed_as, preset_digest, "0.05"), (profile_seed, "55555555/eeeeeeee", "0.125")]
+        if scenario == "stock-serial-profile":
+            rows = [("baseline", "22222222/bbbbbbbb", "0.05"),
+                    ("W_sketch[control]", "11111111/aaaaaaaa", "0.05"),
+                    (profile_seed, "55555555/eeeeeeee", "0.125")]
+        else:
+            rows = [(preset_timed_as, preset_digest, "0.05"),
+                    (profile_seed, "55555555/eeeeeeee", "0.125"),
+                    ("W_sketch[control]", "11111111/aaaaaaaa", "1.25")]
     elif scenario in ("stock-preset", "stock-seeded-preset", "stock-preset-conflict") or preset_untimed:
         if opts.get("autotune_log_seeding") == "true":
             plan = stock_seed if scenario == "stock-preset-unused" else preset
@@ -80,19 +91,28 @@ if arm == "32":
             print("autotune-seeding: preset-digest", preset_digest, file=sys.stderr)
         if preset_untimed:
             rows = [(stock_seed, "66666666/ffffffff", "0.50"),
-                    ("W_sketch[second]", "77777777/aaaaaaaa", "1.50")]
+                    ("W_sketch[second]", "77777777/aaaaaaaa", "1.50"),
+                    ("W_sketch[control]", "11111111/aaaaaaaa", "1.25")]
         else:
             ms = "0.25" if Path.cwd().name.endswith("_r2") else "0.50"
             rows = [(preset_timed_as, preset_digest, ms),
-                    (preset_timed_as, "44444444/dddddddd", "0.10")]
+                    (preset_timed_as, "44444444/dddddddd", "0.10"),
+                    ("W_sketch[control]", "11111111/aaaaaaaa", "1.25")]
+    elif scenario == "stock-serial-profile":
+        if opts.get("autotune_log_seeding") == "true":
+            print("autotune-seeding: plan", stock_seed, file=sys.stderr)
+        r2 = Path.cwd().name.endswith("_r2")
+        rows = [("baseline", "22222222/bbbbbbbb", "0.40" if r2 else "0.50"),
+                (stock_seed, "66666666/ffffffff", "0.75"),
+                ("W_sketch[control]", "11111111/aaaaaaaa", "1.00" if r2 else "1.25")]
     else:
         if opts.get("autotune_log_seeding") == "true":
             print("autotune-seeding: plan", stock_seed, file=sys.stderr)
         rows = [("baseline", "22222222/bbbbbbbb", "0.50"),
-                (stock_seed, "66666666/ffffffff", "0.75")]
+                (stock_seed, "66666666/ffffffff", "0.75"),
+                ("W_sketch[control]", "11111111/aaaaaaaa", "1.25")]
         if scenario == "stock-serial-ambiguous":
             rows.append((profile_seed, "55555555/eeeeeeee", "0.25"))
-    rows.append(("W_sketch[control]", "11111111/aaaaaaaa", "1.25"))
     with open(opts["autotune_calibration_file"], "a") as tsv:
         for name, digest, ms in rows:
             print(opts["backend"], digest, "rs_stub", name, ms, "", 1, 4, 8, "false", "false",
@@ -352,5 +372,122 @@ SERIAL
     "$TMP/runs/needed/out/${site}_agreement.txt"
   check 'the timed leaves still produce a score comparison' \
     grep -qF 'shipped: joined=2 ' "$TMP/runs/needed/out/${site}_agreement.txt"
+fi
+if harness_leg '6: stock fits use .tsv.stock and agreement refuses truncated stock snapshots'; then
+  site=rank_wgrad_1x32x32x32
+  stock_sites='SITES=wgrad:1,32,32,32'
+  drive "$SRC" mixed-fits COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" \
+    STUB_MUTATION=stock-serial-profile PICK_PROFILES=reproducible TXN_RATE=1e12
+  check 'mixed stock run with TXN_RATE and profile timing cell succeeds' test "$got" = 0
+  mixed_out="$TMP/runs/mixed-fits/out"
+  check 'stock agreement reads baseline from .tsv.stock rather than the faster profile row' \
+    grep -qxF "  shipped: 'default' measured_ms=0.400000 rank_ms=0.500000 admitted=true" \
+      "$mixed_out/${site}_agreement.txt"
+  check 'stock agreement reads W_sketch from .tsv.stock rather than the faster profile row' \
+    grep -qxF "  shipped: 'W_sketch[control]' measured_ms=1.000000 rank_ms=1.250000 admitted=true" \
+      "$mixed_out/${site}_agreement.txt"
+  check 'explicit profile pick still joins its profile timing row' \
+    grep -qF "reproducible: pick label='seeded' seeded_label='F_seeded[profile]' row='F_seeded[profile]' measured_ms=0.125000" \
+      "$mixed_out/${site}_agreement.txt"
+  check 'gh1253_cells passes .tsv.stock to gh1600_txn_fit (all 3 stock candidates join)' \
+    grep -qF 'wgrad_1x32x32x32: joined=3 spread=1.000 ' "$mixed_out/${site}_txn.txt"
+  check 'gh1600_txn_fit driver output keeps stock median for default' \
+    grep -qF "  wgrad_1x32x32x32: 'default' median_ms=0.450000 " "$mixed_out/${site}_txn.txt"
+  check 'gh1600_txn_fit driver output keeps stock median for W_sketch[control]' \
+    grep -qF "  wgrad_1x32x32x32: 'W_sketch[control]' median_ms=1.125000 " "$mixed_out/${site}_txn.txt"
+
+  txn_fit="$tree/benchmarks/gh1600_txn_fit.py"
+  geo_fit="$tree/benchmarks/gh1821_geometry_fit.py"
+  agreement="$tree/benchmarks/gh1442_agreement.py"
+
+  got=0
+  python3 "$txn_fit" --rate 1e12 --show \
+    "wgrad_1x32x32x32=$mixed_out/$site.tsv,$mixed_out/${site}_notxn.out" \
+    >"$TMP/runs/mixed-fits/txn-mixed.out" 2>"$TMP/runs/mixed-fits/txn-mixed.err" || got=$?
+  check 'gh1600_txn_fit refuses a marked mixed TSV directly' test "$got" = 2
+  check 'gh1600_txn_fit refusal names stock_snapshot_missing' \
+    grep -qF 'stock_snapshot_missing:' "$TMP/runs/mixed-fits/txn-mixed.err"
+  check 'gh1600_txn_fit refusal emits no stdout' test ! -s "$TMP/runs/mixed-fits/txn-mixed.out"
+
+  got=0
+  python3 "$txn_fit" --rate 1e12 --show \
+    "wgrad_1x32x32x32=$mixed_out/$site.tsv.stock,$mixed_out/${site}_notxn.out" \
+    >"$TMP/runs/mixed-fits/txn-stock.out" 2>"$TMP/runs/mixed-fits/txn-stock.err" || got=$?
+  check 'gh1600_txn_fit succeeds on .tsv.stock' test "$got" = 0
+  check 'gh1600_txn_fit on .tsv.stock matches the driver output byte for byte' \
+    cmp "$mixed_out/${site}_txn.txt" "$TMP/runs/mixed-fits/txn-stock.out"
+
+  got=0
+  python3 "$geo_fit" "$mixed_out" \
+    >"$TMP/runs/mixed-fits/geo-stock.out" 2>"$TMP/runs/mixed-fits/geo-stock.err" || got=$?
+  check 'gh1821_geometry_fit succeeds on a mixed archive using .tsv.stock' test "$got" = 0
+  check 'gh1821_geometry_fit reports stock agreement and spread' \
+    grep -qxF "F ${site}: agreement=100.0% spread=1.000 argmin='default'@1.000 admitted_argmin@1.000 pass=true" \
+      "$TMP/runs/mixed-fits/geo-stock.out"
+
+  check 'gh1600_txn_fit and gh1821_geometry_fit read the exact stock replicate sets' \
+    python3 - "$tree/benchmarks" "$mixed_out" "$site" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import gh1600_txn_fit
+import gh1821_geometry_fit
+
+out, site = sys.argv[2], sys.argv[3]
+want = {"default": [0.5, 0.4], "seeded": [0.75, 0.75], "W_sketch[control]": [1.25, 1.0]}
+_, cands, bad, _ = gh1600_txn_fit.load_cell(f"{site}={out}/{site}.tsv.stock,{out}/{site}_notxn.out")
+assert not bad, bad
+got_txn = {k: v["times"] for k, v in cands.items()}
+assert got_txn == want, f"gh1600 replicates: {got_txn!r} != {want!r}"
+cells = gh1821_geometry_fit.load(out, "shipped")
+assert len(cells) == 1, cells
+got_geo = {r["label"]: r["times"] for r in cells[0][2]}
+assert got_geo == want, f"gh1821 replicates: {got_geo!r} != {want!r}"
+PY
+
+  geo_partial="$TMP/runs/mixed-fits/geo-partial"
+  mkdir -p "$geo_partial"
+  cp "$mixed_out/$site.tsv" "$mixed_out/${site}_shipped.out" "$geo_partial/"
+  got=0
+  python3 "$geo_fit" "$geo_partial" \
+    >"$TMP/runs/mixed-fits/geo-partial.out" 2>"$TMP/runs/mixed-fits/geo-partial.err" || got=$?
+  check 'gh1821_geometry_fit refuses a partial archive missing .tsv.stock' test "$got" = 2
+  check 'gh1821_geometry_fit refusal names stock_snapshot_missing' \
+    grep -qF 'stock_snapshot_missing:' "$TMP/runs/mixed-fits/geo-partial.err"
+  check 'gh1821_geometry_fit refusal emits no stdout' test ! -s "$TMP/runs/mixed-fits/geo-partial.out"
+
+  trunc_dir="$(cd "$TMP" && pwd)/runs/mixed-fits/trunc-archive"
+  mkdir -p "$trunc_dir"
+  cp "$mixed_out/$site.tsv" "$mixed_out/${site}_time.err" "$mixed_out/${site}_time_r2.err" "$trunc_dir/"
+  grep -vF 'F_seeded[stock]' "$mixed_out/$site.tsv.stock" >"$trunc_dir/$site.tsv.stock"
+  got=0
+  python3 "$agreement" "$mixed_out/$site.tsv" "shipped=$mixed_out/${site}_shipped.out" \
+    --stock-tsv "$trunc_dir/$site.tsv.stock" \
+    --census "$mixed_out/${site}_time.err" --census "$mixed_out/${site}_time_r2.err" \
+    >"$TMP/runs/mixed-fits/trunc-direct.out" 2>"$TMP/runs/mixed-fits/trunc-direct.err" || got=$?
+  check 'direct agreement fails on a truncated stock snapshot missing F_seeded[stock]' test "$got" = 1
+  check 'direct agreement diagnoses the missing seeded incumbent' \
+    grep -qxF "shipped: seeded_plan_unmatched label='seeded' plan='F_seeded[stock]'" \
+      "$TMP/runs/mixed-fits/trunc-direct.out"
+  check 'truncated snapshot still keeps remaining candidates on stock timings' \
+    grep -qxF "  shipped: 'W_sketch[control]' measured_ms=1.000000 rank_ms=1.250000 admitted=true" \
+      "$TMP/runs/mixed-fits/trunc-direct.out"
+
+  drive "$SRC" trunc-replay COMPARE_AUTO_GATE=0 "$stock_sites" TIME_REPEATS=1 \
+    EXPLAIN_ONLY="$trunc_dir" STUB_MUTATION=stock-serial-profile
+  check 'EXPLAIN_ONLY fails on a truncated stock snapshot missing F_seeded[stock]' test "$got" = 1
+  check 'EXPLAIN_ONLY diagnoses the missing seeded incumbent' \
+    grep -qxF "shipped: seeded_plan_unmatched label='seeded' plan='F_seeded[stock]'" \
+      "$TMP/runs/trunc-replay/out/${site}_agreement.txt"
+
+  : >"$TMP/runs/mixed-fits/empty.tsv.stock"
+  got=0
+  python3 "$agreement" "$mixed_out/$site.tsv" "shipped=$mixed_out/${site}_shipped.out" \
+    --stock-tsv "$TMP/runs/mixed-fits/empty.tsv.stock" \
+    --census "$mixed_out/${site}_time.err" --census "$mixed_out/${site}_time_r2.err" \
+    >"$TMP/runs/mixed-fits/empty-stock.out" 2>"$TMP/runs/mixed-fits/empty-stock.err" || got=$?
+  check 'direct agreement refuses an empty stock snapshot' test "$got" = 2
+  check 'empty stock snapshot names no calibration rows on stderr' \
+    grep -qF 'no calibration rows in ' "$TMP/runs/mixed-fits/empty-stock.err"
+  check 'empty stock snapshot emits no stdout' test ! -s "$TMP/runs/mixed-fits/empty-stock.out"
 fi
 finish
