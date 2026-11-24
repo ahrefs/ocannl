@@ -5,7 +5,6 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module SC = Ir.Schedule_cache
 module SO = Ir.Schedule_outcome
-module Tn = Ir.Tnode
 
 type segment = { kind : Sched.segment_kind; units : int; ops : SC.saved_schedule }
 [@@deriving sexp, equal]
@@ -247,9 +246,9 @@ let validate_ops ~location (census : canonical_census) (ops : SC.saved_schedule)
   let op_names = Array.of_list_map ops ~f:saved_optop_name in
   let minted_roles_by_op : SC.mint_role list array = Array.create ~len:(List.length ops) [] in
   let minted_keys = ref (Set.empty (module Minted_key)) in
-  let record_minted idx role =
-    minted_keys := Set.add !minted_keys (idx, role);
-    minted_roles_by_op.(idx) <- minted_roles_by_op.(idx) @ [ role ]
+  let record_minted idx roles =
+    minted_roles_by_op.(idx) <- roles;
+    List.iter roles ~f:(fun role -> minted_keys := Set.add !minted_keys (idx, role))
   in
   let fail ~op_index ~op_name ~anchor ~detail =
     refuse_anchor { location; op_index = Some op_index; op_name = Some op_name; anchor; detail }
@@ -300,68 +299,48 @@ let validate_ops ~location (census : canonical_census) (ops : SC.saved_schedule)
           in
           fail ~op_index ~op_name ~anchor ~detail
   in
-  let check_tn ~op_index ~op_name ~field idx : Tn.t =
+  let check_tn ~op_index ~op_name ~field idx : unit =
     if idx < 0 || idx >= census.n_tns then
       fail ~op_index ~op_name
         ~anchor:(Printf.sprintf "%s (tn %d)" field idx)
         ~detail:
           (Printf.sprintf "tensor node %d does not exist (fresh lowering has %d tensor node(s))" idx
              census.n_tns)
-    else SC.tn_of_ref census.canon idx
   in
   List.iteri ops ~f:(fun op_index saved_op ->
       let op_name = saved_optop_name saved_op in
       let sym field sref = check_sym ~op_index ~op_name ~field sref in
       let tn field idx = check_tn ~op_index ~op_name ~field idx in
-      match saved_op with
-      | SC.Split { axis; _ } ->
-          sym "axis" axis;
-          record_minted op_index SC.Split_outer;
-          record_minted op_index SC.Split_inner
-      | Swap { outer; inner } ->
+      (match saved_op with
+      | SC.Split { axis; _ }
+      | Retype { axis; _ }
+      | Unroll { axis; _ }
+      | Pad { axis; _ }
+      | Partition { axis; _ } ->
+          sym "axis" axis
+      | Swap { outer; inner } | Coalesce { outer; inner } ->
           sym "outer" outer;
           sym "inner" inner
-      | Retype { axis; _ } | Unroll { axis; _ } | Pad { axis; _ } -> sym "axis" axis
-      | Partition { axis; breakpoints } ->
-          sym "axis" axis;
-          for j = 0 to List.length breakpoints do
-            record_minted op_index (SC.Partition_seg j)
-          done
-      | Coalesce { outer; inner } ->
-          sym "outer" outer;
-          sym "inner" inner;
-          record_minted op_index SC.Coalesce_merged
       | Stage { source; tile_loops; _ } ->
-          ignore (tn "source" source : Tn.t);
+          tn "source" source;
           List.iteri tile_loops ~f:(fun k sref -> sym (Printf.sprintf "tile_loops[%d]" k) sref)
       | Privatize { target; over; _ } ->
-          ignore (tn "target" target : Tn.t);
+          tn "target" target;
           sym "over" over
-      | Expand_zero { tn = tn_idx } ->
-          let node = tn "tn" tn_idx in
-          let rank = Array.length (Lazy.force node.Tn.dims) in
-          for j = 0 to rank - 1 do
-            record_minted op_index (SC.Expand_axis j)
-          done
+      | Expand_zero { tn = tn_idx } -> tn "tn" tn_idx
       | Tensorize { i; j; k; _ } ->
           sym "i" i;
           sym "j" j;
-          sym "k" k;
-          record_minted op_index SC.Tensorize_lane
-      | Fuse_epilogue { target; _ } -> ignore (tn "target" target : Tn.t)
+          sym "k" k
+      | Fuse_epilogue { target; _ } -> tn "target" target
       | Split_reduce { axis; target; _ } ->
           sym "axis" axis;
-          let node = tn "target" target in
-          let rank = Array.length (Lazy.force node.Tn.dims) in
-          record_minted op_index SC.Split_reduce_block;
-          record_minted op_index SC.Split_reduce_inner;
-          for j = 0 to rank - 1 do
-            record_minted op_index (SC.Split_reduce_combine j)
-          done
-      | Fold_mma { query; _ } ->
-          sym "query" query;
-          record_minted op_index SC.Fold_mma_lane;
-          record_minted op_index SC.Fold_mma_block)
+          tn "target" target
+      | Fold_mma { query; _ } -> sym "query" query);
+      (* Share [Schedule_cache.minted_roles_of_op] with [of_saved] so pre-replay validation cannot
+         drift from the production decoder's minted-role table (gh-ocannl-2454). Every tensor-node
+         anchor was checked above, so [tn_of_ref] inside [minted_roles_of_op] cannot raise here. *)
+      record_minted op_index (SC.minted_roles_of_op census.canon saved_op))
 
 let validate_and_resolve_ops ~location ~static_indices (opt : LL.optimized)
     (ops : SC.saved_schedule) : Sched.schedule =

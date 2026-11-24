@@ -29,3 +29,9 @@ consumed loop anchor referenced after Split is refused by name: true
 stale Expand_zero anchor with no Zero_out in segment is refused by name: true
 refused replay after segment 0 live precondition leaves placements and traced_store untouched: true
 refused replay after a mutating Split_reduce prelude leaves the caller's traced_store untouched: true
+Schedule_cache.minted_roles_of_op matches of_saved and to_saved for every saved_optop: true
+unminted role boundary is refused identically by of_saved and Winner_fixture.validate: true
+Schedule_cache.minted_roles_of_op raises typed tn_of_ref refusal on out-of-range nodes: true
+Winner_fixture.validate still refuses out-of-range tn anchors by name before role lookup: true
+Schedule_cache.to_saved rejects a hand-built op whose minted symbol count disagrees with its roles: true
+persisted mint_role values resolve to their named live op fields independently of role order: true
