@@ -1528,8 +1528,15 @@ files.
   gh-ocannl-2412) runs on every backend with no key and refuses any `Mod (_, K)` lane operand with
   fixed integer `K > Ops.vec_unop_lanes` of the rendered precision (pre- or post-simplification,
   naming the node, `K`, the precision and its lane count); `lane_bounds_static` pins it across
-  `Ops.scalar_precs`, scopes, projections, fissioned segments and backend `compute_prec`. The
-  float rows are also protected by gh-ocannl-1788's exact-collapse rule. The integer scope
+  `Ops.scalar_precs`, scopes, projections, fissioned segments and backend `compute_prec`.
+  Buffer stores and the lane check share `Low_level.rendered_store_prec` (gh-ocannl-2437).
+  A local with an RNG write takes the scope's storage precision by the renderer's scope census,
+  which pins its declaration and reads along with its writes.
+  `scope_collapse_rounding` fixes a packed draw's `Where` condition at single while varying the
+  store between single and half. Disabling `rng_collapsible` drops the scope in the half row
+  and loses a subtraction residual on cc when half computes in single. The materialized packed
+  draw and early-rounding control show when that difference is observable.
+  The older float rows are also protected by gh-ocannl-1788's exact-collapse rule. The integer scope
   exactness check (gh-ocannl-1884) independently retains the uint16 draw across widths. The
   isolated controls for these rows and for the render-time RNG check are in
   `test/operations/verdict_ratchet_controls.md`.
@@ -1555,7 +1562,7 @@ files.
   `compute_prec`. The simplifier cannot ask which applies: numerics are never in the lowered code
   (gh-ocannl-568), so the scope stays on every backend and the renderer decides what it costs.
   The value renders at that storage precision too, as a materialized copy's does
-  (`renders_at_store_prec`), and not at `compute_prec` first (gh-ocannl-1956): through f32, an f64
+  (`Low_level.rendered_store_prec`), and not at `compute_prec` first (gh-ocannl-1956): through f32, an f64
   source just off an f32 tie rounded twice, so `1.125 + 2^-40` read 1 virtual and 1.25 materialized
   in fp8, the double rounding gh-ocannl-648 removed from `double_to_fp8`. Only an f64 source can
   show it, and only where `compute_prec` widens a cast's precision, which among the backends with
