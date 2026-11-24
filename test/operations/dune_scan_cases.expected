@@ -1,3 +1,10 @@
+an unrelated library edit keeps the sweep inventory identical: true
+regrouping and reordering policy deps keep the sweep inventory identical: true
+adding a policy member changes the sweep inventory: true
+changing a policy member's condition changes the sweep inventory: true
+the sweep inventory preserves an escaped pform in a policy condition: true
+a policy alias indirection is refused by the sweep inventory: true
+a policy alias spelling the sweep would miss is refused by the inventory: true
 ok: a test declaring the dep
 ok: a test omitting the dep
 ok: a test with deps but not this one

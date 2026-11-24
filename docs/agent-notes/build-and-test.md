@@ -4044,6 +4044,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 
 ## Aliases and goldens
 
+- The sweep harness's synthetic Git history takes its policy alias from the generated
+  `sweep_policy_inventory.sexp` (gh-ocannl-2449). An edit to `test/operations/dune` rechecks the
+  inventory; Dune reuses the harness action when its input bytes are identical. Direct membership
+  or an alias's condition changes those bytes and invalidates the action.
+
 - Backend-disabled targets from `affected` or the codegen inventory are handled by
   `test-run.sh run` and `start` (gh-ocannl-2161): every skipped operand is printed,
   counted in the digest and stored in `disabled-aliases` with `disabled-alias-count`.

@@ -45,6 +45,73 @@ let support_source = "test/support/test_utils.ml"
 let support_module = "Test_utils"
 let policy_module = [ "Ir"; "Numerics" ]
 
+(** The sweep fixture's inventory of the root [test/operations/dune] policy alias. It reads
+    top-level [(alias (name policy-invariance) …)] stanzas, their direct literal
+    [(alias runtest-NAME)] deps (letters, digits, underscores and hyphens) and their optional
+    [(enabled_if …)]. Other stanzas, comments and transitive dependencies are outside this
+    projection, as are alias definitions in includes or subdirectories. Unsupported fields or deps
+    in a selected stanza fail. The result is Dune text so the sweep's historical-ref admission check
+    can read the fixture as a committed file. *)
+let sweep_inventory content =
+  let name_line = " (name " ^ family_alias ^ ")" in
+  let refuse message = failwith ("sweep policy inventory: " ^ message) in
+  let spelling raw =
+    String.sub content ~pos:raw.Dune.raw_start ~len:(raw.Dune.raw_stop - raw.Dune.raw_start)
+  in
+  (* Preserve Dune's quoted atoms, including escapes that make a pform literal. *)
+  let rec render raw =
+    match raw.Dune.raw_atom with
+    | Some _ -> spelling raw
+    | None -> "(" ^ String.concat ~sep:" " (List.map raw.Dune.raw_children ~f:render) ^ ")"
+  in
+  let selected =
+    List.filter (Dune.spelled_stanzas content) ~f:(fun (stanza, _) ->
+        Option.equal String.equal (Dune.alias_stanza_name stanza) (Some family_alias))
+  in
+  (* sweep.sh looks for the literal name line at a committed revision. If the live alias loses that
+     spelling, canonicalizing the fixture must not hide the resulting refusal. *)
+  if
+    (not (List.is_empty selected))
+    && not
+         (List.exists selected ~f:(fun (_, raw) ->
+              spelling raw |> String.split_lines |> List.exists ~f:(String.equal name_line)))
+  then refuse ("missing the literal name line " ^ name_line);
+  let members =
+    List.concat_map selected ~f:(fun (stanza, raw) ->
+        let fields = match stanza with Sexp.List (_ :: fields) -> fields | _ -> assert false in
+        let condition =
+          List.filter_map
+            (List.zip_exn fields (List.tl_exn raw.Dune.raw_children))
+            ~f:(function
+              | Sexp.List (Sexp.Atom ("name" | "deps") :: _), _ -> None
+              | Sexp.List [ Sexp.Atom "enabled_if"; _ ], raw_field -> Some (render raw_field)
+              | field, _ -> refuse ("unsupported field " ^ Sexp.to_string_mach field))
+          |> function
+          | [] -> ""
+          | [ condition ] -> condition
+          | _ -> refuse "expected at most one enabled_if"
+        in
+        match Dune.field stanza "deps" with
+        | None -> refuse "missing deps"
+        | Some deps ->
+            List.map deps ~f:(function
+              | Sexp.List [ Sexp.Atom "alias"; Sexp.Atom name ]
+                when String.is_prefix name ~prefix:"runtest-"
+                     && String.for_all name ~f:(fun c ->
+                         Char.is_alphanum c || Char.equal c '_' || Char.equal c '-') ->
+                  (condition, name)
+              | dep -> refuse ("unsupported dep " ^ Sexp.to_string_mach dep)))
+  in
+  List.sort_and_group members ~compare:(fun (a, _) (b, _) -> String.compare a b)
+  |> List.map ~f:(fun group ->
+      let condition, _ = List.hd_exn group in
+      let deps = List.map group ~f:snd |> List.dedup_and_sort ~compare:String.compare in
+      let condition = if String.is_empty condition then "" else " " ^ condition ^ "\n" in
+      "(alias\n" ^ name_line ^ "\n" ^ condition ^ " (deps\n"
+      ^ String.concat ~sep:"\n" (List.map deps ~f:(fun name -> "  (alias " ^ name ^ ")"))
+      ^ "))\n")
+  |> String.concat
+
 (** The values of [test_utils.ml] whose definitions reach [Ir.Numerics], directly or through another
     of its values, each as the path a test names it by below the module ([with_policy],
     [with_fp16_auto], ...). *)

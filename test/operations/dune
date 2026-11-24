@@ -16649,8 +16649,8 @@
   ../../tools/sweep-supervisor.sh
   ; shared floor/native runtime-refusal signatures and matcher (gh-ocannl-2219)
   ../../tools/environment-refusals.sh
-  ; the stanza whose `@policy-invariance` alias admits the policy units (gh-ocannl-1104)
-  dune
+  ; Dune rechecks the inventory on stanza edits. Only changed bytes invalidate this action.
+  sweep_policy_inventory.sexp
   sweep_harness.sh
   sweep_remote_fixture.sh
   ../../scripts/harness-support.sh
@@ -16770,6 +16770,23 @@
   (diff
    sweep_owner_scan_refusal_control.expected
    sweep_owner_scan_refusal_control.actual)))
+
+(executable
+ (name sweep_policy_inventory)
+ (modules sweep_policy_inventory)
+ (libraries stdio test_scan))
+
+(rule
+ ; ocannl-backend: none -- projects policy alias membership from the Dune file.
+ (target sweep_policy_inventory.sexp)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{exe:sweep_policy_inventory.exe} %{dep:dune}))))
 
 ; gh-ocannl-929: the gradient half of that contract -- grad_update, gradient accumulation across
 ; extents, and the Rev_sides scatter executed and refused.
