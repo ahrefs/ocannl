@@ -824,8 +824,13 @@ the scan reached at least the 12 shell scripts this repository is known to have:
 the scan reached the session hook and the suite runner: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
-  [scanner-refusal:918cb75e57498280d25cb0783c645841] context is unsupported
-  [scanner-refusal:704f5ea1abc0485c63711f58214bf1bc] shell execution context
+  [scanner-refusal:5a33b3090d0b22b64b0dcfd7eb75c717] dollar-quoted heredoc delimiter
+  [scanner-refusal:5a100f6085e18fab300f003899e342de] unterminated outer heredoc
+  [scanner-refusal:2c41b5db925a6aa0945ff98d5c2c7625] continued unquoted heredoc
+  [scanner-refusal:261986b232e3c0d320e14e162a45fd02] multiline heredoc delimiter
+  [scanner-refusal:2af3620c848715087c00635d863574a5] innermost open construct
+  [scanner-refusal:d7a6bb6f6a525cf9994430bc39b6954e] closes no subshell
+  [scanner-refusal:4c983091dfcac75f21cacf41beaa556d] still open at
   [scanner-refusal:bf12194d221f2281dedd171e418892fa] heredoc fixture
   [scanner-refusal:f23aa9a38a34c91eadc946f44d66d28a] unsupported shell lexical
   [scanner-refusal:d06f79ba9c87a43873089eb160369d9c] unsupported shell execution

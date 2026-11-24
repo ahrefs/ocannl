@@ -783,6 +783,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   returned by helpers stay outside literal extraction. The recognized wrapper forms are defined
   in `test/support/refusal_control_scan.ml`. Exact extraction exemptions,
   when one is deliberate, are stale-checked.
+  An accumulating scanner can construct a literal-format refusal with
+  `Refusal_control_manifest.fail` and keep it alongside its findings until it reports them
+  (gh-ocannl-2453). Preserve the format when adding location or other context to the rendered
+  message. `check_failures` observes the actual formats only after an exact comparison with the
+  fixture's expected list. The floating-point pin scan's wrong-diagnostic control puts the
+  expected text in an argument of a different refusal to exercise this distinction.
+  The command-line and backend golden-family scans, stanza order and the shell-context reader use
+  the same comparison. The bin-smoke graph and workflow timeouts retain their existing
+  result and subprocess checks for accumulated explanations. The render-decline inventory
+  compares typed problem kinds. Shell shebangs are checked by the table of rendered parse results,
+  and interpreter availability and parse output come from the host. These boundaries are recorded
+  in the scanner headers.
   Four shapes such a scan gets wrong quietly, all found in review, and each is a member of a genre
   rather than a one-off. **Identifiers**: a scan that matches a function through the module it
   belongs to must collect the module's local names from BOTH grammars — OCaml spells binding,

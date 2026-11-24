@@ -20,6 +20,14 @@ Synthetic controls:
   a provenance target outside the rule directory is refused
   an unknown recorded-on backend is refused
   a provenance sentinel outside a comment is refused
+  a member naming two backend positions is refused
+  an expected atom reading the backend twice is refused
+  an expected atom mixing a backend read with another pform is refused
+  an unreadable dune file is refused
+  two markers naming one member are refused
+  a marker naming a missing member is refused
+  a marker recording the member on its own backend is refused
+  a corpus without any backend family is refused
 
 Provenance-marker refusal diagnostics exercised by those controls:
   outside every stanza -- test/synthetic/dune: found 1 `ocannl-golden-recorded-on:` occurrence(s) in the file but only 0 inside dune stanzas
@@ -38,5 +46,22 @@ Provenance-marker refusal diagnostics exercised by those controls:
 backend golden families are complete, self-certifying, and provenance markers are valid: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:6e3c13cde68fdb8c13e4fe2e78b895d7] one backend position
+  [scanner-refusal:f9d6efa26b74daefa5557b7b00f8a682] expected atom
+  [scanner-refusal:5d618d2854245d7a364a03971b3a1b0d] expected atom
+  [scanner-refusal:de53562eca7cfdcf8e2a137a77d44724] <member>.expected
+  [scanner-refusal:8b581264b8bd140e3985e9f9bced6638] provenance target must
+  [scanner-refusal:1c96d667ded2ef1c95b7780e45d29789] recorded-on backend
+  [scanner-refusal:5ac098d53c612962b81e3afe44054bdd] provenance marker has
+  [scanner-refusal:43131f24bfb3bb850487bf36adc98bb5] provenance marker reason
+  [scanner-refusal:9dd518b47eeaa289c03164634c04f299] more than one
+  [scanner-refusal:b488d4e27ab1c2ebf5ac694c7c7095fa] that references family
+  [scanner-refusal:8a4d6f9fcf6429492277e482bfa47424] occurrence(s in the
+  [scanner-refusal:6620d38a048422186913091223d863d9] parse dune structure
+  [scanner-refusal:1407376649d9a0054747b260309b94b2] provenance marker names
+  [scanner-refusal:8dd5f5e0febece68bce7c390ae336362] provenance marker target
+  [scanner-refusal:dfe88f31831f61d09b8eecbf1fe2cd36] provenance marker records
+  [scanner-refusal:69adad8dff9bfd72ab49a01d9ea8b4a8] contain exactly certification
+  [scanner-refusal:fb5ea0107d1672c9e7c66baa76f18f9a] backend golden family
   [scanner-refusal:2fcd4d491da746e829dc7cec63905091] self-certifying and provenance
 End of synthetic controls.

@@ -63,6 +63,9 @@ open Base
 open Stdio
 module Scan = Test_scan.Dune_stanza_scan
 module Inventory = Test_scan.Source_inventory
+module Refusals = Test_scan.Refusal_control_manifest
+
+let source = "command_line_length_scan.ml"
 
 (** The bound at which a spawned command line fails: 4,767 characters short of Windows' 32,767, so a
     rule fails on Linux while the repository has a few hundred paths of growth left. *)
@@ -145,7 +148,7 @@ let sum_results results =
 
 let unbounded_dependency form =
   Error
-    (Printf.sprintf
+    (Refusals.fail
        "`%s` expands to a dependency set that grows with the repository, including the generated \
         files dune's globs also match, so no reading of the source tree bounds it"
        (Sexp.to_string form))
@@ -159,8 +162,8 @@ let rec entry_cost st ~cwd ~pform entry =
       | [ Scan.Pform p ] -> Result.map (pform st ~cwd p) ~f:(( + ) 1)
       | _ ->
           Error
-            (Printf.sprintf "dependency `%s` mixes a pform with text, which this scan cannot bound"
-               a))
+            (Refusals.fail "dependency `%s` mixes a pform with text, which this scan cannot bound" a)
+      )
   | Sexp.List (Sexp.Atom name :: entries) when String.is_prefix name ~prefix:":" ->
       sum_results (List.map entries ~f:(entry_cost st ~cwd ~pform))
   | Sexp.List [ Sexp.Atom "file"; Sexp.Atom a ] when not (has_pform a) ->
@@ -170,7 +173,7 @@ let rec entry_cost st ~cwd ~pform entry =
       unbounded_dependency entry
   | _ ->
       Error
-        (Printf.sprintf "dependency form `%s` is one this scan cannot bound" (Sexp.to_string entry))
+        (Refusals.fail "dependency form `%s` is one this scan cannot bound" (Sexp.to_string entry))
 
 let deps_of st = Option.value (Scan.field st.sexp "deps") ~default:[]
 
@@ -188,8 +191,8 @@ let field_paths st ~cwd name =
            (module Int)
            atoms
            ~f:(function Sexp.Atom a -> path_cost ~cwd (resolve st.dir a) + 1 | _ -> 0))
-  | Some _ -> Error (Printf.sprintf "`%%{%s}` names a target spelled with a pform" name)
-  | None -> Error (Printf.sprintf "`%%{%s}` in a stanza with no `(%s ...)` field" name name)
+  | Some _ -> Error (Refusals.fail "`%%{%s}` names a target spelled with a pform" name)
+  | None -> Error (Refusals.fail "`%%{%s}` in a stanza with no `(%s ...)` field" name name)
 
 (* The judged reads a command line used, for the stale-row check. *)
 let reads_used = Hash_set.create (module String)
@@ -212,7 +215,7 @@ let rec pform_cost st ~cwd p =
         | Some names, _ | None, Some names -> List.concat_map names ~f:Scan.atoms
         | None, None -> []
       in
-      if List.is_empty names then Error "`%{test}` in a stanza that names no test"
+      if List.is_empty names then Error (Refusals.fail "`%%{test}` in a stanza that names no test")
       else
         Ok
           (List.fold names ~init:0 ~f:(fun acc n ->
@@ -229,14 +232,14 @@ let rec pform_cost st ~cwd p =
           Ok bound
       | None ->
           Error
-            (Printf.sprintf
+            (Refusals.fail
                "`%%{%s}` puts the contents of `%s` on the command line, a file `judged_reads` does \
                 not bound"
                p path))
   | name, None when Option.is_some (named_dep st name) ->
       sum_results
         (List.map (Option.value_exn (named_dep st name)) ~f:(entry_cost st ~cwd ~pform:pform_cost))
-  | _ -> Error (Printf.sprintf "`%%{%s}` is a pform this scan has no bound for" p)
+  | _ -> Error (Refusals.fail "`%%{%s}` is a pform this scan has no bound for" p)
 
 let atom_cost st ~cwd atom =
   let* text =
@@ -250,7 +253,7 @@ let atom_cost st ~cwd atom =
 type spawn = {
   stanza : stanza;
   command : string;
-  cost : (int, string) Result.t;
+  cost : (int, Refusals.refusal) Result.t;
   limit : int * int * string;  (** where it fails, the cap that limit keeps clear of, and whose *)
 }
 
@@ -267,14 +270,14 @@ let spawn_cost st ~cwd sexp =
             | Sexp.Atom a -> atom_cost st ~cwd a
             | form ->
                 Error
-                  (Printf.sprintf "argument `%s` is a list, which this scan cannot bound"
+                  (Refusals.fail "argument `%s` is a list, which this scan cannot bound"
                      (Sexp.to_string form))))
       in
       Ok (List.sum (module Int) costs ~f:Fn.id + install_path_allowance)
   | Sexp.List [ Sexp.Atom ("system" | "bash"); Sexp.Atom line ] ->
       Result.map (atom_cost st ~cwd line) ~f:(( + ) shell_allowance)
   | form ->
-      Error (Printf.sprintf "command `%s` is not one this scan can read" (Sexp.to_string_hum form))
+      Error (Refusals.fail "command `%s` is not one this scan can read" (Sexp.to_string_hum form))
 
 (* Where a [chdir] destination puts the working directory. *)
 let chdir_target st ~cwd dir =
@@ -284,7 +287,7 @@ let chdir_target st ~cwd dir =
   | _ when not (has_pform dir) -> Ok (resolve cwd dir)
   | _ ->
       Error
-        (Printf.sprintf "`(chdir %s ...)` in %s moves to a directory this scan cannot resolve" dir
+        (Refusals.fail "`(chdir %s ...)` in %s moves to a directory this scan cannot resolve" dir
            (identity st))
 
 let rec spawns_in st ~cwd sexp =
@@ -310,7 +313,7 @@ let rec spawns_in st ~cwd sexp =
   | Sexp.List (Sexp.Atom h :: _) ->
       [
         Error
-          (Printf.sprintf "action head `%s` in %s is on neither of the action lists this scan reads"
+          (Refusals.fail "action head `%s` in %s is on neither of the action lists this scan reads"
              h (identity st));
       ]
   | _ -> []
@@ -342,9 +345,9 @@ let rec stanzas_in ~file ~content ~dir pairs =
 
 type findings = {
   dune_files : string list;
-  unreadable : string list;
+  unreadable : Refusals.refusal list;
   spawns : spawn list;
-  refused : string list;  (** sites with no bound, and stanzas the scan cannot place *)
+  refused : Refusals.refusal list;  (** sites with no bound, and stanzas the scan cannot place *)
 }
 
 let scan_tree inventory =
@@ -357,14 +360,16 @@ let scan_tree inventory =
       let content = In_channel.read_all f.on_disk in
       match Scan.spelled_stanzas content with
       | exception exn ->
-          unreadable := Printf.sprintf "%s: %s" f.path (Exn.to_string exn) :: !unreadable
+          unreadable :=
+            Refusals.fail "%s: unreadable dune structure: %s" f.path (Exn.to_string exn)
+            :: !unreadable
       | pairs ->
           let dir = List.drop_last_exn (components f.path) in
           List.iter (stanzas_in ~file:f.path ~content ~dir pairs) ~f:(fun st ->
               match Scan.head st.sexp with
               | Some ("include" | "dynamic_include") ->
                   refused :=
-                    Printf.sprintf "%s includes stanzas from a file this scan does not read"
+                    Refusals.fail "%s includes stanzas from a file this scan does not read"
                       (identity st)
                     :: !refused
               | _ ->
@@ -379,15 +384,15 @@ let scan_tree inventory =
     refused = List.rev !refused;
   }
 
-let scan ~root ~generated ~live =
-  let inventory = Inventory.of_dune_sandbox ~workspace_root:root ~generated in
-  let t = scan_tree inventory in
+let assess t =
   let unbounded =
     List.filter_map t.spawns ~f:(fun s ->
         match s.cost with
         | Error e ->
             Some
-              (Printf.sprintf "%s: %s, in `%s`" (identity s.stanza) e (String.prefix s.command 200))
+              (Refusals.with_message e
+                 (Printf.sprintf "%s: %s, in `%s`" (identity s.stanza) e.message
+                    (String.prefix s.command 200)))
         | Ok _ -> None)
   in
   let over =
@@ -396,21 +401,27 @@ let scan ~root ~generated ~live =
         match s.cost with
         | Ok n when n >= limit ->
             Some
-              (Printf.sprintf
+              (Refusals.fail
                  "%s: a spawned command line of up to %d characters, at or over this scan's limit \
                   of %d (%s refuses past %d): `%s`"
                  (identity s.stanza) n limit whose cap (String.prefix s.command 200))
         | _ -> None)
   in
-  let refusals = t.refused @ unbounded in
-  List.iter t.unreadable ~f:(eprintf "%s\n");
-  List.iter refusals ~f:(eprintf "%s\n");
+  (t.refused @ unbounded, over)
+
+let scan ~root ~generated ~live =
+  let inventory = Inventory.of_dune_sandbox ~workspace_root:root ~generated in
+  let t = scan_tree inventory in
+  let refusals, over = assess t in
+  let report (r : Refusals.refusal) = eprintf "%s\n" r.message in
+  List.iter t.unreadable ~f:report;
+  List.iter refusals ~f:report;
   if not (List.is_empty refusals) then
     eprintf
       "A dependency set belongs in a response file: `(with-stdout-to <x>.filelist (echo \
        \"%%{deps}\"))`, then `(run <exe> @<x>.filelist)`, read through \
        `Test_scan.Scan_argv.expand` (gh-ocannl-1720).\n";
-  List.iter over ~f:(eprintf "%s\n");
+  List.iter over ~f:report;
   (* The floors keep a scan that stopped finding dune files or spawns from passing; a synthetic
      control tree is far smaller than the repository, so they apply to the live run only. *)
   let file_floor = if live then 20 else 1 and spawn_floor = if live then 200 else 1 in
@@ -465,18 +476,27 @@ let control () =
   let run name files =
     let root = Stdlib.Filename.concat fixture name in
     List.iter files ~f:(fun (path, data) -> write_file (Stdlib.Filename.concat root path) data);
-    Fresh_process.run ~exe [ "--scan-only"; root ]
+    let tree = scan_tree (Inventory.of_dune_sandbox ~workspace_root:root ~generated:[]) in
+    let refused, over = assess tree in
+    (Fresh_process.run ~exe [ "--scan-only"; root ], tree.unreadable @ refused @ over)
   in
   let report label child = Fresh_process.report ~label child in
-  let passed label child =
+  let passed label (child, _) =
     let ok = Fresh_process.matches ~exit:0 ~contains:[] child in
     if not ok then report label child;
     ok
   in
-  let refused label ~messages child =
-    let ok = Fresh_process.matches ~exit:1 ~contains:messages child in
+  let refused label ~format ?(messages = []) (child, refusals) =
+    let ok =
+      match refusals with
+      | [ refusal ] ->
+          Fresh_process.matches ~stream:`Stderr ~exit:1
+            ~contains:(refusal.Refusals.message :: messages)
+            child
+      | _ -> false
+    in
     if not ok then report label child;
-    ok
+    ok && Refusals.check_failures ~source:("test/operations/" ^ source) ~formats:[ format ] refusals
   in
   let project = ("dune-project", "(lang dune 3.20)\n") in
   let rule action = Printf.sprintf "(rule (target out) (deps a.ml) (action %s))\n" action in
@@ -561,6 +581,14 @@ let control () =
   let unreadable =
     run "unreadable" [ project; ("a/dune", "(rule #; (hidden) (action (run p)))\n") ]
   in
+  let unbounded_dependency_format =
+    "`%s` expands to a dependency set that grows with the repository, including the generated \
+     files dune's globs also match, so no reading of the source tree bounds it"
+  in
+  let over_limit_format =
+    "%s: a spawned command line of up to %d characters, at or over this scan's limit of %d (%s \
+     refuses past %d): `%s`"
+  in
   printf
     "Synthetic controls run the shipping scanner over a passing tree and over each refused shape;\n\
      refusal output is captured and matched below.\n\n";
@@ -569,22 +597,24 @@ let control () =
      short-form rule in a subdir and a short system line pass"
     (passed "legitimate" legitimate);
   Verdict.p "gh-ocannl-1720's shape, a recursive glob in %{deps} on a command line, is refused"
-    (refused "glob on the command line"
+    (refused "glob on the command line" ~format:unbounded_dependency_format
        ~messages:[ "a/dune:1 (rule out)"; "`(glob_files_rec ../*.ml)` expands to a dependency set" ]
        glob_on_command_line);
   Verdict.p "a named dependency bound to a glob is refused where the command line expands it"
-    (refused "named glob"
+    (refused "named glob" ~format:unbounded_dependency_format
        ~messages:[ "`(glob_files *.ml)` expands to a dependency set" ]
        named_glob);
   Verdict.p "listed deps whose expansion reaches the limit are refused with their bound"
-    (refused "over-long listed deps"
+    (refused "over-long listed deps" ~format:over_limit_format
        ~messages:[ "a/dune:1 (rule out): a spawned command line of up to" ]
        over_long_listed);
   Verdict.p "a shell line that reaches the limit is refused"
-    (refused "over-long shell line" ~messages:[ "at or over this scan's limit" ] over_long_shell);
+    (refused "over-long shell line" ~format:over_limit_format
+       ~messages:[ "at or over this scan's limit" ]
+       over_long_shell);
   Verdict.p
     "a system line under the process limit but past cmd.exe's is refused at cmd.exe's own limit"
-    (refused "over-long system line"
+    (refused "over-long system line" ~format:over_limit_format
        ~messages:
          [
            Printf.sprintf "at or over this scan's limit of %d (cmd.exe refuses past %d)" cmd_limit
@@ -592,24 +622,57 @@ let control () =
          ]
        over_long_system);
   Verdict.p "a pform with no bound is refused"
-    (refused "unbounded pform"
+    (refused "unbounded pform" ~format:"`%%{%s}` is a pform this scan has no bound for"
        ~messages:[ "`%{env:HOME=}` is a pform this scan has no bound for" ]
        unbounded_pform);
   Verdict.p "a read of a file no judgment bounds is refused"
-    (refused "unjudged read" ~messages:[ "a file `judged_reads` does not bound" ] unjudged_read);
+    (refused "unjudged read"
+       ~format:
+         "`%%{%s}` puts the contents of `%s` on the command line, a file `judged_reads` does not \
+          bound"
+       ~messages:[ "a file `judged_reads` does not bound" ]
+       unjudged_read);
   Verdict.p "an action head on neither list is refused"
-    (refused "unplaced head" ~messages:[ "action head `frobnicate`" ] unplaced_head);
+    (refused "unplaced head"
+       ~format:"action head `%s` in %s is on neither of the action lists this scan reads"
+       ~messages:[ "action head `frobnicate`" ] unplaced_head);
   Verdict.p "a chdir to a directory the scan cannot resolve is refused"
     (refused "unresolved chdir"
+       ~format:"`(chdir %s ...)` in %s moves to a directory this scan cannot resolve"
        ~messages:[ "moves to a directory this scan cannot resolve" ]
        unresolved_chdir);
   Verdict.p "an include stanza is refused"
-    (refused "included"
+    (refused "included" ~format:"%s includes stanzas from a file this scan does not read"
        ~messages:[ "includes stanzas from a file this scan does not read" ]
        included);
   Verdict.p "a dune file sexplib would read with a hole in it is refused"
-    (refused "unreadable" ~messages:[ "a/dune: " ] unreadable);
-  Test_scan.Refusal_control_manifest.print "command_line_length_scan.ml";
+    (refused "unreadable" ~format:"%s: unreadable dune structure: %s" ~messages:[ "a/dune: " ]
+       unreadable);
+  let refused_rule label format text =
+    refused label ~format (run label [ project; ("a/dune", text) ])
+  in
+  Verdict.p "a dependency mixing a pform with literal text is refused"
+    (refused_rule "mixed dependency"
+       "dependency `%s` mixes a pform with text, which this scan cannot bound"
+       {|(rule (deps "x%{dep:a.ml}") (action (run p %{deps})))|});
+  Verdict.p "an unknown dependency form is refused"
+    (refused_rule "unknown dependency" "dependency form `%s` is one this scan cannot bound"
+       {|(rule (deps (unmodeled a.ml)) (action (run p %{deps})))|});
+  Verdict.p "a target whose field contains a pform is refused"
+    (refused_rule "pform targets" "`%%{%s}` names a target spelled with a pform"
+       {|(rule (targets "%{env:X=x}") (action (run p %{targets})))|});
+  Verdict.p "a target reference without its field is refused"
+    (refused_rule "missing target field" "`%%{%s}` in a stanza with no `(%s ...)` field"
+       {|(rule (action (run p %{target})))|});
+  Verdict.p "a test reference without a test name is refused"
+    (refused_rule "missing test name" "`%%{test}` in a stanza that names no test"
+       {|(rule (action (run p %{test})))|});
+  Verdict.p "a list in command arguments is refused"
+    (refused_rule "list argument" "argument `%s` is a list, which this scan cannot bound"
+       (rule "(run p (list arg))"));
+  Verdict.p "a malformed spawning action is refused"
+    (refused_rule "malformed action" "command `%s` is not one this scan can read" (rule "(run)"));
+  Refusals.print source;
   remove_tree fixture
 
 let usage () =

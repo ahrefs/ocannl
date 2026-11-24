@@ -21,13 +21,16 @@
     marker dropped in a merge would otherwise turn the whole check off silently.
 
     The decision is {!findings}, a pure function of a dune file's text, so the controls run the code
-    the live check runs, on files built to be refused. *)
+    the live check runs, on files built to be refused. The scan reads top-level Dune stanzas and
+    explicit alias dependencies. It leaves include expansion and nested subdir bodies to Dune. *)
 
 open Base
 open Stdio
 open Verdict.Claims
 module Scan = Test_scan.Dune_stanza_scan
+module Refusals = Test_scan.Refusal_control_manifest
 
+let source = "stanza_order.ml"
 let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
 (** The comment line that opens a file's ordered part, as {!Scan.read_raw} hands a comment over: the
@@ -105,7 +108,7 @@ let findings ?(must_carry = false) ~path content =
               | _ -> None
             in
             Option.map (first_break members) ~f:(fun (a, b) ->
-                Printf.sprintf
+                Refusals.fail
                   "%s:%d: the members of the `%s` alias are not in order: `%s` is listed before \
                    `%s`. Keep the list sorted, each member once, so that two branches adding one \
                    do not both append to it (gh-ocannl-2193)"
@@ -115,7 +118,7 @@ let findings ?(must_carry = false) ~path content =
   | [] ->
       if must_carry then
         [
-          Printf.sprintf
+          Refusals.fail
             "%s does not carry the marker comment `;%s` that opens its sorted part, so nothing \
              holds its test stanzas in order (gh-ocannl-2193)"
             path marker;
@@ -123,7 +126,7 @@ let findings ?(must_carry = false) ~path content =
       else []
   | _ :: _ :: _ ->
       [
-        Printf.sprintf
+        Refusals.fail
           "%s carries the marker comment `;%s` %d times: which stanzas are ordered is ambiguous"
           path marker (List.length markers);
       ]
@@ -137,7 +140,7 @@ let findings ?(must_carry = false) ~path content =
             | Some _ -> None
             | None ->
                 Some
-                  (Printf.sprintf
+                  (Refusals.fail
                      "%s:%d: %s sits in the sorted part of the file and names no test to sort \
                       under: move it above the marker, beside the directory's other machinery, or \
                       into the stanza it serves"
@@ -159,7 +162,7 @@ let findings ?(must_carry = false) ~path content =
           :: ((stanza, (raw : Scan.raw_form), g) :: _ as rest) ->
             if String.compare g_above g <= 0 then out_of_place rest
             else
-              Printf.sprintf
+              Refusals.fail
                 "%s:%d: %s follows %s (line %d), which sorts after it. Below the marker a stanza \
                  sits where its test's name sorts, never at the end of the file: whichever of the \
                  two is misplaced, `%s` belongs %s and `%s` belongs %s (gh-ocannl-2193)"
@@ -200,8 +203,13 @@ let aggregate name members =
 let machinery = "(copy_files\n (files ../config/ocannl_config))"
 let found ?must_carry content = findings ?must_carry ~path:"t/dune" content
 
-let refused ?must_carry ~substring content =
-  match found ?must_carry content with [ f ] -> String.is_substring f ~substring | _ -> false
+let refused ?must_carry ~format ~message content =
+  let findings = found ?must_carry content in
+  Refusals.check_failures ~source:("test/operations/" ^ source) ~formats:[ format ] findings
+  &&
+  match findings with
+  | [ finding ] -> String.is_substring finding.message ~substring:message
+  | _ -> false
 
 let controls () =
   let sorted = [ machinery; marker_line; test "alpha"; test "beta"; test "delta" ] in
@@ -230,37 +238,59 @@ let controls () =
      statement about stanzas that were read and not about an empty file. *)
   p_empty "a file whose tests are in order of name is accepted" ~over:(Scan.stanzas in_order)
     (found in_order);
+  let misplaced_format =
+    "%s:%d: %s follows %s (line %d), which sorts after it. Below the marker a stanza sits where \
+     its test's name sorts, never at the end of the file: whichever of the two is misplaced, `%s` \
+     belongs %s and `%s` belongs %s (gh-ocannl-2193)"
+  in
+  let members_format =
+    "%s:%d: the members of the `%s` alias are not in order: `%s` is listed before `%s`. Keep the \
+     list sorted, each member once, so that two branches adding one do not both append to it \
+     (gh-ocannl-2193)"
+  in
   p "a test appended at the end of the file is refused, with the place it belongs"
-    (refused
-       ~substring:
+    (refused ~format:misplaced_format
+       ~message:
          "t/dune:15: the (test) stanza of `charlie` follows the (test) stanza of `delta` (line \
           12), which sorts after it"
        appended
-    && refused ~substring:"`charlie` belongs before the (test) stanza of `delta` (line 12)" appended
-    );
+    && refused ~format:misplaced_format
+         ~message:"`charlie` belongs before the (test) stanza of `delta` (line 12)" appended);
   p_empty "the same test in its place is accepted" ~over:(Scan.stanzas in_place) (found in_place);
   p_empty "a test's executable, its variant rules and its golden diffs are one group, in any order"
     ~over:(Scan.stanzas one_group) (found one_group);
   p "a rule sorts under its per-test alias, so one filed under another test's name is refused"
-    (refused ~substring:"the (rule) stanza of `alpha` follows the (executable) stanza of `beta`"
+    (refused ~format:misplaced_format
+       ~message:"the (rule) stanza of `alpha` follows the (executable) stanza of `beta`"
        (file [ marker_line; exe "beta"; diff "alpha"; actual "beta" ]));
   p_empty "stanzas above the marker are not ordered" ~over:(Scan.stanzas above) (found above);
   p "a stanza below the marker that names no test is refused"
-    (refused ~substring:"a (copy_files) stanza sits in the sorted part of the file"
+    (refused
+       ~format:
+         "%s:%d: %s sits in the sorted part of the file and names no test to sort under: move it \
+          above the marker, beside the directory's other machinery, or into the stanza it serves"
+       ~message:"a (copy_files) stanza sits in the sorted part of the file"
        (file [ marker_line; test "alpha"; machinery; test "beta" ]));
   p "an aggregate alias whose members are out of order is refused, above the marker too"
-    (refused
-       ~substring:
+    (refused ~format:members_format
+       ~message:
          "the members of the `slow` alias are not in order: `slow-b` is listed before `slow-a`"
        (file [ aggregate "slow" [ "slow-b"; "slow-a" ]; marker_line; test "alpha" ]));
   p "an aggregate alias listing a member twice is refused"
-    (refused ~substring:"`slow-a` is listed before `slow-a`"
+    (refused ~format:members_format ~message:"`slow-a` is listed before `slow-a`"
        (file [ aggregate "slow" [ "slow-a"; "slow-a" ]; marker_line; test "alpha" ]));
   p_empty "a file without the marker is left alone" ~over:(Scan.stanzas unmarked) (found unmarked);
   p "a file that must carry the marker and does not is refused"
-    (refused ~must_carry:true ~substring:"does not carry the marker comment" unmarked);
+    (refused ~must_carry:true
+       ~format:
+         "%s does not carry the marker comment `;%s` that opens its sorted part, so nothing holds \
+          its test stanzas in order (gh-ocannl-2193)"
+       ~message:"does not carry the marker comment" unmarked);
   p "a file carrying the marker twice is refused"
-    (refused ~substring:"carries the marker comment"
+    (refused
+       ~format:
+         "%s carries the marker comment `;%s` %d times: which stanzas are ordered is ambiguous"
+       ~message:"carries the marker comment"
        (file [ marker_line; test "alpha"; marker_line; test "beta" ]));
   p "a key is cut at its first `-` or `.`, and at nothing else"
     (List.equal String.equal
@@ -298,9 +328,9 @@ let () =
     List.concat_map dune_files ~f:(fun (path, content) ->
         findings ~must_carry:(must_carry path) ~path content)
   in
-  List.iter found ~f:(fun f -> eprintf "FINDING: %s\n" f);
+  List.iter found ~f:(fun (f : Refusals.refusal) -> eprintf "FINDING: %s\n" f.message);
   p_empty "no stanza is out of place and no aggregate alias lists its members out of order"
     ~over:dune_files found;
   printf "\nControls, on files built to be refused:\n";
   controls ();
-  Test_scan.Refusal_control_manifest.print "stanza_order.ml"
+  Refusals.print source

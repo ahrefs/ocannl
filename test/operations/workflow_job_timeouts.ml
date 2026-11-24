@@ -70,7 +70,10 @@
    from a legitimate one in one respect each, runs this same executable over them as a CHILD, and
    claims both the exit status and the diagnostic text -- for every refusal, and for the nearest
    accepted counterpart of each. Capturing the children's streams keeps their [FAIL:] markers out of
-   a green suite log, following [ocamlformat_ignore_scan] and [generated_provenance]. *)
+   a green suite log, following [ocamlformat_ignore_scan] and [generated_provenance]. The refusal
+   catalogue covers the aggregate claims. The reader's typed unreadable reasons and the explanations
+   for individual jobs, apt commands and floor entries stay with these end-to-end controls, outside
+   per-format extraction. *)
 
 open Base
 open Stdio

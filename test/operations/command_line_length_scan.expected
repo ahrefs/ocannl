@@ -18,8 +18,30 @@ an action head on neither list is refused: true
 a chdir to a directory the scan cannot resolve is refused: true
 an include stanza is refused: true
 a dune file sexplib would read with a hole in it is refused: true
+a dependency mixing a pform with literal text is refused: true
+an unknown dependency form is refused: true
+a target whose field contains a pform is refused: true
+a target reference without its field is refused: true
+a test reference without a test name is refused: true
+a list in command arguments is refused: true
+a malformed spawning action is refused: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:372eeaf368300a9e358067e8d495cf72] the repository including
+  [scanner-refusal:37ae8aab17397f20999234cd8d0f6736] dependency
+  [scanner-refusal:731bfaa30bb282b9a618b0bfdd29e773] dependency form
+  [scanner-refusal:087813b8ad2e0e15e1f1cf137190ea8a] target spelled with
+  [scanner-refusal:d167faac8f0029e909ca0dc0f4b30e41] stanza with no
+  [scanner-refusal:d2e24c0f204c468788a307dee2026b3a] stanza that names
+  [scanner-refusal:af863572668f2295ed85b51e4b34c459] puts the contents
+  [scanner-refusal:1a514655621d234733eb18e735300edb] pform this scan
+  [scanner-refusal:6cdafd68dfe90265d75399ca116fd389] argument
+  [scanner-refusal:cf6423e820c211ef1f7669e8f2a5bd80] one this scan
+  [scanner-refusal:979a75b9cff181cf8c618e3265f341a1] directory this scan
+  [scanner-refusal:f659c7db4d5a7eeb09bb13eee5dd0d9d] action head
+  [scanner-refusal:0292958ea115eba550f5b11a616b213f] unreadable dune structure
+  [scanner-refusal:b2a275ebebff3747d03efc331e31059d] includes stanzas from
+  [scanner-refusal:9d49d08dd876c701ec8baa44b3e8055f] spawned command line
   [scanner-refusal:7b1d721a6b358055eeef13e57e5ba202] source tree reads
   [scanner-refusal:69918b599474e445c1e2dce74dc3e841] every spawned command
   [scanner-refusal:6eba8bdcf1112c04fdf6c29d4770c94a] bounded spawned command
@@ -36,4 +58,11 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:c89bc9f1b5b4e0adddd25e00a9c88da7] scan cannot resolve
   [scanner-refusal:d71d7140161f2e19abd0f58123eaea02] an include stanza
   [scanner-refusal:f2f50b0ccfbbada97516cea48cbc3f16] file sexplib would
+  [scanner-refusal:b09b0066f0f41d3b0b1ffc188b84c55f] a dependency mixing
+  [scanner-refusal:cde1da25360bc3b02f4c015d1c5239cc] unknown dependency form
+  [scanner-refusal:98522ab6abd0e6c4b64b1252f37154a6] whose field contains
+  [scanner-refusal:ca1105d4fef574c3c55a3a5ce5af87a8] target reference without
+  [scanner-refusal:c223f8813d0c15a9a59ea92bcfa4b2e8] test reference without
+  [scanner-refusal:2c815f3192c897e5f51220a7b538a931] in command arguments
+  [scanner-refusal:5592d35c9de1404b0763bd99eb0cf0ab] malformed spawning action
 End of synthetic controls.

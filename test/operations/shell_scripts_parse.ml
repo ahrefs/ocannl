@@ -70,6 +70,11 @@
    `env` invocation that exits 125 rather than running anything. Refused means a failing verdict
    naming the token, not a silent pass.
 
+   The per-format refusal catalogue covers the lexical and execution-context branches directly.
+   Shebang parsing remains a closed table of exact rendered results on literal first lines.
+   Interpreter lookup depends on the host, and parser stderr comes from that host's executable;
+   those diagnostics stay outside per-format extraction.
+
    {!shebang_cases} pins that parser on synthetic lines -- the three above among them -- since the
    repository's own scripts exercise two shapes of the grammar and would not notice the rest
    regressing.
@@ -90,6 +95,8 @@ open Stdio
 (* The dependency set arrives as a `@<path>` response file, because a list that grows with the
    repository does not belong on a Windows command line (gh-ocannl-1748); see
    [Test_scan.Scan_argv]. *)
+module Refusals = Test_scan.Refusal_control_manifest
+
 let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 let base_dir = Test_scan.Dune_stanza_scan.base_dir
 let repo_relative = Test_scan.Dune_stanza_scan.repo_relative
@@ -1515,7 +1522,7 @@ module Shell_lexer = struct
           | `None ->
               if starts_at text ~pos:index "$'" || starts_at text ~pos:index "$\"" then (
                 quoted := true;
-                refuse !number "dollar-quoted heredoc delimiter";
+                refuse !number (Refusals.fail "dollar-quoted heredoc delimiter");
                 Buffer.add_char decoded '$';
                 word (index + 2) (if Char.equal text.[index + 1] '\'' then `Single else `Double))
               else if Char.equal c '\\' && index + 1 < length then (
@@ -1543,7 +1550,7 @@ module Shell_lexer = struct
       | (delimiter, strip_tabs, quoted) :: rest ->
           let rec body index =
             if index >= length then (
-              refuse !number "unterminated outer heredoc";
+              refuse !number (Refusals.fail "unterminated outer heredoc");
               index)
             else
               let finish =
@@ -1563,7 +1570,7 @@ module Shell_lexer = struct
               if
                 (not quoted) && finish < length
                 && Int.rem (backslashes (String.length line - 1) 0) 2 = 1
-              then refuse !number "continued unquoted heredoc body";
+              then refuse !number (Refusals.fail "continued unquoted heredoc body");
               let next = if finish < length then finish + 1 else finish in
               if finish < length then Int.incr number;
               if String.equal line delimiter then skip_bodies next rest else body next
@@ -1633,7 +1640,8 @@ module Shell_lexer = struct
             else if starts_at text ~pos:index "<<" then (
               let strip_tabs = index + 2 < length && Char.equal text.[index + 2] '-' in
               let finish, word, quoted = delimiter (index + if strip_tabs then 3 else 2) in
-              if String.contains word '\n' then refuse !number "multiline heredoc delimiter";
+              if String.contains word '\n' then
+                refuse !number (Refusals.fail "multiline heredoc delimiter");
               heredocs := (word, strip_tabs, quoted) :: !heredocs;
               take finish `None)
             else take (index + 1) `None
@@ -1951,7 +1959,7 @@ module Shell_context = struct
     in
     let mismatch at word =
       refuse (line_of at)
-        (Printf.sprintf "`%s` does not close or continue the innermost open construct (%s)" word
+        (Refusals.fail "`%s` does not close or continue the innermost open construct (%s)" word
            (Option.value_map (top ()).kind ~default:"the top level" ~f:describe))
     in
     let is_meta c =
@@ -2078,7 +2086,8 @@ module Shell_context = struct
                 (match frame.kind with
                 | Some (Group `Paren | Function `Paren) -> pop index (index + 1)
                 | _ ->
-                    refuse (line_of index) "a `)` that closes no subshell or case pattern";
+                    refuse (line_of index)
+                      (Refusals.fail "a `)` that closes no subshell or case pattern");
                     end_statement index (index + 1));
                 continue (index + 1))
               else
@@ -2233,7 +2242,7 @@ module Shell_context = struct
     while List.length !frames > 1 do
       let frame = top () in
       refuse (line_of frame.opened_at)
-        (Printf.sprintf "%s still open at the end of the file"
+        (Refusals.fail "%s still open at the end of the file"
            (Option.value_map frame.kind ~default:"" ~f:describe));
       pop length length
     done;
@@ -2608,11 +2617,12 @@ module Shell_context = struct
 
   type t = {
     top : branch;  (** The compound structure, as read. *)
-    structure_refusals : (int * string) list;
+    structure_refusals : (int * Refusals.refusal) list;
         (** The structure's refusals in every script, whether or not it may turn errexit on. *)
     judgements : judgement list;
-    lexical : (int * string) list;  (** {!Shell_lexer.numbered_spliced_lines}' refusals. *)
-    refusals : (int * string) list;
+    lexical : (int * Refusals.refusal) list;
+        (** {!Shell_lexer.numbered_spliced_lines}' refusals. *)
+    refusals : (int * Refusals.refusal) list;
         (** This module's, for a script that may turn errexit on: elsewhere nothing is judged, so
             nothing rests on the structure. *)
     leaking : string list;
@@ -2631,7 +2641,12 @@ module Shell_context = struct
     let judgements, enables_errexit, leaking = judge top in
     let structure_refusals =
       List.dedup_and_sort !refusals ~compare:(fun (line, reason) (line', reason') ->
-          match Int.compare line line' with 0 -> String.compare reason reason' | order -> order)
+          match Int.compare line line' with
+          | 0 ->
+              let by_message = String.compare reason.Refusals.message reason'.Refusals.message in
+              if Int.equal by_message 0 then String.compare reason.format reason'.format
+              else by_message
+          | order -> order)
     in
     let refusals = if enables_errexit then structure_refusals else [] in
     { top; structure_refusals; judgements; lexical = List.rev !lexical; refusals; leaking }
@@ -2655,11 +2670,13 @@ module Shell_context = struct
         Option.some_if (errexit && (not consumed) && shape statement) statement.line)
     |> List.dedup_and_sort ~compare:Int.compare
 
-  let report ~fail ~rel t =
-    List.iter t.lexical ~f:(fun (line, reason) ->
-        fail (Printf.sprintf "%s:%d: shell lexical context is unsupported: %s" rel line reason));
-    List.iter t.refusals ~f:(fun (line, reason) ->
-        fail (Printf.sprintf "%s:%d: shell execution context is unsupported: %s" rel line reason))
+  let diagnostics ~rel t =
+    let contextualize kind (line, (reason : Refusals.refusal)) =
+      Refusals.with_message reason
+        (Printf.sprintf "%s:%d: shell %s context is unsupported: %s" rel line kind reason.message)
+    in
+    List.map t.lexical ~f:(contextualize "lexical")
+    @ List.map t.refusals ~f:(contextualize "execution")
 
   let controls () =
     List.iter
@@ -2669,20 +2686,16 @@ module Shell_context = struct
         ("paired backslashes", "cat <<END\nEN\\\\\nD\nEND\n");
       ]
       ~f:(fun (name, text) ->
-        let messages = ref [] in
-        report ~fail:(fun message -> messages := message :: !messages) ~rel:"fixture.sh" (read text);
+        let messages = diagnostics ~rel:"fixture.sh" (read text) in
         Verdict.p_empty
           (Printf.sprintf "heredoc fixture %s preserves its supported body" name)
-          ~over:[ text ] !messages);
-    (* Whether [text] reaches the [expected] refusal, observed under its [format]. *)
-    let refuses text ~expected ~format =
-      let messages = ref [] in
-      report ~fail:(fun message -> messages := message :: !messages) ~rel:"fixture.sh" (read text);
-      let refused = List.mem !messages expected ~equal:String.equal in
-      if refused then
-        Test_scan.Refusal_control_manifest.observe_failure
-          ~source:"test/operations/shell_scripts_parse.ml" ~format;
-      refused
+          ~over:[ text ] messages);
+    let refuses refusals ~format ~message =
+      Refusals.check_failures ~source:"test/operations/shell_scripts_parse.ml" ~formats:[ format ]
+        refusals
+      && List.equal String.equal
+           (List.map refusals ~f:(fun refusal -> refusal.Refusals.message))
+           [ message ]
     in
     List.iter
       [
@@ -2695,38 +2708,52 @@ module Shell_context = struct
         ("set -e\ncat <<EN\\\nD\nEN\\\nD\n! probe\nEND\n", 4, "continued unquoted heredoc body");
       ]
       ~f:(fun (text, line, reason) ->
+        (* A delimiter the lexer cannot read can also leave the body unterminated. Each fixture pins
+           its first refusal, and missing terminators have their own fixtures. *)
+        let first = List.take (diagnostics ~rel:"fixture.sh" (read text)) 1 in
         Verdict.pf "unsupported shell lexical fixture %s reaches its refusal" reason
-          (refuses text
-             ~expected:
-               (Printf.sprintf "fixture.sh:%d: shell lexical context is unsupported: %s" line reason)
-             ~format:"%s:%d: shell lexical context is unsupported: %s"));
+          (refuses first ~format:reason
+             ~message:
+               (Printf.sprintf "fixture.sh:%d: shell lexical context is unsupported: %s" line reason)));
     List.iter
       [
         ( "set -e\nfi\n",
           2,
+          "`%s` does not close or continue the innermost open construct (%s)",
           "`fi` does not close or continue the innermost open construct (the top level)" );
         ( "set -e\nif true; then\n  :\ndone\nfi\n",
           4,
+          "`%s` does not close or continue the innermost open construct (%s)",
           "`done` does not close or continue the innermost open construct (an `if`)" );
-        ("set -e\necho x )\n", 2, "a `)` that closes no subshell or case pattern");
+        ( "set -e\necho x )\n",
+          2,
+          "a `)` that closes no subshell or case pattern",
+          "a `)` that closes no subshell or case pattern" );
         ( "set -e\n}\n",
           2,
+          "`%s` does not close or continue the innermost open construct (%s)",
           "`}` does not close or continue the innermost open construct (the top level)" );
-        ("set -e\nwhile true; do\n  :\n", 2, "a loop still open at the end of the file");
-        ("set -e\ncase x in\n  x) : ;;\n", 2, "a `case` still open at the end of the file");
+        ( "set -e\nwhile true; do\n  :\n",
+          2,
+          "%s still open at the end of the file",
+          "a loop still open at the end of the file" );
+        ( "set -e\ncase x in\n  x) : ;;\n",
+          2,
+          "%s still open at the end of the file",
+          "a `case` still open at the end of the file" );
       ]
-      ~f:(fun (text, line, reason) ->
+      ~f:(fun (text, line, format, reason) ->
         Verdict.pf "unsupported shell execution context %S reaches its refusal" text
-          (refuses text
-             ~expected:
+          (refuses
+             (diagnostics ~rel:"fixture.sh" (read text))
+             ~format
+             ~message:
                (Printf.sprintf "fixture.sh:%d: shell execution context is unsupported: %s" line
-                  reason)
-             ~format:"%s:%d: shell execution context is unsupported: %s"));
+                  reason)));
     (* The opposing control: without errexit there is nothing to judge, so nothing is refused. *)
-    let messages = ref [] in
-    report ~fail:(fun message -> messages := message :: !messages) ~rel:"fixture.sh" (read "fi\n");
+    let messages = diagnostics ~rel:"fixture.sh" (read "fi\n") in
     Verdict.p_empty "a script that never turns errexit on is not refused for its structure"
-      ~over:[ "fi\n" ] !messages;
+      ~over:[ "fi\n" ] messages;
     (* A command list inside a substitution is text to this module, and a [case] in one closes no
        parenthesis with its patterns (gh-ocannl-1266). *)
     List.iter
@@ -2741,11 +2768,10 @@ module Shell_context = struct
         ("process substitution", "set -e\ncat <(case $y in a) echo 1 ;; esac) >/dev/null\n");
       ]
       ~f:(fun (name, text) ->
-        let messages = ref [] in
-        report ~fail:(fun message -> messages := message :: !messages) ~rel:"fixture.sh" (read text);
+        let messages = diagnostics ~rel:"fixture.sh" (read text) in
         Verdict.p_empty
           (Printf.sprintf "a case inside a %s keeps the structure readable" name)
-          ~over:[ text ] !messages);
+          ~over:[ text ] messages);
     (* The whole-file errexit reading is named in the golden, and only where it happens. *)
     let restore = "set -e\nf() {\n  set +e\n  x\n  set -e\n}\nset +e\n! probe\n" in
     Verdict.p "a save-and-restore function is named as the reason for the whole-file reading"
@@ -4217,7 +4243,7 @@ module Trap_order = struct
       if Hash_set.is_empty r.trap_lines then []
       else
         List.map context.structure_refusals ~f:(fun (line, reason) ->
-            Unread_structure { line; reason })
+            Unread_structure { line; reason = reason.Refusals.message })
     in
     (* One finding per line and signal, whichever path's EXIT trap it names. *)
     let key = function
@@ -4753,7 +4779,7 @@ let () =
       let first_line = Option.value (first_line_of path) ~default:"" in
       let context = Shell_context.read text in
       Option.iter (Shell_context.note ~rel context) ~f:print_endline;
-      Shell_context.report ~fail:Verdict.fail ~rel context;
+      List.iter (Shell_context.diagnostics ~rel context) ~f:(fun r -> Verdict.fail r.message);
       Errexit_negation.report ~fail:Verdict.fail ~rel context;
       Errexit_and_list.report ~fail:Verdict.fail ~rel context;
       Trap_order.report ~fail:Verdict.fail ~rel context;

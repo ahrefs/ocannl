@@ -64,6 +64,10 @@ case: a sentinel that does not open its comment is refused: true
 case: two markers are refused: true
 case: a pin and a marker together are refused: true
 case: a marker with no claim is refused: true
+case: a marker with no reason separator is refused: true
+case: the wrong refusal is rejected even when its argument echoes the expected diagnostic: true
+case: a source that does not parse is refused: true
+case: an exception from the source reader is refused separately: true
 case: the word in a comment is no claim: true
 every test source lexes: true
 the walk read the arrayjit package's test sources too: true
@@ -179,9 +183,20 @@ test/operations/winograd_conv.ml -- exact-operands: bounded integer fixtures wit
 test/operations/wrap_prec_convert.ml -- no-contraction: a same-precision wrap readback compared with host data is a pure copy
 test/operations/zero_elision.ml -- pinned off
 test/support/forced_decline_sort.ml -- not-executed: a log reader matching claim labels as text
+test/support/refusal_control_manifest.ml -- not-executed: catalogue entries quote scanner diagnostics
 test/support/tensorized_census_scan.ml -- not-executed: a scan reader matching the word in claim labels
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:b2b66576ec487b82b65d3d2a3c7fb584] sentinel must open
+  [scanner-refusal:5fae6b89f7d8258826c7189aafba5a40] expected <kind> <reason>
+  [scanner-refusal:9970d742a14c33910983647a40f64148] unknown kind
+  [scanner-refusal:897ec4f61958b8709e5a89603692821a] the reason needs
+  [scanner-refusal:0477ef9a58ec9e25b75d9c0f1a34c306] bitwise claim for
+  [scanner-refusal:21592137723d61ef8766bb4585efb5d1] marker drop the
+  [scanner-refusal:7be6e2776283b7cf291a429499bfe007] than one marker
+  [scanner-refusal:4c8ebb0a854f491b5b3bf153cb8e6e1f] OCANNL_CC_BACKEND_FP_CONTRACT=off
+  [scanner-refusal:e15c6d30a70f479a8a6380750aa59042] does not parse
+  [scanner-refusal:749f02c83c0859bd8145401cc5a4a5cb] scanner raised
   [scanner-refusal:106879e8d84d7b106e818ac1ddc61a4f] listed as pinned
   [scanner-refusal:777651b1b86abfe512e2d3a3f485ce6d] marked claim is
   [scanner-refusal:0917e598d504b434f3e3c9567742fcc6] claim with neither
@@ -198,6 +213,10 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:b79e2ebc86bfefafc47281afbf5f0550] markers are refused
   [scanner-refusal:3237007207743bc53ec1c1951d1214b7] together are refused
   [scanner-refusal:b52b141cf7d13778997e41d81205de03] claim is refused
+  [scanner-refusal:ffc0217024cc9300c720ee267dd0fde3] separator is refused
+  [scanner-refusal:640314079c325f8264eadc3ee11e14a7] the expected diagnostic
+  [scanner-refusal:61cc31cefcfa4e62f663ac4758af255a] source that does
+  [scanner-refusal:e9713e59d79f302d02300babf9ebd87c] is refused separately
   [scanner-refusal:e28d8e210f8906b6927a78032d5a7f50] case the word
   [scanner-refusal:5af7923d754adb0ac1030df866493123] every test source
   [scanner-refusal:b30b6b3be7749ff984d2979f5a8fe292] arrayjit package's test

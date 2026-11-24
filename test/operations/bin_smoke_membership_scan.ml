@@ -13,6 +13,12 @@
     [bin/], pinned by dune file, program and condition in [platform_contributions] below and exempt
     only while it is exactly that.
 
+    This census reads parsed Dune declarations, actions and the explicit dependency graph described
+    below. Dune expansion beyond those forms stays with Dune. Its refusal boundary is membership and
+    graph reachability: controls check the result populations and expected graph diagnostics.
+    Per-format extraction leaves the accumulated graph and walk explanations alone, including
+    exception text from the Dune reader.
+
     [--negative-control] applies the production scan to a synthetic dune file with two public
     executables and only one smoke command. Its dune rule accepts exit 1 and no other status, so a
     checker that stops detecting the omission makes the control fail rather than go green. *)

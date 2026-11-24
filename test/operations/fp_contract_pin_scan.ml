@@ -86,6 +86,9 @@ module Dune = Test_scan.Dune_stanza_scan
 module Sources = Test_scan.Config_key_scan
 open Ppxlib
 module Scope = Test_scan.Lexical_scope
+module Refusals = Test_scan.Refusal_control_manifest
+
+let source = "fp_contract_pin_scan.ml"
 
 (* cc-fp-contract: not-executed -- its bitwise text is fixture sources and claim names, no
    kernels *)
@@ -117,17 +120,18 @@ type disposition = Pinned | Marked of string * string
 type reading = {
   claim_lines : int list;
   pinned : bool;
-  markers : (int * (string * string, string) Result.t) list;
+  markers : (int * (string * string, Refusals.refusal) Result.t) list;
 }
 
 (* [text] is a marker's whole comment text; [Error] says why it is not a well-formed one. *)
 let parse_marker text =
+  let open Refusals in
   let text = String.strip text in
   match String.chop_prefix text ~prefix:sentinel with
-  | None -> Error "the sentinel must open the comment"
+  | None -> Error (fail "the sentinel must open the comment")
   | Some rest -> (
       match String.substr_index rest ~pattern:" -- " with
-      | None -> Error "expected `<kind> -- <reason>` after the sentinel"
+      | None -> Error (fail "expected `<kind> -- <reason>` after the sentinel")
       | Some i ->
           let kind = String.strip (String.prefix rest i) in
           (* A reason may wrap across lines; it is read, and listed, as its words. *)
@@ -138,9 +142,9 @@ let parse_marker text =
             |> String.concat ~sep:" "
           in
           if not (List.Assoc.mem kinds ~equal:String.equal kind) then
-            Error ("unknown kind `" ^ kind ^ "`")
+            Error (fail "unknown kind `%s`" kind)
           else if List.length (String.split reason ~on:' ') < 2 then
-            Error "the reason needs at least two words"
+            Error (fail "the reason needs at least two words")
           else Ok (kind, reason))
 
 (* Dependency summaries are lexical, not a file-wide search for a familiar helper name. *)
@@ -643,76 +647,129 @@ let read content =
 
 (* The source's disposition, or why it has none. [None] for a source outside the subject. *)
 let judge reading =
+  let open Refusals in
   let malformed =
     List.filter_map reading.markers ~f:(fun (line, m) ->
         match m with
-        | Error why -> Some (Printf.sprintf "line %d: malformed marker: %s" line why)
+        | Error why ->
+            Some
+              (with_message why (Printf.sprintf "line %d: malformed marker: %s" line why.message))
         | Ok _ -> None)
   in
   let well_formed = List.filter_map reading.markers ~f:(fun (_, m) -> Result.ok m) in
   match (malformed, reading.claim_lines, reading.pinned, well_formed) with
-  | _ :: _, _, _, _ -> Some (Error (String.concat ~sep:"; " malformed))
+  | _ :: _, _, _, _ -> Some (Error malformed)
   | [], [], _, [] -> None
-  | [], [], _, _ :: _ -> Some (Error "a marker, but no bitwise claim for it to dispose of")
+  | [], [], _, _ :: _ -> Some (Error [ fail "a marker, but no bitwise claim for it to dispose of" ])
   | [], _ :: _, true, [] -> Some (Ok Pinned)
-  | [], _ :: _, true, _ :: _ -> Some (Error "both a pin and a marker: drop the marker")
+  | [], _ :: _, true, _ :: _ -> Some (Error [ fail "both a pin and a marker: drop the marker" ])
   | [], _ :: _, false, [ (kind, reason) ] -> Some (Ok (Marked (kind, reason)))
-  | [], _ :: _, false, _ :: _ :: _ -> Some (Error "more than one marker")
+  | [], _ :: _, false, _ :: _ :: _ -> Some (Error [ fail "more than one marker" ])
   | [], line :: _, false, [] ->
       Some
         (Error
-           (Printf.sprintf
-              "line %d claims bitwise equality, but the source neither pins \
-               OCANNL_CC_BACKEND_FP_CONTRACT=off nor carries a marker"
-              line))
+           [
+             fail
+               "line %d claims bitwise equality, but the source neither pins \
+                OCANNL_CC_BACKEND_FP_CONTRACT=off nor carries a marker"
+               line;
+           ])
 
 let judge_text content = judge (read content)
+
+let read_source ~path read =
+  let open Refusals in
+  match Test_scan.Scan_attempt.run (fun () -> judge_text (read ())) with
+  | Scanned verdict -> Either.First (path, verdict)
+  | Unparsed why -> Either.Second (fail "%s: does not parse: %s" path why)
+  | Raised why -> Either.Second (fail "%s: scanner raised: %s" path why)
 
 (* The reader against synthetic sources: each direction, and the nearest text it must not take. *)
 let cases () =
   let claim = "let () = p \"tiled matches serial bitwise\" true\n" in
   let pin = "let () = Unix.putenv \"OCANNL_CC_BACKEND_FP_CONTRACT\" \"off\"\n" in
   let marker kind reason = Printf.sprintf "(* %s %s -- %s *)\n" sentinel kind reason in
-  let refused src = match judge_text src with Some (Error _) -> true | _ -> false in
+  let check ?quiet format refusals =
+    Refusals.check_failures ?quiet ~source:("test/operations/" ^ source) ~formats:[ format ]
+      refusals
+  in
+  let refused format src =
+    let refusals = match judge_text src with Some (Error refusals) -> refusals | _ -> [] in
+    check format refusals
+  in
+  let missing_pin =
+    "line %d claims bitwise equality, but the source neither pins \
+     OCANNL_CC_BACKEND_FP_CONTRACT=off nor carries a marker"
+  in
+  let unpinned = refused missing_pin in
   List.iter Fp_contract_pin_scan_cases.cases ~f:(fun (name, subject, source) ->
       p ("case: code subject -- " ^ name)
         (Test_scan.Scan_attempt.attempted ~what:"fp-contract code subjects" ~name ~default:false
-           (fun () -> Bool.equal subject (refused source))));
+           (fun () ->
+             if subject then unpinned source
+             else
+               match judge_text source with None | Some (Ok _) -> true | Some (Error _) -> false)));
   p "case: a pinned claim is listed as pinned"
     (match judge_text (pin ^ claim) with Some (Ok Pinned) -> true | _ -> false);
   p "case: a marked claim is listed with its kind"
     (match judge_text (marker "same-shape" "one kernel, twice" ^ claim) with
     | Some (Ok (Marked ("same-shape", "one kernel, twice"))) -> true
     | _ -> false);
-  p "case: a claim with neither pin nor marker is refused" (refused claim);
+  p "case: a claim with neither pin nor marker is refused" (unpinned claim);
   p "case: a claim in capitals is a claim too"
-    (refused "let () = p \"tiled and serial agree BIT-FOR-BIT\" true\n");
+    (unpinned "let () = p \"tiled and serial agree BIT-FOR-BIT\" true\n");
   p "case: a pin to another mode is no pin"
-    (refused ("let () = Unix.putenv \"OCANNL_CC_BACKEND_FP_CONTRACT\" \"fast\"\n" ^ claim));
+    (unpinned ("let () = Unix.putenv \"OCANNL_CC_BACKEND_FP_CONTRACT\" \"fast\"\n" ^ claim));
   let stated first second = Printf.sprintf "let () = Utils.state_config %s %s\n" first second in
   let key = "~key:\"cc_backend_fp_contract\"" in
   p_all ~min:2 "case: Utils.state_config of off is a pin, its labels in either order"
     [ stated key "~data:\"off\""; stated "~data:\"off\"" key ]
     ~f:(fun pin -> match judge_text (pin ^ claim) with Some (Ok Pinned) -> true | _ -> false);
-  p "case: Utils.state_config of fast is no pin" (refused (stated key "~data:\"fast\"" ^ claim));
+  p "case: Utils.state_config of fast is no pin" (unpinned (stated key "~data:\"fast\"" ^ claim));
   p "case: Utils.state_config of off replaced by fast is no pin"
-    (refused (stated key "~data:\"off\"" ^ stated key "~data:\"fast\"" ^ claim));
+    (unpinned (stated key "~data:\"off\"" ^ stated key "~data:\"fast\"" ^ claim));
   p "case: Utils.state_config of fast outranks the putenv of off"
-    (refused (pin ^ stated key "~data:\"fast\"" ^ claim));
+    (unpinned (pin ^ stated key "~data:\"fast\"" ^ claim));
   p "case: Utils.unstate_config withdraws the statement of off"
-    (refused
+    (unpinned
        (stated key "~data:\"off\"" ^ "let () = Utils.unstate_config \"cc_backend_fp_contract\"\n"
       ^ claim));
   p "case: a marker of an unknown kind is refused"
-    (refused (marker "trust-me" "it is fine" ^ claim));
-  p "case: a one-word reason is refused" (refused (marker "gated" "flags" ^ claim));
+    (refused "unknown kind `%s`" (marker "trust-me" "it is fine" ^ claim));
+  p "case: a one-word reason is refused"
+    (refused "the reason needs at least two words" (marker "gated" "flags" ^ claim));
   p "case: a sentinel that does not open its comment is refused"
-    (refused ("(* see " ^ sentinel ^ " gated -- reads the flags *)\n" ^ claim));
+    (refused "the sentinel must open the comment"
+       ("(* see " ^ sentinel ^ " gated -- reads the flags *)\n" ^ claim));
   p "case: two markers are refused"
-    (refused (marker "gated" "reads the flags" ^ marker "not-cc" "GPU legs only" ^ claim));
+    (refused "more than one marker"
+       (marker "gated" "reads the flags" ^ marker "not-cc" "GPU legs only" ^ claim));
   p "case: a pin and a marker together are refused"
-    (refused (pin ^ marker "gated" "reads the flags" ^ claim));
-  p "case: a marker with no claim is refused" (refused (marker "gated" "reads the flags"));
+    (refused "both a pin and a marker: drop the marker"
+       (pin ^ marker "gated" "reads the flags" ^ claim));
+  p "case: a marker with no claim is refused"
+    (refused "a marker, but no bitwise claim for it to dispose of"
+       (marker "gated" "reads the flags"));
+  p "case: a marker with no reason separator is refused"
+    (refused "expected `<kind> -- <reason>` after the sentinel"
+       ("(* " ^ sentinel ^ " gated reads the flags *)\n" ^ claim));
+  let echoed = "more than one marker" in
+  p "case: the wrong refusal is rejected even when its argument echoes the expected diagnostic"
+    (match judge_text (marker echoed "reads the flags" ^ claim) with
+    | Some (Error ([ refusal ] as refusals)) ->
+        String.is_substring refusal.message ~substring:echoed
+        && check "unknown kind `%s`" refusals
+        && not (check ~quiet:true echoed refusals)
+    | _ -> false);
+  let read_refused format read =
+    match read_source ~path:"fixture.ml" read with
+    | First _ -> false
+    | Second refusal -> check format [ refusal ]
+  in
+  p "case: a source that does not parse is refused"
+    (read_refused "%s: does not parse: %s" (fun () -> "let x = ("));
+  p "case: an exception from the source reader is refused separately"
+    (read_refused "%s: scanner raised: %s" (fun () -> raise Stdlib.Exit));
   p "case: the word in a comment is no claim"
     (Option.is_none (judge_text "(* the two agree bitwise *)\nlet () = p \"tiled matches\" true\n"))
 
@@ -721,6 +778,7 @@ let cases () =
 let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
 let () =
+  let open Refusals in
   if Array.length argv < 2 then (
     eprintf "Usage: %s <workspace_root> <source...>\n" argv.(0);
     Stdlib.exit 2);
@@ -738,13 +796,7 @@ let () =
   in
   let read_sources, unlexed =
     List.partition_map sources ~f:(fun source ->
-        match
-          Test_scan.Scan_attempt.run (fun () ->
-              judge_text (In_channel.read_all (Map.find_exn on_disk source)))
-        with
-        | Scanned verdict -> First (source, verdict)
-        | Unparsed why -> Second (source ^ ": does not parse: " ^ why)
-        | Raised why -> Second (source ^ ": scanner raised: " ^ why))
+        read_source ~path:source (fun () -> In_channel.read_all (Map.find_exn on_disk source)))
   in
   let listed =
     List.filter_map read_sources ~f:(fun (source, v) -> Option.map v ~f:(fun v -> (source, v)))
@@ -754,11 +806,15 @@ let () =
   in
   let refusals =
     List.filter_map listed ~f:(fun (s, v) ->
-        match v with Error why -> Some (s ^ ": " ^ why) | Ok _ -> None)
+        match v with
+        | Error reasons ->
+            Some (s ^ ": " ^ String.concat ~sep:"; " (List.map reasons ~f:(fun r -> r.message)))
+        | Ok _ -> None)
   in
   eprintf "fp-contract pin scan: %d sources read, %d listed (not part of the golden)\n"
     (List.length read_sources) (List.length listed);
-  List.iter (unlexed @ refusals) ~f:(eprintf "  refused %s\n");
+  List.iter unlexed ~f:(fun r -> eprintf "  refused %s\n" r.message);
+  List.iter refusals ~f:(eprintf "  refused %s\n");
   cases ();
   p_empty "every test source lexes" ~over:sources unlexed;
   p_exists "the walk read the arrayjit package's test sources too" read_sources ~f:(fun (path, _) ->
@@ -778,4 +834,4 @@ let () =
       match d with
       | Pinned -> printf "%s -- pinned off\n" source
       | Marked (kind, reason) -> printf "%s -- %s: %s\n" source kind reason);
-  Test_scan.Refusal_control_manifest.print "fp_contract_pin_scan.ml"
+  Refusals.print source
