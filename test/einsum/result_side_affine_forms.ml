@@ -89,8 +89,6 @@ let strided ~stride ~offset a =
 
 (* {2 Executed forms} *)
 
-let exn_message = function Row.Shape_error (msg, _) -> msg | e -> Stdlib.Printexc.to_string e
-
 let read ctx t =
   (Ir.Tnode.dims_without_padding t.Tensor.value, Context.get_values ctx t.Tensor.value)
 
@@ -102,7 +100,7 @@ let executes label ~dims ~want build =
         read (Train.forward_once (Context.auto ()) t) t
       with
       | exception e ->
-          Stdio.eprintf "%s: raised %s\n%!" label (exn_message e);
+          Stdio.eprintf "%s: raised %s\n%!" label (Shape_test.exn_message e);
           pf "%s: executes" label false
       | got -> matches label ~dims ~want got)
 
@@ -475,19 +473,7 @@ let run_gradients () =
 
 (* {2 Refused offset forms} *)
 
-type outcome = Refused_at_construction of string | Refused_later of string | Ran
-
-(* [build] constructs the operation and returns the thunk that compiles and runs it. A failed case
-   leaves the session tainted (gh-ocannl-1301); it is rewound, so the next case starts from the last
-   closure. *)
-let attempt build =
-  let outcome =
-    match build () with
-    | exception Row.Shape_error (msg, _) -> Refused_at_construction msg
-    | run -> ( match run () with () -> Ran | exception e -> Refused_later (exn_message e))
-  in
-  if Option.is_some (Shape.taint_provenance ()) then Tensor.rewind_to_last_closure ();
-  outcome
+open Shape_test
 
 let forward t () = ignore (Train.forward_once (Context.auto ()) t : Context.t)
 
@@ -496,7 +482,7 @@ let refused ?(print_message = false) label ~axis ~spec build =
       let claim_label =
         Printf.sprintf "%s: refused at construction, naming the affine axis %s" label axis
       in
-      match attempt build with
+      match expect_shape_error build with
       | Refused_at_construction msg ->
           if print_message then Stdio.printf "%s: %s\n" label msg;
           let names_it =
@@ -587,7 +573,7 @@ let run_renderer () =
           run (fun x w -> Operation.einsum "s, 2*o=+1+k; k => s, o" ~grad_spec:pg x w ()) )
       with
       | exception e ->
-          Stdio.eprintf "renderer: raised %s\n%!" (exn_message e);
+          Stdio.eprintf "renderer: raised %s\n%!" (Shape_test.exn_message e);
           p "the %op route of 2*o=+1+k executes" false
       | (ppx_dims, ppx_vals), (raw_dims, raw_vals) ->
           p "the %op route of 2*o=+1+k has the plain string's extent"

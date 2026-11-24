@@ -1279,6 +1279,26 @@ module Impl = struct
           "}";
         ]
 
+    let mma_address_space = function
+      | `Device -> Some "device"
+      | `Shared -> Some "threadgroup"
+      | `Thread | `Fragment _ -> None
+
+    (* All three emission paths load A and B with [simdgroup_load]. The update-only path already has
+       a destination fragment, while the other two also load/store D at the boundary. *)
+    let mma_tile_fragments ~d_prec ~a_prec ~b_prec ~m ~n ~k ~d_layout ~a:(a_space, a_layout)
+        ~b:(b_space, b_layout) =
+      let tile = Metal_mma.tile in
+      (* Metal has no [ldmatrix]-style load for swizzled storage (gh-ocannl-481). *)
+      match
+        (d_layout, a_layout, b_layout, mma_address_space a_space, mma_address_space b_space)
+      with
+      | `Plain, `Plain, `Plain, Some a_as, Some b_as
+        when m % tile = 0 && n % tile = 0 && k % tile = 0 ->
+          Option.bind (mma_fragment_types ~d_prec ~a_prec ~b_prec) ~f:(fun types ->
+              Option.map (hardware_limits ()).Backend_intf.mma ~f:(fun _ -> (types, a_as, b_as)))
+      | _ -> None
+
     (* Cooperative tile-MMA emission for [Low_level.Tile_mma] via MSL [simdgroup_matrix]
        (docs/design/tensorize-mma.md §4): fragment blocks of 8×8 tiles held jointly by the 32-thread
        simdgroup, loaded with [simdgroup_load] straight from [device] memory or [threadgroup] tiles
@@ -1303,27 +1323,13 @@ module Impl = struct
           ~a:(lda, a_space, a_layout)
           ~b:(ldb, b_space, b_layout)
         ->
-          (* [simdgroup_matrix] loads take a plain pointer and leading dimension; Metal has no
-             [ldmatrix] analogue, so a swizzled operand layout declines to the caller's scalar
-             fallback (gh-ocannl-481 item 3, D2). *)
-          let plain = function `Plain -> true | `Swizzled_b128 -> false in
           let tile = Metal_mma.tile in
-          let frag_types =
-            if plain d_layout && plain a_layout && plain b_layout then
-              mma_fragment_types ~d_prec ~a_prec ~b_prec
-            else None
+          let fragments =
+            mma_tile_fragments ~d_prec ~a_prec ~b_prec ~m ~n ~k ~d_layout ~a:(a_space, a_layout)
+              ~b:(b_space, b_layout)
           in
-          let addr_space = function
-            | `Device -> Some "device"
-            | `Shared -> Some "threadgroup"
-            | `Thread | `Fragment _ -> None
-          in
-          match (frag_types, d_space, addr_space a_space, addr_space b_space) with
-          | Some (_acc_frag, a_frag, b_frag, _d_frag), `Fragment fragment, Some a_as, Some b_as
-            when m % tile = 0
-                 && n % tile = 0
-                 && k % tile = 0
-                 && Option.is_some (hardware_limits ()).Backend_intf.mma ->
+          match (fragments, d_space) with
+          | Some ((_acc_frag, a_frag, b_frag, _d_frag), a_as, b_as), `Fragment fragment ->
               let ptr_decl name aspace elem ptr =
                 string (Printf.sprintf "%s %s *%s = " aspace elem name) ^^ ptr ^^ semi
               in
@@ -1346,12 +1352,8 @@ module Impl = struct
                     ^^ string "threadgroup_barrier(mem_flags::mem_threadgroup);"
                     ^^ hardline ^^ rbrace))
           | _ -> (
-              match (frag_types, addr_space d_space, addr_space a_space, addr_space b_space) with
-              | Some (acc_frag, a_frag, b_frag, d_frag), Some d_as, Some a_as, Some b_as
-                when m % tile = 0
-                     && n % tile = 0
-                     && k % tile = 0
-                     && Option.is_some (hardware_limits ()).Backend_intf.mma ->
+              match (fragments, mma_address_space d_space) with
+              | Some ((acc_frag, a_frag, b_frag, d_frag), a_as, b_as), Some d_as ->
                   let mt = m / tile and nt = n / tile in
                   let ptr_decl name aspace elem ptr =
                     string (Printf.sprintf "%s %s *%s = " aspace elem name) ^^ ptr ^^ semi
@@ -1429,31 +1431,14 @@ module Impl = struct
           ~b:(_, b_space, b_layout)
           ~body
         ->
-          (* [simdgroup_matrix] loads take a plain pointer and leading dimension; Metal has no
-             [ldmatrix] analogue, so a swizzled operand layout declines to the caller's scalar
-             fallback (gh-ocannl-481 item 3, D2). *)
-          let plain = function `Plain -> true | `Swizzled_b128 -> false in
           let tile = Metal_mma.tile in
-          let frag_types =
-            if plain d_layout && plain a_layout && plain b_layout then
-              mma_fragment_types ~d_prec ~a_prec ~b_prec
-            else None
+          let fragments =
+            mma_tile_fragments ~d_prec ~a_prec ~b_prec ~m ~n ~k ~d_layout ~a:(a_space, a_layout)
+              ~b:(b_space, b_layout)
           in
-          let loadable = function `Device | `Shared -> true | `Thread | `Fragment _ -> false in
-          match frag_types with
-          | Some (acc_frag, _a_frag, _b_frag, d_frag)
-            when m % tile = 0
-                 && n % tile = 0
-                 && k % tile = 0
-                 && loadable d_space && loadable a_space && loadable b_space
-                 && Option.is_some (hardware_limits ()).Backend_intf.mma ->
+          match (fragments, mma_address_space d_space) with
+          | Some ((acc_frag, _a_frag, _b_frag, d_frag), _, _), Some d_as ->
               let mt = m / tile and nt = n / tile in
-              let d_as =
-                match d_space with
-                | `Device -> "device"
-                | `Shared -> "threadgroup"
-                | _ -> assert false
-              in
               let barrier =
                 "threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);"
               in

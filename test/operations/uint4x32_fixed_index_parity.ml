@@ -18,7 +18,12 @@ open Verdict.Claims
    Each case builds the packed [uniform] chain by hand, with the counter a tensor of its own, and
    runs it twice: the counter forced [Virtual], then forced materialized. The draws must agree bit
    for bit, and the generated code must show the two placements really happened (the materialized
-   run stores the counter, the virtual one does not). *)
+   run stores the counter, the virtual one does not).
+
+   The text check reads only the two freshly emitted kernel bodies, including outlined parts. A
+   direct [double_to_uint4x32] call is forbidden in this fixture: its only counter comes from the
+   fixed index and its other uint4x32 inputs come from bit constants. The check ignores the builtins
+   prelude, comments and strings. It makes no claim about conversions in other kernels. *)
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
@@ -59,6 +64,9 @@ let bits_equal a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
    builtins define every conversion. *)
 let body s = Generated.main_logic s
 
+let calls_conversion src ~pattern =
+  Ir.C_syntax.Source_tokens.mentions (Ir.C_syntax.Source_tokens.scan (body src)) pattern
+
 let check ~name ~prec ~packed output_dims =
   Verdict.case name @@ fun () ->
   let mat_vals, mat_src, counter = run ~virtual_counter:false ~prec ~packed output_dims in
@@ -69,6 +77,10 @@ let check ~name ~prec ~packed output_dims =
   Stdio.printf "%s: %d values drawn\n" name (Array.length mat_vals);
   p (name ^ ": the materialized run stores the counter") (stores_counter mat_src);
   p (name ^ ": the virtual run inlines the counter") (not (stores_counter vir_src));
+  let pattern = "double_to_uint4x32(" in
+  p
+    (name ^ ": neither kernel calls double_to_uint4x32")
+    ((not (calls_conversion mat_src ~pattern)) && not (calls_conversion vir_src ~pattern));
   p_all2
     (name ^ ": inlined and materialized counters draw bitwise-equal values")
     vir_vals mat_vals ~f:bits_equal

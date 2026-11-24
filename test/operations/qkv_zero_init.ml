@@ -11,6 +11,7 @@ open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 module LL = Ir.Low_level
 module Sched = Ir.Schedule
+module Outcome = Ir.Schedule_outcome
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let () = Stdio.eprintf "qkv_zero_init backend=%s\n" backend_name
@@ -89,26 +90,40 @@ let folded_seed_claims ~tag ~what ~pre ~out ~seed ~want ~matches =
   let results =
     List.mapi real ~f:(fun i q ->
         let o = apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p:q pre) pre in
-        let ctx, routine = Ll_test.link ~name:(tag ^ Int.to_string i) o in
-        let got = Context.get_values (Ll_test.run_linked (ctx, routine) ~seed) out.Tensor.value in
-        let ok = matches got want in
-        if not ok then
-          Stdio.eprintf "%s seed %d (mma=%b) differs from the materialized run\n" what i
-            q.Autotune.sk_mma;
-        let rendered =
-          Ir.C_syntax.equal_tensorization routine.Context.mma.tensorization Ir.C_syntax.Tensorized
-        in
-        (q, ok, rendered))
+        let name = tag ^ Int.to_string i in
+        match Ll_test.link_outcome ~name ~provenance:Outcome.User_schedule ~candidate:name o with
+        | Error (Outcome.Classified { phase; cause; _ }) ->
+            Stdio.eprintf "%s seed %d (mma=%b) rejected at %s: %s\n" what i q.Autotune.sk_mma
+              (Sexp.to_string (Outcome.sexp_of_phase phase))
+              (Outcome.detail_of_cause cause);
+            (q, None)
+        | Error (Outcome.Fatal { exn; backtrace; _ }) ->
+            Stdlib.Printexc.raise_with_backtrace exn backtrace
+        | Ok (ctx, routine) ->
+            let got =
+              Context.get_values (Ll_test.run_linked (ctx, routine) ~seed) out.Tensor.value
+            in
+            let ok = matches got want in
+            if not ok then
+              Stdio.eprintf "%s seed %d (mma=%b) differs from the materialized run\n" what i
+                q.Autotune.sk_mma;
+            let rendered =
+              Ir.C_syntax.equal_tensorization routine.Context.mma.tensorization
+                Ir.C_syntax.Tensorized
+            in
+            (q, Some (ok, rendered)))
   in
   Stdio.eprintf
-    "%s seeds executed (not part of the golden): %d, %d tensorized, %d of those rendered tensorized\n"
+    "%s seeds (not part of the golden): %d proposed, %d executed, %d tensorized proposals, %d of \
+     those rendered tensorized\n"
     what (List.length real)
+    (List.count results ~f:(fun (_, result) -> Option.is_some result))
     (List.count real ~f:(fun q -> q.Autotune.sk_mma))
-    (List.count results ~f:(fun (q, _, rendered) -> q.Autotune.sk_mma && rendered));
+    (List.count results ~f:(fun (q, result) -> q.Autotune.sk_mma && Option.exists result ~f:snd));
   gated_all ~when_:on_gpu ~on:backend_name
     ("every GPU sketch of the " ^ what ^ " matches the materialized run")
     results
-    ~f:(fun (_, ok, _) -> ok);
+    ~f:(fun (_, result) -> Option.exists result ~f:fst);
   let label =
     "every tensorized " ^ what ^ " sketch renders tensorized and matches the materialized run"
   in
@@ -117,8 +132,8 @@ let folded_seed_claims ~tag ~what ~pre ~out ~seed ~want ~matches =
       (* Every tensorized seed, not some (gh-ocannl-1283): one seed declining to the scalar fallback
          fails the claim even while its siblings render the intrinsics. *)
       p_all label
-        (List.filter results ~f:(fun (q, _, _) -> q.Autotune.sk_mma))
-        ~f:(fun (_, ok, rendered) -> rendered && ok)
+        (List.filter results ~f:(fun (q, _) -> q.Autotune.sk_mma))
+        ~f:(fun (_, result) -> Option.exists result ~f:(fun (ok, rendered) -> rendered && ok))
   | `Withheld aggregation -> Verdict.skipped ~aggregation ~backend:backend_name label
 
 let () =

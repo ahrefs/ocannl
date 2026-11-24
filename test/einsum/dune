@@ -519,7 +519,14 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules test_symbolic_extents)
- (libraries base ocannl stdio arrayjit.ir arrayjit.context arrayjit.utils)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.ir
+  arrayjit.context
+  arrayjit.utils
+  shape_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -537,7 +544,8 @@
   arrayjit.verdict
   arrayjit.context
   ll_test
-  exact_sums)
+  exact_sums
+  shape_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -590,7 +598,8 @@
   arrayjit.verdict
   arrayjit.context
   ll_test
-  exact_sums)
+  exact_sums
+  shape_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -608,7 +617,8 @@
   arrayjit.verdict
   arrayjit.context
   ll_test
-  exact_sums)
+  exact_sums
+  shape_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

@@ -244,19 +244,20 @@ let stage_over x t =
 let unroll s = Sched.Unroll { axis = s; materialize = true }
 let retype axis ty = Sched.Retype { axis; ty }
 
-(* The detail of the typed refusal [apply_classified] raises for [sched], [None] when it applies. *)
+(* The check and detail of the typed refusal, or [None] when the schedule applies. *)
 let refusal ~name sched o =
   match Sched.apply_classified sched o with
   | (_ : LL.optimized) -> None
-  | exception Outcome.Cause_at (Outcome.Transform, Outcome.Illegal_schedule { detail; _ }) ->
+  | exception Outcome.Cause_at (Outcome.Transform, Outcome.Illegal_schedule { check; detail }) ->
       Stdio.eprintf "privatize_recheck: %s refused: %s (not part of the golden)\n%!" name detail;
-      Some detail
+      Some (check, detail)
 
 (* Refused at the op [op], the detail saying [what]. *)
-let refused ~name ~op ~what sched o =
+let refused ~name ~op ~check ~what sched o =
   match refusal ~name sched o with
-  | Some detail ->
-      String.is_prefix detail ~prefix:("Schedule." ^ op ^ ":")
+  | Some (got, detail) ->
+      String.equal check got
+      && String.is_prefix detail ~prefix:("Schedule." ^ op ^ ":")
       && String.is_substring detail ~substring:what
   | None -> false
 
@@ -279,12 +280,16 @@ let scope_legs () =
   let hw ty name ~privatize =
     let o, acc, _, r, s, t = build_rst name in
     let pre = if privatize then [ pz ~target:acc ~over:r ] else [] in
-    refused ~name ~op:"Retype" ~what:in_scope (pre @ [ unroll s; retype t ty ]) o
+    refused ~name ~op:"Retype" ~check:"scope_grammar" ~what:in_scope
+      (pre @ [ unroll s; retype t ty ])
+      o
   in
   let stage name ~privatize =
     let o, acc, x, r, s, t = build_rsut name in
     let pre = if privatize then [ pz ~target:acc ~over:r ] else [] in
-    refused ~name ~op:"Stage" ~what:scope_anchor (pre @ [ unroll s; stage_over x t ]) o
+    refused ~name ~op:"Stage" ~check:"Schedule.apply" ~what:scope_anchor
+      (pre @ [ unroll s; stage_over x t ])
+      o
   in
   p claim_scope_hw
     (hw LL.Workgroup_reduce "prc_wgr" ~privatize:true && hw LL.Grid "prc_grid" ~privatize:true);
@@ -364,7 +369,7 @@ let lifetime_legs () =
       | Some (Sched.Retype _, v) -> illegal_with ~what:lifetime v
       | _ -> false
     in
-    refused ~name ~op:"Retype" ~what:lifetime sched o && chain
+    refused ~name ~op:"Retype" ~check:"privatize_tile_lifetime" ~what:lifetime sched o && chain
   in
   p claim_lifetime_omitted (omitted "prc_life_grid" LL.Grid && omitted "prc_life_wg" LL.Workgroup);
   (let o, acc, _, r, _, t = build_rst "prc_life_single" in
@@ -388,8 +393,10 @@ let lifetime_legs () =
        | _ -> false
      in
      storage_tile
-     && refused ~name:"prc_life_mentioned" ~op:"Retype" ~what:lifetime sched o
-     && refused ~name:"prc_life_over" ~op:"Retype" ~what:lifetime sched' o');
+     && refused ~name:"prc_life_mentioned" ~op:"Retype" ~check:"privatize_tile_lifetime"
+          ~what:lifetime sched o
+     && refused ~name:"prc_life_over" ~op:"Retype" ~check:"privatize_tile_lifetime" ~what:lifetime
+          sched' o');
   p claim_lifetime_admitted
     (let o, sched =
        f32 "prc_life_outer" ~inner_mentioned:false (fun ~r:_ ~i -> [ retype i LL.Grid ])

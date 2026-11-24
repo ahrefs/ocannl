@@ -617,6 +617,14 @@ let backend_accum_prec =
 let backend_contraction_off () =
   (Context.codegen_capabilities (Lazy.force base_ctx)).compiler_contraction_off ()
 
+(** The typed form of {!link}, for probes that distinguish a candidate rejection from a fatal
+    compile failure. *)
+let link_outcome ?ctx ?(bindings = Idx.Empty) ~name ~provenance ?candidate (o : LL.optimized) =
+  let ctx = match ctx with Some ctx -> ctx | None -> Lazy.force base_ctx in
+  Context.compile_outcome ~name ~prelowered:o
+    ~lowered_transform:(fun x -> [ x ])
+    ~provenance ?candidate ctx Ir.Assignments.empty_comp bindings
+
 (** [link ~name o] compiles the optimized record AS WRITTEN through the [?prelowered] seam,
     returning the advanced context and the compiled routine — so a test can assert on the
     [inputs]/[outputs] the link actually computed, read straight off the routine record, instead of
@@ -633,11 +641,10 @@ let backend_contraction_off () =
     before {!run_linked}; the unit bindings themselves carry no cell to write. ({!run} and
     {!execute}, which return no routine, take those values as [~launch] instead.) Empty by default,
     which is right for every nest whose indices are all loop indices. *)
-let link ?ctx ?(bindings = Idx.Empty) ~name (o : LL.optimized) =
-  let ctx = match ctx with Some ctx -> ctx | None -> Lazy.force base_ctx in
-  Context.compile ~name ~prelowered:o
-    ~lowered_transform:(fun x -> [ x ])
-    ctx Ir.Assignments.empty_comp bindings
+let link ?ctx ?bindings ~name o =
+  match link_outcome ?ctx ?bindings ~name ~provenance:Ir.Schedule_outcome.User_schedule o with
+  | Ok linked -> linked
+  | Error failure -> Ir.Schedule_outcome.raise_failure failure
 
 (** [link_finalized ~placements ~name o] links through the real backend, then checks that every
     requested node has left the undecided placement classes. Backend code generation is the
