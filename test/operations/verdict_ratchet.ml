@@ -6774,6 +6774,36 @@ let () =
       let leg = Verdict.leg ~on:"cuda" ~when_:(alignment = 4) () in
       Verdict.in_leg ~leg "aligned" (fun label -> Verdict.p label true)|ocaml},
       [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
+    ( "refuses a production call hidden in the second call to a nested forwarding gate helper",
+      {ocaml|let id x = x
+let relay x = id x
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:(relay true && relay (Option.is_some (Autotune.detect_conv llc)))
+    ()
+let () = Verdict.in_leg ~leg "conv" (fun label -> Verdict.p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses an explicit policy supplied through an alias of Ir.Numerics.get outside \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let get_policy = Ir.Numerics.get
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:
+      (Ll_test.advertised ~backend_name:"cuda" ~policy:(get_policy ()) ~a_prec:Ir.Ops.single
+         ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+    ()
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "accepts a leg returned by a terminating recursive helper",
+      {ocaml|open Verdict.Claims
+let leg = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let rec choose n = if n = 0 then leg else choose (n - 1)
+let () = in_leg ~leg:(choose 1) "recursive selector" (fun label -> p label true)|ocaml},
+      [] );
     ( "refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy",
       {ocaml|open Verdict.Claims
 let leg =

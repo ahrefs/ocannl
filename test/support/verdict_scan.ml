@@ -7974,18 +7974,21 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
           match expr.pexp_desc with
           | Pexp_record _ -> false
           | Pexp_apply _ -> (
-              let base, _ = flatten_apply expr in
-              match (strip base).pexp_desc with
-              | Pexp_ident { txt; _ } -> (
-                  match resolve_longident env txt with
-                  | `External [ "Ir"; "Numerics"; "get" ] -> true
-                  | `Local_val v -> check_fn_result v
-                  | `Unqualified name -> (
-                      match Lexical_scope.lookup env name with
-                      | Some v -> check_fn_result v
-                      | None -> false)
-                  | _ -> false)
-              | _ -> false)
+              match resolve_external_chain env expr with
+              | Some ([ "Ir"; "Numerics"; "get" ], _) -> true
+              | _ -> (
+                  let base, _ = flatten_apply expr in
+                  match (strip base).pexp_desc with
+                  | Pexp_ident { txt; _ } -> (
+                      match resolve_longident env txt with
+                      | `External [ "Ir"; "Numerics"; "get" ] -> true
+                      | `Local_val v -> check_fn_result v
+                      | `Unqualified name -> (
+                          match Lexical_scope.lookup env name with
+                          | Some v -> check_fn_result v
+                          | None -> false)
+                      | _ -> false)
+                  | _ -> false))
           | Pexp_ident { txt; _ } -> (
               match lookup_local_val env txt with
               | Some v when (not (Hash_set.mem seen v.lg_id)) && List.is_empty v.lg_proj -> (
@@ -8011,6 +8014,15 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
             | Some (rhs, rhs_env) -> (
                 match (strip rhs).pexp_desc with
                 | Pexp_function (_, _, Pfunction_body body) -> check rhs_env body
+                | Pexp_ident { txt; _ } -> (
+                    match resolve_longident rhs_env txt with
+                    | `External [ "Ir"; "Numerics"; "get" ] -> true
+                    | `Local_val next -> check_fn_result next
+                    | `Unqualified name -> (
+                        match Lexical_scope.lookup rhs_env name with
+                        | Some next -> check_fn_result next
+                        | None -> false)
+                    | _ -> false)
                 | _ -> false)
             | None -> false)
         in
@@ -8023,7 +8035,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
       method inspect_gate ~is_sub_leg ~leg_scopes env expr =
         let seen_vals = Hash_set.create (module Int) in
         let seen_param_calls = Hash_set.create (module String) in
-        let seen_fn_calls = Hash_set.create (module String) in
+        let active_fn_calls = Hash_set.create (module Int) in
         let bind_local_call fn_env params all_args =
           let nolabel_args =
             List.filter_map all_args ~f:(fun (albl, aexpr, aenv) ->
@@ -8364,15 +8376,15 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                                   (fn_id, all_args, def)))
                       with
                       | Some (fn_id, all_args, (params, body, fn_env)) ->
-                          let call_key =
-                            Printf.sprintf "%d:%d" fn_id expr.pexp_loc.loc_start.pos_cnum
-                          in
-                          if not (Hash_set.mem seen_fn_calls call_key) then (
-                            Hash_set.add seen_fn_calls call_key;
-                            let call_env, extra_args = bind_local_call fn_env params all_args in
-                            walk ~eval_kind ~in_explicit_policy call_env body;
-                            List.iter extra_args ~f:(fun (aexpr, aenv) ->
-                                walk ~eval_kind ~in_explicit_policy aenv aexpr))
+                          if not (Hash_set.mem active_fn_calls fn_id) then (
+                            Hash_set.add active_fn_calls fn_id;
+                            Exn.protect
+                              ~finally:(fun () -> Hash_set.remove active_fn_calls fn_id)
+                              ~f:(fun () ->
+                                let call_env, extra_args = bind_local_call fn_env params all_args in
+                                walk ~eval_kind ~in_explicit_policy call_env body;
+                                List.iter extra_args ~f:(fun (aexpr, aenv) ->
+                                    walk ~eval_kind ~in_explicit_policy aenv aexpr)))
                       | None ->
                           walk ~eval_kind ~in_explicit_policy env callee;
                           let nolabel_idx = ref 0 in
@@ -8615,13 +8627,13 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                             (fn_id, all_args, def)))
                   with
                   | Some (fn_id, all_args, (params, body, fn_env)) ->
-                      let call_key =
-                        Printf.sprintf "p:%d:%d" fn_id expr.pexp_loc.loc_start.pos_cnum
-                      in
-                      if not (Hash_set.mem seen_fn_calls call_key) then (
-                        Hash_set.add seen_fn_calls call_key;
-                        let call_env, _ = bind_local_call fn_env params all_args in
-                        walk_projected ~eval_kind ~in_explicit_policy call_env proj body)
+                      if not (Hash_set.mem active_fn_calls fn_id) then (
+                        Hash_set.add active_fn_calls fn_id;
+                        Exn.protect
+                          ~finally:(fun () -> Hash_set.remove active_fn_calls fn_id)
+                          ~f:(fun () ->
+                            let call_env, _ = bind_local_call fn_env params all_args in
+                            walk_projected ~eval_kind ~in_explicit_policy call_env proj body))
                   | None ->
                       (match step with
                       | P_field fname when expr_is_cap_record env expr ->
@@ -8748,6 +8760,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
       method resolve_legs ?call_pos ~wrapper_ids env expr =
         let seen = Hash_set.create (module Int) in
         let seen_param = Hash_set.create (module String) in
+        let active_fns = Hash_set.create (module Int) in
         let resolve_param_legs pm proj =
           let all_calls = Hashtbl.find_multi local_calls pm.pm_fn_id in
           let calls =
@@ -8827,10 +8840,14 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
               | Pexp_apply _ -> (
                   match
                     Option.bind (resolve_local_fn_chain env expr) ~f:(fun (fn_id, _) ->
-                        Hashtbl.find fn_def_by_id fn_id)
+                        Option.map (Hashtbl.find fn_def_by_id fn_id) ~f:(fun def -> (fn_id, def)))
                   with
-                  | Some (_, body, fn_env) -> go ~wids fn_env body
-                  | None -> [])
+                  | Some (fn_id, (_, body, fn_env)) when not (Hash_set.mem active_fns fn_id) ->
+                      Hash_set.add active_fns fn_id;
+                      Exn.protect
+                        ~finally:(fun () -> Hash_set.remove active_fns fn_id)
+                        ~f:(fun () -> go ~wids fn_env body)
+                  | _ -> [])
               | Pexp_field (record, { txt; _ }) ->
                   let fname = Ppxlib.Longident.last_exn txt in
                   go_proj ~wids env [ P_field fname ] record
@@ -8903,10 +8920,14 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
               | Pexp_apply _ -> (
                   match
                     Option.bind (resolve_local_fn_chain env expr) ~f:(fun (fn_id, _) ->
-                        Hashtbl.find fn_def_by_id fn_id)
+                        Option.map (Hashtbl.find fn_def_by_id fn_id) ~f:(fun def -> (fn_id, def)))
                   with
-                  | Some (_, body, fn_env) -> go_proj ~wids fn_env proj body
-                  | None -> [])
+                  | Some (fn_id, (_, body, fn_env)) when not (Hash_set.mem active_fns fn_id) ->
+                      Hash_set.add active_fns fn_id;
+                      Exn.protect
+                        ~finally:(fun () -> Hash_set.remove active_fns fn_id)
+                        ~f:(fun () -> go_proj ~wids fn_env proj body)
+                  | _ -> [])
               | Pexp_ifthenelse (_, t, Some f) ->
                   go_proj ~wids env proj t @ go_proj ~wids env proj f
               | Pexp_match (scrut, cases) ->

@@ -846,6 +846,9 @@ refuses a stale ambient-policy leg passed to a second call of a local claim help
 refuses a deferred lazy sub_leg used unwrapped before Test_utils.with_policy inside the same local helper call: true
 refuses an ambient-policy leg used inside a named iterator callback under Test_utils.with_policy: true
 refuses a leg gated on a non-allowlisted capability field bound by an enclosing match: true
+refuses a production call hidden in the second call to a nested forwarding gate helper: true
+refuses an explicit policy supplied through an alias of Ir.Numerics.get outside Test_utils.with_policy: true
+accepts a leg returned by a terminating recursive helper: true
 refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy: true
 refuses an ambient-policy leg used inside a local helper called from a Test_utils.with_policy callback: true
 refuses a deferred lazy sub_leg explicitly forced with Lazy.force before Test_utils.with_policy: true
