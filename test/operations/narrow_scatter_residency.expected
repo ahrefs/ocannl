@@ -16,8 +16,11 @@ fp16 Fp16_wide: f32 baseline equals exact host sums: true
 fp16 Fp16_wide: per-hit fp16 differs from one final rounding (non-vacuity): true
 fp16 Fp16_wide: every Set_dynamic targets an f32 scatter_acc buffer: true
 fp16 Fp16_wide: wte.grad equals f32 reference narrowed once, cell for cell: true
-Bf16_narrow: every Set_dynamic target precision matches backend accum_prec: true
-Bf16_narrow: executed bf16 gradient matches backend accum_prec reference: true
+Bf16_narrow: backend accum_prec matches the backend policy table: true
+Bf16_narrow (narrow backend): every Set_dynamic stays bf16 with no scatter_acc buffer: true
+Bf16_narrow (narrow backend): executed bf16 gradient matches per-hit reference: true
+Bf16_narrow (wide backend): every Set_dynamic targets an f32 scatter_acc buffer: true
+Bf16_narrow (wide backend): executed bf16 gradient matches once-narrowed f32 reference: true
 identity accum_prec leaves scatter IR physically unchanged: true
 f32 scatter target is left physically unchanged: true
 debug_log_from_routines declines widening: true
@@ -33,3 +36,11 @@ mismatched Get_dynamic index precision declines widening: true
 single-hit scatter (no multi-trip reduction loop) declines widening: true
 lowered_for_decisions ~accum_prec:Fn.id keeps narrow scatter target: true
 lowered_for_decisions ~accum_prec:widen_all widens scatter target to f32: true
+dual-table GPT-2 shape: both wte and wpe scatters arrive separately and widen: true
+dual-table GPT-2 shape: every Set_dynamic targets an f32 scatter_acc buffer: true
+dual-table GPT-2 shape: f32 wte.grad equals exact host sum: true
+dual-table GPT-2 shape: f32 wpe.grad equals exact host sum: true
+dual-table GPT-2 shape: wte per-hit bf16 differs from once-rounded (non-vacuity): true
+dual-table GPT-2 shape: wpe per-hit bf16 differs from once-rounded (non-vacuity): true
+dual-table GPT-2 shape: bf16 wte.grad equals f32 narrowed once, cell for cell: true
+dual-table GPT-2 shape: bf16 wpe.grad equals f32 narrowed once, cell for cell: true

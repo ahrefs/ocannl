@@ -274,10 +274,8 @@ let () =
                 | 7 -> 50. *. s (* OOB *)
                 | _ -> 0.)
           in
-          (* hfinal has shape [b=1; s=1; o=d_model] with value 1.0, and lm_coeff has shape [b=1;
-             s=1; o=vocab] with 256.0 at v=3, 256.0 at v=6, and 1.0 at v=11 (untouched by scatter).
-             Wait: to vary by channel [d], set hfinal[0,0,d] = scale d and lm_coeff[0,0,v] = 256. on
-             v in {3,6}, 4. on v=11, 0. elsewhere. *)
+          (* hfinal[0,0,d] = scale d and lm_coeff[0,0,v] = 256. on v in {3, 6}, 4. on v = 11
+             (untouched by scatter), and 0. elsewhere. *)
           let hfinal_vals = Array.init d_model ~f:scale in
           let lm_coeff_vals =
             Array.init vocab ~f:(fun v -> match v with 3 | 6 -> 256. | 11 -> 4. | _ -> 0.)
@@ -563,6 +561,15 @@ let () =
             host_scatter ~vocab ~d_model ~ids_rows ~coeff_vals ~init:zeros
               ~step:(Ops.round_to_prec bf16)
           in
+          let backend_name =
+            String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
+          in
+          let expected_narrows =
+            match backend_name with
+            | "hip" | "metal" -> true
+            | "cc" | "multidev_cc" | "cuda" -> false
+            | other -> failwith ("unexpected backend: " ^ other)
+          in
           let acc_bf16 =
             (Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.accum_prec bf16
           in
@@ -573,15 +580,34 @@ let () =
               ()
           in
           let targets = scatter_targets routine in
-          Stdio.eprintf "Bf16_narrow (not part of the golden): narrows=%b targets=%d\n%!" narrows
-            (List.length targets);
-          p_all "Bf16_narrow: every Set_dynamic target precision matches backend accum_prec" targets
-            ~f:(fun tn ->
-              Ops.equal_prec (Lazy.force tn.Tn.storage_prec) acc_bf16
-              && Bool.equal (String.equal tn.Tn.namespace LL.scatter_accum_namespace) (not narrows));
-          let expected = if narrows then per_hit else once in
-          p_all2 "Bf16_narrow: executed bf16 gradient matches backend accum_prec reference" bf_grad
-            expected ~f:bitwise))
+          Stdio.eprintf "Bf16_narrow (not part of the golden): backend=%s narrows=%b targets=%d\n%!"
+            backend_name narrows (List.length targets);
+          p "Bf16_narrow: backend accum_prec matches the backend policy table"
+            (Bool.equal narrows expected_narrows);
+          let narrow_leg =
+            Verdict.leg ~when_:expected_narrows ~on:"backends whose Bf16_narrow widens" ()
+          in
+          let wide_leg =
+            Verdict.leg ~when_:(not expected_narrows) ~on:"backends whose Bf16_narrow narrows" ()
+          in
+          in_leg ~leg:narrow_leg
+            "Bf16_narrow (narrow backend): every Set_dynamic stays bf16 with no scatter_acc buffer"
+            (fun label ->
+              p_all label targets ~f:(fun tn ->
+                  Ops.equal_prec (Lazy.force tn.Tn.storage_prec) bf16
+                  && not (String.equal tn.Tn.namespace LL.scatter_accum_namespace)));
+          in_leg ~leg:narrow_leg
+            "Bf16_narrow (narrow backend): executed bf16 gradient matches per-hit reference"
+            (fun label -> p_all2 label bf_grad per_hit ~f:bitwise);
+          in_leg ~leg:wide_leg
+            "Bf16_narrow (wide backend): every Set_dynamic targets an f32 scatter_acc buffer"
+            (fun label ->
+              p_all label targets ~f:(fun tn ->
+                  Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ops.single
+                  && String.equal tn.Tn.namespace LL.scatter_accum_namespace));
+          in_leg ~leg:wide_leg
+            "Bf16_narrow (wide backend): executed bf16 gradient matches once-narrowed f32 reference"
+            (fun label -> p_all2 label bf_grad once ~f:bitwise)))
 
 (* === Case 7: hand-built IR allowlist and decline negative controls === *)
 let () =
@@ -856,3 +882,138 @@ let () =
         (scatter_targets_of_ll opt_wide.LL.llc) ~f:(fun tn ->
           Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ops.single
           && String.equal tn.Tn.namespace LL.scatter_accum_namespace))
+
+(* === Case 8: dual-table bf16 cast-twin embedding (wte + wpe + tied lm_head, gpt2_mini_train
+   two-scatter shape) === *)
+let () =
+  Test_utils.with_policy
+    (fun policy ->
+      { policy with Ir.Numerics.bf16_arithmetic = Ir.Numerics.Bf16_auto; narrow_compute_f32 = true })
+    (fun () ->
+      case "dual-table bf16 cast-twin embedding (wte + wpe in one routine)" (fun () ->
+          let vocab = 12 and n_pos = 8 and d_model = 8 and batch = 5 and seq = 4 in
+          (* 5 batches x 4 positions: every position 0..3 receives 5 hits into wpe (big + 4*tiny),
+             and token 2 receives 5 hits into wte (big + 4*tiny) across batch 0..4, pos 0. *)
+          let tok_rows =
+            [|
+              [| 2; 3; 4; 5 |];
+              [| 2; 6; 7; 8 |];
+              [| 2; 3; 6; 9 |];
+              [| 2; 4; 7; 10 |];
+              [| 2; 5; 8; vocab |];
+            |]
+          in
+          let pos_rows = Array.init batch ~f:(fun _ -> [| 0; 1; 2; 3 |]) in
+          let scale d = 2. **. Float.of_int (d % 4) in
+          let coeff_vals =
+            Array.init
+              (batch * seq * d_model)
+              ~f:(fun idx ->
+                let pos = idx / d_model and d = idx % d_model in
+                let b = pos / seq in
+                let s_val = scale d in
+                if b = 0 then 256. *. s_val else 0.5 *. s_val)
+          in
+          let wte_vals =
+            Array.init (d_model * vocab) ~f:(fun idx ->
+                Ll_test.weighted ~weights:[| 3; 5 |] ~modulus:9 ~offset:(-4.) ~stride:0.25
+                  [| idx / vocab; idx % vocab |])
+          in
+          let wpe_vals =
+            Array.init (d_model * n_pos) ~f:(fun idx ->
+                Ll_test.weighted ~weights:[| 5; 3 |] ~modulus:7 ~offset:(-3.) ~stride:0.25
+                  [| idx / n_pos; idx % n_pos |])
+          in
+          let run ~prec =
+            Tensor.unsafe_reinitialize ();
+            let tok_ids = ids_tensor_2d ~label:"dual_tok" tok_rows in
+            let pos_ids = ids_tensor_2d ~label:"dual_pos" pos_rows in
+            let oh_tok = Nn_blocks.one_hot_of_ids ~num_classes:vocab tok_ids in
+            let oh_pos = Nn_blocks.one_hot_of_ids ~num_classes:n_pos pos_ids in
+            let make_tables () =
+              let wte =
+                TDSL.param ~values:wte_vals "wte" ~input_dims:[ vocab ] ~output_dims:[ d_model ] ()
+              in
+              let wpe =
+                TDSL.param ~values:wpe_vals "wpe" ~input_dims:[ n_pos ] ~output_dims:[ d_model ] ()
+              in
+              (wte, wpe)
+            in
+            let wte_used, wpe_used =
+              match prec with
+              | None -> make_tables ()
+              | Some p -> MP.with_master_weights ~placement:MP.Twin_virtual ~prec:p make_tables
+            in
+            let%op emb = (wte_used * oh_tok) + (wpe_used * oh_pos) in
+            let coeff =
+              TDSL.ndarray coeff_vals ~label:[ "dual_coeff" ] ~batch_dims:[ batch; seq ]
+                ~output_dims:[ d_model ] ()
+            in
+            let%op loss = (emb *. coeff) ++ "...|... => |->0" in
+            Option.iter prec ~f:(fun p ->
+                Precision_policy.apply
+                  ~except:(fun tn ->
+                    Tn.equal tn loss.Tensor.value || Tn.equal tn coeff.Tensor.value)
+                  {
+                    Precision_policy.param_prec = None;
+                    activation_prec = Some p;
+                    grad_prec = Some p;
+                  }
+                  loss);
+            let update = Train.grad_update loss in
+            let ctx = Context.auto () in
+            let ctx = Train.init_params ctx Idx.Empty loss in
+            let ctx, routine =
+              compile_routine
+                ~name:(match prec with None -> "nsr_c8_f32" | Some _ -> "nsr_c8_bf16")
+                ctx update
+            in
+            let ctx = Context.run ctx routine in
+            Context.sync ctx;
+            let wte_m = param_by_label loss "wte" and wpe_m = param_by_label loss "wpe" in
+            (Context.get_values ctx (grad_of wte_m), Context.get_values ctx (grad_of wpe_m), routine)
+          in
+          let zeros_wte = Array.create ~len:(d_model * vocab) 0. in
+          let zeros_wpe = Array.create ~len:(d_model * n_pos) 0. in
+          let exact_wte =
+            host_scatter ~vocab ~d_model ~ids_rows:tok_rows ~coeff_vals ~init:zeros_wte ~step:Fn.id
+          in
+          let exact_wpe =
+            host_scatter ~vocab:n_pos ~d_model ~ids_rows:pos_rows ~coeff_vals ~init:zeros_wpe
+              ~step:Fn.id
+          in
+          let once_wte = Array.map exact_wte ~f:(Ops.round_to_prec bf16) in
+          let once_wpe = Array.map exact_wpe ~f:(Ops.round_to_prec bf16) in
+          let per_hit_wte =
+            host_scatter ~vocab ~d_model ~ids_rows:tok_rows ~coeff_vals ~init:zeros_wte
+              ~step:(Ops.round_to_prec bf16)
+          in
+          let per_hit_wpe =
+            host_scatter ~vocab:n_pos ~d_model ~ids_rows:pos_rows ~coeff_vals ~init:zeros_wpe
+              ~step:(Ops.round_to_prec bf16)
+          in
+          let f32_wte, f32_wpe, _ = run ~prec:None in
+          let bf_wte, bf_wpe, routine = run ~prec:(Some bf16) in
+          let targets = scatter_targets routine in
+          p "dual-table GPT-2 shape: both wte and wpe scatters arrive separately and widen"
+            (match targets with [ a; b ] -> not (Tn.equal a b) | _ -> false);
+          p_all "dual-table GPT-2 shape: every Set_dynamic targets an f32 scatter_acc buffer"
+            targets ~f:(fun tn ->
+              String.equal tn.Tn.namespace LL.scatter_accum_namespace
+              && Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ops.single);
+          p_all2 "dual-table GPT-2 shape: f32 wte.grad equals exact host sum" f32_wte exact_wte
+            ~f:bitwise;
+          p_all2 "dual-table GPT-2 shape: f32 wpe.grad equals exact host sum" f32_wpe exact_wpe
+            ~f:bitwise;
+          p_exists
+            "dual-table GPT-2 shape: wte per-hit bf16 differs from once-rounded (non-vacuity)"
+            (List.zip_exn (Array.to_list per_hit_wte) (Array.to_list once_wte))
+            ~f:(fun (a, b) -> not (bitwise a b));
+          p_exists
+            "dual-table GPT-2 shape: wpe per-hit bf16 differs from once-rounded (non-vacuity)"
+            (List.zip_exn (Array.to_list per_hit_wpe) (Array.to_list once_wpe))
+            ~f:(fun (a, b) -> not (bitwise a b));
+          p_all2 "dual-table GPT-2 shape: bf16 wte.grad equals f32 narrowed once, cell for cell"
+            bf_wte once_wte ~f:bitwise;
+          p_all2 "dual-table GPT-2 shape: bf16 wpe.grad equals f32 narrowed once, cell for cell"
+            bf_wpe once_wpe ~f:bitwise))
