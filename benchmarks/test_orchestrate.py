@@ -31,6 +31,7 @@ import display_safe
 import gh1161_sites
 import orchestrate
 import strict_json
+import test_cells
 from runners import bench_common
 from test.test_cell_group import CellGroupTest  # imported so unittest.main includes shared tests
 from test.test_gpu_memory_census import GpuMemoryCensusTest  # same unittest discovery
@@ -40,7 +41,7 @@ from test.test_fixture_compare import FixtureCompareTest, write_safetensors  # n
 from test_cells import (  # noqa: F401  (likewise)
     AbDriverTest, CellCommandTest, ConfigRecordsExpectTest, Gh1051AbDriverTest, Gh1180DriverTest,
     Gh1253FlipDriverTest, Gh1279DriverTest, Gh1557DriverTest, Gh740DriverTest, ProgressCommandTest,
-    ProseTraceScanTest)
+    ProseTraceScanTest, shell_driver_path)
 from test.test_cell_group import (
     cap_counted_from, interrupt_once_published, kill_the_group_on_cleanup, publish_pid)
 
@@ -479,14 +480,14 @@ class DriverResultReaderModulesTest(unittest.TestCase):
         for label in ("a", "b"):
             self.gh612_cell(root, label, 1, ["2.5", "2.25"])
         proc = subprocess.run(
-            [box_gate.BASH, str(HERE / "gh612_cells.sh"), "parity"], text=True, capture_output=True,
+            [box_gate.BASH, str(shell_driver_path("gh612_cells.sh")), "parity"], text=True, capture_output=True,
             cwd=self.dir, timeout=120,
             env=dict(os.environ, OUT_ROOT=str(root), EXPECT_STEPS="2"))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("parity gate PASSED", proc.stdout)
         # Negative control: the step count the driver passes through is the gate's.
         proc = subprocess.run(
-            [box_gate.BASH, str(HERE / "gh612_cells.sh"), "parity"], text=True, capture_output=True,
+            [box_gate.BASH, str(shell_driver_path("gh612_cells.sh")), "parity"], text=True, capture_output=True,
             cwd=self.dir, timeout=120, env=dict(os.environ, OUT_ROOT=str(root)))
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("expected EXPECT_STEPS=8", proc.stderr)
@@ -615,7 +616,7 @@ class Gh1003SummaryTest(unittest.TestCase):
         # fails on the empty matrix.
         out = self.dir / "driven"
         proc = subprocess.run(
-            [box_gate.BASH, str(HERE / "gh1003_fold_cells.sh"), str(out), "60", "summary"],
+            [box_gate.BASH, str(shell_driver_path("gh1003_fold_cells.sh")), str(out), "60", "summary"],
             text=True, capture_output=True, cwd=self.dir, timeout=120)
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         summary = (out / "summary.md").read_text()
@@ -625,7 +626,7 @@ class Gh1003SummaryTest(unittest.TestCase):
 
     def driver(self, *steps, env=None):
         return subprocess.run(
-            [box_gate.BASH, str(HERE / "gh1003_fold_cells.sh"), str(self.out), "60", *steps],
+            [box_gate.BASH, str(shell_driver_path("gh1003_fold_cells.sh")), str(self.out), "60", *steps],
             text=True, capture_output=True, cwd=self.dir, timeout=120,
             env=dict(os.environ, **(env or {})))
 
@@ -9157,4 +9158,8 @@ class TimingFreeTestRunner(unittest.TextTestRunner):
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--dune-shell-drivers"]:
+        # Dune passes its literal dependency group as paths. Direct unittest runs keep their CLI.
+        test_cells.shell_driver_deps = {Path(path).resolve() for path in sys.argv[2:]}
+        del sys.argv[1:]
     unittest.main(testRunner=TimingFreeTestRunner)

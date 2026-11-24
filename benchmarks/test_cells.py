@@ -32,6 +32,15 @@ import cells
 from display_safe import display_value
 
 HERE = Path(__file__).resolve().parent
+shell_driver_deps = None
+
+
+def shell_driver_path(name: str, *, root: Path = HERE) -> Path:
+    """Resolve checked-in drivers launched by these tests, including launches from a scratch copy."""
+    if shell_driver_deps is not None and HERE / name not in shell_driver_deps:
+        raise AssertionError(f"{name} must be named in benchmarks/dune's shell_drivers dependencies")
+    return root / name
+
 
 # The record `Utils.config_record_to_json` prints (config_records.py's schema) for every
 # `--ocannl_<key>=<value>` the stub was given, and then `body` (Python source, with `argv` and
@@ -200,7 +209,7 @@ class AbDriverTest(StubRunTest):
         base = self.commit("0.004", "base")
         head = self.commit("0.002", "head")
         out = self.dir / "out"
-        proc = self.run_tool(["bash", str(HERE / "gh1343_ab.sh"), str(self.repo), base, str(out),
+        proc = self.run_tool(["bash", str(shell_driver_path("gh1343_ab.sh")), str(self.repo), base, str(out),
                               "2", "9"], self.env)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         record = json.loads((out / "ab.json").read_text())
@@ -219,7 +228,7 @@ class AbDriverTest(StubRunTest):
     def test_gh1343_driver_refuses_uncommitted_changes(self):
         base = self.commit("0.004", "base")
         (self.repo / "other.ml").write_text("dirty\n")
-        proc = self.run_tool(["bash", str(HERE / "gh1343_ab.sh"), str(self.repo), base,
+        proc = self.run_tool(["bash", str(shell_driver_path("gh1343_ab.sh")), str(self.repo), base,
                               str(self.dir / "out"), "2", "9"], self.env)
         self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
         self.assertIn("uncommitted tracked changes", proc.stderr)
@@ -269,7 +278,7 @@ class Gh1180DriverTest(StubRunTest):
         root = self.dir / "root"
         out = self.dir / "out"
         proc = self.run_tool(
-            [box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "measure", str(root), str(out),
+            [box_gate.BASH, str(shell_driver_path("gh1180_tie_ab.sh")), "measure", str(root), str(out),
              str(rounds), *cases], {"OCANNL_FP16_ARITHMETIC": "true", "OMP_NUM_THREADS": "1"})
         return proc, out
 
@@ -306,7 +315,7 @@ class Gh1180DriverTest(StubRunTest):
         records[0]["config"]["late_setting"] = {"value": "x", "source": "default",
                                                 "layer": "default", "profile": None, "origin": None}
         jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
-        proc = self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
+        proc = self.run_tool([box_gate.BASH, str(shell_driver_path("gh1180_tie_ab.sh")), "summary", str(out)])
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("ocannl_late_setting resolved differently", proc.stdout)
 
@@ -327,7 +336,7 @@ class Gh1180DriverTest(StubRunTest):
             r["results"] = [[v, {"packmma": serial, "packmma_par": base / 2}.get(v, s), c, n]
                             for v, s, c, n in r["results"]]
         jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
-        proc = self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
+        proc = self.run_tool([box_gate.BASH, str(shell_driver_path("gh1180_tie_ab.sh")), "summary", str(out)])
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         summary = (out / "summary.md").read_text()
         case = "| f16 n=64 bm=8 bk=16 |"
@@ -362,7 +371,7 @@ class Gh1180DriverTest(StubRunTest):
              "--", "f16", "64", "3", "8", "16", "--ocannl_fp16_arithmetic=false"])
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         (out / "driver.log").write_text("gh1180: cases: f16:64:8:16:3:4:6\n")
-        proc = self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
+        proc = self.run_tool([box_gate.BASH, str(shell_driver_path("gh1180_tie_ab.sh")), "summary", str(out)])
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("inconclusive (no control)", proc.stdout)
 
@@ -374,7 +383,7 @@ class Gh1180DriverTest(StubRunTest):
             r["results"] = [[v, seconds.get(v, s), c, n]
                             for v, s, c, n in r["results"]]
         jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
-        return self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
+        return self.run_tool([box_gate.BASH, str(shell_driver_path("gh1180_tie_ab.sh")), "summary", str(out)])
 
     def test_control_drift_and_short_pool_timings_gate_the_reading(self):
         proc, out = self.measure(rounds=6)
@@ -407,7 +416,7 @@ class Gh1180DriverTest(StubRunTest):
         records = self.records(jsonl.parent)
         next(r for r in records if r["arm"] == "control")["argv"].append("--different-treatment")
         jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
-        proc = self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
+        proc = self.run_tool([box_gate.BASH, str(shell_driver_path("gh1180_tie_ab.sh")), "summary", str(out)])
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("round 1: control did not repeat rn4", proc.stdout)
 
@@ -790,7 +799,8 @@ class DriverTreeTest(StubRunTest):
         write_stub(self.root / "_build" / "default" / target, body)
 
     def driver(self, name, *args, env=None):
-        return self.run_tool([box_gate.BASH, str(self.root / "benchmarks" / name), *args], env)
+        driver = shell_driver_path(name, root=self.root / "benchmarks")
+        return self.run_tool([box_gate.BASH, str(driver), *args], env)
 
 
 class Gh740DriverTest(DriverTreeTest):
@@ -1078,7 +1088,7 @@ class Gh1051AbDriverTest(StubRunTest):
             lead.append("--tuned-training")
         if repeats is not None:
             lead.extend(["--repeats", repeats])
-        proc = self.run_tool([box_gate.BASH, str(HERE / "gh1051_bf16_ab.sh"), *lead, str(root),
+        proc = self.run_tool([box_gate.BASH, str(shell_driver_path("gh1051_bf16_ab.sh")), *lead, str(root),
                               backend, "stub", "4", "64"],
                              {"TMPDIR": "../tmp with space" if relative_tmp else str(tmp),
                               "OCANNL_BF16_ARITHMETIC": "auto"})
