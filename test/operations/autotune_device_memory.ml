@@ -263,7 +263,7 @@ let floor_scenarios ~backend_name ~on_gpu ~baseline_links ~check_values comp =
   let advertised =
     on_gpu
     && Ll_test.advertised ~backend_name ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single
-         ~d_prec:Ir.Ops.single
+         ~d_prec:Ir.Ops.single ()
   in
   Verdict.gated
     ~when_:(on_gpu && not (Utils.debug_log_from_routines ()))

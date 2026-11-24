@@ -3,6 +3,7 @@ unforced, the plain tensorized schedule renders tensorized where uniform f32 is 
 forced, every Tile_mma of the plain schedule renders the scalar fallback: true
 unforced, the plain tensorized matmul matches the serial twin bitwise: true
 forced, the plain tensorized matmul's fallback matches the serial twin bitwise: true
+CUDA Ampere+ with tf32_matmuls enabled advertises Mma_tf32 in a persistent-fragment scope: true
 unforced, the staged schedule renders tensorized in a persistent-fragment scope: true
 forced, the staged schedule compiles and runs: true
 forced, the staged schedule declines at the fragment scope: every Tile_mma falls back, no scope renders: true

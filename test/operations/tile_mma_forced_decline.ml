@@ -165,13 +165,33 @@ let () =
   p_all2 "forced, the plain tensorized matmul's fallback matches the serial twin bitwise"
     plain_forced want ~f:Float.equal;
   let gpu = Verdict.leg ~when_:on_gpu ~on:backend_name () in
+  (* gh-ocannl-2434: non-vacuous CUDA descriptor claim for the [-tf32] variant. [fragment_scope]
+     gates the f32 staged rendering on the descriptor, so a regression that stopped advertising
+     [Mma_tf32] in [Mma_fragment_scope] under [tf32_matmuls=true] would turn that leg into a green
+     skip unless an independently gated claim asserts the descriptor directly. *)
+  let cuda_leg =
+    Verdict.sub_leg gpu ~on:backend_name ~when_:(lazy (String.equal backend_name "cuda"))
+  in
+  let cuda_tf32 =
+    Verdict.sub_leg cuda_leg ~aggregation:`Environment ~on:"cuda with tf32_matmuls=false"
+      ~when_:(lazy (Ir.Numerics.get ()).Ir.Numerics.tf32_matmuls)
+  in
+  let cuda_tf32_ampere = Ll_test.cuda_arm_leg cuda_tf32 (Ir.Cuda_mma.Wmma Wmma_tf32) in
+  in_leg ~leg:cuda_tf32_ampere
+    "CUDA Ampere+ with tf32_matmuls enabled advertises Mma_tf32 in a persistent-fragment scope"
+    (fun label ->
+      p label
+        (BI.advertises_mma_format_in_scope
+           (Context.hardware_limits (Context.auto ()))
+           ~policy:(Ir.Numerics.get ()) ~scope:BI.Mma_fragment_scope ~a:BI.Mma_tf32 ~b:BI.Mma_tf32
+           ~d:BI.Mma_f32));
   (* The descriptor's judgment that this GPU holds a uniform-f32 accumulator in a persistent
      fragment: Metal's genuine f32 tile, or CUDA's tf32 one where the policy enables it. *)
   let fragment_scope =
     Verdict.sub_leg gpu ~on:backend_name
       ~when_:
         (lazy
-          (Ll_test.advertised ~backend_name ~a_prec:single ~b_prec:single ~d_prec:single
+          (Ll_test.advertised ~backend_name ~a_prec:single ~b_prec:single ~d_prec:single ()
           && List.exists [ BI.Mma_f32; BI.Mma_tf32 ] ~f:(fun f ->
               BI.advertises_mma_format_in_scope
                 (Context.hardware_limits (Context.auto ()))
@@ -277,7 +297,7 @@ let () =
       let _, mma = Lazy.force f16_staged_unforced in
       census "fd_f16_staged unforced" mma;
       let expect_fragment =
-        Ll_test.advertised ~backend_name ~a_prec:half ~b_prec:half ~d_prec:single
+        Ll_test.advertised ~backend_name ~a_prec:half ~b_prec:half ~d_prec:single ()
         && f16_fragment_advertised ()
       in
       p label
