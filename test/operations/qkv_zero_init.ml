@@ -11,6 +11,7 @@ open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 module LL = Ir.Low_level
 module Sched = Ir.Schedule
+module Outcome = Ir.Schedule_outcome
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let () = Stdio.eprintf "qkv_zero_init backend=%s\n" backend_name
@@ -89,12 +90,21 @@ let folded_seed_claims ~tag ~what ~pre ~out ~seed ~want ~matches =
   let results =
     List.mapi real ~f:(fun i q ->
         let o = apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p:q pre) pre in
-        match Ll_test.link ~name:(tag ^ Int.to_string i) o with
-        | exception exn ->
-            Stdio.eprintf "%s seed %d (mma=%b) failed to compile: %s\n" what i q.Autotune.sk_mma
-              (Exn.to_string exn);
+        let name = tag ^ Int.to_string i in
+        match
+          Context.compile_outcome ~name ~prelowered:o
+            ~lowered_transform:(fun x -> [ x ])
+            ~provenance:Outcome.User_schedule ~candidate:name (Lazy.force Ll_test.base_ctx)
+            Ir.Assignments.empty_comp Ir.Indexing.Empty
+        with
+        | Error (Outcome.Classified { phase; cause; _ }) ->
+            Stdio.eprintf "%s seed %d (mma=%b) rejected at %s: %s\n" what i q.Autotune.sk_mma
+              (Sexp.to_string (Outcome.sexp_of_phase phase))
+              (Outcome.detail_of_cause cause);
             (q, None)
-        | ctx, routine ->
+        | Error (Outcome.Fatal { exn; backtrace; _ }) ->
+            Stdlib.Printexc.raise_with_backtrace exn backtrace
+        | Ok (ctx, routine) ->
             let got =
               Context.get_values (Ll_test.run_linked (ctx, routine) ~seed) out.Tensor.value
             in

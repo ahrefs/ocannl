@@ -64,10 +64,8 @@ let bits_equal a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
    builtins define every conversion. *)
 let body s = Generated.main_logic s
 
-let calls_double_conversion src =
-  Ir.C_syntax.Source_tokens.mentions
-    (Ir.C_syntax.Source_tokens.scan (body src))
-    "double_to_uint4x32("
+let calls_conversion src ~pattern =
+  Ir.C_syntax.Source_tokens.mentions (Ir.C_syntax.Source_tokens.scan (body src)) pattern
 
 let check ~name ~prec ~packed output_dims =
   Verdict.case name @@ fun () ->
@@ -79,9 +77,10 @@ let check ~name ~prec ~packed output_dims =
   Stdio.printf "%s: %d values drawn\n" name (Array.length mat_vals);
   p (name ^ ": the materialized run stores the counter") (stores_counter mat_src);
   p (name ^ ": the virtual run inlines the counter") (not (stores_counter vir_src));
-  p_none
+  let pattern = "double_to_uint4x32(" in
+  p
     (name ^ ": neither kernel calls double_to_uint4x32")
-    [ mat_src; vir_src ] ~f:calls_double_conversion;
+    ((not (calls_conversion mat_src ~pattern)) && not (calls_conversion vir_src ~pattern));
   p_all2
     (name ^ ": inlined and materialized counters draw bitwise-equal values")
     vir_vals mat_vals ~f:bits_equal
