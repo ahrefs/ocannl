@@ -552,6 +552,7 @@ if leg == 'matrix':
     print('PASS every scheduled-only compiler dispatches as exactly its scheduled job')
     print('PASS side jobs are read from ci.yml: a new guarded job joins the selection')
     print('PASS a scheduled side job runs on the schedule and an ordinary dispatch, never per PR or in the fallback')
+    print('PASS the affected reader audit runs when dispatch pins its own head and skips an ancestor checkout')
     print('PASS ubuntu main and train shards are exactly 1/N..N/N, over the aliases ci-shard.sh shards')
     print('PASS an ordinary dispatch runs one macOS job, main; the schedule adds its train job')
     print('PASS every build step piping into tee has pipefail; the PowerShell one exits with dune\'s status')
