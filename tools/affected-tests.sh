@@ -4406,8 +4406,12 @@ for my $p (@changed) {
   print STDERR "affected: $p: " . join("; ", @parts) . "\n" if @parts;
   # A changed script an alias's rule names by its path (gh-ocannl-2304): the header's "Literal
   # dependencies". When that alias also runs sweep_harness_driver.exe, emit the sweep-driver reach
-  # line for the scoped Linux shell leg (gh-ocannl-2414).
+  # line for the scoped Linux shell leg (gh-ocannl-2414). When the Dune probe did not run, targetless
+  # alias rules are opaque, so report sweep-driver reach unavailable rather than empty.
   if ($b =~ /\.sh\z/) {
+    if (!$probe_ok) {
+      print STDERR "affected: $p: sweep-driver reach unavailable (dune probe did not run)\n";
+    }
     my %by_name = map { $_->{name} => $_ } grep { names_literally($_, $p) } @al;
     for my $n (sort keys %by_name) {
       print STDERR "affected: $p: named as a dependency by the rule of $n\n";

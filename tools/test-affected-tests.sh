@@ -3248,6 +3248,14 @@ DUNE
     report 1 'a non-shell dep of a sweep-driver rule emits no reached-by-sweep-driver line' \
       "exit $rc; stderr: $(cat "$err")"
   fi
+  OCANNL_TOOL_AFFECTED_PROBE=0 affected --files test/operations/probe.sh
+  if [ "$rc" = 0 ] &&
+     grep -qxF 'affected: test/operations/probe.sh: sweep-driver reach unavailable (dune probe did not run)' "$err"; then
+    report 0 'disabling the Dune probe reports sweep-driver reach unavailable for a changed .sh file'
+  else
+    report 1 'disabling the Dune probe reports sweep-driver reach unavailable for a changed .sh file' \
+      "exit $rc; stderr: $(cat "$err")"
+  fi
   sweep_label='negative control: disabling runs_sweep_driver drops the sweep-driver reach line'
   if run_affected_mutant "$sweep_label" \
       'if runs_sweep_driver($by_name{$n});' \

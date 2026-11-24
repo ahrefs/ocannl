@@ -123,6 +123,10 @@ if [ "$*" = '--list' ]; then
   cat "$FAKE_MANIFEST"
   exit 0
 fi
+if [ "$*" = '--toolchain --list' ]; then
+  [ -n "${FAKE_TOOLCHAIN_MANIFEST:-}" ] && [ -f "$FAKE_TOOLCHAIN_MANIFEST" ] && cat "$FAKE_TOOLCHAIN_MANIFEST"
+  exit 0
+fi
 case " $* " in
   *' --list '*)
     [ "${FAKE_ASK_RC:-0}" = 0 ] || exit "$FAKE_ASK_RC"
@@ -138,6 +142,13 @@ printf 'shell %s\n' "$*" >>"$FAKE_RECORD"
 sleep "${FAKE_TIER_DELAY:-0}"
 if [ -n "${FAKE_MEMBER_TIMING:-}" ] && [ -n "${OCANNL_TOOL_HARNESS_TIMINGS_FILE:-}" ]; then
   printf '%s\n' "$FAKE_MEMBER_TIMING" >>"$OCANNL_TOOL_HARNESS_TIMINGS_FILE"
+fi
+if [ "${FAKE_HARNESS_EMIT:-0}" = 1 ]; then
+  if [ "${FAKE_HARNESS_SKIP_ONLY:-0}" = 1 ]; then
+    printf 'HARNESS tools/test-one.sh (shell; fake)\nSKIP  all legs skipped\nall legs passed (1 skipped)\nHARNESS tools/test-one.sh exit: 0\n'
+  else
+    printf 'HARNESS tools/test-one.sh (shell; fake)\nPASS  ok\nall legs passed (0 skipped)\nHARNESS tools/test-one.sh exit: 0\n'
+  fi
 fi
 case " $* " in *' --affected '*) exit "${FAKE_SCOPED_RC:-0}" ;; esac
 exit "${FAKE_SHELL_RC:-0}"
@@ -189,6 +200,9 @@ count() {
     printf 'test-run: prepush: 1 of the 7 alias(es) the change lists; left off: %s train- (the nightly CI run) and 0 slow-\n' "${FAKE_TRAIN_N:-0}" >&2
 }
 case " $* " in
+  ' affected --files '*)
+    [ -z "${FAKE_RENAME_NAMED:-}" ] || cat "$FAKE_RENAME_NAMED" >&2
+    exit "${FAKE_RENAME_RC:-0}" ;;
   ' affected '*)
     cat "${FAKE_AFFECTED:-/dev/null}"
     [ "${FAKE_AFF_VERDICT-ok}" = none ] || printf 'affected: verdict=%s\n' "${FAKE_AFF_VERDICT-ok}" >&2
@@ -1930,7 +1944,7 @@ owed-run: v2 linux-shell head=$head_sha writer=record exit=0 clean=yes os=Linux 
   : >"$TMP/record"
   rc_leg=0
   (cd "$R" && PATH=$linux_bin:$TMP/gitbin:$SYS_PATH OCANNL_TOOL_TEST_RUNS=$state_root \
-    FAKE_RECORD=$TMP/record FAKE_MANIFEST=$TMP/ls-manifest \
+    FAKE_RECORD=$TMP/record FAKE_MANIFEST=$TMP/ls-manifest FAKE_HARNESS_EMIT=1 \
     FLEET_LEG_RUN_RECORD=$leg_path FLEET_LEG_RECEIPT_LINK=$TMP/ls-receipt-link \
     "$BASH" tools/linux-shell-leg.sh --harness tools/test-one.sh --dune @test/operations/runtest-sweep_harness) \
     >"$TMP/ls-run.out" 2>&1 || rc_leg=$?
@@ -1943,6 +1957,17 @@ owed-run: v2 linux-shell head=$head_sha writer=record exit=0 clean=yes os=Linux 
     report 0 'tools/linux-shell-leg.sh runs dune + --member harnesses on Linux and links a clean receipt'
   else report 1 'tools/linux-shell-leg.sh runs dune + --member harnesses on Linux and links a clean receipt' \
     "exit $rc_leg receipt=$receipt_dir record=$(cat "$TMP/record") out=$(cat "$TMP/ls-run.out")"; fi
+  # Negative control: a skip-only harness (0 PASS / unexpected SKIP) is refused and never writes a passing receipt.
+  rc_skip=0
+  (cd "$R" && PATH=$linux_bin:$TMP/gitbin:$SYS_PATH OCANNL_TOOL_TEST_RUNS="$state_root-skip" \
+    FAKE_RECORD=$TMP/record FAKE_MANIFEST=$TMP/ls-manifest FAKE_HARNESS_EMIT=1 FAKE_HARNESS_SKIP_ONLY=1 \
+    "$BASH" tools/linux-shell-leg.sh --harness tools/test-one.sh) >"$TMP/ls-skip.out" 2>&1 || rc_skip=$?
+  skip_rec=$(sed -n 's/.*receipt: \([^)]*\)).*/\1/p' "$TMP/ls-skip.out" | tail -n 1)
+  if [ "$rc_skip" = 1 ] && [ -n "$skip_rec" ] && [ "$(cat "$skip_rec/exit" 2>/dev/null)" = 1 ] &&
+     grep -qF 'REFUSED unexpected skip' "$TMP/ls-skip.out"; then
+    report 0 'tools/linux-shell-leg.sh refuses a skip-only harness run and records nonzero exit'
+  else report 1 'tools/linux-shell-leg.sh refuses a skip-only harness run and records nonzero exit' \
+    "exit $rc_skip rec=$skip_rec out=$(cat "$TMP/ls-skip.out")"; fi
   # Publish via tools/owed-run-report.sh using pointer fallback (no FLEET_LEG_RECEIPT_DIR), then verify Darwin merge admits it.
   pub_repo=$TMP/owed-linux-pub.git
   git init -q --bare "$pub_repo"
@@ -1998,6 +2023,58 @@ owed-run: v2 linux-shell head=$head_sha writer=record exit=0 clean=yes os=Linux 
      [ "$(cat "$TMP/record")" = "$COMPILE" ]; then
     report 0 '--all on Darwin still refuses without the owed Linux shell record'
   else report 1 '--all on Darwin still refuses without the owed Linux shell record' "exit $rc; $(cat "$TMP/record"); $(cat "$TMP/out")"; fi
+
+  # 9. Linux build whose tests tier omits a reached sweep-driver alias (e.g. OWED list) still owes it.
+  : >"$TMP/reach"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting \
+    FAKE_TIER_RC=2 FAKE_TIER_VERDICT=cross-cutting FAKE_NAMED=$TMP/ls-sweep-named run "$linux_bin" --plan-merge
+  if [ "$rc" = 0 ] &&
+     grep -qxF 'ship-pr-merge-plan: unadmitted runtest linux:@test/operations/runtest-sweep_harness' "$TMP/out" &&
+     has '-- tools/linux-shell-leg.sh --dune @test/operations/runtest-sweep_harness'; then
+    report 0 'Linux --plan-merge still owes a reached sweep-driver alias omitted from its tests tier'
+  else report 1 'Linux --plan-merge still owes a reached sweep-driver alias omitted from its tests tier' "exit $rc; $(cat "$TMP/out")"; fi
+
+  # 10. Sweep-driver reach unavailable (disabled Dune probe) fails closed with no plan verdict.
+  printf '%s\n' 'affected: tools/sub/a.sh: sweep-driver reach unavailable (dune probe did not run)' >"$TMP/ls-unavail"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_NAMED=$TMP/ls-unavail run "$darwin_bin" --plan-merge
+  if [ "$rc" = 1 ] && [ "$(grep -c '^ship-pr-merge-plan:' "$TMP/out")" = 0 ] &&
+     has 'sweep-driver reach for tools/sub/a.sh could not be determined'; then
+    report 0 'unavailable sweep-driver reach fails closed with no plan verdict'
+  else report 1 'unavailable sweep-driver reach fails closed with no plan verdict' "exit $rc; $(cat "$TMP/out")"; fi
+
+  # 11. Base-added harness member absent from PR head collapses to linux:harnesses / --all-harnesses.
+  fixture linux-shell-base-added
+  printf '%s\n' tools/test-one.sh tools/test-base-new.sh >"$TMP/ls-base-manifest"
+  git -C "$R" checkout -q side && last tools/sub/a.sh && commit_on side
+  git -C "$R" checkout -q base && printf '#!/bin/sh\n:\n' >"$R/tools/test-base-new.sh" && commit_on base && merge_side
+  printf '%s\ttools/test-base-new.sh\n' tools/sub/a.sh >"$TMP/reach"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_MANIFEST=$TMP/ls-base-manifest run "$darwin_bin" --plan-merge
+  if [ "$rc" = 0 ] && grep -qxF 'ship-pr-merge-plan: unadmitted linux:harnesses' "$TMP/out" &&
+     has '-- tools/linux-shell-leg.sh --all-harnesses'; then
+    report 0 'a base-added harness member absent from the PR head collapses to linux:harnesses and --all-harnesses'
+  else report 1 'a base-added harness member absent from the PR head collapses to linux:harnesses and --all-harnesses' "exit $rc; $(cat "$TMP/out")"; fi
+
+  # 12. Base-side rename to *.sh queries sweep-driver reach for the renamed path.
+  fixture linux-shell-rename
+  git -C "$R" checkout -q base && git -C "$R" mv r.txt tools/sub/renamed.sh && commit_on base
+  git -C "$R" checkout -q side && last r.txt && commit_on side && merge_side
+  : >"$TMP/reach"
+  printf '%s\n' 'affected: tools/sub/renamed.sh: reached by sweep driver alias @test/operations/runtest-sweep_harness' >"$TMP/ls-ren-named"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_RENAME_NAMED=$TMP/ls-ren-named run "$darwin_bin" --plan-merge
+  if [ "$rc" = 0 ] &&
+     grep -qxF 'ship-pr-merge-plan: unadmitted linux:@test/operations/runtest-sweep_harness' "$TMP/out"; then
+    report 0 'a base-side rename to *.sh queries sweep-driver reach for the renamed path'
+  else report 1 'a base-side rename to *.sh queries sweep-driver reach for the renamed path' "exit $rc; $(cat "$TMP/out")"; fi
+
+  # 13. Quoted path on Darwin fails closed instead of silently owing no Linux leg.
+  fixture linux-shell-quoted
+  git -C "$R" checkout -q base && printf 'q\n' >"$R/\"quoted\".txt" && commit_on base
+  git -C "$R" checkout -q side && last tools/sub/a.sh && commit_on side && merge_side
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY run "$darwin_bin" --plan-merge
+  if [ "$rc" = 1 ] && [ "$(grep -c '^ship-pr-merge-plan:' "$TMP/out")" = 0 ] &&
+     has 'git quoted a path one side changed, so non-Linux cannot verify whether a shell source changed'; then
+    report 0 'a quoted path on Darwin fails closed with no plan verdict'
+  else report 1 'a quoted path on Darwin fails closed with no plan verdict' "exit $rc; $(cat "$TMP/out")"; fi
   : >"$TMP/reach"
 }
 harness_leg_run 'scoped owed Linux shell leg on non-Linux hosts, Linux self-satisfaction and leg publication #linux-shell' linux_shell_leg

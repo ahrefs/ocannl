@@ -149,9 +149,17 @@ if [ "$got" = 0 ] && [ ! -s "$RECORD" ] && cmp -s "$TMP/want-members" "$TMP/out"
 else report 1 '--member --list prints selected members in manifest order without running them' "exit $got; $(cat "$TMP/out")"; fi
 for width in 1 4; do
   run --member "$mem_second" --member "$mem_first" --jobs "$width"
-  if [ "$got" = 0 ] && cmp -s "$TMP/want-members" "$RECORD" && grep -q '^harnesses: 2 run, 0 failed$' "$TMP/out"; then
-    report 0 "--member --jobs $width runs only the selected members in manifest order"
-  else report 1 "--member --jobs $width runs only the selected members in manifest order" "exit $got; ran $(cat "$RECORD"); $(tail -n 3 "$TMP/out")"; fi
+  if [ "$width" = 1 ]; then
+    cmp -s "$TMP/want-members" "$RECORD" && rec_ok=1 || rec_ok=0
+  else
+    diff -u <(LC_ALL=C sort "$TMP/want-members") <(LC_ALL=C sort "$RECORD") >/dev/null 2>&1 && rec_ok=1 || rec_ok=0
+  fi
+  awk '/^HARNESS / && $NF != "exit:" && $(NF-1) != "exit:" { print $2 }' "$TMP/out" >"$TMP/out-members"
+  if [ "$got" = 0 ] && [ "$rec_ok" = 1 ] && cmp -s "$TMP/want-members" "$TMP/out-members" &&
+     grep -q '^harnesses: 2 run, 0 failed$' "$TMP/out"; then
+    report 0 "--member --jobs $width runs only the selected members and reports them in manifest order"
+  else report 1 "--member --jobs $width runs only the selected members and reports them in manifest order" \
+    "exit $got; ran $(cat "$RECORD"); headers $(cat "$TMP/out-members"); $(tail -n 3 "$TMP/out")"; fi
 done
 member_bad=
 for bad_args in \

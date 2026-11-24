@@ -17,9 +17,13 @@
 #     `${OCANNL_TOOL_TEST_RUNS:-$HOME/.ocannl-test-runs}/linux-shell/`, binds `FLEET_LEG_RUN_RECORD`
 #     and `FLEET_LEG_RECEIPT_LINK` when invoked inside a fleet execution leg, and atomically records
 #     `exit` only on completion.
-#   - Runs `--dune` targets under `OCANNL_BACKEND=cc` (`dune build --root . -j N ...`), then
-#     `tools/test-harnesses.sh --jobs N` (with `--member ...` or whole). When `dune` is absent
-#     from PATH, sources `tools/opam-env.sh`.
+#   - Requires `dune` unconditionally (sourcing `tools/opam-env.sh` when absent from PATH) and
+#     `ocamlc` when `--all-harnesses` or a toolchain harness is requested. Runs `--dune` targets
+#     under `OCANNL_BACKEND=cc` (`dune build --root . -j N ...`), then `tools/test-harnesses.sh
+#     --jobs N` (with `--member ...` or whole), and refuses (exit 1) if any harness member reports
+#     zero `PASS` checks or any `SKIP` outside `tools/harness-skips-ci-shell.txt` (plus the
+#     absent-zsh skip in `scripts/test-setup-ocaml-env.sh`).
+#   - Fails with exit 2 if completion status cannot be written atomically to `$receipt_dir/exit`.
 #   - Standalone runs on a fleet Linux box should wrap this command in `fleet-worker.sh execution
 #     slot --cpu -- ...`; fleet execution legs (`execution leg --cpu`) already hold that slot and
 #     publish the receipt through `.github/fleet-leg`'s `owed-record` hook (`tools/owed-run-report.sh`).
@@ -121,8 +125,22 @@ if [ ${#harness_targets[@]} -gt 0 ]; then
 fi
 
 # Validate Dune targets against canonical syntax and `dune show aliases`.
+# Require dune unconditionally so real-dune and toolchain harnesses cannot silently skip.
+find_dune || die "dune is not on PATH and tools/opam-env.sh did not supply it"
+if [ "$all_harnesses" = 1 ]; then
+  command -v ocamlc >/dev/null 2>&1 || die "ocamlc is not on PATH (required for --all-harnesses)"
+elif [ ${#harness_targets[@]} -gt 0 ]; then
+  toolchain_list=$("${BASH:-bash}" "$root/tools/test-harnesses.sh" --toolchain --list 2>/dev/null || true)
+  toolchain_nl=$'\n'$toolchain_list$'\n'
+  for m in "${harness_targets[@]}"; do
+    case $toolchain_nl in
+      *$'\n'"$m"$'\n'*)
+        command -v ocamlc >/dev/null 2>&1 || die "ocamlc is not on PATH (required for toolchain harness '$m')"
+        break ;;
+    esac
+  done
+fi
 if [ ${#dune_targets[@]} -gt 0 ]; then
-  find_dune || die "dune is not on PATH and tools/opam-env.sh did not supply it"
   seen_d=$'\n'
   for a in "${dune_targets[@]}"; do
     valid_runtest_alias "$a" || die "invalid Dune alias '$a' (expected @DIR/runtest-NAME)"
@@ -136,9 +154,6 @@ if [ ${#dune_targets[@]} -gt 0 ]; then
     printf '%s\n' "$aliases_out" | grep -qxF -- "$name" ||
       die "Dune alias '$a' does not exist in this tree"
   done
-else
-  # Best-effort opam setup for real-dune harness legs.
-  find_dune 2>/dev/null || :
 fi
 
 # Build canonical sorted comma-separated target list.
@@ -223,10 +238,10 @@ printf '%s\n' "$receipt_dir" >"$last_ptr.tmp.$$" && mv -f "$last_ptr.tmp.$$" "$l
   die "cannot update last receipt pointer $last_ptr"
 
 write_exit() {
-  printf '%s\n' "$1" >"$receipt_dir/exit.tmp.$$" && mv -f "$receipt_dir/exit.tmp.$$" "$receipt_dir/exit" || :
+  printf '%s\n' "$1" >"$receipt_dir/exit.tmp.$$" && mv -f "$receipt_dir/exit.tmp.$$" "$receipt_dir/exit"
 }
 on_signal() {
-  write_exit "$1"
+  write_exit "$1" || :
   echo "$me: interrupted (exit $1; receipt: $receipt_dir)" >&2
   exit "$1"
 }
@@ -234,7 +249,54 @@ trap 'on_signal 129' HUP
 trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
 
-cd "$root" || { write_exit 2; die "cannot enter $root"; }
+verify_harness_output() {
+  local out_file=$1 allow_file=$receipt_dir/allowed-skips.txt
+  : >"$allow_file"
+  if [ -r "$root/tools/harness-skips-ci-shell.txt" ]; then
+    cat "$root/tools/harness-skips-ci-shell.txt" >>"$allow_file"
+  fi
+  if ! command -v zsh >/dev/null 2>&1; then
+    printf 'scripts/test-setup-ocaml-env.sh\tsourcing (b-d): zsh legs\n' >>"$allow_file"
+  fi
+  awk -v allow_file="$allow_file" '
+    FILENAME == allow_file {
+      if ($0 ~ /^[[:space:]]*(#|$)/) next
+      allowed[$0] = 1
+      next
+    }
+    /^HARNESS [^ ]+ \(/ {
+      cur = $2
+      if (!(cur in seen)) { seen[cur] = 1; order[++n] = cur; pass[cur] = 0 }
+      next
+    }
+    cur != "" && /^PASS[[:space:]]/ { pass[cur]++; next }
+    cur != "" && /^SKIP  / {
+      lbl = substr($0, 7)
+      key = cur "\t" lbl
+      if (!(key in allowed)) {
+        printf "linux-shell-leg: REFUSED unexpected skip in %s: %s\n", cur, lbl
+        bad = 1
+      }
+      next
+    }
+    END {
+      if (n == 0) {
+        print "linux-shell-leg: REFUSED harness run produced no HARNESS blocks"
+        exit 1
+      }
+      for (i = 1; i <= n; i++) {
+        m = order[i]
+        if (pass[m] < 1) {
+          printf "linux-shell-leg: REFUSED %s reported 0 PASS checks (skip-only or empty run)\n", m
+          bad = 1
+        }
+      }
+      exit bad ? 1 : 0
+    }
+  ' "$allow_file" "$out_file" >&2
+}
+
+cd "$root" || { write_exit 2 || :; die "cannot enter $root"; }
 
 rc=0
 if [ ${#dune_targets[@]} -gt 0 ]; then
@@ -243,20 +305,28 @@ if [ ${#dune_targets[@]} -gt 0 ]; then
 fi
 
 if [ "$rc" = 0 ] && { [ "$all_harnesses" = 1 ] || [ ${#harness_targets[@]} -gt 0 ]; }; then
+  h_out="$receipt_dir/harnesses.out"
   if [ "$all_harnesses" = 1 ]; then
     echo "$me: running whole harness tier (--jobs $jobs)"
-    "${BASH:-bash}" "$root/tools/test-harnesses.sh" --jobs "$jobs" || rc=$?
+    "${BASH:-bash}" "$root/tools/test-harnesses.sh" --jobs "$jobs" >"$h_out" 2>&1 || rc=$?
   else
     h_args=(--jobs "$jobs")
     for m in "${harness_targets[@]}"; do
       h_args+=(--member "$m")
     done
     echo "$me: running harness members: ${harness_targets[*]}"
-    "${BASH:-bash}" "$root/tools/test-harnesses.sh" "${h_args[@]}" || rc=$?
+    "${BASH:-bash}" "$root/tools/test-harnesses.sh" "${h_args[@]}" >"$h_out" 2>&1 || rc=$?
+  fi
+  cat "$h_out"
+  if [ "$rc" = 0 ]; then
+    verify_harness_output "$h_out" || rc=1
   fi
 fi
 
-write_exit "$rc"
+if ! write_exit "$rc"; then
+  echo "$me: FAILED to record completion status in $receipt_dir/exit" >&2
+  exit 2
+fi
 if [ "$rc" = 0 ]; then
   echo "$me: passed (targets: $canonical_targets; receipt: $receipt_dir)"
 else

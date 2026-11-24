@@ -311,8 +311,8 @@ cover_tier() {
 # side changed a script, which tools/merge-build-replay.py's shell-tier set replays) and, for a
 # tier it could narrow, `scoped`, `reach` and `asked` (or `scope_why`).
 select_tiers() {
-  harness=1 scoped=0 pending=0 scope_why= reach= asked=() scripts=() unreached=() script_line= n_paths=0
-  linux_harness_members=() linux_harness_all=0
+  harness=1 scoped=0 pending=0 scope_why= reach= asked=() scripts=() renamed_scripts=() unreached=() script_line= n_paths=0
+  linux_harness_members=() linux_harness_all=0 linux_scope_err=
   local head_names base_pairs p old new other n=0 rc=0 hit=
   if [ -z "$base" ]; then
     [ "$all" = 0 ] || { why='--all'; return; }
@@ -328,9 +328,11 @@ select_tiers() {
   case $rc in
     0) ;;
     3)
+      linux_scope_err='git quoted a path one side changed, so non-Linux cannot verify whether a shell source changed'
       if [ "$all" = 1 ]; then why='--all'; else why='git quoted a path one side changed, so the whole harness tier runs'; fi
       return ;;
     *)
+      linux_scope_err='the paths each side changed could not be read, so non-Linux cannot verify whether a shell source changed'
       if [ "$all" = 1 ]; then why='--all'; else why='the paths each side changed could not be read, so the whole harness tier runs'; fi
       return ;;
   esac
@@ -353,6 +355,7 @@ select_tiers() {
       case $other in
         $SHELL_GLOB)
           scripts+=("$other")
+          renamed_scripts+=("$other")
           [ -n "$hit" ] || hit="$p was renamed from or to $other, which matches $SHELL_GLOB" ;;
       esac
     done <<EOF
@@ -549,26 +552,47 @@ owed_needs() {
 
 # linux_shell_needs appends scoped Linux shell-leg NEEDs (gh-ocannl-2414) to `needs` on non-Linux
 # hosts when the head side changed any `*.sh` path reached by the harness census or a sweep-driver
-# Dune rule. A merge build running on Linux satisfies the Linux leg by itself. Sets `linux_why`
-# and `linux_leg_args` when any Linux need is added; fails closed (`tests=unread`) on an invalid
-# or absent sweep-driver alias line.
+# Dune rule, and on Linux when a reached sweep-driver alias will not be built locally by this
+# merge build's tests tier (e.g. an OWED list or cross-cutting first tier that drops it). A Linux
+# merge build always runs the harness tier locally and satisfies built sweep-driver aliases by
+# itself. Sets `linux_why` and `linux_leg_args` when any Linux need is added; fails closed
+# (`tests=unread`) when Linux shell reach cannot be read (quoted path, disabled Dune probe,
+# failed rename ask, or an invalid/absent sweep-driver alias).
 linux_shell_needs() {
-  local s line a dir last_dir= name m sorted_h sorted_d manifest_all
-  local sweep_aliases=() uniq_h=() uniq_d=()
+  local s line a dir last_dir= name m sorted_h sorted_d manifest_all af rrc=0
+  local ask_files=() sweep_aliases=() uniq_h=() uniq_d=() local_missing_d=()
   linux_why= linux_leg_args=
-  [ "$host_os" != Linux ] || return 0
+  if [ "$host_os" != Linux ] && [ -n "${linux_scope_err:-}" ]; then
+    tests=unread tests_why="$linux_scope_err"
+    return
+  fi
   [ ${#scripts[@]} -gt 0 ] || return 0
   if [ -f "$tests_dir/ask" ]; then
+    ask_files+=("$tests_dir/ask")
+  fi
+  if [ ${#renamed_scripts[@]} -gt 0 ]; then
+    "${BASH:-bash}" "$root/tools/test-run.sh" affected --files "${renamed_scripts[@]}" \
+      >/dev/null 2>"$tests_dir/sweep-rename-ask" </dev/null || rrc=$?
+    if [ "$rrc" != 0 ] && [ "$rrc" != 3 ]; then
+      tests=unread tests_why="could not query sweep-driver reach for base-renamed script(s) (${renamed_scripts[*]}; exit $rrc)"
+      return
+    fi
+    ask_files+=("$tests_dir/sweep-rename-ask")
+  fi
+  for af in ${ask_files[@]+"${ask_files[@]}"}; do
     for s in "${scripts[@]}"; do
       while IFS= read -r line; do
         case $line in
+          "affected: $s: sweep-driver reach unavailable"*)
+            tests=unread tests_why="sweep-driver reach for $s could not be determined (the Dune probe did not run)"
+            return ;;
           "affected: $s: reached by sweep driver alias "*)
             a=${line#"affected: $s: reached by sweep driver alias "}
             sweep_aliases+=("$a") ;;
         esac
-      done <"$tests_dir/ask"
+      done <"$af"
     done
-  fi
+  done
   if [ ${#sweep_aliases[@]} -gt 0 ]; then
     sorted_d=$(printf '%s\n' "${sweep_aliases[@]}" | env LC_ALL=C sort -u)
     while IFS= read -r a; do
@@ -597,6 +621,21 @@ linux_shell_needs() {
 $sorted_d
 EOF
   fi
+  if [ "$host_os" = Linux ]; then
+    for a in ${uniq_d[@]+"${uniq_d[@]}"}; do
+      if [ "$tests" = list ] && grep -qxF -- "$a" "$tests_dir/list"; then
+        continue
+      fi
+      local_missing_d+=("$a")
+    done
+    [ ${#local_missing_d[@]} -gt 0 ] || return 0
+    for a in "${local_missing_d[@]}"; do
+      needs+=("linux:$a")
+      linux_leg_args+="${linux_leg_args:+ }--dune $a"
+    done
+    linux_why="the change reaches sweep-driver alias(es) omitted from this Linux build's tests tier"
+    return
+  fi
   if [ "$linux_harness_all" = 0 ] && [ ${#linux_harness_members[@]} -gt 0 ]; then
     sorted_h=$(printf '%s\n' "${linux_harness_members[@]}" | env LC_ALL=C sort -u)
     while IFS= read -r m; do
@@ -610,6 +649,18 @@ EOF
     done <<EOF
 $sorted_h
 EOF
+    if [ "$linux_harness_all" = 0 ] && [ ${#uniq_h[@]} -gt 0 ]; then
+      # If the base added a harness member that does not exist at $head, --harness MEMBER
+      # would be unrunnable at $head; collapse to --all-harnesses (which covers every member).
+      for m in "${uniq_h[@]}"; do
+        if git -C "$root" cat-file -e "HEAD:$m" 2>/dev/null &&
+           ! git -C "$root" cat-file -e "$head:$m" 2>/dev/null; then
+          linux_harness_all=1
+          uniq_h=()
+          break
+        fi
+      done
+    fi
     if [ "$linux_harness_all" = 0 ] && [ ${#uniq_h[@]} -gt 0 ]; then
       if manifest_all=$("${BASH:-bash}" "$root/tools/test-harnesses.sh" --list 2>/dev/null </dev/null) &&
          [ -n "$manifest_all" ] &&
