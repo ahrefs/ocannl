@@ -181,8 +181,9 @@ let () =
     (fun policy -> { policy with Ir.Numerics.fp16_arithmetic = Ir.Numerics.Fp16_wide })
     (fun () -> List.iter [ 1; 2 ] ~f:check_fp16)
 
-(* gh-ocannl-2464: executed 2-D overlapping (and mixed overlapping/non-overlapping) bf16 convolution
-   input-gradient residency parity against materialized f32 sums rounded once. *)
+(* gh-ocannl-2464: executed 2-D overlapping (and mixed overlapping/non-overlapping) bf16 and
+   overlapping fp16 convolution input-gradient residency parity against materialized f32 sums
+   rounded once. *)
 type geom2d = {
   pos_h : int;
   pos_w : int;
@@ -283,55 +284,73 @@ let modeled_2d g initial ~step ~window =
       List.fold (terms_2d g ih iw) ~init:initial ~f:(fun acc terms ->
           window (List.fold terms ~init:acc ~f:(fun acc term -> step (acc +. term)))))
 
-let check_2d g =
-  let label = Printf.sprintf "2-D stride (%d, %d)" g.stride_h g.stride_w in
-  let initial = incoming_2d ~base:256 g in
+let check_2d_prec ~label_prefix ~prec_name ~base ~f32_tag ~narrow_tag ~priv_tag prec g =
+  let label = Printf.sprintf "%s stride (%d, %d)" label_prefix g.stride_h g.stride_w in
+  let initial = incoming_2d ~base g in
   let modeled = modeled_2d g initial in
-  let round = Ir.Ops.round_to_prec bf16 in
+  let round = Ir.Ops.round_to_prec prec in
   let exact = modeled ~step:Fn.id ~window:Fn.id in
-  let twin, _ = run_fixture_2d g ~initial ~tag:"f32" Ir.Ops.single in
-  let narrow, _ = run_fixture_2d g ~initial ~tag:"bf16" bf16 in
-  let scheduled, tiles = run_fixture_2d g ~initial ~tag:"priv" ~privatize:true bf16 in
+  let twin, _ = run_fixture_2d g ~initial ~tag:f32_tag Ir.Ops.single in
+  let narrow, _ = run_fixture_2d g ~initial ~tag:narrow_tag prec in
+  let scheduled, tiles = run_fixture_2d g ~initial ~tag:priv_tag ~privatize:true prec in
   let once = Array.map twin ~f:round in
   pf_all2 "%s: the materialized f32 gradient equals the host sums" label twin exact ~f:same;
   discriminates ~label ~once "per step" (modeled ~step:round ~window:Fn.id);
   if g.stride_h < g.taps_h || g.stride_w < g.taps_w then
     discriminates ~label ~once "per window" (modeled ~step:Fn.id ~window:round);
-  pf_all2 "%s: the bf16 gradient equals the f32 gradient rounded once per cell" label narrow once
-    ~f:same;
+  pf_all2 "%s: the %s gradient equals the f32 gradient rounded once per cell" label prec_name narrow
+    once ~f:same;
   p_all (Printf.sprintf "%s: the input gradient's accumulator tiles are f32" label) tiles
     ~f:(fun tn -> Ir.Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ir.Ops.single);
   pf_all2 "%s: the privatized gradient equals the f32 gradient rounded once per cell" label
     scheduled once ~f:same
 
+let check_2d =
+  check_2d_prec ~label_prefix:"2-D" ~prec_name:"bf16" ~base:256 ~f32_tag:"f32" ~narrow_tag:"bf16"
+    ~priv_tag:"priv" bf16
+
+let check_fp16_2d =
+  check_2d_prec ~label_prefix:"2-D FP16" ~prec_name:"fp16" ~base:2048 ~f32_tag:"fp16_f32"
+    ~narrow_tag:"fp16" ~priv_tag:"fp16_priv" Ir.Ops.half
+
+let overlapping_geoms_2d =
+  [
+    { pos_h = 13; pos_w = 11; taps_h = 3; taps_w = 3; channels_2d = 3; stride_h = 1; stride_w = 1 };
+    { pos_h = 13; pos_w = 11; taps_h = 5; taps_w = 5; channels_2d = 3; stride_h = 2; stride_w = 2 };
+  ]
+
 let () =
   let geoms =
-    [
-      {
-        pos_h = 13;
-        pos_w = 11;
-        taps_h = 3;
-        taps_w = 3;
-        channels_2d = 3;
-        stride_h = 1;
-        stride_w = 1;
-      };
-      {
-        pos_h = 13;
-        pos_w = 11;
-        taps_h = 5;
-        taps_w = 5;
-        channels_2d = 3;
-        stride_h = 2;
-        stride_w = 2;
-      };
-      { pos_h = 13; pos_w = 7; taps_h = 5; taps_w = 5; channels_2d = 3; stride_h = 2; stride_w = 6 };
-      { pos_h = 5; pos_w = 4; taps_h = 3; taps_w = 2; channels_2d = 3; stride_h = 4; stride_w = 3 };
-    ]
+    overlapping_geoms_2d
+    @ [
+        {
+          pos_h = 13;
+          pos_w = 7;
+          taps_h = 5;
+          taps_w = 5;
+          channels_2d = 3;
+          stride_h = 2;
+          stride_w = 6;
+        };
+        {
+          pos_h = 5;
+          pos_w = 4;
+          taps_h = 3;
+          taps_w = 2;
+          channels_2d = 3;
+          stride_h = 4;
+          stride_w = 3;
+        };
+      ]
   in
   Test_utils.with_policy
     (fun policy -> { policy with Ir.Numerics.bf16_arithmetic = Ir.Numerics.Bf16_wide })
     (fun () -> List.iter geoms ~f:check_2d)
+
+let () =
+  Test_utils.with_policy
+    (fun policy -> { policy with Ir.Numerics.fp16_arithmetic = Ir.Numerics.Fp16_wide })
+    (fun () -> List.iter overlapping_geoms_2d ~f:check_fp16_2d)
 
 let () =
   let open Ll_test in

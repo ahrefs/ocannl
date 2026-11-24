@@ -798,11 +798,11 @@ files.
   composition, `Fp16_wide`, `Bf16_narrow`, decision-only target `accum_prec`, and hand-built
   allowlist declines. The affine path is pinned by `narrow_conv_grad_residency` (1-D including a
   split tail, a disjoint window with gaps, FP16, and the shorter-scan-over-64 decline; 2-D
-  overlapping, mixed, and all-injective bf16 parity against the once-rounded f32 twin, privatized
-  f32 tiles, a hand-built mixed-frame 2-D order witness, and coupled-pair / residue-budget boundary
-  controls). The 1-D overlapping FP16 fixture selects `Fp16_wide` explicitly and starts at 2048 to
-  match the BF16 fixture's spacing of two at 256, so the same window contributions expose
-  per-window rounding in both formats. The plain path is pinned by
+  overlapping, mixed, and all-injective bf16 parity plus overlapping 2-D FP16 parity against the
+  once-rounded f32 twin, privatized f32 tiles, a hand-built mixed-frame 2-D order witness, and
+  coupled-pair / residue-budget boundary controls). The 1-D and 2-D overlapping FP16 fixtures select
+  `Fp16_wide` explicitly and start at 2048 to match the BF16 fixtures' spacing of two at 256, so
+  the same window contributions expose per-window rounding in both formats. The plain path is pinned by
   `lowered_nest_order`'s narrow legs and `narrow_grad_residency` (a bf16 dense layer's three
   gradients onto nonzero incoming values equal an f32 twin's exact sums narrowed once on the default,
   the privatized preset and the seeded CUDA/HIP default, whose shipped `acc` tiles are f32).
