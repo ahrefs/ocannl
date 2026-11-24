@@ -1,5 +1,6 @@
 HIP cache identity contains the selected production math switches, including the default regime: true
 the flip and unflippable tables cover exactly the Keyed class: true
+the source scan covers utils.ml and every codegen-stage module without duplicate basenames: true
 every key utils.ml resolves into Utils.settings is flipped through its field or startup resolution, and only those: true
 every Keyed key the running backend hashes moves its own component when flipped: true
 and no Keyed flip moves a component its classification does not account for: true
@@ -24,6 +25,10 @@ and moves no component of the cache key: true
 no registered non-Keyed key moves the cache key when flipped off its default: true
 two fresh builds of the probe compile to the same kernel under the same key: true
 every key a compile reads whose class promises an unchanged kernel has oracle values or an exemption: true
+every key read in a codegen-stage module whose class promises an unchanged kernel has oracle values or an exemption: true
+emitted_flips, emitted_exemptions, codegen_not_traced, and settings_flips are disjoint with no duplicate keys: true
+every emitted_flips and emitted_exemptions row is in an oracle class, has non-empty flip candidates, and is read at codegen or during compile_probe: true
+every codegen_not_traced row is an oracle-class key read in a codegen-stage module and not traced during compile_probe: true
 no such key changes the emitted kernel while leaving the cache key unchanged: true
 
 Keyed keys this sweep cannot flip in-process:
@@ -36,6 +41,17 @@ Keys a compile reads that the codegen-diff oracle does not flip:
   ll_ident_style -- identifier spelling: the canonical rendering alpha-renames identifiers away, and code that differs only in their names compiles to the same kernel -- a changed text is what the key is right to ignore
   cc_backend_verify_codesign -- a check on the compiled library, which signs it or refuses it and never touches the source: stated on a host without codesign (every Linux CI box) it refuses every compile, so no kernel comes back to compare
   build_files_prefix -- it moves the very artifacts this oracle reads, and Generated refuses a set prefix
+
+Keys read in a codegen-stage module that compile_probe does not trace (resolved once or at device init):
+  cc_backend_probe_cache -- read only inside module-level lazy toolchain probes (Cc_backend.cached_probe); memoizes probe results on disk without altering emitted source
+  cc_kernel_cache_mib -- resolved once by the module-level lazy Cc_backend.kernel_cache_capacity_bytes; bounds in-process compiled-kernel cache capacity without altering emitted source
+  cuda_kernel_cache_mib -- resolved once by the module-level lazy Cuda_backend.kernel_cache_capacity_bytes; bounds in-process compiled-kernel cache capacity without altering emitted source
+  hip_kernel_cache_mib -- resolved once by the module-level lazy Hip_backend.kernel_cache_capacity_bytes; bounds in-process compiled-kernel cache capacity without altering emitted source
+  metal_kernel_cache_mib -- resolved once by the module-level lazy Metal_backend.kernel_cache_capacity_bytes; bounds in-process compiled-kernel cache capacity without altering emitted source
+  hip_scratch_validation -- resolved once by the module-level lazy Hip_backend.hip_scratch_validation; gates pre-launch scratch-size validation without altering emitted source
+  schedule_log_declines -- resolved once by the module-level lazy C_syntax.log_declines; logs rendering declines to stderr without altering emitted source
+  cuda_printf_fifo_size -- read once at device initialization under debug_log_from_routines; sets the device printf FIFO size without altering emitted source
+  hip_printf_fifo_size -- read once at device initialization under debug_log_from_routines; sets the device printf FIFO size without altering emitted source
 
 Keyed keys hashed only on some backends:
   cc_backend_optimization_level -- CPU backends

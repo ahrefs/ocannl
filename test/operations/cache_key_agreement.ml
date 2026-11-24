@@ -29,7 +29,21 @@
    wrong together -- a key that changes the emitted kernel, is classified as leaving it alone
    (execution-neutral, placement-shaping, untimed-model), and is not hashed: every such key a
    compile reads is flipped, the probe recompiled, and a changed kernel under an unchanged key is
-   reported by name.
+   reported by name. Because dynamic tracing sees only the running backend's reads, stage 2 also
+   cross-checks [emitted_flips] / [emitted_exemptions] / [codegen_not_traced] / [settings_flips]
+   statically against the same [Test_scan.Codegen_stage_modules.modules] set [digest_completeness]
+   scans (gh-ocannl-2440), so a new GPU-only codegen-stage read fails on cc before merge rather than
+   first turning a GPU loop red. [codegen_not_traced] stays disjoint from [emitted_exemptions] and
+   is refused if [compile_probe] ever traces one of its keys, so a lazy/init-only exemption cannot
+   silently weaken the dynamic flip oracle.
+
+   Static cross-check boundary: reads the OCaml parse trees of [utils.ml] and every module in
+   [Test_scan.Codegen_stage_modules.modules] (all required present in the rule's response file, with
+   no duplicate basenames) via [Test_scan.Config_key_scan.keys_by_file] (literal [~arg_name] reads
+   and [Utils.settings] field/predicate reads), filtered to [Execution_neutral | Placement_shaping |
+   Untimed_model]. Deliberately does not scan modules outside [Codegen_stage_modules.modules]
+   (covered by dynamic tracing during [compile_probe] and by [digest_completeness]) or
+   dynamic/forwarded key names (refused by [test_config_consistency]).
 
    A [Keyed] key the sweep cannot flip in-process says why ([unflippable]), is varied another way --
    the backend name through [cache_key_components]' argument, the two lazily resolved cc settings in
@@ -344,6 +358,41 @@ let emitted_exemptions =
       "it moves the very artifacts this oracle reads, and Generated refuses a set prefix" );
   ]
 
+(* Statically read in a codegen-stage module, in the classes the oracle covers, and NOT traced by a
+   warm [compile_probe] (resolved once by a module-level [lazy] or read only at device init). Kept
+   separate from [emitted_exemptions] so a key listed here fails immediately if [compile_probe] ever
+   starts reading it per compile instead of silently bypassing the dynamic flip oracle. *)
+let codegen_not_traced =
+  [
+    ( "cc_backend_probe_cache",
+      "read only inside module-level lazy toolchain probes (Cc_backend.cached_probe); memoizes \
+       probe results on disk without altering emitted source" );
+    ( "cc_kernel_cache_mib",
+      "resolved once by the module-level lazy Cc_backend.kernel_cache_capacity_bytes; bounds \
+       in-process compiled-kernel cache capacity without altering emitted source" );
+    ( "cuda_kernel_cache_mib",
+      "resolved once by the module-level lazy Cuda_backend.kernel_cache_capacity_bytes; bounds \
+       in-process compiled-kernel cache capacity without altering emitted source" );
+    ( "hip_kernel_cache_mib",
+      "resolved once by the module-level lazy Hip_backend.kernel_cache_capacity_bytes; bounds \
+       in-process compiled-kernel cache capacity without altering emitted source" );
+    ( "metal_kernel_cache_mib",
+      "resolved once by the module-level lazy Metal_backend.kernel_cache_capacity_bytes; bounds \
+       in-process compiled-kernel cache capacity without altering emitted source" );
+    ( "hip_scratch_validation",
+      "resolved once by the module-level lazy Hip_backend.hip_scratch_validation; gates pre-launch \
+       scratch-size validation without altering emitted source" );
+    ( "schedule_log_declines",
+      "resolved once by the module-level lazy C_syntax.log_declines; logs rendering declines to \
+       stderr without altering emitted source" );
+    ( "cuda_printf_fifo_size",
+      "read once at device initialization under debug_log_from_routines; sets the device printf \
+       FIFO size without altering emitted source" );
+    ( "hip_printf_fifo_size",
+      "read once at device initialization under debug_log_from_routines; sets the device printf \
+       FIFO size without altering emitted source" );
+  ]
+
 (* [~lower_only] stops the compile once the lowered code is canonicalized, before anything is
    rendered or handed to a compiler. *)
 exception Lowered
@@ -555,17 +604,51 @@ let () =
   p_empty ~min:20 "the flip and unflippable tables cover exactly the Keyed class"
     ~over:(Set.to_list keyed_names)
     (Set.to_list (Set.union (Set.diff keyed_names tabled) (Set.diff tabled keyed_names)));
-  (* 2. The assignments in [utils.ml] own the coverage set for field and startup flips. *)
+  (* 2. The assignments in [utils.ml] own the coverage set for field and startup flips, and the
+     codegen-stage modules (shared with [digest_completeness]) own the static compile-time read set
+     cross-checked in stage 2 (gh-ocannl-2440). *)
+  let expanded_argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv in
+  let source_files =
+    Test_scan.Config_key_scan.sources_among (Array.to_list (Array.subo expanded_argv ~pos:1))
+  in
+  let duplicate_basenames = Test_scan.Config_key_scan.duplicate_basenames source_files in
+  let expected_sources = "utils.ml" :: Test_scan.Codegen_stage_modules.modules in
+  let present_basenames =
+    List.map source_files ~f:Stdlib.Filename.basename |> Set.of_list (module String)
+  in
+  let missing_sources =
+    List.filter expected_sources ~f:(fun base -> not (Set.mem present_basenames base))
+  in
+  List.iter missing_sources ~f:(fun base ->
+      eprintf "cache_key_agreement: expected source missing from arguments: %s\n" base);
+  List.iter duplicate_basenames ~f:(fun base ->
+      eprintf "cache_key_agreement: duplicate source basename in arguments: %s\n" base);
+  p_empty ~min:8
+    "the source scan covers utils.ml and every codegen-stage module without duplicate basenames"
+    ~over:expected_sources
+    (missing_sources @ duplicate_basenames);
   let settings_borne =
-    (* The source, then [outranked] and its commandline statements, if any. *)
-    match Array.to_list Stdlib.Sys.argv with
-    | _ :: utils_ml :: _ ->
+    match
+      List.find source_files ~f:(fun path ->
+          String.equal (Stdlib.Filename.basename path) "utils.ml")
+    with
+    | Some utils_ml ->
         Test_scan.Config_key_scan.settings_field_initializers (In_channel.read_all utils_ml)
         |> List.concat_map ~f:snd
         |> Set.of_list (module String)
-    | _ ->
-        Verdict.fail "usage: cache_key_agreement <arrayjit/lib/utils.ml>";
-        Set.empty (module String)
+    | None -> Set.empty (module String)
+  in
+  let codegen_by_file =
+    let codegen_sources =
+      List.filter source_files ~f:(fun path ->
+          List.mem Test_scan.Codegen_stage_modules.modules (Stdlib.Filename.basename path)
+            ~equal:String.equal)
+    in
+    Test_scan.Config_key_scan.keys_by_file codegen_sources
+  in
+  let codegen_read = List.map codegen_by_file ~f:snd |> Set.union_list (module String) in
+  let codegen_readers key =
+    List.filter_map codegen_by_file ~f:(fun (base, keys) -> Option.some_if (Set.mem keys key) base)
   in
   let flipped_through_settings =
     List.filter_map keyed_flips ~f:(fun (key, flip) ->
@@ -994,6 +1077,76 @@ let () =
         let ok = exempt key || Option.is_some (values key) in
         if not ok then eprintf "%s is read during a compile; give it values in emitted_flips\n" key;
         ok);
+    (* Static cross-check against [Codegen_stage_modules.modules] (gh-ocannl-2440): dynamic tracing
+       above sees only the active backend, so a GPU-only codegen-stage read escaped cc gates. *)
+    let not_traced key = List.Assoc.mem codegen_not_traced key ~equal:String.equal in
+    let codegen_oracle_keys = Set.filter codegen_read ~f:oracle_class in
+    p_all ~min:10
+      "every key read in a codegen-stage module whose class promises an unchanged kernel has \
+       oracle values or an exemption"
+      (Set.to_list codegen_oracle_keys) ~f:(fun key ->
+        let ok = exempt key || not_traced key || Option.is_some (values key) in
+        if not ok then
+          eprintf
+            "%s is read in a codegen-stage module (%s); give it values in emitted_flips, or \
+             document it in emitted_exemptions or codegen_not_traced\n"
+            key
+            (String.concat ~sep:", " (codegen_readers key));
+        ok);
+    let emitted_entries =
+      List.map emitted_flips ~f:(fun (k, candidates) -> (k, `Flip candidates))
+      @ List.map emitted_exemptions ~f:(fun (k, _) -> (k, `Exempt))
+    in
+    let table_keys =
+      List.map emitted_flips ~f:fst
+      @ List.map emitted_exemptions ~f:fst
+      @ List.map codegen_not_traced ~f:fst
+      @ List.map settings_flips ~f:fst
+    in
+    let table_dups = List.find_all_dups table_keys ~compare:String.compare in
+    List.iter table_dups ~f:(fun key ->
+        eprintf
+          "%s appears more than once across emitted_flips, emitted_exemptions, codegen_not_traced, \
+           and settings_flips\n"
+          key);
+    p_empty ~min:10
+      "emitted_flips, emitted_exemptions, codegen_not_traced, and settings_flips are disjoint with \
+       no duplicate keys"
+      ~over:table_keys table_dups;
+    p_all ~min:10
+      "every emitted_flips and emitted_exemptions row is in an oracle class, has non-empty flip \
+       candidates, and is read at codegen or during compile_probe"
+      emitted_entries ~f:(fun (key, entry) ->
+        let in_class = oracle_class key in
+        let has_candidates =
+          match entry with `Flip cs -> not (List.is_empty cs) | `Exempt -> true
+        in
+        let is_read = Set.mem codegen_read key || Set.mem traced_reads key in
+        if not in_class then
+          eprintf "%s is in emitted_flips/emitted_exemptions but not in an oracle class\n" key;
+        if not has_candidates then eprintf "%s in emitted_flips has no candidate values\n" key;
+        if not is_read then
+          eprintf
+            "%s is in emitted_flips/emitted_exemptions but read neither in a codegen-stage module \
+             nor during compile_probe\n"
+            key;
+        in_class && has_candidates && is_read);
+    p_all ~min:5
+      "every codegen_not_traced row is an oracle-class key read in a codegen-stage module and not \
+       traced during compile_probe"
+      codegen_not_traced ~f:(fun (key, _) ->
+        let in_class = oracle_class key in
+        let at_codegen = Set.mem codegen_read key in
+        let untraced = not (Set.mem traced_reads key) in
+        if not in_class then eprintf "%s is in codegen_not_traced but not in an oracle class\n" key;
+        if not at_codegen then
+          eprintf "%s is in codegen_not_traced but no codegen-stage module reads it\n" key;
+        if not untraced then
+          eprintf
+            "%s is in codegen_not_traced yet compile_probe traced it -- move it to emitted_flips \
+             (or emitted_exemptions)\n"
+            key;
+        in_class && at_codegen && untraced);
     let flipped =
       List.filter population ~f:(fun key ->
           (not (exempt key))
@@ -1048,6 +1201,11 @@ let () =
   List.iter unflippable ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
   printf "\nKeys a compile reads that the codegen-diff oracle does not flip:\n";
   List.iter emitted_exemptions ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
+  printf
+    "\n\
+     Keys read in a codegen-stage module that compile_probe does not trace (resolved once or at \
+     device init):\n";
+  List.iter codegen_not_traced ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
   printf "\nKeyed keys hashed only on some backends:\n";
   List.iter keyed_flips ~f:(fun (key, flip) ->
       match flip.scope with

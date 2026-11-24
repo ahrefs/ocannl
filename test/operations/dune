@@ -3493,19 +3493,31 @@
  (libraries base stdio test_scan arrayjit.verdict))
 
 ; gh-ocannl-596: every config key's classification agrees with what flipping it does to the cache
-; key -- the substance behind digest_completeness's shape checks. Its argument is the source the
-; settings-borne keys are derived from.
+; key -- the substance behind digest_completeness's shape checks. Its response file holds the
+; arrayjit/lib sources for both the settings-borne derivation (utils.ml) and the static cross-check
+; of emitted_flips/emitted_exemptions against codegen-stage reads (gh-ocannl-2440).
+
+(rule
+ (target cache_key_agreement.filelist)
+ (package neural_nets_lib)
+ (deps
+  (glob_files ../../arrayjit/lib/*.ml))
+ (action
+  (with-stdout-to
+   %{target}
+   (echo "%{deps}"))))
 
 (test
  (name cache_key_agreement)
  (package neural_nets_lib)
  (deps
   ocannl_config
+  (glob_files ../../arrayjit/lib/*.ml)
   (env_var OCANNL_BACKEND))
  (locks cache_key_agreement)
  (modules cache_key_agreement)
  (action
-  (run %{test} %{dep:../../arrayjit/lib/utils.ml}))
+  (run %{test} @%{dep:cache_key_agreement.filelist}))
  (libraries
   base
   ocannl
@@ -3533,6 +3545,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
+  (glob_files ../../arrayjit/lib/*.ml)
   (env_var OCANNL_BACKEND))
  (locks cache_key_agreement)
  (action
@@ -3540,7 +3553,7 @@
    %{target}
    (run
     %{dep:cache_key_agreement.exe}
-    %{dep:../../arrayjit/lib/utils.ml}
+    @%{dep:cache_key_agreement.filelist}
     outranked
     --ocannl_cc_kernel_part_weight=1
     --ocannl_cuda_ptx_target=native))))
