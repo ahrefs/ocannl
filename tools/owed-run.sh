@@ -16,23 +16,29 @@
 # moves the PR's head (no CI run, review round or checkpoint is re-triggered) nor carries code;
 # its message holds the records, one line each:
 #   owed-run: v2 run head=<sha> writer=<writer> exit=0 clean=yes backend=cc source=<host>:<run dir> cmd=<dune argv>
+#   owed-run: v2 linux-shell head=<sha> writer=<writer> exit=0 clean=yes os=Linux source=<host>:<run dir> targets=<t1,t2,...>
 #   owed-run: v2 waiver head=<sha> writer=<writer> by=<who> reason=<text>
-# Run writers are record, relay, or leg:<hostname> (ASCII letters, digits, dot, hyphen and
-# underscore); waiver writers are waive or relay. Existing v1 lines omit the writer and are
-# admitted as writer=legacy. `add` rewrites either version as v2 with writer=relay.
+# Run and linux-shell writers are record, relay, or leg:<hostname> (ASCII letters, digits, dot,
+# hyphen and underscore); waiver writers are waive or relay. Existing v1 lines omit the writer and
+# are admitted as writer=legacy. `add` rewrites any version as v2 with writer=relay.
 # Whoever can push to that repository can write one (the decision recorded on gh-ocannl-2218:
 # attestation, as the PR-body citation it replaces was, now machine-checked); any box with network
 # can read one, anonymously. Each write keeps the head's earlier records and adds its own.
 #
-# What `record` certifies, read from the run's own record under ~/.ocannl-test-runs (written by
-# tools/test-run.sh): `exit` present (the run finished) and 0; `dirty` present and empty (the
-# checkout was clean at launch); `head`, the commit the record is for; `expect-backend` exactly
-# `cc` (test-run.sh refused the batch unless it held cc: `--expect-backend cc`); and `cmd`, dune's
-# argv, one of the allowlisted forms (FULL, TRAIN below). Refused otherwise, nothing published.
+# What `record` certifies:
+#   - For a tools/test-run.sh run record under ~/.ocannl-test-runs: `exit` present (the run
+#     finished) and 0; `dirty` present and empty (clean at launch); `head`, the commit;
+#     `expect-backend` exactly `cc`; and `cmd`, dune's argv, one of FULL or TRAIN below.
+#   - For a tools/linux-shell-leg.sh receipt (`kind` = `linux-shell`, gh-ocannl-2414): `exit`
+#     present and 0; `dirty` present and empty; `os` exactly `Linux`; `head`, the commit; and
+#     `targets`, a comma-separated canonical list of `harnesses`, `member:<MEMBER>` and/or
+#     `@<DIR>/runtest-<NAME>`.
+# Refused otherwise, nothing published.
 #
 # What `check HEAD NEED...` admits (exit 0, one `owed-run: admitted ...` line per record it
 # used), as a fail-closed allowlist. NEED is `runtest` (the full suite), `train` (every `train-`
-# alias: `@train`) or one alias `@test/training/train-NAME`. The ref must exist on OWED_RUN_URL
+# alias: `@train`), `@test/training/train-NAME`, `linux:harnesses`, `linux:member:<MEMBER>`, or
+# `linux:@<DIR>/runtest-<NAME>`. The ref must exist on OWED_RUN_URL
 # and be fetched within FETCH_CAP seconds; its commit must have HEAD as its only parent and
 # HEAD's tree; every `owed-run:` line in its message must parse as v1 or v2 and name HEAD; and together
 # the run records must cover every NEED, or one waiver must stand:
@@ -41,7 +47,12 @@
 #          tools/test-run.sh injects them: neither filters what runs; a `fresh` run's injected
 #          `--build-dir=...` is refused like any other option, so record a `run`);
 #   TRAIN  cmd `build @train [-j N]` (with or without @runtest): covers `train` and every alias;
-#          cmd `build @test/training/train-NAME... [-j N]` covers the aliases it names.
+#          cmd `build @test/training/train-NAME... [-j N]` covers the aliases it names;
+#   LINUX  `linux-shell` record with `os=Linux`: `targets` entry `harnesses` covers
+#          `linux:harnesses` and every `linux:member:<MEMBER>`; `member:<MEMBER>` covers
+#          `linux:member:<MEMBER>`; `@<DIR>/runtest-<NAME>` covers `linux:@<DIR>/runtest-<NAME>`.
+#          A `run` record carries no OS attestation and never covers a `linux:*` NEED, and a
+#          `linux-shell` record never covers `runtest`, `train` or `@test/training/train-*`.
 # Refused (exit 1, saying why and naming OWED_RUN_URL): no ref (missing); a commit whose parent is
 # not HEAD, whose tree is another, or a ref pointing to a non-commit (foreign: a record of another
 # head, i.e. of an older push or another PR, is under that head's own name and is never read for
@@ -235,15 +246,59 @@ cmd_cover() {
   cover=${cover# }
 }
 
+# valid_harness_member / valid_runtest_alias / linux_targets_cover: strict allowlist for
+# scoped Linux shell-leg targets (gh-ocannl-2414).
+valid_harness_member() {
+  local LC_ALL=C
+  case $1 in
+    '' | /* | *..* | *//* | *[!A-Za-z0-9_./-]*) return 1 ;;
+    *.sh) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+valid_runtest_alias() {
+  local LC_ALL=C name
+  case $1 in
+    '' | *[!A-Za-z0-9_@./-]* | *..* | *//* | @/* | *@*@*) return 1 ;;
+    @?*/runtest-?*) ;;
+    *) return 1 ;;
+  esac
+  name=${1##*/}
+  case $name in runtest-?*) return 0 ;; *) return 1 ;; esac
+}
+linux_targets_cover() {
+  local rest=$1 tok seen=' '
+  linux_cover=
+  [ -n "$rest" ] || return 1
+  case $rest in ,* | *, | *,,* | *[[:space:]]* | *[\'\"\\\$\`]*) return 1 ;; esac
+  while [ -n "$rest" ]; do
+    case $rest in
+      *,*) tok=${rest%%,*} rest=${rest#*,} ;;
+      *) tok=$rest rest= ;;
+    esac
+    case $tok in
+      harnesses) ;;
+      member:*) valid_harness_member "${tok#member:}" || return 1 ;;
+      @*) valid_runtest_alias "$tok" || return 1 ;;
+      *) return 1 ;;
+    esac
+    case $seen in *" $tok "*) return 1 ;; esac
+    seen="$seen$tok "
+    linux_cover="$linux_cover linux:$tok"
+  done
+  linux_cover=${linux_cover# }
+  [ -n "$linux_cover" ]
+}
+
 # parse_line LINE: sets kind, head, writer, and for a run exit_, clean, backend, source, cmd;
-# for a waiver by, reason. Fails on anything else.
+# for a linux-shell run exit_, clean, os, source, targets; for a waiver by, reason.
 parse_line() {
   local rest schema
-  kind= head= writer=legacy exit_= clean= backend= source= cmd= by= reason=
+  kind= head= writer=legacy exit_= clean= backend= os= source= cmd= targets= by= reason=
   case $1 in *$'\n'*) return 1 ;; esac
   case $1 in
     'owed-run: v1 run head='* | 'owed-run: v1 waiver head='*) schema=v1 ;;
-    "owed-run: $SCHEMA run head="* | "owed-run: $SCHEMA waiver head="*) schema=$SCHEMA ;;
+    "owed-run: $SCHEMA run head="* | "owed-run: $SCHEMA linux-shell head="* | "owed-run: $SCHEMA waiver head="*) schema=$SCHEMA ;;
     *) return 1 ;;
   esac
   rest=${1#"owed-run: $schema "}
@@ -254,8 +309,8 @@ parse_line() {
     case $rest in writer=*' '*) ;; *) return 1 ;; esac
     writer=${rest%% *} writer=${writer#writer=} rest=${rest#* }
     case $kind/$writer in
-      run/record | run/relay | waiver/waive | waiver/relay) ;;
-      run/leg:*) valid_host "${writer#leg:}" || return 1 ;;
+      run/record | run/relay | linux-shell/record | linux-shell/relay | waiver/waive | waiver/relay) ;;
+      run/leg:* | linux-shell/leg:*) valid_host "${writer#leg:}" || return 1 ;;
       *) return 1 ;;
     esac
   fi
@@ -268,6 +323,14 @@ parse_line() {
       source=${rest%% cmd=*} source=${source#source=}
       cmd=${rest#* cmd=}
       [ -n "$source" ] && [ -n "$cmd" ] ;;
+    linux-shell)
+      case $rest in exit=*' clean='*' os='*' source='*' targets='?*) ;; *) return 1 ;; esac
+      exit_=${rest%% *} exit_=${exit_#exit=} rest=${rest#* }
+      clean=${rest%% *} clean=${clean#clean=} rest=${rest#* }
+      os=${rest%% *} os=${os#os=} rest=${rest#* }
+      source=${rest%% targets=*} source=${source#source=}
+      targets=${rest#* targets=}
+      [ -n "$source" ] && [ -n "$targets" ] && linux_targets_cover "$targets" ;;
     waiver)
       case $rest in by=*' reason='?*) ;; *) return 1 ;; esac
       by=${rest%% reason=*} by=${by#by=}
@@ -284,6 +347,11 @@ valid_host() {
 
 run_line() {
   printf 'owed-run: %s run head=%s writer=%s exit=0 clean=yes backend=cc source=%s cmd=%s' \
+    "$SCHEMA" "$1" "$2" "$3" "$4"
+}
+
+linux_shell_line() {
+  printf 'owed-run: %s linux-shell head=%s writer=%s exit=0 clean=yes os=Linux source=%s targets=%s' \
     "$SCHEMA" "$1" "$2" "$3" "$4"
 }
 
@@ -418,10 +486,76 @@ record_run() {
   if [ "$print" = 1 ]; then printf '%s\n' "$line"; else publish "$h" "$line"; fi
 }
 
+linux_shell_last_pointer() {
+  local base wt key target_root=${1:-$root}
+  base=${OCANNL_TOOL_TEST_RUNS:-${HOME:-}/.ocannl-test-runs}
+  [ -n "$base" ] && [ "$base" != "/.ocannl-test-runs" ] || return 1
+  case $base in /*) ;; *) base=$target_root/$base ;; esac
+  wt=$(CDPATH= cd -- "$target_root" && pwd -P) || return 1
+  key="$(basename -- "$wt" | tr -c 'A-Za-z0-9' '_')$(printf %s "$wt" | cksum | awk '{print $1}')"
+  printf '%s/linux-shell-last-%s\n' "$base" "$key"
+}
+
+record_linux_shell() {
+  local run=$1 print=$2 leg_record=${3-} observed_head=${4-}
+  local requested_targets h os_val targets host line checkout writer=record
+  [ -d "$run" ] || die "record: no receipt directory $run"
+  [ "$(cat "$run/kind" 2>/dev/null)" = linux-shell ] || die "record: $run is not a linux-shell receipt"
+  if [ -n "$leg_record" ]; then
+    cmp -s "$run/fleet-leg-run-record" <(printf '%s\n' "$leg_record") ||
+      die "record: $run does not match this fleet leg's run record"
+    requested_targets=$(cat "$run/fleet-leg-targets" 2>/dev/null) &&
+      [[ $requested_targets != *$'\n'* ]] && linux_targets_cover "$requested_targets" ||
+      die "record: $run did not request valid linux-shell targets"
+  fi
+  [ -f "$run/exit" ] || die "record: $run has no exit status: it has not finished"
+  [ "$(cat "$run/exit")" = 0 ] || die "record: $run exited $(cat "$run/exit"), not 0"
+  [ -f "$run/dirty" ] || die "record: $run recorded no checkout state"
+  [ ! -s "$run/dirty" ] || die "record: $run ran a dirty checkout"
+  os_val=$(sed -n 1p "$run/os" 2>/dev/null)
+  [ "$os_val" = Linux ] || die "record: $run ran on '$os_val', not Linux"
+  h=$(sed -n 1p "$run/head" 2>/dev/null)
+  is_sha "$h" || die "record: $run recorded no head commit"
+  targets=$(cat "$run/targets" 2>/dev/null)
+  [[ $targets != *$'\n'* ]] && linux_targets_cover "$targets" ||
+    die "record: $run recorded invalid linux-shell targets '$targets'"
+  host=$(hostname -s 2>/dev/null || hostname)
+  if [ -n "$leg_record" ]; then
+    [ "$targets" = "$requested_targets" ] || die "record: $run targets do not match the fleet leg's requested targets"
+    [ "$h" = "$observed_head" ] || die "record: $run is for a different head than the fleet leg observed"
+    [ "$h" = "$(git -C "$root" rev-parse HEAD)" ] || die "record: $run is for a different head"
+    checkout=$(git -C "$root" status --porcelain --untracked-files=all --ignore-submodules=none) ||
+      die "record: could not read the fleet worktree's checkout state"
+    [ -z "$checkout" ] || die "record: the fleet worktree is dirty"
+    if on_record_master "$h"; then
+      printf '%s\n' "$me: recorded nothing (head is on master at $OWED_RUN_URL)"
+      return 0
+    fi
+    valid_host "$host" || die "record: cannot use '$host' as a leg writer hostname"
+    writer=leg:$host
+  fi
+  line=$(linux_shell_line "$h" "$writer" "$host:$run" "$targets")
+  if [ "$print" = 1 ]; then printf '%s\n' "$line"; else publish "$h" "$line"; fi
+}
+
 verb=${1-}
 [ $# -gt 0 ] && shift
 case $verb in
   url) printf '%s\n' "$OWED_RUN_URL" ;;
+  valid-target)
+    [ $# -ge 2 ] || die "valid-target: expected --member|--alias VALUE..."
+    mode=$1
+    shift
+    for val do
+      case $mode in
+        --member) valid_harness_member "$val" || exit 1 ;;
+        --alias) valid_runtest_alias "$val" || exit 1 ;;
+        *) die "valid-target: unknown mode '$mode'" ;;
+      esac
+    done ;;
+  linux-shell-pointer)
+    [ $# -le 1 ] || die "linux-shell-pointer: at most one WORKTREE"
+    linux_shell_last_pointer "${1:-$root}" || die "linux-shell-pointer: cannot determine receipt pointer (set HOME or OCANNL_TOOL_TEST_RUNS)" ;;
   record)
     run= print=0
     for a do
@@ -431,12 +565,33 @@ case $verb in
         *) [ -z "$run" ] || die "record: one RUN at most"; run=$a ;;
       esac
     done
-    record_run "$run" "$print" ;;
+    if [ -n "$run" ] && [ -d "$run" ] && [ "$(cat "$run/kind" 2>/dev/null)" = linux-shell ]; then
+      record_linux_shell "$run" "$print"
+    else
+      record_run "$run" "$print"
+    fi ;;
   leg-record)
     [ $# = 3 ] && [[ $1 = /* ]] && [ -n "$2" ] && is_sha "$3" ||
       die "leg-record: expected an absolute leg record path, request ID and observed SHA"
-    if ! ( export GIT_TERMINAL_PROMPT=0; record_run last 0 "$1" "$3" ) </dev/null 2>&1; then
-      printf '%s\n' "$me: recorded nothing (record refused)"
+    linux_cand=
+    if [ -n "${FLEET_LEG_RECEIPT_DIR:-}" ] && [ -d "$FLEET_LEG_RECEIPT_DIR" ] &&
+       [ "$(cat "$FLEET_LEG_RECEIPT_DIR/kind" 2>/dev/null)" = linux-shell ]; then
+      linux_cand=$FLEET_LEG_RECEIPT_DIR
+    elif ptr=$(linux_shell_last_pointer 2>/dev/null) && [ -r "$ptr" ]; then
+      cand=$(sed -n 1p "$ptr" 2>/dev/null)
+      if [ -n "$cand" ] && [ -d "$cand" ] && [ "$(cat "$cand/kind" 2>/dev/null)" = linux-shell ] &&
+         cmp -s "$cand/fleet-leg-run-record" <(printf '%s\n' "$1"); then
+        linux_cand=$cand
+      fi
+    fi
+    if [ -n "$linux_cand" ]; then
+      if ! ( export GIT_TERMINAL_PROMPT=0; record_linux_shell "$linux_cand" 0 "$1" "$3" ) </dev/null 2>&1; then
+        printf '%s\n' "$me: recorded nothing (record refused)"
+      fi
+    else
+      if ! ( export GIT_TERMINAL_PROMPT=0; record_run last 0 "$1" "$3" ) </dev/null 2>&1; then
+        printf '%s\n' "$me: recorded nothing (record refused)"
+      fi
     fi ;;
   add)
     [ $# = 1 ] || die "add: one LINE"
@@ -444,6 +599,9 @@ case $verb in
     if [ "$kind" = run ]; then
       [ "$exit_/$clean/$backend" = 0/yes/cc ] && cmd_cover "$cmd" || die "add: a record no check admits: $1"
       line=$(run_line "$head" relay "$source" "$cmd")
+    elif [ "$kind" = linux-shell ]; then
+      [ "$exit_/$clean/$os" = 0/yes/Linux ] && linux_targets_cover "$targets" || die "add: a record no check admits: $1"
+      line=$(linux_shell_line "$head" relay "$source" "$targets")
     else
       line=$(waiver_line "$head" relay "$by" "$reason")
     fi
@@ -469,7 +627,12 @@ case $verb in
     shift
     is_sha "$h" || die "check: HEAD must be a full 40-hex commit"
     for n do
-      case $n in runtest | train | @test/training/train-?*) ;; *) die "check: unknown NEED '$n'" ;; esac
+      case $n in
+        runtest | train | @test/training/train-?* | linux:harnesses) ;;
+        linux:member:*) valid_harness_member "${n#linux:member:}" || die "check: unknown NEED '$n'" ;;
+        linux:@*) valid_runtest_alias "${n#linux:}" || die "check: unknown NEED '$n'" ;;
+        *) die "check: unknown NEED '$n'" ;;
+      esac
     done
     ref=refs/owed-runs/$h
     remote_ref "$ref" || unreadable "$ref could not be read within ${FETCH_CAP}s: unreadable"
@@ -496,6 +659,13 @@ case $verb in
       fi
       [ "$exit_" = 0 ] || refuse "$ref holds a run that exited $exit_"
       [ "$clean" = yes ] || refuse "$ref holds a run of a dirty checkout"
+      if [ "$kind" = linux-shell ]; then
+        [ "$os" = Linux ] || refuse "$ref holds a linux-shell run on OS $os, not Linux"
+        linux_targets_cover "$targets" || refuse "$ref holds invalid linux-shell targets '$targets'"
+        got="$got$linux_cover "
+        admitted+="owed-run: admitted linux-shell targets '$targets' for ${h:0:8} ($source, writer=$writer)"$'\n'
+        continue
+      fi
       [ "$backend" = cc ] || refuse "$ref holds a run on backend $backend, not cc"
       cmd_cover "$cmd" || refuse "$ref holds a run of '$cmd', which is no full or train- run (a filtered or first-tier run)"
       got="$got$cover "
@@ -508,7 +678,10 @@ EOF
     missing=
     for n do
       case $got in *" $n "*) continue ;; esac
-      case $n in @test/training/train-*) case $got in *' train '*) continue ;; esac ;; esac
+      case $n in
+        @test/training/train-*) case $got in *' train '*) continue ;; esac ;;
+        linux:member:*) case $got in *' linux:harnesses '*) continue ;; esac ;;
+      esac
       missing="$missing $n"
     done
     [ -z "$missing" ] || refuse "$ref covers no run of:$missing"

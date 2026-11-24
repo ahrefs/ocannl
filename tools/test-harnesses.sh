@@ -6,6 +6,7 @@
 #        tools/test-harnesses.sh --ci-real-dune [--list] [--jobs N]
 #        tools/test-harnesses.sh [GROUP] --affected [--list] [--jobs N] --since BASE
 #        tools/test-harnesses.sh [GROUP] --affected [--list] [--jobs N] --files PATH...
+#        tools/test-harnesses.sh --member HARNESS [--member HARNESS]... [--list] [--jobs N]
 # With no group, run all three. --shell needs no OCaml toolchain; --toolchain
 # runs the formatter controls and the scan-case type check (which links
 # ppxlib) and --promotion the controls of tools that read
@@ -160,7 +161,7 @@ exit_with() {
   exit "$1"
 }
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit_with 2
-group=all list=0 expected= ci_shell=0 ci_real_dune=0 affected=0 since= files=() jobs=1
+group=all list=0 expected= ci_shell=0 ci_real_dune=0 affected=0 since= files=() explicit_members=() jobs=1
 original_args=("$@")
 while [ $# -gt 0 ]; do
   arg=$1
@@ -172,6 +173,10 @@ while [ $# -gt 0 ]; do
     --ci-shell) ci_shell=1 ;;
     --ci-real-dune) ci_real_dune=1 ;;
     --affected) affected=1 ;;
+    --member)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "test-harnesses.sh: --member needs a harness path" >&2; exit_with 2; }
+      explicit_members+=("$2")
+      shift ;;
     --jobs)
       [ $# -ge 2 ] && [[ $2 =~ ^[1-9][0-9]*$ ]] ||
         { echo "test-harnesses.sh: --jobs needs a positive integer" >&2; exit_with 2; }
@@ -225,6 +230,12 @@ if [ "$affected" = 1 ]; then
 elif [ -n "$since" ] || [ ${#files[@]} -gt 0 ]; then
   echo "test-harnesses.sh: --since and --files are --affected's" >&2
   exit_with 2
+fi
+if [ ${#explicit_members[@]} -gt 0 ]; then
+  [ "$group" = all ] && [ -z "$expected" ] && [ "$ci_shell" = 0 ] && [ "$ci_real_dune" = 0 ] && [ "$affected" = 0 ] || {
+    echo "test-harnesses.sh: --member cannot be combined with groups, --expected-skips, --affected or CI forms" >&2
+    exit_with 2
+  }
 fi
 # This is the sole membership list: CI selects groups from this entrypoint.
 manifest() {
@@ -484,6 +495,25 @@ read_affected() {
   done <"$dir/commands" >"$affected_table"
 }
 [ "$affected" = 0 ] || read_affected
+explicit_set=$'\n'
+if [ ${#explicit_members[@]} -gt 0 ]; then
+  every_members=$'\n'$(group=all members)$'\n'
+  for m in "${explicit_members[@]}"; do
+    case $m in
+      '' | *$'\n'* | *$'\t'* | *$'\r'*)
+        echo "test-harnesses.sh: --member: invalid harness name '$m'" >&2
+        exit_with 2 ;;
+    esac
+    case $every_members in
+      *$'\n'"$m"$'\n'*) ;;
+      *) echo "test-harnesses.sh: --member: '$m' is not a member of the manifest" >&2; exit_with 2 ;;
+    esac
+    case $explicit_set in
+      *$'\n'"$m"$'\n'*) echo "test-harnesses.sh: --member: '$m' listed more than once" >&2; exit_with 2 ;;
+    esac
+    explicit_set=$explicit_set$m$'\n'
+  done
+fi
 if [ "$affected" = 1 ] && [ ! -s "$affected_table" ]; then
   if [ "$list" = 0 ]; then
     if [ "$group" = all ]; then what='no harness'; else what="no harness of the $group group"; fi
@@ -542,6 +572,12 @@ while read -r tier script; do
     [ -n "$selector" ] || continue
   fi
   command=$script
+  if [ ${#explicit_members[@]} -gt 0 ]; then
+    case $explicit_set in
+      *$'\n'"$script"$'\n'*) ;;
+      *) continue ;;
+    esac
+  fi
   if [ "$affected" = 1 ]; then
     # `+` tells a member reached whole from one no line names.
     reached=$(awk -F '\t' -v s="$script" '$1 == s { print "+" $2 }' "$affected_table")

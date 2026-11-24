@@ -419,6 +419,9 @@
 # `tools/merge-build-check.sh` counts such an alias as the script's coverage
 # when its tests tier runs it. Naming is all this reads: a rule that lists a
 # script only so a text scan can read it names it as much as one running it.
+# For each such alias whose own rules execute `test/operations/sweep_harness_driver.exe`,
+# stderr also carries one line `affected: PATH: reached by sweep driver alias @ALIAS`
+# (gh-ocannl-2414), which `tools/merge-build-check.sh` reads for the scoped Linux shell leg.
 #
 # The harness census (gh-ocannl-2342): `affected --harness-census [MEMBER]`
 # prints, for every member (or MEMBER alone), what the boundary above reaches,
@@ -4261,6 +4264,18 @@ sub names_literally {   # ALIAS PATH
   return 1 if $a->{named_deps} && $a->{named_deps}{$p};
   return grep { $names_of{$_} && $names_of{$_}{$p} && $reads{$_} && $reads{$_}{$p} } @{$a->{own}};
 }
+sub runs_sweep_driver {   # ALIAS
+  my ($a) = @_;
+  return 0 unless $a->{described};
+  for my $t (@{$a->{own}}) {
+    for my $si (keys %{$runs{$t} // {}}) {
+      my $s = $st[$si];
+      return 1 if $s->{dir} eq "test/operations" && $s->{kind} eq "executables"
+        && grep { $_ eq "sweep_harness_driver" } @{$s->{names}};
+    }
+  }
+  return 0;
+}
 
 # Only a directory wholly gated by literal system comparisons can account for
 # an otherwise ownerless module. Optional libraries with missing dependencies
@@ -4390,10 +4405,18 @@ for my $p (@changed) {
   push @parts, "read by $harness_read{$p} harness(es), named below" if $harness_read{$p};
   print STDERR "affected: $p: " . join("; ", @parts) . "\n" if @parts;
   # A changed script an alias's rule names by its path (gh-ocannl-2304): the header's "Literal
-  # dependencies".
+  # dependencies". When that alias also runs sweep_harness_driver.exe, emit the sweep-driver reach
+  # line for the scoped Linux shell leg (gh-ocannl-2414). When the Dune probe did not run, targetless
+  # alias rules are opaque, so report sweep-driver reach unavailable rather than empty.
   if ($b =~ /\.sh\z/) {
-    my @named = map { $_->{name} } grep { names_literally($_, $p) } @al;
-    print STDERR "affected: $p: named as a dependency by the rule of $_\n" for sort @named;
+    if (!$probe_ok) {
+      print STDERR "affected: $p: sweep-driver reach unavailable (dune probe did not run)\n";
+    }
+    my %by_name = map { $_->{name} => $_ } grep { names_literally($_, $p) } @al;
+    for my $n (sort keys %by_name) {
+      print STDERR "affected: $p: named as a dependency by the rule of $n\n";
+      print STDERR "affected: $p: reached by sweep driver alias $n\n" if runs_sweep_driver($by_name{$n});
+    }
   }
   # Any path but a module source a stanza owns may be an input of an alias
   # action dune does not dump (see `opaque` below).

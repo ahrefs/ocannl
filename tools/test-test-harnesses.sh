@@ -139,6 +139,43 @@ for group in all shell toolchain promotion; do
     report 0 "$group executes every selected member from the repository root"
   else report 1 "$group executes every selected member from the repository root"; fi
 done
+# --member selects explicit manifest members in manifest order (gh-ocannl-2414).
+mem_first=$(sed -n '1p' "$TMP/shell")
+mem_second=$(sed -n '1p' "$TMP/promotion")
+printf '%s\n%s\n' "$mem_first" "$mem_second" >"$TMP/want-members"
+run --member "$mem_second" --member "$mem_first" --list
+if [ "$got" = 0 ] && [ ! -s "$RECORD" ] && cmp -s "$TMP/want-members" "$TMP/out"; then
+  report 0 '--member --list prints selected members in manifest order without running them'
+else report 1 '--member --list prints selected members in manifest order without running them' "exit $got; $(cat "$TMP/out")"; fi
+for width in 1 4; do
+  run --member "$mem_second" --member "$mem_first" --jobs "$width"
+  if [ "$width" = 1 ]; then
+    cmp -s "$TMP/want-members" "$RECORD" && rec_ok=1 || rec_ok=0
+  else
+    diff -u <(LC_ALL=C sort "$TMP/want-members") <(LC_ALL=C sort "$RECORD") >/dev/null 2>&1 && rec_ok=1 || rec_ok=0
+  fi
+  awk '/^HARNESS / && $NF != "exit:" && $(NF-1) != "exit:" { print $2 }' "$TMP/out" >"$TMP/out-members"
+  if [ "$got" = 0 ] && [ "$rec_ok" = 1 ] && cmp -s "$TMP/want-members" "$TMP/out-members" &&
+     grep -q '^harnesses: 2 run, 0 failed$' "$TMP/out"; then
+    report 0 "--member --jobs $width runs only the selected members and reports them in manifest order"
+  else report 1 "--member --jobs $width runs only the selected members and reports them in manifest order" \
+    "exit $got; ran $(cat "$RECORD"); headers $(cat "$TMP/out-members"); $(tail -n 3 "$TMP/out")"; fi
+done
+member_bad=
+for bad_args in \
+  '--member' \
+  '--member tools/not-a-member.sh' \
+  "--member $mem_first --member $mem_first" \
+  "--shell --member $mem_first" \
+  "--ci-shell --member $mem_first" \
+  "--affected --files $mem_first --member $mem_first"; do
+  # shellcheck disable=SC2086 # fixed argument probes
+  run $bad_args
+  { [ "$got" = 2 ] && [ ! -s "$RECORD" ]; } || member_bad="$member_bad [$bad_args: exit $got]"
+done
+if [ -z "$member_bad" ]; then
+  report 0 '--member refuses missing, unknown, duplicate or incompatible arguments before running any member'
+else report 1 '--member refuses missing, unknown, duplicate or incompatible arguments before running any member' "$member_bad"; fi
 export FAIL_MEMBER
 FAIL_MEMBER=$(head -n 1 "$TMP/all")
 run

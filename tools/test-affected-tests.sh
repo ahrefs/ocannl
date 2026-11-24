@@ -3210,6 +3210,65 @@ ML
   repo=$saved_repo
 fi
 
+if harness_leg 'sweep-driver rules emit reached-by-sweep-driver lines for literal .sh deps alone #sweep-driver'; then
+  saved_repo=$repo
+  repo=$TMP/sweep-driver-repo
+  mkdir -p "$repo/tools" "$repo/test/operations" || exit 2
+  cp "$HERE/affected-tests.sh" "$repo/tools/" || exit 2
+  printf '(lang dune 3.20)\n' >"$repo/dune-project"
+  cat >"$repo/test/operations/dune" <<'DUNE'
+(executable (name sweep_harness_driver) (modules sweep_harness_driver))
+(rule
+ (alias runtest-sweep_probe)
+ (deps probe.sh data.txt)
+ (action (run %{dep:sweep_harness_driver.exe} %{dep:probe.sh})))
+(rule
+ (alias runtest-other)
+ (deps probe.sh)
+ (action (progn)))
+DUNE
+  printf 'let () = ()\n' >"$repo/test/operations/sweep_harness_driver.ml"
+  printf '#!/bin/sh\n:\n' >"$repo/test/operations/probe.sh"
+  printf 'data\n' >"$repo/test/operations/data.txt"
+  git_q init -q && mutant_ignored "$repo" && git_q add -A && git_q commit -qm sweep-driver-fixture || exit 2
+  affected --files test/operations/probe.sh
+  if [ "$rc" = 0 ] &&
+     grep -qxF 'affected: test/operations/probe.sh: reached by sweep driver alias @test/operations/runtest-sweep_probe' "$err" &&
+     ! grep -qF 'reached by sweep driver alias @test/operations/runtest-other' "$err" &&
+     grep -qxF 'affected: test/operations/probe.sh: named as a dependency by the rule of @test/operations/runtest-other' "$err"; then
+    report 0 'a sweep-driver rule emits reached-by-sweep-driver for its literal .sh dep; a non-sweep rule does not'
+  else
+    report 1 'a sweep-driver rule emits reached-by-sweep-driver for its literal .sh dep; a non-sweep rule does not' \
+      "exit $rc; stdout: $(cat "$out"); stderr: $(cat "$err")"
+  fi
+  affected --files test/operations/data.txt
+  if [ "$rc" = 0 ] && ! grep -qF 'reached by sweep driver alias' "$err"; then
+    report 0 'a non-shell dep of a sweep-driver rule emits no reached-by-sweep-driver line'
+  else
+    report 1 'a non-shell dep of a sweep-driver rule emits no reached-by-sweep-driver line' \
+      "exit $rc; stderr: $(cat "$err")"
+  fi
+  OCANNL_TOOL_AFFECTED_PROBE=0 affected --files test/operations/probe.sh
+  if [ "$rc" = 0 ] &&
+     grep -qxF 'affected: test/operations/probe.sh: sweep-driver reach unavailable (dune probe did not run)' "$err"; then
+    report 0 'disabling the Dune probe reports sweep-driver reach unavailable for a changed .sh file'
+  else
+    report 1 'disabling the Dune probe reports sweep-driver reach unavailable for a changed .sh file' \
+      "exit $rc; stderr: $(cat "$err")"
+  fi
+  sweep_label='negative control: disabling runs_sweep_driver drops the sweep-driver reach line'
+  if run_affected_mutant "$sweep_label" \
+      'if runs_sweep_driver($by_name{$n});' \
+      'if 0;' --files test/operations/probe.sh; then
+    if [ "$rc" = 0 ] && ! grep -qF 'reached by sweep driver alias' "$err"; then
+      report_mutant 0 "$sweep_label"
+    else
+      report_mutant 1 "$sweep_label" "exit $rc; $(cat "$err")"
+    fi
+  fi
+  repo=$saved_repo
+fi
+
 if [ -n "$pending_mutant" ]; then
   report 1 "$pending_mutant" 'no verdict was given for the mutant'
 fi
