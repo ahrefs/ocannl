@@ -1110,8 +1110,26 @@ let () =
             (Context.get_values ctx grad, routine)
           in
           let original = original_scatter_schedule ctx in
+          let check_retired_mask_placement opt =
+            let placements = opt.LL.optimize_ctx.placements in
+            let before = Hashtbl.copy placements.Tn.Placements.table in
+            let refused =
+              match
+                Sched.fission_segmented ~scatter_packets:true
+                  ~replay:([], fun _ _ -> None)
+                  ~preset:(fun _ -> [])
+                  ~zero_sched:(fun _ -> [])
+                  ~static_indices:[] opt
+              with
+              | _ -> false
+              | exception Ir.Schedule_outcome.Cause_at (_, Illegal_schedule _) -> true
+            in
+            p "a refused packetized replay leaves the placement table unchanged"
+              (refused && Hashtbl.equal Poly.equal before placements.table);
+            original opt
+          in
           let baseline, baseline_routine =
-            run_f32 ~name:"nsr_packets_f32_base" ~lowered_transform:original ()
+            run_f32 ~name:"nsr_packets_f32_base" ~lowered_transform:check_retired_mask_placement ()
           in
           let rewritten, routine = run_f32 ~name:"nsr_packets_f32_default" () in
           let round x = Int32.float_of_bits (Int32.bits_of_float x) in
@@ -1160,3 +1178,66 @@ let () =
             packed_bf16 original_bf16 ~f:bitwise;
           in_leg ~leg:owners "seeded bf16 owns the f32 scatter accumulator rows" (fun label ->
               p label (row_owned_launch routine))))
+
+let () =
+  case "row packets match the effective 32-bit scatter index" (fun () ->
+      let ctx = Context.auto () in
+      let backend = Context.backend_name ctx in
+      let owners =
+        Verdict.leg
+          ~when_:(String.equal backend "cuda" || String.equal backend "hip")
+          ~on:"CUDA and HIP" ()
+      in
+      in_leg ~leg:owners "uint64 selector scatter agrees bitwise after the address cast"
+        (fun label ->
+          let open Ll_test in
+          let tokens = 128 and rows = 64 and channels = 32 in
+          let table_dims = [| channels; rows |] in
+          let table = node_factory ~first_id:24449 ~dims:table_dims () "packet_cast_table" in
+          let ids =
+            node_factory ~prec:Ops.uint64 ~first_id:24450 ~dims:[| tokens |] () "packet_cast_ids"
+          in
+          let grad =
+            node_factory ~first_id:24451 ~dims:[| tokens; channels |] () "packet_cast_grad"
+          in
+          let pos = sym () and channel = sym () in
+          let idcs = [| iter channel; fixed 0 |] in
+          let raw =
+            loop_n channel channels
+              (set table idcs (add (get grad [| fixed 0; iter channel |]) (get ids [| fixed 0 |])))
+          in
+          let scatter =
+            (* The first selector is in range after the backend's address cast. A value comparison
+               at the selector's storage width would miss its update. *)
+            loop_n pos tokens
+              (loop_n channel channels
+                 (scatter_add ~tn:table ~idcs ~dyn_axis:1
+                    ~dyn_value:(get ids [| iter pos |], Ops.uint64)
+                    (get grad [| iter pos; iter channel |], Ops.single)))
+          in
+          let selectors =
+            Array.init tokens ~f:(cycle_flat ~dims:[| tokens |] ~modulus:rows ~offset:0. ~stride:1.)
+          in
+          selectors.(0) <- 4_294_967_299.;
+          let seed =
+            [
+              (ids, selectors);
+              (grad, Array.init (tokens * channels) ~f:(fun i -> Float.of_int (i + 1) /. 16.));
+              (table, Array.init (channels * rows) ~f:(fun i -> Float.of_int (i + 1) /. 8.));
+            ]
+          in
+          let run ~name ?lowered_transform () =
+            let prelowered =
+              optimize_scoped ~name ~materialized:[ table; ids; grad ] ~raw scatter
+            in
+            let pair =
+              Context.compile ~name ~prelowered ?lowered_transform ctx Ir.Assignments.empty_comp
+                Idx.Empty
+            in
+            Context.get_values (run_linked pair ~seed) table
+          in
+          let original =
+            run ~name:"nsr_packets_cast_base" ~lowered_transform:(original_scatter_schedule ctx) ()
+          in
+          let rewritten = run ~name:"nsr_packets_cast_default" () in
+          p_all2 label rewritten original ~f:bitwise))

@@ -9863,19 +9863,14 @@ let packetize_scatter (opt : Low_level.optimized) : Low_level.optimized =
         let tokens = List.fold outer ~init:positions ~f:(fun n (_, extent) -> n * extent) in
         if rows < 32 || rows > 4096 || tokens < 128 || tokens > 4096 || rows * tokens > 4_194_304
         then raise Decline;
-        (* Selectors are storage-typed integer reads. Comparing at a wide integer precision keeps a
-           high selector or a row outside that storage width from becoming a hit via a narrowing
-           conversion. *)
-        let compare_prec =
-          match (selector, prec) with
-          | Get (ids, _), (Ops.Byte_prec _ | Uint16_prec _ | Uint32_prec _ | Uint64_prec _)
-            when Ops.equal_prec (Lazy.force ids.Tn.storage_prec) prec ->
-              Ops.uint64
-          | Get (ids, _), (Ops.Int32_prec _ | Int64_prec _)
-            when Ops.equal_prec (Lazy.force ids.Tn.storage_prec) prec ->
-              Ops.int64
-          | _ -> raise Decline
-        in
+        (* A storage-typed integer read needs exactly the address cast used by Set_dynamic. The
+           original guard, when present, still sees the selector at its own precision. *)
+        (match (selector, Ops.prec_family prec) with
+        | Get (ids, _), Ops.Scalar_integer when Ops.equal_prec (Lazy.force ids.Tn.storage_prec) prec
+          ->
+            ()
+        | _ -> raise Decline);
+        let compare_prec = Ops.index_prec () in
         let plain_index = function
           | Indexing.Fixed_idx _ | Iterator _ | Affine _ -> true
           | Concat _ | Sub_axis -> false
@@ -9935,7 +9930,9 @@ let packetize_scatter (opt : Low_level.optimized) : Low_level.optimized =
             ~padding:(lazy None)
             ()
         in
-        Tn.Placements.update plc masks On_device (Site "2443:scatter-mask");
+        (* Scratch placement belongs to this fresh node. If fission or replay declines, nothing in
+           the caller's placement table keeps the discarded node alive. *)
+        Tn.update_memory_mode masks On_device (Site "2443:scatter-mask");
         let st = get_node (Lazy.force traced_store) masks in
         st.has_assignment <- true;
         st.read_by_other <- true;

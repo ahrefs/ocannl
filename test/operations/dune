@@ -12095,6 +12095,14 @@
 (test
  (name narrow_scatter_residency)
  (package neural_nets_lib)
+ (action
+  (run
+   %{test}
+   --ocannl_automatic_gpu_schedule=true
+   --ocannl_schedule_fission=true
+   --ocannl_gpu_schedule_min_parallel=64
+   --ocannl_debug_log_from_routines=false
+   --ocannl_large_models=false))
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))

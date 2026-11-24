@@ -44,9 +44,11 @@ dual-table GPT-2 shape: wte per-hit bf16 differs from once-rounded (non-vacuity)
 dual-table GPT-2 shape: wpe per-hit bf16 differs from once-rounded (non-vacuity): true
 dual-table GPT-2 shape: bf16 wte.grad equals f32 narrowed once, cell for cell: true
 dual-table GPT-2 shape: bf16 wpe.grad equals f32 narrowed once, cell for cell: true
+a refused packetized replay leaves the placement table unchanged: true
 the ordered f32 fixture distinguishes reversing the hits: true
 original scatter agrees bitwise with the host recurrence: true
 default f32 scatter agrees bitwise with the original scatter: true
 f32 uses separate parallel mask and row kernels and the original uses Set_dynamic: true
 seeded bf16 cast-twin gradient agrees bitwise with the original scatter: true
 seeded bf16 owns the f32 scatter accumulator rows: true
+uint64 selector scatter agrees bitwise after the address cast: true
