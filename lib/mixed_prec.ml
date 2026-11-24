@@ -44,10 +44,10 @@ let with_master_weights ?placement ?master_prec ~prec f =
   Tensor.param_value_prec := Option.first_some master_prec saved_value_prec;
   (Tensor.param_postprocess :=
      fun p ->
-       (* The enclosing hook casts first, so it must see an inner explicit request too. Check any
+       (* The enclosing hook casts first, so it reads the innermost scope's request. Check any
           specified precision on the original parameter, before the hook returns a twin. *)
-       let master_prec = !Tensor.param_value_prec in
-       (match (master_prec, p.Tensor.diff, Tn.get_specified_prec p.Tensor.value) with
+       let scope_prec = !Tensor.param_value_prec in
+       (match (scope_prec, p.Tensor.diff, Tn.get_specified_prec p.Tensor.value) with
        | Some requested, Some _, Some actual when not (Ops.equal_prec requested actual) ->
            raise
              (Utils.User_error
@@ -56,7 +56,7 @@ let with_master_weights ?placement ?master_prec ~prec f =
                    (Tn.label_name p.Tensor.value) (Ops.prec_string actual)
                    (Ops.prec_string requested)))
        | _ -> ());
-       cast_param ?placement ?master_prec ~prec (saved_hook p));
+       cast_param ?placement ?master_prec:scope_prec ~prec (saved_hook p));
   Exn.protect ~f ~finally:(fun () ->
       Tensor.param_postprocess := saved_hook;
       Tensor.param_value_prec := saved_value_prec)
