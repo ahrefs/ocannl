@@ -1037,6 +1037,7 @@ let raw_entries =
         "[scanner-refusal:c921c1a193838de76e92d91d550cd7b1] executes";
         "[scanner-refusal:df4e110ae1379f998d366f0875cbade7] exempt_leg_gate_calls";
         "[scanner-refusal:deafc7763427d518f93ceafc49426fa1] leg-gate independence reader";
+        "[scanner-refusal:3bd156674aa90688bc0e75de9fb6c146] stdout probe token";
         "[scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into";
         "[scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised";
         "[scanner-refusal:add5883320d9cdf491a628c74ff3aa98] folds the run-time";

@@ -6238,11 +6238,15 @@ let skip_list_census content =
     under a [not], [&&]), [not] (which swaps the two), a name into its [let] right-hand side, type
     constraints, a [let] body and a sequence's last expression; and through an [if] one of whose
     branches is the passing constant -- [if on_cpu then ok else true] is [(not on_cpu) || ok]. The
-    claim is refused when one disjunct is RUN-CONSTANT and another is computed by the test: the gate
-    decides the verdict wherever it is closed. For a [gated] claim, a disjunct that makes its own
-    [~when_] false -- a conjunct of the gate, negated -- is dropped first: the claim is never
-    evaluated where it holds. A disjunct that is a constant -- a literal, a library value -- is
-    neither, so a claim over the configuration and constants alone is no fold.
+    For a nonrecursive [let] with a flat tuple pattern of variables and wildcards, each variable
+    sees only its position in a same-arity tuple literal. A tuple can be returned through an [if]
+    with two arms, [match], local [let] or a sequence; every terminal value must be a tuple literal
+    of that arity. The enclosing condition and branch scopes survive projection. The claim is
+    refused when one disjunct is RUN-CONSTANT and another is computed by the test: the gate decides
+    the verdict wherever it is closed. For a [gated] claim, a disjunct that makes its own [~when_]
+    false -- a conjunct of the gate, negated -- is dropped first: the claim is never evaluated where
+    it holds. A disjunct that is a constant -- a literal, a library value -- is neither, so a claim
+    over the configuration and constants alone is no fold.
 
     {2 Run-constant}
 
@@ -6273,8 +6277,9 @@ let skip_list_census content =
 
     A claim reached through a wrapper the source binds ([let check label ok = p label ok]), applied
     through [|>] or [@@], or partially applied; a function's result where the function is the
-    source's own ([has_mma ()] is not run-constant, whatever its body reads); a name a destructuring
-    [let] or a [match] case binds; and a gate folded below a conjunction
+    source's own ([has_mma ()] is not run-constant, whatever its body reads); destructuring outside
+    the flat tuple form above (including values bound by a [match] case), qualified access to a
+    projected component, and a gate folded below a conjunction
     ([census_ok && ((not on_metal) || dialect_ok)]), which the claim checks partly everywhere -- the
     label then promises both halves, and only the reader of the label can tell that the second is
     vacuous off Metal. Each is a place a folded gate can hide; none is one this reader reports where
@@ -6397,6 +6402,25 @@ let folded_unread_members =
     "in_legf";
   ]
 
+let rec tuple_projection ~index ~arity expr =
+  let project = tuple_projection ~index ~arity in
+  let rebuild desc = { expr with pexp_desc = desc } in
+  match (strip_constraints expr).pexp_desc with
+  | Pexp_tuple parts when List.length parts = arity -> List.nth parts index
+  | Pexp_ifthenelse (condition, yes, Some no) ->
+      Option.map2 (project yes) (project no) ~f:(fun yes no ->
+          rebuild (Pexp_ifthenelse (condition, yes, Some no)))
+  | Pexp_match (scrutinee, cases) ->
+      List.map cases ~f:(fun case ->
+          Option.map (project case.pc_rhs) ~f:(fun rhs -> { case with pc_rhs = rhs }))
+      |> Option.all
+      |> Option.map ~f:(fun cases -> rebuild (Pexp_match (scrutinee, cases)))
+  | Pexp_let (rec_flag, bindings, body) ->
+      Option.map (project body) ~f:(fun body -> rebuild (Pexp_let (rec_flag, bindings, body)))
+  | Pexp_sequence (setup, result) ->
+      Option.map (project result) ~f:(fun result -> rebuild (Pexp_sequence (setup, result)))
+  | _ -> None
+
 let folded_gate_census content =
   let ast = Read.structure_of content in
   let owners = Verdict_callee.of_structure ast in
@@ -6454,9 +6478,37 @@ let folded_gate_census content =
 
       method! binding_denotes env binding =
         let identity = binding.pvb_loc.loc_start.pos_cnum + 1 in
-        match Read.pattern_name binding.pvb_pat with
-        | Some _ -> { identity; definition = Some (binding.pvb_expr, env) }
-        | None -> { identity; definition = None }
+        match (Read.pattern_name binding.pvb_pat, binding.pvb_pat.ppat_desc) with
+        | Some _, _ | None, Ppat_tuple _ -> { identity; definition = Some (binding.pvb_expr, env) }
+        | _ -> { identity; definition = None }
+
+      method tuple_bindings binding denotation =
+        match (binding.pvb_pat.ppat_desc, denotation.definition) with
+        | Ppat_tuple parts, Some (rhs, rhs_env)
+          when List.for_all parts ~f:(fun part ->
+                   match part.ppat_desc with Ppat_var _ | Ppat_any -> true | _ -> false) ->
+            List.filter_mapi parts ~f:(fun index part ->
+                match part.ppat_desc with
+                | Ppat_var { txt = name; loc } ->
+                    let identity = loc.loc_start.pos_cnum + 1 in
+                    Option.map
+                      (tuple_projection ~index ~arity:(List.length parts) rhs)
+                      ~f:(fun projected ->
+                        (name, { identity; definition = Some (projected, rhs_env) }))
+                | _ -> None)
+        | _ -> []
+
+      method! bind_group env bindings denotes =
+        let scoped =
+          List.map2_exn bindings denotes ~f:(fun binding denotation ->
+              match binding.pvb_pat.ppat_desc with
+              | Ppat_tuple _ -> { denotation with definition = None }
+              | _ -> denotation)
+          |> super#bind_group env bindings
+        in
+        List.fold2_exn bindings denotes ~init:scoped ~f:(fun env binding denotation ->
+            List.fold (self#tuple_bindings binding denotation) ~init:env
+              ~f:(fun env (name, value) -> Lexical_scope.bind_values env [ name ] value))
 
       method! attribute _ attr = attr
 
@@ -6879,6 +6931,113 @@ let folded_gate_census content =
       : structure);
   List.iter (List.rev !pending) ~f:(fun judge -> judge ());
   { folded = List.rev !folded; folded_hatches = List.rev !hatches; folded_claim_sites = !sites }
+
+(** {1 Quantified checks folded into a probe's stdout (gh-ocannl-2435)}
+
+    The child-side protocol is a closed syntactic form: a top-level [let ()] branches on
+    [Array.exists Stdlib.Sys.argv ~f:(String.equal flag)]. On the then arm's [let]/sequence spine,
+    [List.iter checks ~f:(fun (tag, ok) -> if ok then Stdio.printf "%s\n%!" tag)] emits a token for
+    each passing check. The rows come from an inline literal list or a local name directly bound to
+    one. A literal string tag and its Boolean identify a producer-side claim whose positive
+    [List.for_all] must have a nonempty witness, just as for an ordinary Verdict claim.
+
+    The library paths above are recognized by spelling. Other dispatch, iteration, formatting and
+    table construction are outside this reader. The producer is checked where its population is in
+    scope. Process creation, exit status, stdout transport and the parent's token consumer are
+    outside the model. *)
+let probe_token_guards structure =
+  let path expr names = Poly.equal (Read.longident_of (strip_constraints expr)) (Some names) in
+  let variable expr name = path expr [ name ] in
+  let rec literal_rows expr =
+    match (strip_constraints expr).pexp_desc with
+    | Pexp_construct ({ txt = Lident "[]"; _ }, None) -> Some []
+    | Pexp_construct ({ txt = Lident "::"; _ }, Some { pexp_desc = Pexp_tuple [ row; rest ]; _ }) ->
+        Option.map (literal_rows rest) ~f:(fun rows -> row :: rows)
+    | _ -> None
+  in
+  let prints_check callback =
+    match (strip_constraints callback).pexp_desc with
+    | Pexp_function
+        ( [
+            {
+              pparam_desc =
+                Pparam_val
+                  ( Nolabel,
+                    None,
+                    {
+                      ppat_desc =
+                        Ppat_tuple
+                          [ { ppat_desc = Ppat_var tag; _ }; { ppat_desc = Ppat_var ok; _ } ];
+                      _;
+                    } );
+              _;
+            };
+          ],
+          _,
+          Pfunction_body { pexp_desc = Pexp_ifthenelse (guard, printed, None); _ } ) -> (
+        match printed.pexp_desc with
+        | Pexp_apply (printer, [ (Nolabel, format); (Nolabel, argument) ]) ->
+            variable guard ok.txt
+            && path printer [ "Stdio"; "printf" ]
+            && variable argument tag.txt
+            && Option.value_map (Read.string_literal format) ~default:false ~f:(function
+              | "%s\n" | "%s\n%!" -> true
+              | _ -> false)
+        | _ -> false)
+    | _ -> false
+  in
+  let argv_dispatch condition =
+    match (strip_constraints condition).pexp_desc with
+    | Pexp_apply (exists, [ (Nolabel, argv); (Labelled "f", predicate) ]) -> (
+        path exists [ "Array"; "exists" ]
+        && path argv [ "Stdlib"; "Sys"; "argv" ]
+        &&
+        match (strip_constraints predicate).pexp_desc with
+        | Pexp_apply (equal, [ (Nolabel, _) ]) -> path equal [ "String"; "equal" ]
+        | _ -> false)
+    | _ -> false
+  in
+  let rec guards tables expr =
+    match (strip_constraints expr).pexp_desc with
+    | Pexp_let (rec_flag, bindings, body) ->
+        let tables =
+          List.fold bindings ~init:tables ~f:(fun tables binding ->
+              let tables =
+                List.fold
+                  (Lexical_scope.pattern_vars [ binding.pvb_pat ])
+                  ~init:tables ~f:Map.remove
+              in
+              match
+                (rec_flag, Read.pattern_name binding.pvb_pat, literal_rows binding.pvb_expr)
+              with
+              | Nonrecursive, Some name, Some rows -> Map.set tables ~key:name ~data:rows
+              | _ -> tables)
+        in
+        guards tables body
+    | Pexp_sequence (first, rest) -> guards tables first @ guards tables rest
+    | Pexp_apply (iter, [ (Nolabel, checks); (Labelled "f", callback) ])
+      when path iter [ "List"; "iter" ] && prints_check callback ->
+        let rows =
+          match (strip_constraints checks).pexp_desc with
+          | Pexp_ident { txt = Lident name; _ } -> Map.find tables name
+          | _ -> literal_rows checks
+        in
+        List.filter_map (Option.value rows ~default:[]) ~f:(fun row ->
+            match (strip_constraints row).pexp_desc with
+            | Pexp_tuple [ token; guard ] ->
+                Option.map (Read.string_literal token) ~f:(fun token -> (token, guard))
+            | _ -> None)
+    | _ -> []
+  in
+  List.concat_map structure ~f:(fun item ->
+      match item.pstr_desc with
+      | Pstr_value (Nonrecursive, [ binding ]) -> (
+          match (binding.pvb_pat.ppat_desc, (strip_constraints binding.pvb_expr).pexp_desc) with
+          | Ppat_construct ({ txt = Lident "()"; _ }, None), Pexp_ifthenelse (cond, yes, None)
+            when argv_dispatch cond ->
+              guards (Map.empty (module String)) yes
+          | _ -> [])
+      | _ -> [])
 
 (** {1 Leg-gate independence and ambient-policy alignment (gh-ocannl-2434)}
 

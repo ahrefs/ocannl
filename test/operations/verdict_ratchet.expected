@@ -887,6 +887,8 @@ refuses a gate written after the claim it folds: true
 refuses a fold bound to a name before the claim: true
 refuses a fold spelled as an if whose else branch passes: true
 refuses a fold spelled as an if whose then branch passes: true
+refuses each passing component of a backend-gated tuple: true
+accepts a tuple component computed on both sides of a backend gate: true
 refuses a fold behind a negated conjunction: true
 refuses a fold in a quantified claim's predicate: true
 refuses a fold in a predicate a name is bound to: true
@@ -931,6 +933,9 @@ accepts a gate folded below a conjunction, which the claim checks in part everyw
 accepts a claim about the configuration alone: true
 accepts an if both of whose branches the test computes: true
 does not split a disjunction whose connective the source rebinds: true
+refuses a stdout probe token that can pass on an empty population: true
+accepts a stdout probe token with a nonempty population witness: true
+accepts separate stdout tokens for independently checked rows: true
 refuses a planted folded gate, and names a folded-gate reader that raised: true
 refuses a contention hatch folded into a claim's value: true
 refuses a hatch folded into a quantified claim's predicate, and a dispersed one: true
@@ -1102,6 +1107,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:c921c1a193838de76e92d91d550cd7b1] executes
   [scanner-refusal:df4e110ae1379f998d366f0875cbade7] exempt_leg_gate_calls
   [scanner-refusal:deafc7763427d518f93ceafc49426fa1] leg-gate independence reader
+  [scanner-refusal:3bd156674aa90688bc0e75de9fb6c146] stdout probe token
   [scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into
   [scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised
   [scanner-refusal:add5883320d9cdf491a628c74ff3aa98] folds the run-time
