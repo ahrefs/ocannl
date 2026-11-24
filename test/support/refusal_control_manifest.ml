@@ -1459,10 +1459,11 @@ let observe_failure ~source ~format =
 (* Keep the format before substitution: a fixture argument can echo any sibling diagnostic. *)
 type refusal = { format : string; message : string }
 
-let fail fmt =
+let capture_refusal finish fmt =
   let format = Stdlib.string_of_format fmt in
-  Printf.ksprintf (fun message -> { format; message }) fmt
+  Printf.ksprintf (fun message -> finish { format; message }) fmt
 
+let fail fmt = capture_refusal Fn.id fmt
 let with_message refusal message = { refusal with message }
 
 module type FAIL = sig
@@ -1473,9 +1474,7 @@ let collect_refusals f =
   let recorded = ref [] in
   let sink : (module FAIL) =
     (module struct
-      let fail fmt =
-        let format = Stdlib.string_of_format fmt in
-        Printf.ksprintf (fun message -> recorded := { format; message } :: !recorded) fmt
+      let fail fmt = capture_refusal (fun refusal -> recorded := refusal :: !recorded) fmt
     end)
   in
   let result = f ~fail:sink in
