@@ -19,7 +19,9 @@
 
    The scan validates the target, source backend, uniqueness, reason and containing rule, then
    prints every such member into its own golden. Remove the marker when the member is recorded on
-   its own backend. All repository-relative paths remain slash-normalized for Windows goldens. *)
+   its own backend. The census reads only handed dune files and .expected files, with backend
+   certification read from whole lines. Other build languages, includes and expansion of arbitrary
+   Dune pforms are outside this scan. Paths are slash-normalized for Windows goldens. *)
 
 open Base
 open Stdio
@@ -31,6 +33,10 @@ let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
 module Backends = Context.Backends
 module Dune_scan = Test_scan.Dune_stanza_scan
+module Refusals = Test_scan.Refusal_control_manifest
+open Refusals
+
+let source = "backend_golden_family_scan.ml"
 
 type member = { path : string; family : string; backend : string }
 
@@ -45,7 +51,7 @@ type result = {
   families : string list;
   incomplete : (string * string list) list;
   provenance : provenance list;
-  errors : string list;
+  errors : Refusals.refusal list;
 }
 
 let marker = "ocannl-golden-recorded-on:"
@@ -106,7 +112,7 @@ let member_of_path ~backends path =
   | [ member ] -> Ok (Some member)
   | _ ->
       Error
-        (Printf.sprintf "%s names more than one backend position: [%s]" path
+        (Refusals.fail "%s names more than one backend position: [%s]" path
            (List.map candidates ~f:(fun member -> member.backend)
            |> sorted |> String.concat ~sep:"; "))
 
@@ -125,7 +131,7 @@ let family_of_rule_atom ~directory atom =
     in
     if Int.equal backend_reads 0 then Ok None
     else if backend_reads > 1 then
-      Error (Printf.sprintf "expected atom `%s` reads ocannl_backend.txt more than once" atom)
+      Error (Refusals.fail "expected atom `%s` reads ocannl_backend.txt more than once" atom)
     else
       let rendered, foreign_pform =
         List.fold (Dune_scan.pieces atom) ~init:([], false)
@@ -137,7 +143,7 @@ let family_of_rule_atom ~directory atom =
       in
       if foreign_pform then
         Error
-          (Printf.sprintf
+          (Refusals.fail
              "expected atom `%s` mixes the backend read with another pform, so its family path is \
               unresolved"
              atom)
@@ -152,7 +158,10 @@ let families_of_stanza ~dune_path (stanza : Dune_scan.marked_stanza) =
         | Ok None -> (families, errors)
         | Ok (Some family) -> (family :: families, errors)
         | Error error ->
-            (families, Printf.sprintf "%s:%d: %s" dune_path stanza.marked_line error :: errors))
+            ( families,
+              Refusals.with_message error
+                (Printf.sprintf "%s:%d: %s" dune_path stanza.marked_line error.message)
+              :: errors ))
     |> fun (families, errors) -> (dedup_sorted families, List.rev errors)
 
 let split_once text ~on =
@@ -162,7 +171,7 @@ let split_once text ~on =
 
 let parse_provenance_declaration ~backends ~directory ~containing_families ~declaration ~reason =
   match split_once declaration ~on:" <- " with
-  | None -> Error [ "provenance marker has no ` <member>.expected <- <backend>`" ]
+  | None -> Error [ Refusals.fail "provenance marker has no ` <member>.expected <- <backend>`" ]
   | Some (basename, recorded_on) ->
       let basename = String.strip basename in
       let recorded_on = String.strip recorded_on in
@@ -174,10 +183,13 @@ let parse_provenance_declaration ~backends ~directory ~containing_families ~decl
                String.is_empty basename || String.contains basename '/'
                || String.contains basename '\\'
                || not (String.is_suffix basename ~suffix:".expected")
-             then Some "provenance target must be an .expected basename in the rule's directory"
+             then
+               Some
+                 (Refusals.fail
+                    "provenance target must be an .expected basename in the rule's directory")
              else None);
             (if List.mem backends recorded_on ~equal:String.equal then None
-             else Some (Printf.sprintf "recorded-on backend `%s` is not one OCANNL has" recorded_on));
+             else Some (Refusals.fail "recorded-on backend `%s` is not one OCANNL has" recorded_on));
           ]
       in
       if List.is_empty errors then Ok { member; recorded_on; reason; containing_families }
@@ -187,13 +199,18 @@ let marker_issue_errors ~dune_path = function
   | Dune_scan.Malformed_marker { issue_line; issue_malformed; _ } ->
       let detail =
         match issue_malformed with
-        | Dune_scan.Missing_reason_separator -> "provenance marker has no ` -- <reason>`"
-        | Dune_scan.Short_reason _ -> "provenance marker reason must say why in more than one word"
+        | Dune_scan.Missing_reason_separator ->
+            Refusals.fail "provenance marker has no ` -- <reason>`"
+        | Dune_scan.Short_reason _ ->
+            Refusals.fail "provenance marker reason must say why in more than one word"
         | Dune_scan.Repeated_sentinel ->
-            Printf.sprintf "more than one `%s` marker occurs on this line" marker
+            Refusals.fail "more than one `%s` marker occurs on this line" marker
         | Dune_scan.Declaration_error why -> why
       in
-      [ Printf.sprintf "%s:%d: %s" dune_path issue_line detail ]
+      [
+        Refusals.with_message detail
+          (Printf.sprintf "%s:%d: %s" dune_path issue_line detail.message);
+      ]
   | Dune_scan.Marker_in_wrong_stanza { issue_why; _ } -> [ issue_why ]
   | Dune_scan.Marker_outside_stanza _ | Dune_scan.Marker_outside_comment _ -> []
 
@@ -223,7 +240,7 @@ let scan ~backends ~expected_files ~dune_files =
                 ->
                   Error
                     [
-                      Printf.sprintf
+                      Refusals.fail
                         "%s: provenance marker is not inside the dune rule that references family \
                          %s"
                         provenance.member member.family;
@@ -254,7 +271,7 @@ let scan ~backends ~expected_files ~dune_files =
               if Int.equal contract.contract_text_occurrences inside_stanzas then
                 List.rev_append contract_errors errors
               else
-                Printf.sprintf
+                Refusals.fail
                   "%s: found %d `%s` occurrence(s) in the file but only %d inside dune stanzas"
                   dune_path contract.contract_text_occurrences marker inside_stanzas
                 :: List.rev_append contract_errors errors
@@ -265,7 +282,7 @@ let scan ~backends ~expected_files ~dune_files =
         | exception exn ->
             ( all_families,
               all_provenance,
-              Printf.sprintf "%s: cannot parse dune structure: %s" dune_path (Exn.to_string exn)
+              Refusals.fail "%s: cannot parse dune structure: %s" dune_path (Exn.to_string exn)
               :: all_errors ))
   in
   let file_families = List.map members ~f:(fun member -> member.family) in
@@ -295,15 +312,15 @@ let scan ~backends ~expected_files ~dune_files =
         let marker = List.hd_exn markers in
         let duplicate =
           if List.length markers > 1 then
-            [ Printf.sprintf "%s: more than one provenance marker names this member" path ]
+            [ Refusals.fail "%s: more than one provenance marker names this member" path ]
           else []
         in
         match Map.find members_by_path path with
         | None ->
-            Printf.sprintf "%s: provenance marker target is not a backend golden family member" path
+            Refusals.fail "%s: provenance marker target is not a backend golden family member" path
             :: duplicate
         | Some member when String.equal member.backend marker.recorded_on ->
-            Printf.sprintf
+            Refusals.fail
               "%s: provenance marker records the member on its own backend; remove the marker" path
             :: duplicate
         | Some _ -> duplicate)
@@ -324,7 +341,7 @@ let scan ~backends ~expected_files ~dune_files =
         if List.equal String.equal actual_lines [ expected_line ] then None
         else
           Some
-            (Printf.sprintf
+            (Refusals.fail
                "%s: backend golden member must contain exactly certification line `%s`; found [%s]"
                member.path expected_line
                (String.concat ~sep:"; " actual_lines)))
@@ -335,7 +352,8 @@ let scan ~backends ~expected_files ~dune_files =
     |> List.rev
   in
   let errors =
-    if List.is_empty families then "no backend golden family was found in rules or files" :: errors
+    if List.is_empty families then
+      Refusals.fail "no backend golden family was found in rules or files" :: errors
     else errors
   in
   { families; incomplete; provenance; errors }
@@ -504,8 +522,55 @@ let control_results () =
           );
         ]
   in
+  let in_fixture content =
+    scan ~backends ~expected_files:native_expected_files
+      ~dune_files:[ ("test/synthetic/dune", content) ]
+  in
+  let ambiguous_member =
+    scan ~backends ~dune_files:[]
+      ~expected_files:
+        (("test/synthetic/probe-cc-metal.expected", certification_line "metal" ^ "\n")
+        :: native_expected_files)
+  in
+  let repeated_read =
+    in_fixture
+      {|(rule (action (diff "p-%{read:ocannl_backend.txt}-%{read:ocannl_backend.txt}.expected" p.actual)))|}
+  in
+  let another_pform =
+    in_fixture
+      {|(rule (action (diff "p-%{read:ocannl_backend.txt}-%{env:X=x}.expected" p.actual)))|}
+  in
+  let bad_dune = in_fixture "(rule (" in
+  let duplicate_markers =
+    in_fixture (family_rule ~marker:(valid_marker ^ "\n " ^ valid_marker) ())
+  in
+  let missing_target =
+    scan ~backends
+      ~expected_files:(List.take native_expected_files 1)
+      ~dune_files:[ ("test/synthetic/dune", family_rule ~marker:valid_marker ()) ]
+  in
+  let native_marker =
+    in_fixture
+      (family_rule
+         ~marker:
+           "; ocannl-golden-recorded-on: probe-metal.expected <- metal -- already recorded here"
+         ())
+  in
+  let no_family = scan ~backends ~expected_files:[] ~dune_files:[] in
+  let check result format =
+    Refusals.check_failures ~source:("test/operations/" ^ source) ~formats:[ format ] result.errors
+  in
   let expected_family = "test/synthetic/probe-<backend>.expected" in
-  let has_exact_error result error = List.mem result.errors error ~equal:String.equal in
+  let has_exact_error result format error =
+    check result format
+    && List.equal String.equal (List.map result.errors ~f:(fun r -> r.message)) [ error ]
+  in
+  let certification_format =
+    "%s: backend golden member must contain exactly certification line `%s`; found [%s]"
+  in
+  let occurrences_format =
+    "%s: found %d `%s` occurrence(s) in the file but only %d inside dune stanzas"
+  in
   let checks =
     [
       ( "a complete synthesized family and valid contained marker are accepted",
@@ -522,16 +587,16 @@ let control_results () =
         | [ (family, actual) ] -> String.equal family expected_family && List.is_empty actual
         | _ -> false );
       ( "a copied sibling without its member's backend certification is refused",
-        has_exact_error copied_sibling
+        has_exact_error copied_sibling certification_format
           "test/synthetic/probe-metal.expected: backend golden member must contain exactly \
            certification line `OCANNL backend: metal`; found [OCANNL backend: cc]" );
       ( "conflicting backend certifications are refused",
-        has_exact_error conflicting_certifications
+        has_exact_error conflicting_certifications certification_format
           "test/synthetic/probe-metal.expected: backend golden member must contain exactly \
            certification line `OCANNL backend: metal`; found [OCANNL backend: cc; OCANNL backend: \
            metal]" );
       ( "duplicate backend certifications are refused",
-        has_exact_error duplicate_certifications
+        has_exact_error duplicate_certifications certification_format
           "test/synthetic/probe-metal.expected: backend golden member must contain exactly \
            certification line `OCANNL backend: metal`; found [OCANNL backend: metal; OCANNL \
            backend: metal]" );
@@ -540,37 +605,57 @@ let control_results () =
           (join_path "test\\synthetic" ("probe-" ^ backend_placeholder ^ ".expected"))
           expected_family );
       ( "a marker outside every stanza is refused",
-        has_exact_error misplaced
+        has_exact_error misplaced occurrences_format
           "test/synthetic/dune: found 1 `ocannl-golden-recorded-on:` occurrence(s) in the file but \
            only 0 inside dune stanzas" );
       ( "a marker inside the wrong family rule is refused",
         has_exact_error wrong_rule
+          "%s: provenance marker is not inside the dune rule that references family %s"
           "test/synthetic/probe-metal.expected: provenance marker is not inside the dune rule that \
            references family test/synthetic/probe-<backend>.expected" );
       ( "a malformed provenance relationship is refused",
-        has_exact_error malformed
+        has_exact_error malformed "provenance marker has no ` <member>.expected <- <backend>`"
           "test/synthetic/dune:2: provenance marker has no ` <member>.expected <- <backend>`" );
       ( "a missing reason separator is refused",
-        has_exact_error missing_separator
+        has_exact_error missing_separator "provenance marker has no ` -- <reason>`"
           "test/synthetic/dune:2: provenance marker has no ` -- <reason>`" );
       ( "a one-word provenance reason is refused",
-        has_exact_error short_reason
+        has_exact_error short_reason "provenance marker reason must say why in more than one word"
           "test/synthetic/dune:2: provenance marker reason must say why in more than one word" );
       ( "two provenance declarations in one comment are refused",
-        has_exact_error duplicated
+        has_exact_error duplicated "more than one `%s` marker occurs on this line"
           "test/synthetic/dune:2: more than one `ocannl-golden-recorded-on:` marker occurs on this \
            line" );
       ( "a provenance target outside the rule directory is refused",
         has_exact_error invalid_target
+          "provenance target must be an .expected basename in the rule's directory"
           "test/synthetic/dune:2: provenance target must be an .expected basename in the rule's \
            directory" );
       ( "an unknown recorded-on backend is refused",
-        has_exact_error invalid_backend
+        has_exact_error invalid_backend "recorded-on backend `%s` is not one OCANNL has"
           "test/synthetic/dune:2: recorded-on backend `cuda` is not one OCANNL has" );
       ( "a provenance sentinel outside a comment is refused",
-        has_exact_error outside_comment
+        has_exact_error outside_comment occurrences_format
           "test/synthetic/dune: found 1 `ocannl-golden-recorded-on:` occurrence(s) in the file but \
            only 0 inside dune stanzas" );
+      ( "a member naming two backend positions is refused",
+        check ambiguous_member "%s names more than one backend position: [%s]" );
+      ( "an expected atom reading the backend twice is refused",
+        check repeated_read "expected atom `%s` reads ocannl_backend.txt more than once" );
+      ( "an expected atom mixing a backend read with another pform is refused",
+        check another_pform
+          "expected atom `%s` mixes the backend read with another pform, so its family path is \
+           unresolved" );
+      ("an unreadable dune file is refused", check bad_dune "%s: cannot parse dune structure: %s");
+      ( "two markers naming one member are refused",
+        check duplicate_markers "%s: more than one provenance marker names this member" );
+      ( "a marker naming a missing member is refused",
+        check missing_target "%s: provenance marker target is not a backend golden family member" );
+      ( "a marker recording the member on its own backend is refused",
+        check native_marker
+          "%s: provenance marker records the member on its own backend; remove the marker" );
+      ( "a corpus without any backend family is refused",
+        check no_family "no backend golden family was found in rules or files" );
     ]
   in
   let refusal_diagnostics =
@@ -618,7 +703,7 @@ let () =
       eprintf "%s: backend golden family is incomplete\n" family;
       eprintf "  expected backends: [%s]\n" (String.concat ~sep:"; " backends);
       eprintf "  actual backends:   [%s]\n" (String.concat ~sep:"; " actual));
-  List.iter result.errors ~f:(eprintf "%s\n");
+  List.iter result.errors ~f:(fun r -> eprintf "%s\n" r.message);
   let controls, refusal_diagnostics = control_results () in
   List.filter controls ~f:(fun (_, held) -> not held)
   |> List.iter ~f:(fun (name, _) -> eprintf "synthetic control failed: %s\n" name);
@@ -632,7 +717,7 @@ let () =
   List.iter controls ~f:(fun (name, _) -> printf "  %s\n" name);
   printf "\nProvenance-marker refusal diagnostics exercised by those controls:\n";
   List.iter refusal_diagnostics ~f:(fun (name, errors) ->
-      List.iter errors ~f:(fun error -> printf "  %s -- %s\n" name error));
+      List.iter errors ~f:(fun error -> printf "  %s -- %s\n" name error.message));
   printf "\n";
   let complete =
     (not (List.is_empty controls))
@@ -642,4 +727,4 @@ let () =
   Verdict.p
     "backend golden families are complete, self-certifying, and provenance markers are valid"
     complete;
-  Test_scan.Refusal_control_manifest.print "backend_golden_family_scan.ml"
+  Refusals.print source

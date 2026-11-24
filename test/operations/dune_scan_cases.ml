@@ -1003,7 +1003,7 @@ let marker_placement_cases =
    stanza running something. The pairing is the point: "reported, +floor" is a hole named by both
    readers, and "reported, no floor" is one named by the walk alone -- which is the state a blind
    walk can quietly leave. *)
-let render_rule (contract : Scan.marker_body Scan.marker_contract)
+let render_rule (contract : (Scan.marker_body, string) Scan.marker_contract)
     (marked : Scan.marker_body Scan.marker_stanza) =
   let m = marked.Scan.marker_stanza in
   let verdict =

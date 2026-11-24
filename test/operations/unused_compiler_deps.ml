@@ -140,12 +140,9 @@ let exemptions =
           library,
           "the linkage probe checks whether declaring this library forces in compiler units" ))
 
-(* Refusal sink carrying the compile-time format string alongside the rendered message so synthetic
-   controls pin the originating refusal format itself, never text echoed in another refusal's
-   arguments. *)
-module type FAIL = sig
-  val fail : ('a, unit, string, unit) Stdlib.format4 -> 'a
-end
+module Refusals = Test_scan.Refusal_control_manifest
+
+module type FAIL = Refusals.FAIL
 
 (* Raised after [fail] has recorded a parse or schema refusal, to stop walking corrupt input. *)
 exception Abort
@@ -748,42 +745,13 @@ let bind_probed ~fail:(module F : FAIL) ~by_uid ~by_name ~probed unresolved =
 (* {1 Controls} -- each refusal format, run against synthetic input and asserted by exact format
    string. *)
 
-let collect_refusals f =
-  let recorded = ref [] in
-  let sink : (module FAIL) =
-    (module struct
-      let fail fmt =
-        let format = Stdlib.string_of_format fmt in
-        Printf.ksprintf (fun msg -> recorded := (format, msg) :: !recorded) fmt
-    end)
-  in
-  let result = f ~fail:sink in
-  (result, List.rev !recorded)
-
-let refused_with ?(quiet = false) ~format f =
-  let (), recorded = collect_refusals f in
-  let matched =
-    match recorded with
-    | [ (emitted_format, _msg) ] -> String.equal emitted_format format
-    | _ -> false
-  in
-  if matched then Test_scan.Refusal_control_manifest.observe_failure ~source:manifest_source ~format
-  else if not quiet then
-    if List.is_empty recorded then eprintf "control expected format %S, got no refusal\n" format
-    else
-      List.iter recorded ~f:(fun (emitted_format, msg) ->
-          eprintf "control expected format %S, got format %S (%s)\n" format emitted_format msg);
-  matched
-
-let accepted f =
-  let (), recorded = collect_refusals f in
-  List.iter recorded ~f:(fun (_, msg) -> eprintf "control expected no refusal, got: %s\n" msg);
-  match recorded with [] -> true | _ :: _ -> false
+let refused_with ?quiet ~format f = Refusals.refused_with ?quiet ~source:manifest_source ~format f
 
 let controls ~dune ~objinfo ~tool_stderr =
   let stanza_of text =
     let stanzas, messages =
-      collect_refusals (fun ~fail -> collect_stanzas ~fail ~dir:"synthetic" (Scan.stanzas text))
+      Refusals.collect_refusals (fun ~fail ->
+          collect_stanzas ~fail ~dir:"synthetic" (Scan.stanzas text))
     in
     match (stanzas, messages) with
     | [ s ], [] -> s
@@ -821,7 +789,7 @@ let controls ~dune ~objinfo ~tool_stderr =
            (shared_units ~fail ~findlib:dune ~objinfo { shared with local = true } : archive_info)));
   p "an interface-only unit belongs to its unique dependency-minimal archive"
     (let owner, messages =
-       collect_refusals (fun ~fail ->
+       Refusals.collect_refusals (fun ~fail ->
            interface_owner ~fail
              ~depends_on:(fun a b -> String.equal a "consumer" && String.equal b "owner")
              ~possible_definers:(Fn.const []) ~name:Fn.id "Types_only" [ "consumer"; "owner" ])
@@ -892,7 +860,7 @@ let controls ~dune ~objinfo ~tool_stderr =
      (refused && match !verdict with Refused -> true | _ -> false);
    let owner_is ~owner_requires ~owner_definitions expected =
      let known_owner, messages =
-       collect_refusals (fun ~fail ->
+       Refusals.collect_refusals (fun ~fail ->
            let w = fixture ~fail ~owner_requires ~owner_definitions in
            w.owners unit)
      in
@@ -933,7 +901,7 @@ let controls ~dune ~objinfo ~tool_stderr =
       "((7:library(%s(4:name1:x)(3:uid1:u)(5:local4:true)(8:requires())(12:include_dirs()))))" extra
   in
   p "the control library description itself is read"
-    (accepted (fun ~fail ->
+    (Refusals.accepted (fun ~fail ->
          ignore
            (read_description ~fail ~workspace_root:"." ~build_dir:"/b" (library "") : library list)));
   p "a library field outside the recognised forms is refused"
@@ -1009,7 +977,7 @@ let controls ~dune ~objinfo ~tool_stderr =
   p "a stanza with no object directory and no enabled_if is refused"
     (refused_with ~format:"%s/dune (%s): no object directory %s" (judged "(library (name a))"));
   p "a stanza with no object directory under enabled_if is inactive, not refused"
-    (accepted (judged "(library (name a) (enabled_if false))"));
+    (Refusals.accepted (judged "(library (name a) (enabled_if false))"));
   p "an object directory holding no typed tree is refused"
     (refused_with ~format:"%s/dune (%s): object directory %s holds no .cmt or .cmti"
        (judged ~read_references:(fun _ -> referenced_units empty_dir) "(library (name a))"));

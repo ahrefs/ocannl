@@ -99,6 +99,23 @@ markdown_links.ml: [scanner-refusal:2f2dfef90107c2fbc43b20d212add0ef] Markdown c
 markdown_links.ml: [scanner-refusal:63555f8686b2d8399a5909d32c43838b] documented symlink alias (claim) is catalogued beside markdown_links.expected: true
 markdown_links.ml: [scanner-refusal:497f7864b862de90bf699cb29ebc7395] recognised relative Markdown (claim) is catalogued beside markdown_links.expected: true
 backend_golden_family_scan.ml has exactly the explicitly assigned refusal controls: true
+backend_golden_family_scan.ml: [scanner-refusal:6e3c13cde68fdb8c13e4fe2e78b895d7] one backend position (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:f9d6efa26b74daefa5557b7b00f8a682] expected atom (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:5d618d2854245d7a364a03971b3a1b0d] expected atom (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:de53562eca7cfdcf8e2a137a77d44724] <member>.expected (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:8b581264b8bd140e3985e9f9bced6638] provenance target must (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:1c96d667ded2ef1c95b7780e45d29789] recorded-on backend (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:5ac098d53c612962b81e3afe44054bdd] provenance marker has (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:43131f24bfb3bb850487bf36adc98bb5] provenance marker reason (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:9dd518b47eeaa289c03164634c04f299] more than one (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:b488d4e27ab1c2ebf5ac694c7c7095fa] that references family (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:8a4d6f9fcf6429492277e482bfa47424] occurrence(s in the (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:6620d38a048422186913091223d863d9] parse dune structure (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:1407376649d9a0054747b260309b94b2] provenance marker names (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:8dd5f5e0febece68bce7c390ae336362] provenance marker target (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:dfe88f31831f61d09b8eecbf1fe2cd36] provenance marker records (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:69adad8dff9bfd72ab49a01d9ea8b4a8] contain exactly certification (direct failure) is catalogued beside backend_golden_family_scan.expected: true
+backend_golden_family_scan.ml: [scanner-refusal:fb5ea0107d1672c9e7c66baa76f18f9a] backend golden family (direct failure) is catalogued beside backend_golden_family_scan.expected: true
 backend_golden_family_scan.ml: [scanner-refusal:2fcd4d491da746e829dc7cec63905091] self-certifying and provenance (claim) is catalogued beside backend_golden_family_scan.expected: true
 bin_smoke_membership_scan.ml has exactly the explicitly assigned refusal controls: true
 bin_smoke_membership_scan.ml: [scanner-refusal:9446215c7b3c2270741bbb1cd8300733] executable exactly once (claim) is catalogued beside bin_smoke_membership_scan.expected, bin_smoke_membership_scan_control.expected: true
@@ -182,6 +199,11 @@ generated_lock_scan.ml: [scanner-refusal:90a5bf8d781c4ed0a5407b52bd9fa3cd] argum
 generated_lock_scan.ml: [scanner-refusal:a02da6b10b325cc5503fe4adf61da286] reaches the scanner-defect (claim) is catalogued beside generated_lock_scan.expected, generated_lock_scan_control.expected: true
 generated_lock_scan.ml: [scanner-refusal:01eec44b44e6e6a758bc7e95ef545443] Generated.init (claim) is catalogued beside generated_lock_scan.expected, generated_lock_scan_control.expected: true
 stanza_order.ml has exactly the explicitly assigned refusal controls: true
+stanza_order.ml: [scanner-refusal:a38642dc43749b00aa10a80a44e3de14] the members of (direct failure) is catalogued beside stanza_order.expected: true
+stanza_order.ml: [scanner-refusal:16b77db4cbd5ac82d6ebc373211395fa] the marker comment (direct failure) is catalogued beside stanza_order.expected: true
+stanza_order.ml: [scanner-refusal:122f68556796d56d187e83a664c02f1c] carries the marker (direct failure) is catalogued beside stanza_order.expected: true
+stanza_order.ml: [scanner-refusal:0e5583936dd4737cc5116ef5cb345541] directory's other machinery (direct failure) is catalogued beside stanza_order.expected: true
+stanza_order.ml: [scanner-refusal:0fccc7482c9a39a1e282bd1fbb950fae] the file whichever (direct failure) is catalogued beside stanza_order.expected: true
 stanza_order.ml: [scanner-refusal:486695c03657d82f7e086a00621b636c] file whose tests (claim) is catalogued beside stanza_order.expected: true
 stanza_order.ml: [scanner-refusal:61d738fcc3d650e8f79cf987b0379b72] test appended at (claim) is catalogued beside stanza_order.expected: true
 stanza_order.ml: [scanner-refusal:1e198bd028e8a39c5c3977cc813d9834] place is accepted (claim) is catalogued beside stanza_order.expected: true
@@ -652,6 +674,16 @@ premise_ratchet.ml: [scanner-refusal:b58a95cec37dfce6d01a2e4de53038d6] test sour
 premise_ratchet.ml: [scanner-refusal:e74f4879325b87eebe84c1ce30d37ed2] premise debt has (claim) is catalogued beside premise_ratchet.expected, premise_scan_cases.expected: true
 premise_ratchet.ml: [scanner-refusal:b35b45534098c6165bc2d50aab63313c] contains exactness premises (claim) is catalogued beside premise_ratchet.expected, premise_scan_cases.expected: true
 fp_contract_pin_scan.ml has exactly the explicitly assigned refusal controls: true
+fp_contract_pin_scan.ml: [scanner-refusal:b2b66576ec487b82b65d3d2a3c7fb584] sentinel must open (direct failure) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:5fae6b89f7d8258826c7189aafba5a40] expected <kind> <reason> (direct failure) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:9970d742a14c33910983647a40f64148] unknown kind (direct failure) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:897ec4f61958b8709e5a89603692821a] the reason needs (direct failure) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:0477ef9a58ec9e25b75d9c0f1a34c306] bitwise claim for (direct failure) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:21592137723d61ef8766bb4585efb5d1] marker drop the (direct failure) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:7be6e2776283b7cf291a429499bfe007] than one marker (direct failure) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:4c8ebb0a854f491b5b3bf153cb8e6e1f] OCANNL_CC_BACKEND_FP_CONTRACT=off (direct failure) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:e15c6d30a70f479a8a6380750aa59042] does not parse (direct failure) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:749f02c83c0859bd8145401cc5a4a5cb] scanner raised (direct failure) is catalogued beside fp_contract_pin_scan.expected: true
 fp_contract_pin_scan.ml: [scanner-refusal:106879e8d84d7b106e818ac1ddc61a4f] listed as pinned (claim) is catalogued beside fp_contract_pin_scan.expected: true
 fp_contract_pin_scan.ml: [scanner-refusal:777651b1b86abfe512e2d3a3f485ce6d] marked claim is (claim) is catalogued beside fp_contract_pin_scan.expected: true
 fp_contract_pin_scan.ml: [scanner-refusal:0917e598d504b434f3e3c9567742fcc6] claim with neither (claim) is catalogued beside fp_contract_pin_scan.expected: true
@@ -668,6 +700,10 @@ fp_contract_pin_scan.ml: [scanner-refusal:be5184012422a01273ca348715955f05] sent
 fp_contract_pin_scan.ml: [scanner-refusal:b79e2ebc86bfefafc47281afbf5f0550] markers are refused (claim) is catalogued beside fp_contract_pin_scan.expected: true
 fp_contract_pin_scan.ml: [scanner-refusal:3237007207743bc53ec1c1951d1214b7] together are refused (claim) is catalogued beside fp_contract_pin_scan.expected: true
 fp_contract_pin_scan.ml: [scanner-refusal:b52b141cf7d13778997e41d81205de03] claim is refused (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:ffc0217024cc9300c720ee267dd0fde3] separator is refused (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:640314079c325f8264eadc3ee11e14a7] the expected diagnostic (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:61cc31cefcfa4e62f663ac4758af255a] source that does (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:e9713e59d79f302d02300babf9ebd87c] is refused separately (claim) is catalogued beside fp_contract_pin_scan.expected: true
 fp_contract_pin_scan.ml: [scanner-refusal:e28d8e210f8906b6927a78032d5a7f50] case the word (claim) is catalogued beside fp_contract_pin_scan.expected: true
 fp_contract_pin_scan.ml: [scanner-refusal:5af7923d754adb0ac1030df866493123] every test source (claim) is catalogued beside fp_contract_pin_scan.expected: true
 fp_contract_pin_scan.ml: [scanner-refusal:b30b6b3be7749ff984d2979f5a8fe292] arrayjit package's test (claim) is catalogued beside fp_contract_pin_scan.expected: true
@@ -736,6 +772,21 @@ ocamlformat_ignore_scan.ml: [scanner-refusal:f111a87fee55ca52831220a49495432a] i
 ocamlformat_ignore_scan.ml: [scanner-refusal:d3e7969b1266fa6b311234da304986db] line containing no (claim) is catalogued beside ocamlformat_ignore_scan.expected: true
 ocamlformat_ignore_scan.ml: [scanner-refusal:4186a2cb3aaa270f0e693d87e91d2e2d] undeclared file present (claim) is catalogued beside ocamlformat_ignore_scan.expected: true
 command_line_length_scan.ml has exactly the explicitly assigned refusal controls: true
+command_line_length_scan.ml: [scanner-refusal:372eeaf368300a9e358067e8d495cf72] the repository including (direct failure) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:37ae8aab17397f20999234cd8d0f6736] dependency (direct failure) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:731bfaa30bb282b9a618b0bfdd29e773] dependency form (direct failure) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:087813b8ad2e0e15e1f1cf137190ea8a] target spelled with (direct failure) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:d167faac8f0029e909ca0dc0f4b30e41] stanza with no (direct failure) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:d2e24c0f204c468788a307dee2026b3a] stanza that names (direct failure) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:af863572668f2295ed85b51e4b34c459] puts the contents (direct failure) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:1a514655621d234733eb18e735300edb] pform this scan (direct failure) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:6cdafd68dfe90265d75399ca116fd389] argument (direct failure) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:cf6423e820c211ef1f7669e8f2a5bd80] one this scan (direct failure) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:979a75b9cff181cf8c618e3265f341a1] directory this scan (direct failure) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:f659c7db4d5a7eeb09bb13eee5dd0d9d] action head (direct failure) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:0292958ea115eba550f5b11a616b213f] unreadable dune structure (direct failure) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:b2a275ebebff3747d03efc331e31059d] includes stanzas from (direct failure) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:9d49d08dd876c701ec8baa44b3e8055f] spawned command line (direct failure) is catalogued beside command_line_length_scan.expected: true
 command_line_length_scan.ml: [scanner-refusal:7b1d721a6b358055eeef13e57e5ba202] source tree reads (claim) is catalogued beside command_line_length_scan.expected: true
 command_line_length_scan.ml: [scanner-refusal:69918b599474e445c1e2dce74dc3e841] every spawned command (claim) is catalogued beside command_line_length_scan.expected: true
 command_line_length_scan.ml: [scanner-refusal:6eba8bdcf1112c04fdf6c29d4770c94a] bounded spawned command (claim) is catalogued beside command_line_length_scan.expected: true
@@ -752,14 +803,26 @@ command_line_length_scan.ml: [scanner-refusal:1156b111ec97fe778b6dbcba4ce8e21c] 
 command_line_length_scan.ml: [scanner-refusal:c89bc9f1b5b4e0adddd25e00a9c88da7] scan cannot resolve (claim) is catalogued beside command_line_length_scan.expected: true
 command_line_length_scan.ml: [scanner-refusal:d71d7140161f2e19abd0f58123eaea02] an include stanza (claim) is catalogued beside command_line_length_scan.expected: true
 command_line_length_scan.ml: [scanner-refusal:f2f50b0ccfbbada97516cea48cbc3f16] file sexplib would (claim) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:b09b0066f0f41d3b0b1ffc188b84c55f] a dependency mixing (claim) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:cde1da25360bc3b02f4c015d1c5239cc] unknown dependency form (claim) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:98522ab6abd0e6c4b64b1252f37154a6] whose field contains (claim) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:ca1105d4fef574c3c55a3a5ce5af87a8] target reference without (claim) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:c223f8813d0c15a9a59ea92bcfa4b2e8] test reference without (claim) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:2c815f3192c897e5f51220a7b538a931] in command arguments (claim) is catalogued beside command_line_length_scan.expected: true
+command_line_length_scan.ml: [scanner-refusal:5592d35c9de1404b0763bd99eb0cf0ab] malformed spawning action (claim) is catalogued beside command_line_length_scan.expected: true
 optional_arg_inventory.ml has exactly the explicitly assigned refusal controls: true
 optional_arg_inventory.ml: [scanner-refusal:924efa1e307f7c5a40712dd66311abe1] the inventory nothing (direct failure) is catalogued beside optional_arg_inventory.expected, optional_arg_inventory_control.expected: true
 optional_arg_inventory.ml: [scanner-refusal:52e64fbae740ca90c4066b7840e926ae] source hand-over reaches (claim) is catalogued beside optional_arg_inventory.expected, optional_arg_inventory_control.expected: true
 optional_arg_inventory.ml: [scanner-refusal:8827ebeb8572d08d2dd427695c19c0f4] lib/ optional arguments (claim) is catalogued beside optional_arg_inventory.expected, optional_arg_inventory_control.expected: true
 optional_arg_inventory.ml: [scanner-refusal:69241f287bacdd3e1e418debbdc13d3d] every unimplemented option (claim) is catalogued beside optional_arg_inventory.expected, optional_arg_inventory_control.expected: true
 shell_scripts_parse.ml has exactly the explicitly assigned refusal controls: true
-shell_scripts_parse.ml: [scanner-refusal:918cb75e57498280d25cb0783c645841] context is unsupported (direct failure) is catalogued beside shell_scripts_parse.expected: true
-shell_scripts_parse.ml: [scanner-refusal:704f5ea1abc0485c63711f58214bf1bc] shell execution context (direct failure) is catalogued beside shell_scripts_parse.expected: true
+shell_scripts_parse.ml: [scanner-refusal:5a33b3090d0b22b64b0dcfd7eb75c717] dollar-quoted heredoc delimiter (direct failure) is catalogued beside shell_scripts_parse.expected: true
+shell_scripts_parse.ml: [scanner-refusal:5a100f6085e18fab300f003899e342de] unterminated outer heredoc (direct failure) is catalogued beside shell_scripts_parse.expected: true
+shell_scripts_parse.ml: [scanner-refusal:2c41b5db925a6aa0945ff98d5c2c7625] continued unquoted heredoc (direct failure) is catalogued beside shell_scripts_parse.expected: true
+shell_scripts_parse.ml: [scanner-refusal:261986b232e3c0d320e14e162a45fd02] multiline heredoc delimiter (direct failure) is catalogued beside shell_scripts_parse.expected: true
+shell_scripts_parse.ml: [scanner-refusal:2af3620c848715087c00635d863574a5] innermost open construct (direct failure) is catalogued beside shell_scripts_parse.expected: true
+shell_scripts_parse.ml: [scanner-refusal:d7a6bb6f6a525cf9994430bc39b6954e] closes no subshell (direct failure) is catalogued beside shell_scripts_parse.expected: true
+shell_scripts_parse.ml: [scanner-refusal:4c983091dfcac75f21cacf41beaa556d] still open at (direct failure) is catalogued beside shell_scripts_parse.expected: true
 shell_scripts_parse.ml: [scanner-refusal:bf12194d221f2281dedd171e418892fa] heredoc fixture (claim) is catalogued beside shell_scripts_parse.expected: true
 shell_scripts_parse.ml: [scanner-refusal:f23aa9a38a34c91eadc946f44d66d28a] unsupported shell lexical (claim) is catalogued beside shell_scripts_parse.expected: true
 shell_scripts_parse.ml: [scanner-refusal:d06f79ba9c87a43873089eb160369d9c] unsupported shell execution (claim) is catalogued beside shell_scripts_parse.expected: true

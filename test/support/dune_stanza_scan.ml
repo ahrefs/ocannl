@@ -1642,16 +1642,16 @@ let marker_backends = [ "none"; "cc"; "multidev_cc"; "cuda"; "hip"; "metal" ]
     grammar that fails for a reason nobody can see in a diff. *)
 let marker_separators = [ "--"; "\xe2\x80\x94" ]
 
-type marker_malformed =
+type 'error marker_malformed =
   | Repeated_sentinel
   | Missing_reason_separator
   | Short_reason of string
-  | Declaration_error of string
+  | Declaration_error of 'error
 
-type 'a marker_text =
+type ('a, 'error) marker_text =
   | Not_a_marker
   | Parsed_marker of 'a
-  | Malformed_marker_text of marker_malformed list
+  | Malformed_marker_text of 'error marker_malformed list
 
 let marker_malformed_reason ~sentinel ~separator_subject ~grammar = function
   | Repeated_sentinel ->
@@ -1878,24 +1878,24 @@ type 'a marker_stanza = { marker_stanza : marked_stanza; stanza_markers : 'a con
     Convention-specific declaration errors arrive as [Malformed_marker]; the other constructors are
     the reusable structural contract. A well-formed marker must be in a Dune comment, inside one
     stanza, and accepted by that convention's [belongs] predicate. *)
-type marker_issue =
+type 'error marker_issue =
   | Malformed_marker of {
       issue_line : int;
       issue_text : string;
-      issue_malformed : marker_malformed;
+      issue_malformed : 'error marker_malformed;
     }
   | Marker_outside_stanza of { issue_line : int; issue_text : string }
   | Marker_in_wrong_stanza of {
       issue_line : int;
       issue_text : string;
       issue_stanza : marked_stanza;
-      issue_why : string;
+      issue_why : 'error;
     }
   | Marker_outside_comment of { issue_text_occurrences : int; issue_comment_occurrences : int }
 
-type 'a marker_contract = {
+type ('a, 'error) marker_contract = {
   contract_stanzas : 'a marker_stanza list;
-  contract_issues : marker_issue list;
+  contract_issues : 'error marker_issue list;
   contract_text_occurrences : int;
   contract_comment_occurrences : int;
   contract_stanza_occurrences : int;

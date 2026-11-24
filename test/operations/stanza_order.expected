@@ -23,6 +23,11 @@ a file carrying the marker twice is refused: true
 a key is cut at its first `-` or `.`, and at nothing else: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:a38642dc43749b00aa10a80a44e3de14] the members of
+  [scanner-refusal:16b77db4cbd5ac82d6ebc373211395fa] the marker comment
+  [scanner-refusal:122f68556796d56d187e83a664c02f1c] carries the marker
+  [scanner-refusal:0e5583936dd4737cc5116ef5cb345541] directory's other machinery
+  [scanner-refusal:0fccc7482c9a39a1e282bd1fbb950fae] the file whichever
   [scanner-refusal:486695c03657d82f7e086a00621b636c] file whose tests
   [scanner-refusal:61d738fcc3d650e8f79cf987b0379b72] test appended at
   [scanner-refusal:1e198bd028e8a39c5c3977cc813d9834] place is accepted

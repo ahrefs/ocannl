@@ -53,7 +53,9 @@
 
    The corpus is every checked-in [arrayjit/lib/**.ml], selected from [Test_scan.Source_inventory]
    over the rule's clean sandbox (so no build output joins it), each parse classified through
-   [Test_scan.Scan_attempt]; the note is read from the same inventory. *)
+   [Test_scan.Scan_attempt]; the note is read from the same inventory. Its refusal boundary is the
+   typed [problem] list, which the controls compare by kind, together with the aggregate claims. The
+   diagnostic rendering of those constructors stays outside per-format extraction. *)
 
 open Base
 open Stdio

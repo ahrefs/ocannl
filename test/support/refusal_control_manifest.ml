@@ -14,6 +14,8 @@
 open Base
 open Stdio
 
+(* cc-fp-contract: not-executed -- catalogue entries quote scanner diagnostics *)
+
 let raw_entries =
   [
     ( "explicit_library_deps.ml",
@@ -135,6 +137,16 @@ let raw_entries =
       ] );
     ( "fp_contract_pin_scan.ml",
       [
+        "[scanner-refusal:b2b66576ec487b82b65d3d2a3c7fb584] sentinel must open";
+        "[scanner-refusal:5fae6b89f7d8258826c7189aafba5a40] expected <kind> <reason>";
+        "[scanner-refusal:9970d742a14c33910983647a40f64148] unknown kind";
+        "[scanner-refusal:897ec4f61958b8709e5a89603692821a] the reason needs";
+        "[scanner-refusal:0477ef9a58ec9e25b75d9c0f1a34c306] bitwise claim for";
+        "[scanner-refusal:21592137723d61ef8766bb4585efb5d1] marker drop the";
+        "[scanner-refusal:7be6e2776283b7cf291a429499bfe007] than one marker";
+        "[scanner-refusal:4c8ebb0a854f491b5b3bf153cb8e6e1f] OCANNL_CC_BACKEND_FP_CONTRACT=off";
+        "[scanner-refusal:e15c6d30a70f479a8a6380750aa59042] does not parse";
+        "[scanner-refusal:749f02c83c0859bd8145401cc5a4a5cb] scanner raised";
         "[scanner-refusal:106879e8d84d7b106e818ac1ddc61a4f] listed as pinned";
         "[scanner-refusal:777651b1b86abfe512e2d3a3f485ce6d] marked claim is";
         "[scanner-refusal:0917e598d504b434f3e3c9567742fcc6] claim with neither";
@@ -151,6 +163,10 @@ let raw_entries =
         "[scanner-refusal:b79e2ebc86bfefafc47281afbf5f0550] markers are refused";
         "[scanner-refusal:3237007207743bc53ec1c1951d1214b7] together are refused";
         "[scanner-refusal:b52b141cf7d13778997e41d81205de03] claim is refused";
+        "[scanner-refusal:ffc0217024cc9300c720ee267dd0fde3] separator is refused";
+        "[scanner-refusal:640314079c325f8264eadc3ee11e14a7] the expected diagnostic";
+        "[scanner-refusal:61cc31cefcfa4e62f663ac4758af255a] source that does";
+        "[scanner-refusal:e9713e59d79f302d02300babf9ebd87c] is refused separately";
         "[scanner-refusal:e28d8e210f8906b6927a78032d5a7f50] case the word";
         "[scanner-refusal:5af7923d754adb0ac1030df866493123] every test source";
         "[scanner-refusal:b30b6b3be7749ff984d2979f5a8fe292] arrayjit package's test";
@@ -313,7 +329,26 @@ let raw_entries =
         "[scanner-refusal:95468bc3bac3466d68db9d3b9602b3f2] level-4 subheading stays";
       ] );
     ( "backend_golden_family_scan.ml",
-      [ "[scanner-refusal:2fcd4d491da746e829dc7cec63905091] self-certifying and provenance" ] );
+      [
+        "[scanner-refusal:6e3c13cde68fdb8c13e4fe2e78b895d7] one backend position";
+        "[scanner-refusal:f9d6efa26b74daefa5557b7b00f8a682] expected atom";
+        "[scanner-refusal:5d618d2854245d7a364a03971b3a1b0d] expected atom";
+        "[scanner-refusal:de53562eca7cfdcf8e2a137a77d44724] <member>.expected";
+        "[scanner-refusal:8b581264b8bd140e3985e9f9bced6638] provenance target must";
+        "[scanner-refusal:1c96d667ded2ef1c95b7780e45d29789] recorded-on backend";
+        "[scanner-refusal:5ac098d53c612962b81e3afe44054bdd] provenance marker has";
+        "[scanner-refusal:43131f24bfb3bb850487bf36adc98bb5] provenance marker reason";
+        "[scanner-refusal:9dd518b47eeaa289c03164634c04f299] more than one";
+        "[scanner-refusal:b488d4e27ab1c2ebf5ac694c7c7095fa] that references family";
+        "[scanner-refusal:8a4d6f9fcf6429492277e482bfa47424] occurrence(s in the";
+        "[scanner-refusal:6620d38a048422186913091223d863d9] parse dune structure";
+        "[scanner-refusal:1407376649d9a0054747b260309b94b2] provenance marker names";
+        "[scanner-refusal:8dd5f5e0febece68bce7c390ae336362] provenance marker target";
+        "[scanner-refusal:dfe88f31831f61d09b8eecbf1fe2cd36] provenance marker records";
+        "[scanner-refusal:69adad8dff9bfd72ab49a01d9ea8b4a8] contain exactly certification";
+        "[scanner-refusal:fb5ea0107d1672c9e7c66baa76f18f9a] backend golden family";
+        "[scanner-refusal:2fcd4d491da746e829dc7cec63905091] self-certifying and provenance";
+      ] );
     ( "bin_smoke_membership_scan.ml",
       [
         "[scanner-refusal:9446215c7b3c2270741bbb1cd8300733] executable exactly once";
@@ -342,6 +377,11 @@ let raw_entries =
       ] );
     ( "stanza_order.ml",
       [
+        "[scanner-refusal:a38642dc43749b00aa10a80a44e3de14] the members of";
+        "[scanner-refusal:16b77db4cbd5ac82d6ebc373211395fa] the marker comment";
+        "[scanner-refusal:122f68556796d56d187e83a664c02f1c] carries the marker";
+        "[scanner-refusal:0e5583936dd4737cc5116ef5cb345541] directory's other machinery";
+        "[scanner-refusal:0fccc7482c9a39a1e282bd1fbb950fae] the file whichever";
         "[scanner-refusal:486695c03657d82f7e086a00621b636c] file whose tests";
         "[scanner-refusal:61d738fcc3d650e8f79cf987b0379b72] test appended at";
         "[scanner-refusal:1e198bd028e8a39c5c3977cc813d9834] place is accepted";
@@ -854,6 +894,21 @@ let raw_entries =
       ] );
     ( "command_line_length_scan.ml",
       [
+        "[scanner-refusal:372eeaf368300a9e358067e8d495cf72] the repository including";
+        "[scanner-refusal:37ae8aab17397f20999234cd8d0f6736] dependency";
+        "[scanner-refusal:731bfaa30bb282b9a618b0bfdd29e773] dependency form";
+        "[scanner-refusal:087813b8ad2e0e15e1f1cf137190ea8a] target spelled with";
+        "[scanner-refusal:d167faac8f0029e909ca0dc0f4b30e41] stanza with no";
+        "[scanner-refusal:d2e24c0f204c468788a307dee2026b3a] stanza that names";
+        "[scanner-refusal:af863572668f2295ed85b51e4b34c459] puts the contents";
+        "[scanner-refusal:1a514655621d234733eb18e735300edb] pform this scan";
+        "[scanner-refusal:6cdafd68dfe90265d75399ca116fd389] argument";
+        "[scanner-refusal:cf6423e820c211ef1f7669e8f2a5bd80] one this scan";
+        "[scanner-refusal:979a75b9cff181cf8c618e3265f341a1] directory this scan";
+        "[scanner-refusal:f659c7db4d5a7eeb09bb13eee5dd0d9d] action head";
+        "[scanner-refusal:0292958ea115eba550f5b11a616b213f] unreadable dune structure";
+        "[scanner-refusal:b2a275ebebff3747d03efc331e31059d] includes stanzas from";
+        "[scanner-refusal:9d49d08dd876c701ec8baa44b3e8055f] spawned command line";
         "[scanner-refusal:7b1d721a6b358055eeef13e57e5ba202] source tree reads";
         "[scanner-refusal:69918b599474e445c1e2dce74dc3e841] every spawned command";
         "[scanner-refusal:6eba8bdcf1112c04fdf6c29d4770c94a] bounded spawned command";
@@ -870,6 +925,13 @@ let raw_entries =
         "[scanner-refusal:c89bc9f1b5b4e0adddd25e00a9c88da7] scan cannot resolve";
         "[scanner-refusal:d71d7140161f2e19abd0f58123eaea02] an include stanza";
         "[scanner-refusal:f2f50b0ccfbbada97516cea48cbc3f16] file sexplib would";
+        "[scanner-refusal:b09b0066f0f41d3b0b1ffc188b84c55f] a dependency mixing";
+        "[scanner-refusal:cde1da25360bc3b02f4c015d1c5239cc] unknown dependency form";
+        "[scanner-refusal:98522ab6abd0e6c4b64b1252f37154a6] whose field contains";
+        "[scanner-refusal:ca1105d4fef574c3c55a3a5ce5af87a8] target reference without";
+        "[scanner-refusal:c223f8813d0c15a9a59ea92bcfa4b2e8] test reference without";
+        "[scanner-refusal:2c815f3192c897e5f51220a7b538a931] in command arguments";
+        "[scanner-refusal:5592d35c9de1404b0763bd99eb0cf0ab] malformed spawning action";
       ] );
     ( "optional_arg_inventory.ml",
       [
@@ -880,8 +942,13 @@ let raw_entries =
       ] );
     ( "shell_scripts_parse.ml",
       [
-        "[scanner-refusal:918cb75e57498280d25cb0783c645841] context is unsupported";
-        "[scanner-refusal:704f5ea1abc0485c63711f58214bf1bc] shell execution context";
+        "[scanner-refusal:5a33b3090d0b22b64b0dcfd7eb75c717] dollar-quoted heredoc delimiter";
+        "[scanner-refusal:5a100f6085e18fab300f003899e342de] unterminated outer heredoc";
+        "[scanner-refusal:2c41b5db925a6aa0945ff98d5c2c7625] continued unquoted heredoc";
+        "[scanner-refusal:261986b232e3c0d320e14e162a45fd02] multiline heredoc delimiter";
+        "[scanner-refusal:2af3620c848715087c00635d863574a5] innermost open construct";
+        "[scanner-refusal:d7a6bb6f6a525cf9994430bc39b6954e] closes no subshell";
+        "[scanner-refusal:4c983091dfcac75f21cacf41beaa556d] still open at";
         "[scanner-refusal:bf12194d221f2281dedd171e418892fa] heredoc fixture";
         "[scanner-refusal:f23aa9a38a34c91eadc946f44d66d28a] unsupported shell lexical";
         "[scanner-refusal:d06f79ba9c87a43873089eb160369d9c] unsupported shell execution";
@@ -1388,6 +1455,50 @@ let observe_failure ~source ~format =
     Stdlib.Digest.string (Refusal_control_scan.normalize format) |> Stdlib.Digest.to_hex
   in
   Hash_set.add observed_failures (failure_key ~source ~identity)
+
+(* Keep the format before substitution: a fixture argument can echo any sibling diagnostic. *)
+type refusal = { format : string; message : string }
+
+let capture_refusal finish fmt =
+  let format = Stdlib.string_of_format fmt in
+  Printf.ksprintf (fun message -> finish { format; message }) fmt
+
+let fail fmt = capture_refusal Fn.id fmt
+let with_message refusal message = { refusal with message }
+
+module type FAIL = sig
+  val fail : ('a, unit, string, unit) Stdlib.format4 -> 'a
+end
+
+let collect_refusals f =
+  let recorded = ref [] in
+  let sink : (module FAIL) =
+    (module struct
+      let fail fmt = capture_refusal (fun refusal -> recorded := refusal :: !recorded) fmt
+    end)
+  in
+  let result = f ~fail:sink in
+  (result, List.rev !recorded)
+
+let check_failures ?(quiet = false) ~source ~formats refusals =
+  let actual = List.map refusals ~f:(fun refusal -> refusal.format) in
+  let matched = List.equal String.equal formats actual in
+  if matched then List.iter actual ~f:(fun format -> observe_failure ~source ~format)
+  else if not quiet then (
+    eprintf "control expected refusal formats [%s], got [%s]\n" (String.concat ~sep:"; " formats)
+      (String.concat ~sep:"; " actual);
+    List.iter refusals ~f:(fun refusal -> eprintf "  %s\n" refusal.message));
+  matched
+
+let refused_with ?quiet ~source ~format f =
+  let (), refusals = collect_refusals f in
+  check_failures ?quiet ~source ~formats:[ format ] refusals
+
+let accepted f =
+  let (), refusals = collect_refusals f in
+  List.iter refusals ~f:(fun refusal ->
+      eprintf "control expected no refusal, got: %s\n" refusal.message);
+  List.is_empty refusals
 
 (** The [FAIL: ] lines of a child run's captured [output]: what it refused. *)
 let refusal_lines output =
