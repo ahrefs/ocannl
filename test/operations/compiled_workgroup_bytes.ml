@@ -404,8 +404,22 @@ let () =
       @ List.map k2 ~f:(fun kernel -> { kernel; metal_charge = 40; hip_min = 49; hip_charge = 49 }))
 
 let () =
-  let outcomes = !all_outcomes @ !probe_outcomes @ !two_tier_outcomes
-  and kernels = !all_kernels @ !probe_kernels @ List.map !byte_pairs ~f:(fun pair -> pair.kernel)
+  (* Both CUDA arrays contribute their exact sizes, so each equal-sized pair has a tight bound. *)
+  let cuda_pairs =
+    if on_cuda then
+      List.map [ 17; 33 ] ~f:(fun size ->
+          let tag = Printf.sprintf "cwb_byte_pair_%d_%d" size size in
+          let outcome, kernels = run_byte_probe ~stage_v:true ~tag ~bi:size ~cols:size in
+          (size, outcome, kernels))
+    else []
+  in
+  let outcomes =
+    !all_outcomes @ !probe_outcomes @ !two_tier_outcomes
+    @ List.map cuda_pairs ~f:(fun (_, outcome, _) -> outcome)
+  and kernels =
+    !all_kernels @ !probe_kernels
+    @ List.map !byte_pairs ~f:(fun pair -> pair.kernel)
+    @ List.concat_map cuda_pairs ~f:(fun (_, _, kernels) -> kernels)
   and seeded_kernels = !all_kernels
   and probe = !probe_kernels
   and byte_pairs = !byte_pairs in
@@ -449,11 +463,9 @@ let () =
           k.charged = hip_charge && k.compiled >= hip_min));
   in_leg ~leg:cuda_shared_leg "CUDA odd-byte pairs charge and allocate exactly their array sizes"
     (fun label ->
-      p_all ~min:2 label [ 17; 33 ] ~f:(fun size ->
-          let tag = Printf.sprintf "cwb_byte_pair_%d_%d" size size in
-          match run_byte_probe ~stage_v:true ~tag ~bi:size ~cols:size with
-          | _, [ k ] -> k.charged = 2 * size && k.compiled = 2 * size
-          | _ -> false));
+      p_all ~min:2 label cuda_pairs ~f:(function
+        | size, _, [ k ] -> k.charged = 2 * size && k.compiled = 2 * size
+        | _ -> false));
   in_leg ~leg:seeded_f16_leg
     "some unaligned seeded kernel allocates exactly its granule-rounded bound, not a coarser \
      multiple" (fun label ->
