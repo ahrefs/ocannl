@@ -1639,25 +1639,15 @@ module Impl = struct
                  (group (parens (v1 ^^ string " > 0"))
                  ^^ space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0"
                  ))
-      (* Integer-typed, as CUDA's and HIP's integer arms are (gh-ocannl-1883): the float literals of
-         the arm below made the select a float, which [%] does not take. No integer lies in the open
-         unit interval, so the gate never passes; the operand stays gated. *)
-      | Satur01_gate, p when Ops.is_integer p ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group (parens (v1 ^^ string " > 0 && " ^^ v1 ^^ string " < 1"))
-                 ^^ space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0"
-                 ))
       | Satur01_gate, p_res ->
-          let s = metal_prec_suffix_float p_res in
+          (* The predicate takes the condition once, while the ternary guards the payload and keeps
+             its integer promotions (gh-ocannl-1883). *)
+          let zero = if Ops.is_integer p_res then "0" else "0.0" ^ metal_prec_suffix_float p_res in
           fun v1 v2 ->
             group
               (parens
-                 (group
-                    (parens (v1 ^^ string (" > 0.0" ^ s ^ " && ") ^^ v1 ^^ string (" < 1.0" ^ s)))
-                 ^^ space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                 ^^ string ("0.0" ^ s)))
+                 (string "ocannl_sat01_open" ^^ parens v1 ^^ space ^^ string "?" ^^ space ^^ v2
+                ^^ space ^^ string ":" ^^ space ^^ string zero))
       | ToPowOf, Ops.Half_prec _ ->
           (* Widen both operands and round back once, as CUDA and HIP do (gh-ocannl-1198), so half
              pow is f32 [pow] narrowed under either compile-option math policy (the modern split on

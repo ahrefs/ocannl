@@ -557,6 +557,12 @@ using namespace metal;|}, []);
     ( "ocannl_cos",
       {|inline float ocannl_cos(float x) { return fabs(x) < 0x1p22f ? cos(x) : precise::cos(x); }|},
       [] );
+    (* Only the condition is passed by value. The gate's ternary keeps the payload lazy. *)
+    ( "ocannl_sat01_open",
+      {|template <typename T> inline bool ocannl_sat01_open(T x) {
+  return x > T(0) && x < T(1);
+}|},
+      [] );
     (* Integer-precision [Max] / [Min] / [Relu] (gh-ocannl-1731). MSL's [fmax]/[fmin] are float-only
        and its integer [max]/[min] need both operands of one type, while an operand at an integer
        precision is a [uchar] read, an integer-promoted [int] sum, or a [bool] truth. These take C's
@@ -564,25 +570,17 @@ using namespace metal;|}, []);
        an [int] sum is not narrowed, and the result is typed that, so [%] takes it (gh-ocannl-1883;
        [Builtins_cc]'s [OCANNL_MAX] and the CUDA/HIP templates are the same rule). A float-VALUED
        operand never reaches them: the shared renderer computes such a [Max]/[Min] at the float
-       precision (gh-ocannl-1785), and since gh-ocannl-1883 no integer arm is float-TYPED either, so
-       the floating overloads below are a guard, not a path: a floating common type would go to
-       [fmax]/[fmin] themselves, NaN handling included. *)
+       precision (gh-ocannl-1785), and the integer arms return integer types (gh-ocannl-1883). *)
     ( "ocannl_max",
-      {|template <typename T> inline T ocannl_max_in(T a, T b) { return a > b ? a : b; }
-inline float ocannl_max_in(float a, float b) { return fmax(a, b); }
-inline half ocannl_max_in(half a, half b) { return fmax(a, b); }
-template <typename A, typename B> inline decltype(A() + B()) ocannl_max(A a, B b) {
+      {|template <typename A, typename B> inline decltype(A() + B()) ocannl_max(A a, B b) {
   typedef decltype(A() + B()) C;
-  return ocannl_max_in((C)a, (C)b);
+  return (C)a > (C)b ? (C)a : (C)b;
 }|},
       [] );
     ( "ocannl_min",
-      {|template <typename T> inline T ocannl_min_in(T a, T b) { return a < b ? a : b; }
-inline float ocannl_min_in(float a, float b) { return fmin(a, b); }
-inline half ocannl_min_in(half a, half b) { return fmin(a, b); }
-template <typename A, typename B> inline decltype(A() + B()) ocannl_min(A a, B b) {
+      {|template <typename A, typename B> inline decltype(A() + B()) ocannl_min(A a, B b) {
   typedef decltype(A() + B()) C;
-  return ocannl_min_in((C)a, (C)b);
+  return (C)a < (C)b ? (C)a : (C)b;
 }|},
       [] );
     (* The e5m2 software codec. MSL has no fp8 type, so an fp8 tensor is stored as a byte and its

@@ -35,9 +35,10 @@
    take a [uint4x32] block and produce every scalar precision. Each homogeneous arithmetic arm is
    swept twice, over buffer reads and with an inlined [a + b] as its first operand ([Inlined]),
    since integer promotion types the two differently; at an integer storage precision, a third time
-   over an inlined real-valued [Sqrt(a)] ([Inlined_real], gh-ocannl-1785), and a fourth as the first
-   operand of [Mod] ([Under_mod], gh-ocannl-1883), which takes integer-typed operands only.
-   Conversions are every ordered pair of distinct storage precisions the backend can store
+   over an inlined real-valued [Sqrt(a)] ([Inlined_real], gh-ocannl-1785), then as each operand of
+   [Mod] and [Div] ([Under_integer], gh-ocannl-1883). [Mod] rejects a float operand and the executed
+   [Not] case distinguishes integer division from floating division. Conversions are every ordered
+   pair of distinct storage precisions the backend can store
    ({!Ir.Backend_intf.codegen_capabilities}'s [supports_f64]).
 
    gh-ocannl-1768 extended the sweep in three directions.
@@ -778,6 +779,7 @@ let unguarded_functions =
       "a template: integer Max in the operands' common type, which it is instantiated at" );
     ( ("metal", "ocannl_min"),
       "a template: integer Min in the operands' common type, which it is instantiated at" );
+    (("metal", "ocannl_sat01_open"), "a template testing the condition in its own arithmetic type");
     ( ("metal", "threefry_round"),
       "its state passed by reference, internal to the threefry functions, which are guarded" );
   ]

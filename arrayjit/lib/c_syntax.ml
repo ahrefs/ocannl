@@ -1129,6 +1129,10 @@ module type C_syntax_config = sig
 
   val binop_syntax : Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.document
 
+  val binop_arg1_uses : Ops.binop -> int
+  (** Number of occurrences of the first operand when the binary rendering evaluates it. Projections
+      bypass the renderer. *)
+
   val builtin_param_guards : param_guard_dialect option
   (** The dialect of the builtin parameter guards a kernel's prelude carries under the test seam
       {!Param_guards.with_guards} (gh-ocannl-1768); [None] (the {!Pure_C_config} default) guards
@@ -1889,7 +1893,8 @@ let op_syntax_idents ~ternop_syntax ~binop_syntax ~unop_syntax ~vec_unop_syntax 
     since a renderer cannot ask "am I allowed to short-circuit here" -- it either emits a
     conditional or it does not. Each operator is rendered over distinguishable placeholder operands
     at every precision, and the emitted text is read for the only C-family constructs that can skip
-    an operand: [?:], [&&] and [||]. So:
+    an operand: [?:], [&&] and [||]. The check counts first-operand tokens in the emitted expression
+    only. It does not expand macros or inline helper bodies. So:
 
     - a projection ([Only_first] / [Only_second]) must not mention its discarded operand -- every
       backend rejects one outright, which satisfies this trivially, and {!C_syntax.pp_scalar} emits
@@ -1904,8 +1909,9 @@ let op_syntax_idents ~ternop_syntax ~binop_syntax ~unop_syntax ~vec_unop_syntax 
 
     The operator sweep is [Ops]' derived enumeration, so an operator added to {!Ops.binop} or
     {!Ops.ternop} is checked here without anyone remembering to list it. A (precision, operator)
-    pair the backend rejects by raising contributes nothing, as in {!op_syntax_idents}. *)
-let operand_conditionality_violations ~ternop_syntax ~binop_syntax ~select_blend_syntax =
+    pair the backend rejects with [Invalid_argument] or [Utils.User_error] contributes nothing. *)
+let operand_conditionality_violations ~ternop_syntax ~binop_syntax ~binop_arg1_uses
+    ~select_blend_syntax =
   let violations = ref [] in
   let report what msg = violations := Printf.sprintf "%s: %s" what msg :: !violations in
   let a1 = PPrint.string "$1" and a2 = PPrint.string "$2" and a3 = PPrint.string "$3" in
@@ -1915,7 +1921,7 @@ let operand_conditionality_violations ~ternop_syntax ~binop_syntax ~select_blend
       (* A width no rendering reaches keeps the placeholders off line boundaries. *)
       PPrint.ToBuffer.pretty 1.0 1_000_000 buf (f ());
       Some (Buffer.contents buf)
-    with _ -> None
+    with Invalid_argument _ | Utils.User_error _ -> None
   in
   let at s ph = String.substr_index s ~pattern:ph in
   let gated_in s =
@@ -1944,7 +1950,16 @@ let operand_conditionality_violations ~ternop_syntax ~binop_syntax ~select_blend
                       "classified as a projection onto the second operand, but the rendering \
                        mentions the first"
               | (Ops.Both_operands | Ops.Gated_second) as cond -> (
-                  if Option.is_none i1 then report what "the first operand is not rendered";
+                  (if Option.is_none i1 then report what "the first operand is not rendered"
+                   else
+                     let uses =
+                       List.length (String.substr_index_all s ~may_overlap:false ~pattern:"$1")
+                     in
+                     if uses <> binop_arg1_uses op then
+                       report what
+                         (Printf.sprintf
+                            "first operand occurs %d times but its renderer declares %d" uses
+                            (binop_arg1_uses op)));
                   match (cond, i2) with
                   | _, None -> report what "the second operand is not rendered"
                   | Ops.Gated_second, Some i2 ->
@@ -3360,6 +3375,7 @@ struct
       ^^ string op_suffix)
 
   let binop_syntax = default_binop_syntax
+  let binop_arg1_uses _ = 1
   let select_blend_syntax _prec = None
   let builtin_param_guards = None
   let result_type_probes = C_probes
@@ -3631,7 +3647,7 @@ module C_syntax (B : C_syntax_config) = struct
   let () =
     match
       operand_conditionality_violations ~ternop_syntax:B.ternop_syntax ~binop_syntax:B.binop_syntax
-        ~select_blend_syntax:B.select_blend_syntax
+        ~binop_arg1_uses:B.binop_arg1_uses ~select_blend_syntax:B.select_blend_syntax
     with
     | [] -> ()
     | violations ->
@@ -3939,30 +3955,6 @@ module C_syntax (B : C_syntax_config) = struct
   let repeat_reads n reads =
     if n <= 0 || List.is_empty reads then [] else List.concat (List.init n ~f:(fun _ -> reads))
 
-  (* How many times [B.binop_syntax prec op] splices its first operand document (e.g. 2 for MSL's
-     [Satur01_gate], 1 for C's statement-expression form and every other binop). Computed once per
-     [(prec, op)] via a unique placeholder so [gate_entries] and [pp_scalar_op] charge the exact
-     number of emitted reads. *)
-  let binop_arg1_uses =
-    let cache = Hashtbl.create (module String) in
-    let placeholder = "__ocannl_arg1_probe__" in
-    let p1 = PPrint.string placeholder and p2 = PPrint.string "__ocannl_arg2_probe__" in
-    fun prec op ->
-      let key = Ops.prec_string prec ^ ":" ^ Ops.binop_cd_fallback_syntax op in
-      Hashtbl.find_or_add cache key ~default:(fun () ->
-          try
-            let buf = Buffer.create 128 in
-            PPrint.ToBuffer.pretty 1.0 1_000_000 buf (B.binop_syntax prec op p1 p2);
-            let s = Buffer.contents buf in
-            let plen = String.length placeholder in
-            let rec count pos acc =
-              match String.substr_index s ~pos ~pattern:placeholder with
-              | None -> acc
-              | Some idx -> count (idx + plen) (acc + 1)
-            in
-            Int.max 1 (count 0 0)
-          with _ -> 1)
-
   (* gh-ocannl-2145: a short-circuiting gated operator ([Ops.Gated_second]: the gates, [&&], [||])
      evaluates its second operand only where its own test selects it. The definitions there that run
      under a [Where]'s condition keep that condition behind the operator's test -- that the second
@@ -3978,7 +3970,7 @@ module C_syntax (B : C_syntax_config) = struct
         ^^ string " != "
         ^^ parens (B.binop_syntax prec op e1 (lit 0.))
       in
-      { doc; reads = repeat_reads (2 * binop_arg1_uses prec op) r1 }
+      { doc; reads = repeat_reads (2 * B.binop_arg1_uses op) r1 }
     in
     Low_level.Scope_order.gate
       ~key:(Gate { op; prec; first = v1; first_prec })
@@ -4064,7 +4056,7 @@ module C_syntax (B : C_syntax_config) = struct
                 (op, if blended then blend_for prec ~cond:v1 ~arms:[ (v2, prec) ] else None)
               with
               | (Ops.Relu_gate | Ops.Satur01_gate), Some (Blend_truth _) -> 0
-              | _ -> binop_arg1_uses prec op - 1
+              | _ -> B.binop_arg1_uses op - 1
             in
             let needs_r1 =
               extra_arg1_uses > 0
@@ -4164,7 +4156,7 @@ module C_syntax (B : C_syntax_config) = struct
     | Binop (op, (v1, _), (v2, _)) -> (
         let any = fv v1 || fv v2 in
         let both ~at render =
-          let extra_arg1_uses = binop_arg1_uses at op - 1 in
+          let extra_arg1_uses = B.binop_arg1_uses op - 1 in
           let needs_r1 =
             extra_arg1_uses > 0
             ||

@@ -75,6 +75,7 @@ let metal_only =
     ( "ocannl_min",
       "integer-precision Min/Satur01 in the operands' common type (C's twin is the OCANNL_MIN \
        macro), executed on Metal by op_table_compile" );
+    ("ocannl_sat01_open", "Metal's typed gate predicate, executed by branchless_select");
   ]
 
 (* The parameter type of the C table's [<prec>_to_uint4x32]; the Metal one's is read off its

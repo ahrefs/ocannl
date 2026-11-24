@@ -477,6 +477,10 @@ struct
     | _, 1 -> typ_of_prec prec
     | _ -> invalid_arg (Dialect.error_prefix ^ ".vec_typ_of_prec: invalid combination")
 
+  (* The device ternary uses the condition in both comparisons of the open interval. HIP's blend
+     binds the payload, so its condition has the same multiplicity. *)
+  let binop_arg1_uses = function Ops.Satur01_gate -> 2 | _ -> 1
+
   let rec binop_syntax prec v =
     (* The match stays exhaustive over (op, prec) -- that is what catches a newly added operator
        here -- but arms whose spelling is plain C delegate to {!C_syntax.default_binop_syntax}
