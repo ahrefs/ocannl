@@ -2893,9 +2893,12 @@ DUNE
   cat >>"$repo/p9/dune" <<'DUNE'
 (subdir repeated (alias (name runtest-pair) (deps first.sh)))
 (subdir repeated (alias (name runtest-pair) (deps second.sh)))
+(subdir repeated (rule (alias runtest-rule-pair) (deps rule-first.sh) (action (progn))))
+(subdir repeated (rule (alias runtest-rule-pair) (deps rule-second.sh) (action (progn))))
 DUNE
   printf '; The two subdir stanzas contribute to this directory.\n' >"$repo/p9/repeated/dune"
-  for f in first second; do printf '#!/bin/sh\n' >"$repo/p9/repeated/$f.sh"; done
+  for f in first second rule-first rule-second; do printf '#!/bin/sh\n' >"$repo/p9/repeated/$f.sh"; done
+  : >"$repo/p9/repeated/rule-unused.txt"
   printf '(alias (name runtest-include) (deps shared.sh))\n' >"$repo/p9/shared.inc"
   for d in inc-first inc-second; do
     printf '(include ../shared.inc)\n' >"$repo/p9/$d/dune"
@@ -2909,6 +2912,39 @@ DUNE
     report 0 'both subdir blocks can give the same alias its own literal dependencies'
   else report 1 'both subdir blocks can give the same alias its own literal dependencies' \
     "exit $rc; stdout: $(cat "$out"); stderr: $(cat "$err")"; fi
+  for f in rule-first rule-second; do
+    affected --files "p9/repeated/$f.sh"
+    # shellcheck disable=SC2086
+    expect "subdir targetless rule reading $f.sh reaches only its alias and blind aliases" 0 \
+      @p9/repeated/runtest-rule-pair $probe_blind
+    if grep -qxF "affected: p9/repeated/$f.sh: named as a dependency by the rule of @p9/repeated/runtest-rule-pair" "$err" &&
+       ! grep -qE '^affected: (the probe failed|dune could not print a rule in the probe)' "$err"; then
+      report 0 "subdir targetless rule credits $f.sh without probe collision"
+    else report 1 "subdir targetless rule credits $f.sh without probe collision" \
+      "exit $rc; stdout: $(cat "$out"); stderr: $(cat "$err")"; fi
+  done
+  affected --files p9/repeated/rule-unused.txt
+  # shellcheck disable=SC2086
+  expect 'an unread file beside repeated subdir targetless rules lists only the blind aliases' 0 $probe_blind
+  subdir_rule_label='negative control: sharing the occurrence counter across subdir blocks keeps targetless rule twins unique'
+  if run_affected_mutant "$subdir_rule_label" \
+      '$occ //= {};
+  my @out;' \
+      '$occ //= {};
+  my (@out, %rule_occ);' \
+      --edit \
+      'my $twin = "__affected_probe_" . substr(md5_hex(join("\0", $file, $key, ++$occ->{$key})), 0, 12);
+      push @out, ["rule", map {' \
+      'my $twin = "__affected_probe_" . substr(md5_hex(join("\0", $file, $key, ++$rule_occ{$key})), 0, 12);
+      push @out, ["rule", map {' \
+      --files p9/repeated/rule-first.sh p9/repeated/rule-second.sh; then
+    if ! alias_reader_completed; then
+      report_mutant 2 "$subdir_rule_label" "exit $rc; $(cat "$err")"
+    elif [ "$rc" = 0 ] && grep -qF 'affected: the probe failed' "$err" &&
+       ! grep -qF 'named as a dependency by the rule of @p9/repeated/runtest-rule-pair' "$err"; then
+      report_mutant 0 "$subdir_rule_label"
+    else report_mutant 1 "$subdir_rule_label" "exit $rc; stdout: $(cat "$out"); stderr: $(cat "$err")"; fi
+  fi
   affected --files p9/inc-first/shared.sh p9/inc-second/shared.sh
   for d in inc-first inc-second; do
     if [ "$rc" = 0 ] && grep -qxF "@p9/$d/runtest-include" "$out" &&

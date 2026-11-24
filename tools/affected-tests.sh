@@ -2938,10 +2938,10 @@ my %plain = map { $_ => 1 } "executable", "executables", "library", "test", "tes
   "ocamllex", "ocamlyacc", "menhir", "install", "env", "dirs", "data_only_dirs", "vendored_dirs", "include_subdirs",
   "documentation", "generate_sites_module", "foreign_library";
 my %written;
-sub convert {   # DIR FILE FORMS TOP [ALIAS_OCC] -> the rewritten forms
-  my ($dir, $file, $forms, $top, $alias_occ) = @_;
-  $alias_occ //= {};
-  my (@out, %occ);
+sub convert {   # DIR FILE FORMS TOP [OCC] -> the rewritten forms
+  my ($dir, $file, $forms, $top, $occ) = @_;
+  $occ //= {};
+  my @out;
   # Each top-level form is recorded once it is processed (the continue block),
   # with whether the converter vouched for it: no note said otherwise.
   my ($record, $before);
@@ -2959,7 +2959,7 @@ sub convert {   # DIR FILE FORMS TOP [ALIAS_OCC] -> the rewritten forms
     }
     if ($h eq "subdir") {
       my $sub = @fl ? path_in($dir, $fl[0]) : undef;
-      if (defined $sub) { push @out, [$h, $fl[0], convert($sub, $file, [@fl[1 .. $#fl]], 0, $alias_occ)]; next }
+      if (defined $sub) { push @out, [$h, $fl[0], convert($sub, $file, [@fl[1 .. $#fl]], 0, $occ)]; next }
       note("blindtree", $dir, "$file has a (subdir) whose directory is not a literal path below it"); push @out, $f; next;
     }
     if ($h eq "include") {
@@ -3001,8 +3001,10 @@ sub convert {   # DIR FILE FORMS TOP [ALIAS_OCC] -> the rewritten forms
       }
       # Named by the file, the aliases and the rule's rank among theirs, never by
       # its text: an edit dune reads the same (quoting, layout) changes no rule.
+      # Share $occ across subdir blocks so separate blocks targeting the same
+      # directory and alias get distinct probe targets (gh-ocannl-2446).
       my $key = join(" ", @al);
-      my $twin = "__affected_probe_" . substr(md5_hex(join("\0", $file, $key, ++$occ{$key})), 0, 12);
+      my $twin = "__affected_probe_" . substr(md5_hex(join("\0", $file, $key, ++$occ->{$key})), 0, 12);
       push @out, ["rule", map { named($_, "action") ? ["action", ["progn", ["write-file", $twin, '""'], $_->[1]]] : $_ }
                           grep { !named($_, "alias") && !named($_, "aliases") } @fl];
       push @out, ["alias", ["name", $_], ["deps", $twin]] for @al;
@@ -3029,7 +3031,7 @@ sub convert {   # DIR FILE FORMS TOP [ALIAS_OCC] -> the rewritten forms
       # A file can contribute several blocks to one directory. An included
       # file uses the same target names in each directory that includes it.
       my $key = "alias $n[0]";
-      my $twin = "__affected_probe_" . substr(md5_hex(join("\0", $file, $key, ++$alias_occ->{$key})), 0, 12);
+      my $twin = "__affected_probe_" . substr(md5_hex(join("\0", $file, $key, ++$occ->{$key})), 0, 12);
       push @out, ["rule", @deps, grep({ named($_, "enabled_if") || named($_, "package") } @fl),
                   ["action", ["write-file", $twin, '""']]];
       push @out, [$h, map { named($_, "deps") ? [@$_, $twin] : $_ } @fl];
