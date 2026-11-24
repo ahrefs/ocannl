@@ -55,7 +55,8 @@ harness_scratch test-merge-build-check
 HERE=$(cd "$(dirname "$0")" && pwd)
 # The fixtures' own git: no ambient configuration, identity or repository selection.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
-  GIT_COMMON_DIR GIT_CEILING_DIRECTORIES SHIP_PR_MERGE_BASE_SHA SHIP_PR_MERGE_HEAD_SHA
+  GIT_COMMON_DIR GIT_CEILING_DIRECTORIES SHIP_PR_MERGE_BASE_SHA SHIP_PR_MERGE_HEAD_SHA \
+  OCANNL_TOOL_OWED_RUN_FETCH_CAP OCANNL_TOOL_OWED_RUN_PUSH_RETRIES OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
   GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
   GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
@@ -1124,6 +1125,45 @@ FAKEGIT
   if [ -z "$cfg_bad" ]; then
     report 0 'invalid push retry or backoff settings exit 2'
   else report 1 'invalid push retry or backoff settings exit 2' "$cfg_bad"; fi
+  # Replacing a non-commit ref (blob): publish repairs it under the existing lease so waive/add can recover.
+  repair_repo=$TMP/owed-repair-noncommit.git
+  git init -q --bare "$repair_repo"
+  repair_blob=$(printf 'corrupt non-commit ref\n' | git -C "$R" hash-object -w --stdin)
+  git -C "$R" push -q -f "$repair_repo" "$repair_blob:refs/owed-runs/$APART_HEAD"
+  owed "$repair_repo" check "$APART_HEAD" runtest
+  bad_rc=$orc
+  OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF=0 owed "$repair_repo" waive --head "$APART_HEAD" --reason 'repair non-commit ref'
+  waive_rc=$orc
+  owed "$repair_repo" check "$APART_HEAD" runtest
+  if [ "$bad_rc" = 1 ] && [ "$waive_rc" = 0 ] && [ "$orc" = 0 ] &&
+     grep -qF 'admitted waiver' "$TMP/owed-out"; then
+    report 0 'publish replaces a non-commit record ref under the existing lease'
+  else report 1 'publish replaces a non-commit record ref under the existing lease' \
+    "bad=$bad_rc waive=$waive_rc check=$orc; $(cat "$TMP/owed-out")"; fi
+  # Hanging fetch with a lingering child holding stderr open: must still time out within FETCH_CAP (no pipe hang).
+  mkdir -p "$TMP/hangfetchbin"
+  cat >"$TMP/hangfetchbin/git" <<FAKEGIT
+#!/bin/sh
+for a do
+  case \$a in
+    fetch)
+      sleep 6 &
+      exec sleep 6 ;;
+  esac
+done
+exec "$GIT" "\$@"
+FAKEGIT
+  chmod +x "$TMP/hangfetchbin/git"
+  started=$SECONDS
+  hang_rc=0
+  (cd "$R" && PATH=$TMP/hangfetchbin:$TMP/gitbin:$SYS_PATH \
+    OCANNL_TOOL_OWED_RUN_FETCH_CAP=1 OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL \
+    "$BASH" tools/owed-run.sh check "$APART_HEAD" runtest) >"$TMP/owed-out" 2>&1 || hang_rc=$?
+  took=$((SECONDS - started))
+  if [ "$hang_rc" = 3 ] && [ "$took" -lt 5 ] && grep -qF 'could not be fetched within 1s: unreadable' "$TMP/owed-out"; then
+    report 0 "a hanging fetch with a child holding stderr open still returns exit 3 at FETCH_CAP (${took}s < 5s)"
+  else report 1 'a hanging fetch with a child holding stderr open still returns exit 3 at FETCH_CAP' \
+    "exit=$hang_rc took=${took}s; $(cat "$TMP/owed-out")"; fi
 fi
 
 owed_record_leg() {

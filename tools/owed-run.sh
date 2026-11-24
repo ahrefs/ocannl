@@ -99,8 +99,9 @@ case $PUSH_RETRIES in '' | *[!0-9]* | 0?*) echo "$me: OCANNL_TOOL_OWED_RUN_PUSH_
 PUSH_BACKOFF=${OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF:-2}
 case $PUSH_BACKOFF in '' | *[!0-9]* | 0?*) echo "$me: OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF must be a non-negative integer" >&2; exit 2 ;; esac
 SCHEMA=v2
+_owed_out_file=
 _owed_err_file=
-trap 'rm -f "${_owed_err_file:-}"' EXIT
+trap 'rm -f "${_owed_out_file:-}" "${_owed_err_file:-}"' EXIT
 
 die() { echo "$me: $*" >&2; exit 2; }
 refuse() { echo "$me: REFUSED -- $* (records on $OWED_RUN_URL)"; exit 1; }
@@ -108,8 +109,8 @@ unreadable() { echo "$me: REFUSED -- $* (records on $OWED_RUN_URL)"; exit 3; }
 is_sha() { case $1 in *[!0-9a-f]* | '') return 1 ;; esac; [ "${#1}" = 40 ]; }
 # bounded CMD...: CMD under FETCH_CAP (macOS has no timeout(1); perl's alarm survives exec).
 bounded() { perl -e 'alarm shift; exec @ARGV or exit 127' "$FETCH_CAP" "$@"; }
-# A read never prompts and reads no ambient credential helper's prompt.
-rgit() { GIT_TERMINAL_PROMPT=0 bounded git -C "$root" "$@"; }
+# A read never prompts, reads no ambient credential helper's prompt, and keeps English diagnostics.
+rgit() { LC_ALL=C GIT_TERMINAL_PROMPT=0 bounded git -C "$root" "$@"; }
 
 # is_auth_failure STDERR: true when any line matches the closed auth/authorization denylist above.
 is_auth_failure() {
@@ -147,35 +148,49 @@ is_auth_failure() {
 
 # remote_ref REF: sets `remote_sha` to what REF names on OWED_RUN_URL, empty when it names nothing.
 # Nonzero status when the repository could not be read; sets `remote_err` to stderr on failure.
+# Uses temp files rather than pipes so an orphaned transport helper cannot hold $(...) past FETCH_CAP.
 remote_ref() {
-  local out rc=0 err_file=
+  local rc=0 out_file= err_file=
   remote_sha=
+  remote_err=
+  out_file=$(mktemp "${TMPDIR:-/tmp}/owed-run-out.XXXXXX" 2>/dev/null) || out_file=
+  err_file=$(mktemp "${TMPDIR:-/tmp}/owed-run-err.XXXXXX" 2>/dev/null) || err_file=
+  _owed_out_file=$out_file _owed_err_file=$err_file
+  if [ -n "$out_file" ] && [ -n "$err_file" ]; then
+    rgit ls-remote "$OWED_RUN_URL" "$1" >"$out_file" 2>"$err_file" || rc=$?
+    if [ "$rc" != 0 ]; then
+      remote_err=$(cat "$err_file" 2>/dev/null)
+      rm -f "$out_file" "$err_file"
+      _owed_out_file= _owed_err_file=
+      return "$rc"
+    fi
+    remote_sha=$(awk -v r="$1" '$2 == r { print $1 }' "$out_file")
+    rm -f "$out_file" "$err_file"
+    _owed_out_file= _owed_err_file=
+  else
+    rm -f "${out_file:-}" "${err_file:-}"
+    _owed_out_file= _owed_err_file=
+    local out
+    out=$(rgit ls-remote "$OWED_RUN_URL" "$1" 2>/dev/null) || return $?
+    remote_sha=$(printf '%s\n' "$out" | awk -v r="$1" '$2 == r { print $1 }')
+  fi
+  return 0
+}
+# fetch_objects REF...: the objects of REF... into this repository; no ref or FETCH_HEAD written.
+# Sets `remote_err` to captured output on failure. Uses a temp file to stay independent of pipe EOF.
+fetch_objects() {
+  local rc=0 err_file=
   remote_err=
   err_file=$(mktemp "${TMPDIR:-/tmp}/owed-run-err.XXXXXX" 2>/dev/null) || err_file=
   _owed_err_file=$err_file
   if [ -n "$err_file" ]; then
-    out=$(rgit ls-remote "$OWED_RUN_URL" "$1" 2>"$err_file") || rc=$?
-    if [ "$rc" != 0 ]; then
-      remote_err=$(cat "$err_file" 2>/dev/null)
-      rm -f "$err_file"
-      _owed_err_file=
-      return "$rc"
-    fi
+    rgit fetch --quiet --no-tags --no-write-fetch-head --refmap= "$OWED_RUN_URL" "$@" >"$err_file" 2>&1 || rc=$?
+    [ "$rc" = 0 ] || remote_err=$(cat "$err_file" 2>/dev/null)
     rm -f "$err_file"
     _owed_err_file=
   else
-    out=$(rgit ls-remote "$OWED_RUN_URL" "$1" 2>/dev/null) || return $?
+    rgit fetch --quiet --no-tags --no-write-fetch-head --refmap= "$OWED_RUN_URL" "$@" >/dev/null 2>&1 || rc=$?
   fi
-  remote_sha=$(printf '%s\n' "$out" | awk -v r="$1" '$2 == r { print $1 }')
-  return 0
-}
-# fetch_objects REF...: the objects of REF... into this repository; no ref or FETCH_HEAD written.
-# Sets `remote_err` to captured output on failure.
-fetch_objects() {
-  local rc=0
-  remote_err=
-  remote_err=$(rgit fetch --quiet --no-tags --no-write-fetch-head --refmap= "$OWED_RUN_URL" "$@" 2>&1 >/dev/null) || rc=$?
-  [ "$rc" = 0 ] && remote_err=
   return "$rc"
 }
 
@@ -286,7 +301,7 @@ waiver_line() {
 # Retries non-auth read/fetch/push failures up to PUSH_RETRIES times with exponential backoff,
 # re-reading the remote ref before each attempt so lease-contended or dropped pushes merge cleanly.
 publish() {
-  local h=$1 line=$2 ref="refs/owed-runs/$1" old msg existing tree commit
+  local h=$1 line=$2 ref="refs/owed-runs/$1" old msg existing tree commit err_file=
   local max_attempts=$((PUSH_RETRIES + 1)) attempt=1 delay=$PUSH_BACKOFF rc err step
   git -C "$root" cat-file -e "$h^{commit}" 2>/dev/null || die "$h is not a commit in this checkout"
   tree=$(git -C "$root" rev-parse "$h^{tree}") || die "no tree for $h"
@@ -301,13 +316,13 @@ publish() {
       msg="owed-run record for $h"$'\n\n'
       if [ -n "$old" ]; then
         fetch_objects "$ref" || rc=$?
-        if [ "$rc" = 0 ] && ! git -C "$root" cat-file -e "$old^{commit}" 2>/dev/null; then
+        if [ "$rc" = 0 ] && ! git -C "$root" cat-file -e "$old" 2>/dev/null; then
           rc=1
         fi
         if [ "$rc" != 0 ]; then
           step="fetch $ref from $OWED_RUN_URL"
           err=$remote_err
-        else
+        elif git -C "$root" cat-file -e "$old^{commit}" 2>/dev/null; then
           existing=$(git -C "$root" log -1 --format=%B "$old" | grep '^owed-run: ' | grep -vxF -- "$line" || true)
           [ -z "$existing" ] || msg+="$existing"$'\n'
         fi
@@ -315,7 +330,16 @@ publish() {
       if [ "$rc" = 0 ]; then
         msg+=$line
         commit=$(printf '%s\n' "$msg" | git -C "$root" commit-tree "$tree" -p "$h") || die "could not write the record commit"
-        err=$(bounded git -C "$root" push --quiet --force-with-lease="$ref:$old" "$OWED_RUN_URL" "$commit:$ref" 2>&1) || rc=$?
+        err_file=$(mktemp "${TMPDIR:-/tmp}/owed-run-err.XXXXXX" 2>/dev/null) || err_file=
+        _owed_err_file=$err_file
+        if [ -n "$err_file" ]; then
+          LC_ALL=C bounded git -C "$root" push --quiet --force-with-lease="$ref:$old" "$OWED_RUN_URL" "$commit:$ref" >"$err_file" 2>&1 || rc=$?
+          [ "$rc" = 0 ] || err=$(cat "$err_file" 2>/dev/null)
+          rm -f "$err_file"
+          _owed_err_file=
+        else
+          LC_ALL=C bounded git -C "$root" push --quiet --force-with-lease="$ref:$old" "$OWED_RUN_URL" "$commit:$ref" >/dev/null 2>&1 || rc=$?
+        fi
         [ "$rc" = 0 ] || step="push $ref to $OWED_RUN_URL"
       fi
     fi
