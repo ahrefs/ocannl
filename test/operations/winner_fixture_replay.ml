@@ -10,9 +10,11 @@
    stale-anchor class (out-of-range base loop, ambiguous/shadowed base loop, missing static index,
    unminted / out-of-rank / forward minted axis, out-of-range tensor node, mismatched segmentation
    unit count, mismatched [Zeros] segment kind, consumed loop, and failing structural precondition),
-   plus hermeticity of [opt] on refusal. 5. Single-source minted-role agreement across
-   [Schedule_cache.minted_roles_of_op], [Schedule_cache.of_saved], [Schedule_cache.to_saved], and
-   [Winner_fixture.validate] for every [saved_optop] constructor (gh-ocannl-2454). *)
+   plus hermeticity of [opt] on refusal.
+
+   5. Single-source minted-role agreement across [Schedule_cache.minted_roles_of_op],
+   [Schedule_cache.of_saved], [Schedule_cache.to_saved], and [Winner_fixture.validate] for every
+   [saved_optop] constructor (gh-ocannl-2454). *)
 
 open Base
 open Stdio
@@ -674,19 +676,6 @@ let () =
   let ref0 = Option.value_exn (SC.resolve_tn base_reg tn0) in
   let ref1 = Option.value_exn (SC.resolve_tn base_reg tn1) in
   let ref2 = Option.value_exn (SC.resolve_tn base_reg tn2) in
-  let minted_syms_of_live : Sched.optop -> Idx.symbol list = function
-    | Sched.Split { outer_index; inner_index; _ } -> [ outer_index; inner_index ]
-    | Sched.Partition { segment_indices; _ } -> segment_indices
-    | Sched.Coalesce { merged; _ } -> [ merged ]
-    | Sched.Expand_zero { indices; _ } -> indices
-    | Sched.Tensorize { lane; _ } -> [ lane ]
-    | Sched.Fold_mma { lane; block; _ } -> [ lane; block ]
-    | Sched.Split_reduce { block_index; inner_index; combine_indices; _ } ->
-        block_index :: inner_index :: combine_indices
-    | Sched.Swap _ | Sched.Retype _ | Sched.Unroll _ | Sched.Pad _ | Sched.Stage _
-    | Sched.Privatize _ | Sched.Fuse_epilogue _ ->
-        []
-  in
   let all_ops =
     [
       SC.Split { axis = SC.Base 0; factor = 2; outer = LL.Serial; inner = LL.Serial };
@@ -723,16 +712,8 @@ let () =
   p_all "Schedule_cache.minted_roles_of_op matches of_saved and to_saved for every saved_optop"
     all_ops ~f:(fun saved_op ->
       let roles = SC.minted_roles_of_op canon saved_op in
-      let expected_refs = List.map roles ~f:(fun role -> Some (SC.Minted (0, role))) in
-      let live_ops, reg_of = SC.of_saved canon [ saved_op ] in
-      match live_ops with
-      | [ live_op ] ->
-          let syms = minted_syms_of_live live_op in
-          let of_fwd_ok =
-            List.equal (Option.equal SC.equal_sym_ref)
-              (List.map syms ~f:(SC.resolve reg_of))
-              expected_refs
-          in
+      match SC.of_saved canon [ saved_op ] with
+      | [ live_op ], _ ->
           let of_bwd_ok =
             List.for_all roles ~f:(fun role ->
                 match
@@ -743,14 +724,9 @@ let () =
                 | _ -> false
                 | exception _ -> false)
           in
-          let saved_rt, reg_to = SC.to_saved base_reg [ live_op ] in
+          let saved_rt, _ = SC.to_saved base_reg [ live_op ] in
           let to_rt_ok = List.equal SC.equal_saved_optop saved_rt [ saved_op ] in
-          let to_fwd_ok =
-            List.equal (Option.equal SC.equal_sym_ref)
-              (List.map syms ~f:(SC.resolve reg_to))
-              expected_refs
-          in
-          of_fwd_ok && of_bwd_ok && to_rt_ok && to_fwd_ok
+          of_bwd_ok && to_rt_ok
       | _ -> false);
   let boundary_cases =
     [
@@ -835,7 +811,13 @@ let () =
     match
       SC.of_saved canon [ saved_op; SC.Retype { axis = SC.Minted (0, role); ty = LL.Serial } ]
     with
-    | [ live_op; Sched.Retype { axis; _ } ], _ -> Idx.equal_symbol axis (expected_sym live_op)
+    | [ live_op; Sched.Retype { axis; _ } ], reg_of ->
+        let sym = expected_sym live_op in
+        let expected_ref = Some (SC.Minted (0, role)) in
+        let _, reg_to = SC.to_saved base_reg [ live_op ] in
+        Idx.equal_symbol axis sym
+        && Option.equal SC.equal_sym_ref (SC.resolve reg_of sym) expected_ref
+        && Option.equal SC.equal_sym_ref (SC.resolve reg_to sym) expected_ref
     | _ -> false
   in
   let role_binding_cases =
@@ -850,6 +832,11 @@ let () =
         SC.Partition_seg 0,
         function
         | Sched.Partition { segment_indices; _ } -> List.nth_exn segment_indices 0
+        | _ -> assert false );
+      ( SC.Partition { axis = SC.Base 0; breakpoints = [ 1; 2 ] },
+        SC.Partition_seg 1,
+        function
+        | Sched.Partition { segment_indices; _ } -> List.nth_exn segment_indices 1
         | _ -> assert false );
       ( SC.Partition { axis = SC.Base 0; breakpoints = [ 1; 2 ] },
         SC.Partition_seg 2,
