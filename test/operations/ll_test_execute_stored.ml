@@ -3,16 +3,24 @@
    on read, never return an externally seeded buffer for a [Virtual] node the routine never wrote,
    and never return unregistered-buffer [Host_init] data.
 
-   Refusal controls beside positive controls, with discriminating producers: - Virtual
-   (Recomputable): raw [Context.get_values] recomputes the exact values, while
-   [execute_with_census], [execute], [optimize_and_execute], and mixed [~read:[ out; v ]] refuse. -
+   Refusal controls beside positive controls, with discriminating producers:
+
+   Virtual (Recomputable): raw [Context.get_values] recomputes the exact values, while
+   [execute_with_census], [execute], [optimize_and_execute], and mixed [~read:[ out; v ]] refuse.
+
    Seeded Virtual: seeding a Virtual node gives [Context.observability] a [Stored] answer backed
    only by the uploaded sentinel; raw [Context.get_values] hands back the sentinel while
-   [execute_with_census] and [execute] still refuse. - Host_init: a node with registered host-init
-   data and no context buffer is refused instead of handing back a copy of its host-init array. -
-   Local: preserves [Context.get_values]'s [User_error] and [Ll_test.refused_as_local]. - Positive
-   controls: materialized [out], the same program re-optimized with [~materialized:[ v ]], and an
-   empty [~read:[]] all succeed and match exact cell-by-cell expected values. *)
+   [execute_with_census] and [execute] still refuse.
+
+   Host_init: a node with registered host-init data and no context buffer is refused instead of
+   handing back a copy of its host-init array.
+
+   Local and unreadable Virtual: preserves [Context.get_values]'s [User_error] diagnostics
+   ([Ll_test.refused_as_local] for a [Local] node, and the dependency path for a [Virtual] node
+   reading [Local]).
+
+   Positive controls: materialized [out], the same program re-optimized with [~materialized:[ v ]],
+   and an empty [~read:[]] all succeed and match exact cell-by-cell expected values. *)
 
 open Base
 open Verdict.Claims
