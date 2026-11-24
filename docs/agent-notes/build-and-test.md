@@ -5728,11 +5728,23 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   below, and run the aliases through `tools/test-run.sh`. Windows evidence requires native
   Git Bash, including on boxes that also offer WSL. Save the runner's status before collecting its run record
   (`tools/test-run.sh paths run last`) with the host, SHA and command, then exit with the saved status.
-  On rog the automated staging uses `core.autocrlf=true`, so it checks out sources such as
-  `verdict.ml` with CRLF. For a wave check that needs CI's LF checkout, export the Git config
-  override from the ssh recipe below, then run
+  A CI-parity wave witness states which staging policy it expects. When the coordinator's
+  site entry for the box declares `"staging_line_endings": "lf"`, Ludics sets
+  `core.autocrlf=false` and `core.eol=lf` in the staged repository before checkout.
+  Use the first checkout at `$WITNESS_CHECKOUT`. From that checkout, read the staging settings
+  with `git config --local --get core.autocrlf` and `git config --local --get core.eol`.
+  A script relying on the declared setting stops if those reads fail or yield values other
+  than `false` and `lf`, respectively.
+  [lukstafi/ludics#1250](https://github.com/lukstafi/ludics/pull/1250) implements the site setting.
+  Export the Git config override from the ssh recipe below before adding a worktree or preparing
+  fixtures, so even repositories created by tests use CI's line-ending policy.
+  With the field omitted, staging inherits the box's Git settings, which can produce CRLF.
+  In that case, run
   `git worktree add --detach "${WITNESS_CHECKOUT}-lf" "$WITNESS_REVISION"`.
-  Enter that new worktree before preparing fixtures or running checks.
+  Enter the second worktree. In either case, run
+  `git ls-files --eol -- test/support/verdict.ml | grep -Eq '^i/lf[[:space:]]+w/lf[[:space:]]'`
+  from the checkout the witness will use. The check requires LF in the index and on disk
+  before the script prepares fixtures or runs tests.
 - `wake-lab.sh boot-windows` reached native Git Bash on rog in about 50 s on 2026-09-24, with
   nobody at the keyboard and no BitLocker prompt, and made another unattended round trip on
   2026-11-06 (ahrefs/ocannl#2004). Rog normally runs Ubuntu for the daily CUDA sweep and Linux
