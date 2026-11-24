@@ -37,29 +37,31 @@ let eq r1 r2 = Row.Row_eq { r1; r2; origin }
 let all_stages = [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ]
 let block = 4
 
-(* A packed draw's round-up total over [rows], as [Uint4x32_to_prec] builds it. *)
+(* By default, a packed draw's round-up total over [rows], as [Uint4x32_to_prec] builds it. *)
+let draw_with ?(round_up = true) counter rows =
+  Row.Rows_constr
+    {
+      r = rows;
+      constr =
+        Total_elems
+          {
+            numerator =
+              Strided_var
+                {
+                  coeff = Utils.safe_lazy "test block" (fun () -> block);
+                  var = counter;
+                  denom = 1;
+                  round_up;
+                };
+            divided_by = [];
+            keep_axis = false;
+          };
+      origin;
+    }
+
 let draw rows =
   let counter = Row.get_var () in
-  ( counter,
-    Row.Rows_constr
-      {
-        r = rows;
-        constr =
-          Total_elems
-            {
-              numerator =
-                Strided_var
-                  {
-                    coeff = Utils.safe_lazy "test block" (fun () -> block);
-                    var = counter;
-                    denom = 1;
-                    round_up = true;
-                  };
-              divided_by = [];
-              keep_axis = false;
-            };
-        origin;
-      } )
+  (counter, draw_with counter rows)
 
 (* One stage-1 solve per step, the shape of per-registration solving, then every stage. [leaves] are
    terminal rows; every row of [rows] is a shape to close. *)
@@ -459,27 +461,6 @@ let () =
     Row.add_resolve_at_use (var_of v);
     let a = Row.get_var () and b = Row.get_var () in
     let c1 = Row.get_var () and c2 = Row.get_var () and c3 = Row.get_var () in
-    let draw_with counter rows =
-      Row.Rows_constr
-        {
-          r = rows;
-          constr =
-            Total_elems
-              {
-                numerator =
-                  Strided_var
-                    {
-                      coeff = Utils.safe_lazy "test block" (fun () -> block);
-                      var = counter;
-                      denom = 1;
-                      round_up = true;
-                    };
-                divided_by = [];
-                keep_axis = false;
-              };
-          origin;
-        }
-    in
     let w_batch = fresh ~kind:`Batch () and w_out = fresh () in
     let pending_constraints =
       if pending_total then
@@ -575,3 +556,83 @@ let () =
   pf "with a pending total on a counter renamed within Stage6a, both draws stay deferred"
     (String.equal c5_held_ren "c1" && String.equal c6_held_ren "c3"
    && String.equal u_held_ren "[,..]" && String.equal v_held_ren "[,..]")
+
+(* gh-ocannl-2463: the minima agree at three blocks, but the third total has yet to determine its
+   demand. Two open non-output rows keep it in the worklist. A row equality can also transfer the
+   total from a stored row bound to the worklist within the closing pass. A separate draw with a
+   concrete GLB populates the cache without changing any dimension bindings. The following equality
+   re-emits an exact total with the counter as a divisor, also without changing bindings. *)
+let () =
+  Verdict.case "shared counter minimum guard across partitions and row equality" @@ fun () ->
+  let check stage ~round_up ~reemit =
+    let u = fresh () and v = fresh () and w = fresh () in
+    let counter = Row.get_var () in
+    let packed, shapes =
+      List.unzip
+        (List.map
+           [ (u, 9); (v, 12) ]
+           ~f:(fun (r, d_min) ->
+             Row.add_resolve_at_use (var_of r);
+             let d = Row.Var (Row.get_var ()) in
+             ( [
+                 draw_with counter [ r ];
+                 ineq { (closed []) with dims = [ d ] } r;
+                 Row.Dim_constr { d; constr = At_least_dim { d_min; sites = [] }; origin };
+               ],
+               Row.Shape_row (r, origin) )))
+    in
+    let value = { (closed []) with dims = [ Var (Row.get_var ()) ] } in
+    let total_rows = if reemit then [ w ] else [ fresh ~kind:`Batch (); fresh ~kind:`Input () ] in
+    let exact_total =
+      Row.Total_elems { numerator = Num_elems 36; divided_by = [ counter ]; keep_axis = false }
+    in
+    let total =
+      if reemit then Row.Rows_constr { r = total_rows; constr = exact_total; origin }
+      else draw_with ~round_up counter total_rows
+    in
+    let before_shapes, warm_constraints =
+      if not reemit then ([], [])
+      else
+        let p = fresh () and q = fresh () and other_counter = Row.get_var () in
+        Row.add_resolve_at_use (var_of p);
+        ( [ Row.Shape_row (p, origin); eq w value ],
+          [ draw_with other_counter [ p ]; draw_with other_counter [ q ]; ineq (closed [ 3 ]) p ] )
+    in
+    let cs, env =
+      Row.solve_inequalities ~stage:Stage1
+        (total :: (List.concat packed @ warm_constraints))
+        Row.empty_env
+    in
+    let starts_stored =
+      if not reemit then true
+      else
+        match Row.find_row_entry env (var_of w) with
+        | Some (Bounds_row { constr; _ }) -> Row.equal_row_constraint constr exact_total
+        | _ -> false
+    in
+    let input = before_shapes @ shapes @ cs in
+    let cs, env = Row.solve_inequalities ~stage input env in
+    let reads_counter = function
+      | Row.Total_elems { numerator = Strided_var { var; _ }; _ } -> Row.equal_dim_var var counter
+      | constr -> reemit && Row.equal_row_constraint constr exact_total
+    in
+    let pending =
+      List.exists cs ~f:(function
+        | Row.Rows_constr { r; constr; _ } ->
+            reads_counter constr
+            && List.equal Row.equal r (if reemit then [ value ] else total_rows)
+        | _ -> false)
+    in
+    let u_axes = axes env u and v_axes = axes env v in
+    Stdio.printf "%s, round_up=%b, reemit=%b: u=%s, v=%s, %s\n"
+      (Sexp.to_string (Row.sexp_of_stage stage))
+      round_up reemit u_axes v_axes
+      (if pending then "pending total" else "no pending total");
+    starts_stored && pending && String.equal u_axes "[,..]" && String.equal v_axes "[,..]"
+  in
+  pf "Stage6a draws defer while the exact total is in the other partition"
+    (check Stage6a ~round_up:false ~reemit:false);
+  pf "Stage6b draws defer while the round-up total is in the other partition"
+    (check Stage6b ~round_up:true ~reemit:false);
+  pf "Stage6b draws defer when a row equality adds a pending total to the cached guard"
+    (check Stage6b ~round_up:false ~reemit:true)

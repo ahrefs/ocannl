@@ -5640,11 +5640,13 @@ let packed_draw_counter = function
 
 let is_packed_draw_constr constr = Option.is_some (packed_draw_counter constr)
 
+let subst_dim_vars env vars =
+  Set.fold vars ~init:dim_var_set_empty ~f:(fun vars v ->
+      Set.union vars (vars_of_dim (subst_dim env (Var v))))
+
 (* The dimension variables a [Total_elems] constraint mentions, substituted. *)
 let total_vars env = function
-  | Total_elems _ as constr ->
-      Set.fold (row_constraint_dim_vars constr) ~init:dim_var_set_empty ~f:(fun vars v ->
-          Set.union vars (vars_of_dim (subst_dim env (Var v))))
+  | Total_elems _ as constr -> subst_dim_vars env (row_constraint_dim_vars constr)
   | _ -> dim_var_set_empty
 
 (* The rows other than [draw] whose stored total mentions the (substituted) [counter]: the draws
@@ -5703,12 +5705,13 @@ let round_up_blocks env constr ~counter cells =
       if coeff_val > 0 then solve_strided_var ~coeff_val ~denom ~round_up:true cells else None
   | _ -> None
 
-(* gh-ocannl-2319, gh-ocannl-2370: the (substituted) dimension variables of the totals still pending
-   among [ineqs]: a counter they mention has a sharer [counter_sharers] cannot see, since it reads
-   only totals stored in row bounds. *)
-let pending_total_vars env ineqs =
-  List.fold ineqs ~init:dim_var_set_empty ~f:(fun acc -> function
-    | Rows_constr { constr; _ } -> Set.union acc (total_vars env constr)
+(* gh-ocannl-2319, gh-ocannl-2370: the dimension variables of the totals still pending among
+   [ineqs]. After substitution, a counter they mention has a sharer [counter_sharers] cannot see,
+   since it reads only totals stored in row bounds. *)
+let pending_total_vars ?(init = dim_var_set_empty) ineqs =
+  List.fold ineqs ~init ~f:(fun acc -> function
+    | Rows_constr { constr = Total_elems _ as constr; _ } ->
+        Set.union acc (row_constraint_dim_vars constr)
     | _ -> acc)
 
 (* gh-ocannl-2370: the blocks of [counter] the packed draw [w] needs once its GLB's axes close at
@@ -5747,8 +5750,8 @@ let packed_minimum_demand ~deferred_dims env w counter =
    counter that a total still pending in the pass mentions ([held_totals], {!pending_total_vars})
    has a sharer [counter_sharers] cannot see, so it takes no minimum, as gh-ocannl-2319's held
    totals take no remainder. A counter with no stored sharer keeps gh-ocannl-2318's rule as it
-   landed. Pinned at stage 6a in [test_row_glb_reach], both unrenamed and with an in-pass counter
-   rename (gh-ocannl-2420). *)
+   landed. Pinned at stages 6a and 6b in [test_row_glb_reach], including an in-pass counter rename
+   (gh-ocannl-2420). *)
 let packed_counter_minimum_sizes ~deferred_dims ~held_totals env v constr =
   match Option.map (packed_draw_counter constr) ~f:(fun c -> subst_dim env (Var c)) with
   | Some (Var counter) -> (
@@ -6954,8 +6957,8 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
         let ineqs, env = solve_inequalities ~stage:Stage6a (fixed @ ineqs) env in
         solve_inequalities ~stage:Stage6b ineqs env
   in
-  let rec solve ?(unblocked_dims = dim_var_set_empty) ineqs (env : environment) :
-      constraint_ list * _ =
+  let rec solve ?(extra_total_vars = lazy dim_var_set_empty) ?(unblocked_dims = dim_var_set_empty)
+      ineqs (env : environment) : constraint_ list * _ =
     let sizes, ineqs = List.partition_tf ineqs ~f:(function Dim_size _ -> true | _ -> false) in
     (* gh-ocannl-2156, gh-ocannl-2223: held window and shared-claim concat equations also constrain
        closing order. A window's plain extent waits for the window; against a fixed extent, an open
@@ -6971,30 +6974,33 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
     in
     let deferred_dims = Set.diff deferred_dims unblocked_dims in
     let deferred_kernels = Set.diff deferred_kernels unblocked_dims in
-    (* gh-ocannl-2370, gh-ocannl-2420: the dimension variables of the totals still pending in this
-       pass, which a packed draw's minimum reads as unseen sharers of a counter
-       ([packed_counter_minimum_sizes]). Takes the call's env rather than the pass-start env so a
-       counter renamed earlier in the pass cannot escape the guard, while filtering the pass
-       worklist once and caching per [env.dim_env] so repeated checks stay O(1) when dimension
-       bindings have not changed. *)
-    let held_totals =
-      let pending_totals =
-        lazy
-          (List.filter ineqs ~f:(function
-            | Rows_constr { constr = Total_elems _; _ } -> true
-            | _ -> false))
-      in
-      let cache = ref None in
-      fun env ->
-        match Lazy.force pending_totals with
-        | [] -> dim_var_set_empty
-        | totals -> (
-            match !cache with
-            | Some (cached_dim_env, vars) when phys_equal cached_dim_env env.dim_env -> vars
-            | _ ->
-                let vars = pending_total_vars env totals in
-                cache := Some (env.dim_env, vars);
-                vars)
+    (* gh-ocannl-2370, gh-ocannl-2420, gh-ocannl-2463: the minimum rule must see the totals held in
+       either partition and those emitted earlier in this pass. An equality can move a total from a
+       row bound (where [counter_sharers] sees it) to the worklist. Substitute with the current
+       dimension bindings, since an earlier equality can also rename the counter. *)
+    let pass_total_vars = lazy (pending_total_vars ~init:(Lazy.force extra_total_vars) ineqs) in
+    let emitted_total_vars = ref dim_var_set_empty in
+    let held_totals_cache = ref None in
+    let held_totals env =
+      match !held_totals_cache with
+      | Some (cached_dim_env, vars) when phys_equal cached_dim_env env.dim_env -> vars
+      | _ ->
+          let vars =
+            subst_dim_vars env (Set.union (Lazy.force pass_total_vars) !emitted_total_vars)
+          in
+          held_totals_cache := Some (env.dim_env, vars);
+          vars
+    in
+    let remember_emitted_totals env ineqs =
+      let emitted = pending_total_vars ineqs in
+      if not (Set.is_empty emitted) then (
+        emitted_total_vars := Set.union !emitted_total_vars emitted;
+        (* A retained total can emit itself again. Update a warm cache with the emitted variables so
+           an unchanged dimension environment never needs a full rescan. *)
+        match !held_totals_cache with
+        | Some (cached_dim_env, vars) when phys_equal cached_dim_env env.dim_env ->
+            held_totals_cache := Some (cached_dim_env, Set.union vars (subst_dim_vars env emitted))
+        | _ -> held_totals_cache := None)
     in
     (* A held-size pass checks many relations. Attribute each refusal to the relation being compared
        or inverted, before the per-constraint handler can prefix it. *)
@@ -7277,6 +7283,7 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
       | _ -> ());
       try
         let more_ineqs, env = process_constraint env ineq in
+        if is_stage6_up stage then remember_emitted_totals env more_ineqs;
         (more_ineqs @ ineqs, env)
       with Shape_error (s, trace) ->
         (* let f_out = Out_channel.open_text "shape_error.txt" in
@@ -7340,10 +7347,10 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
       let sizes', sized_env = List.fold sizes ~init:([], env) ~f in
       let sizes' = List.rev sizes' in
       if not (List.equal equal_constraint_up_to_origin sizes' sizes) then
-        solve ~unblocked_dims (ineqs' @ sizes') sized_env
+        solve ~extra_total_vars ~unblocked_dims (ineqs' @ sizes') sized_env
       else
         match if is_stage2_up stage then settle () else None with
-        | Some (ineqs', env) -> solve ~unblocked_dims (ineqs' @ sizes) env
+        | Some (ineqs', env) -> solve ~extra_total_vars ~unblocked_dims (ineqs' @ sizes) env
         | None -> (
             (* Only at the final fixpoint, when nothing else can close, let one waiting dimension
                use ordinary closing and retry. Prefer a kernel, but a cycle with no fixed extent has
@@ -7356,12 +7363,14 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
                 | None -> Set.min_elt deferred_dims
             in
             match next_guess with
-            | Some dim -> solve ~unblocked_dims:(Set.add unblocked_dims dim) (ineqs' @ sizes) env
+            | Some dim ->
+                solve ~extra_total_vars ~unblocked_dims:(Set.add unblocked_dims dim)
+                  (ineqs' @ sizes) env
             | None -> (ineqs' @ sizes, env))
     in
     if List.is_empty ineqs' || List.equal equal_constraint_up_to_origin ineqs' ineqs then
       at_fixpoint ()
-    else solve ~unblocked_dims (ineqs' @ sizes) env
+    else solve ~extra_total_vars ~unblocked_dims (ineqs' @ sizes) env
   in
   (* gh-ocannl-1961: what closes a draw's rows reads the environment, which mid-pass lies: a solved
      bound has left its operands' [res] while the [Row_ineq] carrying it is still in the list. So
@@ -7431,7 +7440,9 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
           | Terminal_row (_, r, _) -> add_row rows r
           | _ -> rows)
       in
-      let held_totals = pending_total_vars env (others @ draws) in
+      let held_totals =
+        subst_dim_vars env (pending_total_vars ~init:(pending_total_vars draws) others)
+      in
       let candidate_draws =
         List.fold candidates
           ~init:(Map.empty (module Row_var))
@@ -7499,8 +7510,8 @@ let%debug4_sexp rec solve_inequalities ~(stage : stage)
     let draws, others =
       List.partition_tf ineqs ~f:(fun c -> is_draw_total c || is_draw_row env c)
     in
-    let others, env = solve others env in
-    let draws', env = solve draws env in
+    let others, env = solve ~extra_total_vars:(lazy (pending_total_vars draws)) others env in
+    let draws', env = solve ~extra_total_vars:(lazy (pending_total_vars others)) draws env in
     if not (List.equal equal_constraint_up_to_origin draws' draws) then
       draws_at_quiescence (others @ draws') env
     else
