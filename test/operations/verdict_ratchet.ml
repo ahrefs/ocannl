@@ -6932,6 +6932,27 @@ let () =
     (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
     (fun () -> in_leg ~leg:sub2 "under policy" (fun label -> p label true))|ocaml},
       [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses a shared deferred lazy sub_leg used across two separate nested-helper invocations",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let check enabled =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = enabled })
+    (fun () -> in_leg ~leg:sub "tf32 replay" (fun label -> p label true))
+let run enabled = check enabled
+let () =
+  run false;
+  run true|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses a leg gated on a non-allowlisted capability field matched by a function helper",
+      {ocaml|let mk = function
+  | { workgroup_allocation_alignment = alignment; _ } ->
+      Verdict.leg ~on:"cuda" ~when_:(alignment = 4) ()
+let () =
+  let leg = mk (Context.codegen_capabilities (Context.auto ())) in
+  Verdict.in_leg ~leg "aligned" (fun label -> Verdict.p label true)|ocaml},
+      [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
     ( "refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy",
       {ocaml|open Verdict.Claims
 let leg =
