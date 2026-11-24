@@ -9,7 +9,7 @@ forced, the staged schedule declines at the fragment scope: every Tile_mma falls
 both staged tensorized matmuls match the serial twin bitwise: true
 the f16->f32 serial twin is positive and below the prefill: true
 an MMA-capable GPU advertises f16->f32 in a persistent-fragment scope: true
-unforced, the f16->f32 staged schedule renders tensorized in a persistent-fragment scope: true
+unforced, the f16->f32 staged schedule renders tensorized in a persistent-fragment scope where advertised, else the scalar fallback: true
 forced, the f16->f32 staged schedule compiles and runs: true
 forced, the f16->f32 staged schedule declines at the fragment scope: every Tile_mma falls back, no scope renders: true
 unforced, the f16->f32 staged tensorized matmul matches the serial twin bitwise: true

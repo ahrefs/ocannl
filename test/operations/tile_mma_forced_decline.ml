@@ -266,19 +266,29 @@ let () =
   in_leg ~leg:gpu_mma "an MMA-capable GPU advertises f16->f32 in a persistent-fragment scope"
     (fun label ->
       p label
-        (Ll_test.advertised ~backend_name ~a_prec:half ~b_prec:half ~d_prec:single
+        (BI.advertises_mma_format_in_scope
+           (Context.hardware_limits (Context.auto ()))
+           ~policy:(Ir.Numerics.get ()) ~scope:BI.Mma_fragment_scope ~a:BI.Mma_f16 ~b:BI.Mma_f16
+           ~d:BI.Mma_f32));
+  in_leg ~leg:gpu
+    "unforced, the f16->f32 staged schedule renders tensorized in a persistent-fragment scope \
+     where advertised, else the scalar fallback" (fun label ->
+      let _, mma = Lazy.force f16_staged_unforced in
+      census "fd_f16_staged unforced" mma;
+      let expect_fragment =
+        Ll_test.advertised ~backend_name ~a_prec:half ~b_prec:half ~d_prec:single
         && BI.advertises_mma_format_in_scope
              (Context.hardware_limits (Context.auto ()))
              ~policy:(Ir.Numerics.get ()) ~scope:BI.Mma_fragment_scope ~a:BI.Mma_f16 ~b:BI.Mma_f16
-             ~d:BI.Mma_f32));
-  in_leg ~leg:gpu_mma
-    "unforced, the f16->f32 staged schedule renders tensorized in a persistent-fragment scope"
-    (fun label ->
-      let _, mma = Lazy.force f16_staged_unforced in
-      census "fd_f16_staged unforced" mma;
+             ~d:BI.Mma_f32
+      in
       p label
-        (Ll_test.all_tensorized ~what:"fd_f16_staged unforced" (Ll_test.renderings mma)
-        && mma.Ir.C_syntax.fragment_scopes > 0));
+        (if expect_fragment then
+           Ll_test.all_tensorized ~what:"fd_f16_staged unforced" (Ll_test.renderings mma)
+           && mma.Ir.C_syntax.fragment_scopes > 0
+         else
+           Ll_test.all_declined ~what:"fd_f16_staged unforced" (Ll_test.renderings mma)
+           && mma.Ir.C_syntax.fragment_scopes = 0));
   in_leg ~leg:gpu "forced, the f16->f32 staged schedule compiles and runs" (fun label ->
       p label (Option.is_some (Lazy.force f16_staged_forced)));
   in_leg ~leg:gpu
