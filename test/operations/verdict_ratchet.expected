@@ -824,6 +824,7 @@ refuses a leg whose condition is destructured from a match over a production cal
 refuses a helper-parameterized leg whose call site supplies a production call: true
 refuses a leg gated on an unresolved helper parameter with no local callers: true
 refuses a production call in a non-handle argument or condition of a context query: true
+refuses a leg whose gate ref is mutated through an alias to a production call: true
 accepts a sub_leg gated on an allowlisted independent MMA ISA capability and config: true
 refuses a leg calling Ll_test.advertised without ~policy outside Test_utils.with_policy: true
 refuses an ambient-policy leg used inside Test_utils.with_policy applied with @@: true
@@ -838,6 +839,9 @@ accepts a deferred lazy sub_leg first forced inside Test_utils.with_policy: true
 accepts a deferred lazy sub_leg first forced through a named callback passed to Test_utils.with_policy: true
 accepts a leg whose gate uses an inline let-binding inside Test_utils.with_policy or a deferred sub_leg: true
 refuses a partial Ll_test.advertised binding capturing an unchanged ambient policy before Test_utils.with_policy: true
+refuses a leg calling Ll_test.advertised with a nonliteral unit argument outside Test_utils.with_policy: true
+accepts a deferred lazy sub_leg gated through a local alias to a lazy binding: true
+refuses an ambient-policy leg passed as a parameter to a local claim helper inside Test_utils.with_policy: true
 refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy: true
 refuses an ambient-policy leg used inside a local helper called from a Test_utils.with_policy callback: true
 refuses a deferred lazy sub_leg explicitly forced with Lazy.force before Test_utils.with_policy: true
@@ -848,6 +852,7 @@ accepts a leg calling Ll_test.advertised without ~policy inside the same Test_ut
 accepts a policy-independent leg built outside Test_utils.with_policy and used inside it: true
 refuses a leg gated on pinned workgroup alignment and granule fields of codegen_capabilities: true
 refuses a leg reading an unqualified non-allowlisted field from Context.codegen_capabilities: true
+refuses a leg reading an unqualified capability field through an aliased capability producer: true
 accepts a leg gated on backend identity rather than pinned alignment fields: true
 does not treat a local module shadowing an external module as a disallowed leg-gate call: true
 refuses a non-allowlisted leg-gate call, an ambient-policy mismatch, a stale leg-gate exemption, and a leg-gate reader that raised: true

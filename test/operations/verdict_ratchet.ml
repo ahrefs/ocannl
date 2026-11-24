@@ -6480,6 +6480,14 @@ let () =
   in_leg ~leg:leg1 "c1" (fun l -> p l true);
   in_leg ~leg:leg2 "c2" (fun l -> p l true)|ocaml},
       [ "call:Autotune.detect_conv"; "call:Autotune.detect_matmul" ] );
+    ( "refuses a leg whose gate ref is mutated through an alias to a production call",
+      {ocaml|open Verdict.Claims
+let ready = ref true
+let alias = ready
+let () = alias := Option.is_some (Autotune.detect_conv llc)
+let leg = Verdict.leg ~when_:!ready ~on:"cuda" ()
+let () = in_leg ~leg "conv" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
     ( "accepts a sub_leg gated on an allowlisted independent MMA ISA capability and config",
       {ocaml|open Verdict.Claims
 module BI = Ir.Backend_intf
@@ -6677,6 +6685,44 @@ let () =
       in
       in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
       [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses a leg calling Ll_test.advertised with a nonliteral unit argument outside \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let token = ()
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:(Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single token)
+    ()
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
+    ( "accepts a deferred lazy sub_leg gated through a local alias to a lazy binding",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let available =
+  lazy (Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+let condition = available
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:condition
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg:sub "tf32 replay" (fun label -> p label true))|ocaml},
+      [] );
+    ( "refuses an ambient-policy leg passed as a parameter to a local claim helper inside \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:(Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+    ()
+let check ~leg () = in_leg ~leg "tf32 replay" (fun label -> p label true)
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> check ~leg ())|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
     ( "refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy",
       {ocaml|open Verdict.Claims
 let leg =
@@ -6797,6 +6843,13 @@ let () = in_leg ~leg:two_tier_leg "two-tier" (fun label -> p label true)|ocaml},
     ( "refuses a leg reading an unqualified non-allowlisted field from Context.codegen_capabilities",
       {ocaml|open Verdict.Claims
 let caps = Context.codegen_capabilities (Context.auto ())
+let two_tier_leg = Verdict.leg ~when_:(caps.workgroup_allocation_alignment = 4) ~on:"metal" ()
+let () = in_leg ~leg:two_tier_leg "two-tier" (fun label -> p label true)|ocaml},
+      [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
+    ( "refuses a leg reading an unqualified capability field through an aliased capability producer",
+      {ocaml|open Verdict.Claims
+let capabilities = Context.codegen_capabilities
+let caps = capabilities (Context.auto ())
 let two_tier_leg = Verdict.leg ~when_:(caps.workgroup_allocation_alignment = 4) ~on:"metal" ()
 let () = in_leg ~leg:two_tier_leg "two-tier" (fun label -> p label true)|ocaml},
       [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
