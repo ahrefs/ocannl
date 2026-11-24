@@ -325,7 +325,12 @@ files.
   rule unchanged); both rules read blocks through `round_up_blocks` and pending totals through
   `pending_total_vars`, evaluated with the call's env so an in-pass counter rename cannot escape
   the guard (gh-ocannl-2420, pinned at stage 6a in `test_row_glb_reach`, both unrenamed and renamed
-  in-pass). No store was found where the two `packed_minimum_demand` exclusions (`deferred_dims`,
+  in-pass). Quiescence splitting keeps a pending total visible to the other partition too
+  (gh-ocannl-2463). A packed `Shape_row` runs with the draws at stage 6a and with the other
+  constraints at stage 6b. After an equality solves a row, its stored total can be emitted back
+  into the worklist, so the pass also tracks totals emitted before the next closing. The staged
+  stores pin both partition directions and the emission. No store was found where the two
+  `packed_minimum_demand` exclusions (`deferred_dims`,
   `in_param_bound_component`) change an outcome (staged attempts are refused on the base too). The same test pins both
   agreeing rules at two lane widths (9 single and 6 double cells, three blocks each, by constants
   and by minima; an f64 leg): forcing one coefficient on either rule fails its case. A reduced draw's leaf axis under the result guessed

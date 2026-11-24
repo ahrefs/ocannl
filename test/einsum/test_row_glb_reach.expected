@@ -66,3 +66,9 @@ without a pending total, agreeing minima close both draws at Stage6a: true
 without a pending total, an in-pass counter rename still closes both draws at Stage6a: true
 with a pending total on an unrenamed counter, both draws stay deferred at Stage6a: true
 with a pending total on a counter renamed within Stage6a, both draws stay deferred: true
+Stage6a, round_up=false, reemit=false: u=[,..], v=[,..], pending total
+Stage6a draws defer while the exact total is in the other partition: true
+Stage6b, round_up=true, reemit=false: u=[,..], v=[,..], pending total
+Stage6b draws defer while the round-up total is in the other partition: true
+Stage6b, round_up=false, reemit=true: u=[,..], v=[,..], pending total
+Stage6b draws defer when a row equality adds a pending total to the cached guard: true
