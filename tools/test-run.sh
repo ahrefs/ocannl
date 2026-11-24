@@ -488,8 +488,9 @@
 # forms. Each TSV row names the process program and its observed action.
 # For additional named file targets it joins trace rows to literal targets
 # of unconditional top-level rules with explicit per-test aliases in local
-# test-tree dune files. Package-filtered or redirected source roots, included
-# stanzas, and ownership inherited through dependencies are outside this census.
+# test-tree dune files. Package-filtered builds, other source roots, directories
+# with an alternative dune-file, included stanzas and inherited ownership are
+# outside this census.
 # Older formats, caller-owned traces, a caller-set DUNE_TRACE and repeat
 # sets leave the inventory unavailable. After cancellation, trace diagnostics can
 # land after the verdict. A batch naming a test with a sibling golden the batch
@@ -1382,6 +1383,7 @@ test_rule_targets() { # NUL-delimited source dune file paths on stdin
       $file =~ s{\A\./}{};
       next unless $file =~ m{\A((?:test|arrayjit/test)(?:/[A-Za-z0-9_.+-]+)*)/dune\z};
       my $dir = $1;
+      next if -e "$dir/dune-file" || -l "$dir/dune-file";
       my $forms = eval { read_dune($file) } or next;
       for my $rule (@$forms) {
         next unless ref $rule && @$rule && !ref $rule->[0] && $rule->[0] eq "rule";
@@ -2157,7 +2159,7 @@ supervisor_perl=$lock_census_perl'
     $reader = (defined $runner && length $runner ? "$runner/" : "") . "tools/action-durations.sh"
       unless defined $reader && length $reader;
     my $c = fork();
-    unless (defined $c) { unlink $trace; return }
+    unless (defined $c) { unlink $trace, "$own/test-rule-targets.tmp"; return }
     if (!$c) {
       $SIG{$_} = "DEFAULT" for qw(ALRM INT TERM HUP);
       POSIX::close($_) for 3 .. 255;
@@ -2713,14 +2715,30 @@ explicit_build_root() { # dune argv; 0 iff it names a build dir or root before d
   return 1
 }
 local_dune_rules() { # dune argv; whether the local rule census applies to this batch
-  local arg dir=$PWD
-  [ -z "${DUNE_ROOT+x}" ] || return 1
-  for arg do
+  local arg flag dir=$PWD root=${DUNE_ROOT:-} explicit_root=${DUNE_ROOT+x}
+  while [ "$#" -gt 0 ]; do
+    arg=$1
+    shift
     case $arg in
       --) break ;;
-      --ro* | -p* | --only-p* | --for-release-of-p*) return 1 ;;
+      --ro | --roo | --root)
+        [ "$#" -gt 0 ] || return 1
+        root=$1
+        explicit_root=1
+        shift ;;
+      --ro=* | --roo=* | --root=*)
+        root=${arg#*=}
+        explicit_root=1 ;;
+      -p*) return 1 ;;
+      --*)
+        flag=${arg%%=*}
+        [[ --only-packages != "$flag"* && --for-release-of-packages != "$flag"* ]] || return 1 ;;
     esac
   done
+  if [ -n "$explicit_root" ]; then
+    [ -n "$root" ] && [ "$(CDPATH= cd -P -- "$root" 2>/dev/null && pwd -P)" = "$PWD" ]
+    return
+  fi
   [ -e dune-project ] || [ -e dune-workspace ] || return 1
   # An ancestor workspace outranks a project, and the outermost marker wins ties.
   while [ "$dir" != / ]; do

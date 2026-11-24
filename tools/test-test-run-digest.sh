@@ -1753,7 +1753,7 @@ harness_leg_run '80b: a manual dune beside a managed run keeps its live trace #d
 
 leg_80_receipt() {
   local label="finished records give elapsed seconds and distinguish executed from reused test actions (real dune)"
-  local dune_path root phase receipt inventory elapsed started expected detail=
+  local dune_path root phase build_dir receipt inventory elapsed started expected detail=
   if ! harness_real_dune; then
     skip "$label" "$harness_dune_absent"
     return
@@ -1764,11 +1764,11 @@ leg_80_receipt() {
     return
   fi
   root=$TMP/executed-receipt
-  mkdir -p "$root/tools" "$root/test"
+  mkdir -p "$root/tools" "$root/test/alternate"
   cp "$SRC" "$root/tools/test-run.sh"
   stage_sourced "$root" || { harness_abandon "$stage_error"; return; }
   cp "$HERE/action-durations.sh" "$root/tools/"
-  printf '(lang dune 3.20)\n' >"$root/dune-project"
+  printf '(lang dune 3.20)\n(accept_alternative_dune_file_name)\n' >"$root/dune-project"
   cat >"$root/test/dune" <<'DUNE'
 (test (name baseline) (modules baseline))
 (executable (name ordinary) (modules ordinary))
@@ -1784,11 +1784,29 @@ leg_80_receipt() {
  (action (with-stdout-to capture.raw (with-stderr-to capture.raw.log (run ./capture.exe)))))
 (rule (alias runtest-capture) (action (diff capture.expected capture.raw)))
 DUNE
+  cat >"$root/test/alternate/dune" <<'DUNE'
+(rule
+ (alias runtest-alternate)
+ (target inactive.raw)
+ (action (with-stdout-to %{target} (run ./generator.exe))))
+DUNE
+  cat >"$root/test/alternate/dune-file" <<'DUNE'
+(executable (name generator))
+(rule (target inactive.raw) (action (with-stdout-to %{target} (run ./generator.exe))))
+(alias (name runtest-alternate) (deps inactive.raw))
+DUNE
   printf 'let () = print_endline "ordinary"\n' >"$root/test/ordinary.ml"
   printf 'ordinary\n' >"$root/test/ordinary.expected"
-  printf 'let () = print_endline "capture"; prerr_endline "captured stderr"\n' >"$root/test/capture.ml"
+  cat >"$root/test/capture.ml" <<'ML'
+let () =
+  set_binary_mode_out stdout true;
+  set_binary_mode_out stderr true;
+  print_endline "capture";
+  prerr_endline "captured stderr"
+ML
   printf 'capture\n' >"$root/test/capture.expected"
-  printf 'let () = print_endline "generated"\n' >"$root/test/generator.ml"
+  printf 'let () = set_binary_mode_out stdout true; print_endline "generated"\n' >"$root/test/generator.ml"
+  cp "$root/test/generator.ml" "$root/test/alternate/generator.ml"
   cat >"$root/test/baseline.ml" <<'ML'
 let () =
   Out_channel.with_open_text (Sys.getenv "RECEIPT_WITNESS") (fun f -> output_string f "ran\n");
@@ -1797,16 +1815,18 @@ ML
   printf 'baseline\n' >"$root/test/baseline.expected"
   receipt_run() (
     cd "$root" || exit
-    unset DUNE_TRACE
+    unset DUNE_TRACE DUNE_ROOT DUNE_BUILD_DIR
     if [ "$phase" = filtered ]; then export DUNE_TRACE=-process; fi
     PATH=$(dirname "$dune_path"):$PATH OCANNL_TOOL_TEST_RUNS=$TMP/receipt-runs \
       RECEIPT_WITNESS=$TMP/receipt-witness bash tools/test-run.sh "$@"
   )
-  for phase in cold warm forced filtered; do
-    set -- @test/runtest-baseline @test/runtest-ordinary @test/runtest-capture
+  for phase in cold warm forced filtered rooted; do
+    build_dir=$root/_build
+    set -- @test/runtest-baseline @test/runtest-ordinary @test/runtest-capture @test/alternate/runtest-alternate
     case $phase in
       forced) set -- --force @test/runtest-baseline ;;
       filtered) set -- --build-dir="$root/filtered-build" @test/runtest-baseline ;;
+      rooted) build_dir=$root/rooted-build; set -- --root . --build-dir="$build_dir" "$@" ;;
     esac
     started=$SECONDS
     if ! receipt_run run build --cache=disabled "$@" >"$TMP/receipt-$phase.log" 2>&1; then
@@ -1814,18 +1834,19 @@ ML
     fi
     receipt=$(receipt_run paths run last) ||
       { harness_abandon "$phase: could not find the run record"; return; }
-    if [ "$phase" = cold ] || [ "$phase" = filtered ]; then
+    if [ "$phase" = cold ] || [ "$phase" = filtered ] || [ "$phase" = rooted ]; then
       if [ ! -s "$TMP/receipt-witness" ]; then
         harness_abandon "$phase: baseline did not execute"; return
       fi
       mv "$TMP/receipt-witness" "$TMP/receipt-witness.$phase"
       expected=$(printf 'baseline.exe\ttest/baseline.exe.output\nordinary.exe\ttest/ordinary.actual')
-      if [ "$phase" = cold ]; then
-        if [ "$(cat "$root/_build/default/test/generated.raw")" != generated ] ||
-           [ "$(cat "$root/_build/default/test/capture.raw.log")" != 'captured stderr' ]; then
-          harness_abandon "$phase: the generator and capture did not produce their named outputs"; return
+      if [ "$phase" != filtered ]; then
+        if [ "$(cat "$build_dir/default/test/generated.raw")" != generated ] ||
+           [ "$(cat "$build_dir/default/test/alternate/inactive.raw")" != generated ] ||
+           [ "$(cat "$build_dir/default/test/capture.raw.log")" != 'captured stderr' ]; then
+          harness_abandon "$phase: the generators and capture did not produce their named outputs"; return
         fi
-        expected=$(printf '%s\ncapture.exe\ttest/capture.raw\n' "$expected" | LC_ALL=C sort)
+        expected=$(printf '%s\ncapture.exe\ttest/capture.raw\n' "$expected" | env LC_ALL=C sort)
       fi
     else
       if [ -e "$TMP/receipt-witness" ]; then
