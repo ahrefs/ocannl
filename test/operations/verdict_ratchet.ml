@@ -6216,18 +6216,6 @@ let run_uncompared_leg_refusal_control () =
    stated reason, stale-checked in both directions. *)
 let exempt_leg_gate_calls : (string * int * string) list =
   [
-    ( "test/operations/autotune_mma_companion.ml:Ll_test.cycle_flat",
-      1,
-      "initializes the test fixture tensor passed to Ll_test.tensorized_matmul_capability to query \
-       its precision metadata" );
-    ( "test/operations/autotune_mma_companion.ml:TDSL.ndarray",
-      1,
-      "builds the test fixture tensor passed to Ll_test.tensorized_matmul_capability to query its \
-       precision metadata" );
-    ( "test/operations/autotune_mma_companion.ml:Tensor.value",
-      1,
-      "reads the operand/output Tnode from the test fixture tensor passed to \
-       Ll_test.tensorized_matmul_capability" );
     ( "test/operations/autotune_seeded_singles.ml:Autotune.seeded_default_backend",
       1,
       "delegates to Backend_intf.backend_facts.seeds_untuned_default, a static backend fact \
@@ -6254,8 +6242,12 @@ let exempt_leg_gate_calls : (string * int * string) list =
        compiler probe, independent of OCANNL codegen" );
     ( "test/operations/cost_model_fill.ml:Autotune.ranking_fill_model",
       1,
-      "pre-existing gate checking whether the running backend defines a fill model before \
-       comparing ranking_ms against thread_only; tracked for follow-up audit" );
+      "known dependent gate (pre-existing): gates fill_leg on Autotune.ranking_fill_model while \
+       claiming about Autotune.ranking_ms; tracked for follow-up" );
+    ( "test/operations/cuda_wmma_floor.real.ml:Ir.Cuda_mma.arm_floor",
+      1,
+      "compiles the plain driver-JIT sm_70 probe at the k8 arm floor; arm_floor values are \
+       separately pinned by cuda_mma_cutoffs.ml" );
     ( "test/operations/launch_predicate_parity.ml:Autotune.c_a",
       1,
       "reads the conv site's input precision node from the test fixture lowering for \
@@ -6359,6 +6351,11 @@ let exempt_leg_gate_calls : (string * int * string) list =
       1,
       "exported test-support helper Ll_test.cuda_arm_leg whose callers live in other test files \
        and supply static Ir.Cuda_mma.arm constructors" );
+    ( "test/support/ll_test.ml:Ir.Cuda_mma.arm_floor",
+      1,
+      "shared Ll_test.cuda_arm_leg helper gates execution legs on Ir.Cuda_mma.arm_floor (whose \
+       floors are pinned by cuda_mma_cutoffs.ml); descriptor-advertisement claims gate on literal \
+       SM floors instead" );
   ]
 
 let leg_gate_call_key ~source (call : Scan.leg_gate_call) = source ^ ":" ^ call.Scan.callee
@@ -6594,6 +6591,64 @@ let leg =
 let check () = in_leg ~leg "tf32 replay" (fun label -> p label true)
 let () = Test_utils.with_policy (fun p -> { p with Ir.Numerics.tf32_matmuls = true }) check|ocaml},
       [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
+    ( "refuses an ambient-policy leg used inside a local helper called from a \
+       Test_utils.with_policy callback",
+      {ocaml|open Verdict.Claims
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:(Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+    ()
+let check () = in_leg ~leg "tf32 replay" (fun label -> p label true)
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> check ())|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
+    ( "refuses a deferred lazy sub_leg explicitly forced with Lazy.force before \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub =
+  Verdict.sub_leg gpu ~on:"cuda"
+    ~when_:(lazy (Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ()))
+let () =
+  ignore (Lazy.force sub);
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg:sub "tf32 replay" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
+    ( "refuses an aliased or partially applied Ll_test.tensorized_capability outside \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let cap = Ll_test.tensorized_capability ~is_gpu:true ~is_cpu:false
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:
+      (match cap ~limits ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single with
+      | `Advertised -> true
+      | `Withheld _ -> false)
+    ()
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.tensorized_capability" ] );
+    ( "refuses an aliased or partially applied Ll_test.tensorized_matmul_capability outside \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let matmul_cap = Ll_test.tensorized_matmul_capability
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:
+      (match matmul_cap ~is_gpu:true ~is_cpu:false ~limits ~a:x.Tensor.value ~b:y.Tensor.value ~d:z.Tensor.value with
+      | `Advertised -> true
+      | `Withheld _ -> false)
+    ()
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.tensorized_matmul_capability" ] );
     ( "refuses an inline parent leg reading ambient policy when its sub_leg is used inside \
        Test_utils.with_policy",
       {ocaml|open Verdict.Claims
@@ -8076,10 +8131,7 @@ let () =
   else
     List.iter exempt_uncompared_legs ~f:(fun (key, sites, why) ->
         printf "  %s (%d site%s) -- %s\n" key sites (if sites = 1 then "" else "s") why);
-  printf
-    "\n\
-     Non-allowlisted leg-gate calls exempted, with the independent reason each is not the value \
-     under test:\n";
+  printf "\nNon-allowlisted leg-gate calls exempted, with the reason each is exempted:\n";
   if List.is_empty exempt_leg_gate_calls then
     printf "  (none: every leg gate queries only allowlisted independent invariants)\n"
   else
