@@ -864,8 +864,9 @@ type entry = {
    24: gh-ocannl-2079 -- NaN-free frozen f32 masters under half twins gain hoisted packing seeds
    25: gh-ocannl-1843 -- CPU seeds' companions take the default preset's per-nest Grid geometry
    26: gh-ocannl-2275 -- plain packed Grid with split k and over-cap conv Grid panels leave the menu
+   27: gh-ocannl-2443 -- the GPU fission floor and candidates gain ordered row-owned scatter kernels
 *)
-let entry_version = 26
+let entry_version = 27
 
 let sanitize name =
   String.map name ~f:(fun c ->

@@ -239,6 +239,7 @@ val tuner_fission :
   ?arity_cuts:bool ->
   ?fold_zeros:bool ->
   ?replay:Ir.Schedule.segmentation * (int -> Ir.Low_level.optimized -> Ir.Schedule.schedule option) ->
+  ?scatter_packets:bool ->
   is_gpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
   preset:(Ir.Low_level.optimized -> Ir.Schedule.schedule) ->
@@ -259,6 +260,7 @@ val tuner_fission :
 
 val sketch_segmentation :
   ?arity_cuts:bool ->
+  ?scatter_packets:bool ->
   presets:[ `Search | `Config ] ->
   is_gpu:bool ->
   is_cpu:bool ->
@@ -301,6 +303,7 @@ type search_seeding = {
 
 val search_seeding :
   ?census:(where:string -> Ir.Low_level.optimized -> unit) ->
+  ?scatter_packets:bool ->
   capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
@@ -3137,6 +3140,7 @@ val seeded_swap_label :
 
 val seeded_single_seeds :
   ?census:(where:string -> Ir.Low_level.optimized -> unit) ->
+  ?scatter_packets:bool ->
   capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->

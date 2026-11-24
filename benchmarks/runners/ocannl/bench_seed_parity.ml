@@ -115,6 +115,7 @@ let target ctx =
 
 let census_lines ctx ~static_indices opt =
   let is_gpu, is_cpu = target ctx in
+  let scatter_packets = Ir.Schedule.scatter_packets_enabled ~facts:(Context.backend_facts ctx) in
   let limits = Context.hardware_limits ctx in
   let capabilities = Context.codegen_capabilities ctx in
   let lines = ref [] in
@@ -126,7 +127,8 @@ let census_lines ctx ~static_indices opt =
         !lines
   in
   ignore
-    (Autotune.search_seeding ~census ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices opt
+    (Autotune.search_seeding ~census ~scatter_packets ~capabilities ~is_gpu ~is_cpu ~limits
+       ~static_indices opt
       : Autotune.search_seeding);
   List.rev !lines
 
@@ -607,6 +609,7 @@ let parity ?tol ?(perturb = false) ?(round = true) ?(replay = true) ?replay_frac
     opt =
   let tol = match tol with Some t -> t | None -> default_tol () in
   let is_gpu, is_cpu = target ctx in
+  let scatter_packets = Ir.Schedule.scatter_packets_enabled ~facts:(Context.backend_facts ctx) in
   let limits = Context.hardware_limits ctx in
   let capabilities = Context.codegen_capabilities ctx in
   let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
@@ -730,7 +733,7 @@ let parity ?tol ?(perturb = false) ?(round = true) ?(replay = true) ?replay_frac
   let seeding =
     Autotune.search_seeding
       ~census:(fun ~where:_ _ -> ())
-      ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices opt
+      ~scatter_packets ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices opt
   in
   let segments =
     List.map seeding.ss_coarse ~f:(fun e -> (false, seeding.ss_coarse_plan, e))
@@ -797,7 +800,7 @@ let parity ?tol ?(perturb = false) ?(round = true) ?(replay = true) ?replay_frac
         s
       in
       let _, tuples =
-        Autotune.tuner_fission ~is_gpu ~limits ~replay:(plan, schedule)
+        Autotune.tuner_fission ~scatter_packets ~is_gpu ~limits ~replay:(plan, schedule)
           ~preset:(Autotune.segment_preset ~presets:`Search ~is_gpu ~is_cpu ~limits)
           ~static_indices fresh
       in

@@ -132,7 +132,7 @@ test/operations/model_seeded_anchor.ml -- not-cc: the bitwise claim is gated on 
 test/operations/narrow_constant_rounding.ml -- no-contraction: compared kernels store literals, multiply by a folded constant, or exponentiate; no product feeds an add
 test/operations/narrow_conv_grad_residency.ml -- exact-operands: the dyadic products and all sums onto the incoming values fit the f32 significand.
 test/operations/narrow_grad_residency.ml -- exact-operands: a product of two multiples of 1/8 is representable in f32, so a fused multiply-add rounds where the separate operations do, and the twin's claim against the host shows its additions do not round either
-test/operations/narrow_scatter_residency.ml -- exact-operands: every input is a small dyadic float whose products and f32 sums fit the f32 significand exactly.
+test/operations/narrow_scatter_residency.ml -- pinned off
 test/operations/narrow_storage_compute.ml -- pinned off
 test/operations/nonoverlap_pool_grads.ml -- exact-operands: small integer inputs and a unit loss gradient; every max, product and sum exact
 test/operations/prefix_scan.ml -- exact-operands: every product multiplies by an exact 0/1 selector, and the integer data's sums are derived exact below
