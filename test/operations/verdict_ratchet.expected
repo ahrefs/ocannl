@@ -849,6 +849,9 @@ refuses a leg gated on a non-allowlisted capability field bound by an enclosing 
 refuses a production call hidden in the second call to a nested forwarding gate helper: true
 refuses an explicit policy supplied through an alias of Ir.Numerics.get outside Test_utils.with_policy: true
 accepts a leg returned by a terminating recursive helper: true
+refuses a production call in the second component of a shared tuple binding: true
+refuses an explicit policy forwarded through a local identity helper outside Test_utils.with_policy: true
+refuses an ambient-policy leg built in an eager let before the Test_utils.with_policy callback function: true
 refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy: true
 refuses an ambient-policy leg used inside a local helper called from a Test_utils.with_policy callback: true
 refuses a deferred lazy sub_leg explicitly forced with Lazy.force before Test_utils.with_policy: true

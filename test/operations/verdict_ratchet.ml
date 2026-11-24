@@ -6804,6 +6804,40 @@ let leg = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
 let rec choose n = if n = 0 then leg else choose (n - 1)
 let () = in_leg ~leg:(choose 1) "recursive selector" (fun label -> p label true)|ocaml},
       [] );
+    ( "refuses a production call in the second component of a shared tuple binding",
+      {ocaml|let pair = (true, Option.is_some (Autotune.detect_conv llc))
+let a, b = pair
+let leg = Verdict.leg ~on:"cuda" ~when_:(a && b) ()
+let () = Verdict.in_leg ~leg "shared tuple" (fun label -> Verdict.p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses an explicit policy forwarded through a local identity helper outside \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let identity p = p
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:
+      (Ll_test.advertised ~backend_name:"cuda" ~policy:(identity (Ir.Numerics.get ()))
+         ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+    ()
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses an ambient-policy leg built in an eager let before the Test_utils.with_policy \
+       callback function",
+      {ocaml|open Verdict.Claims
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (let leg =
+       Verdict.leg ~on:"cuda"
+         ~when_:(Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+         ()
+     in
+     fun () -> in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
     ( "refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy",
       {ocaml|open Verdict.Claims
 let leg =
