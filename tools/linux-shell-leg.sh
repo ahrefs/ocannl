@@ -19,10 +19,13 @@
 #     `exit` only on completion.
 #   - Requires `dune` unconditionally (sourcing `tools/opam-env.sh` when absent from PATH) and
 #     `ocamlc` when `--all-harnesses` or a toolchain harness is requested. Runs `--dune` targets
-#     under `OCANNL_BACKEND=cc` (`dune build --root . -j N ...`), then `tools/test-harnesses.sh
-#     --jobs N` (with `--member ...` or whole), and refuses (exit 1) if any harness member reports
-#     zero `PASS` checks or any `SKIP` outside `tools/harness-skips-ci-shell.txt` (plus the
-#     absent-zsh skip in `scripts/test-setup-ocaml-env.sh`).
+#     through `tools/test-run.sh run --expect-backend cc build -j N ...` (preserving per-test caps,
+#     logs, digests, and nested fleet slot reuse; records its run directory in `$receipt_dir/dune-run`),
+#     then `tools/test-harnesses.sh --jobs N` (with `--member ...` or whole), and refuses (exit 1)
+#     if any harness member reports zero `PASS` checks or any `SKIP` outside
+#     `tools/harness-skips-ci-shell.txt` (plus the absent-zsh skip in `scripts/test-setup-ocaml-env.sh`).
+#   - Delegates target syntax validation and the per-worktree pointer path to `tools/owed-run.sh`
+#     (`valid-target`, `linux-shell-pointer`) so both scripts share one definition.
 #   - Fails with exit 2 if completion status cannot be written atomically to `$receipt_dir/exit`.
 #   - Standalone runs on a fleet Linux box should wrap this command in `fleet-worker.sh execution
 #     slot --cpu -- ...`; fleet execution legs (`execution leg --cpu`) already hold that slot and
@@ -70,26 +73,6 @@ if [ "$all_harnesses" = 0 ] && [ ${#harness_targets[@]} -eq 0 ] && [ ${#dune_tar
   die "specify at least one of --all-harnesses, --harness MEMBER, or --dune @DIR/runtest-NAME"
 fi
 
-valid_harness_member() {
-  local LC_ALL=C
-  case $1 in
-    '' | /* | *..* | *//* | *[!A-Za-z0-9_./-]*) return 1 ;;
-    *.sh) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-valid_runtest_alias() {
-  local LC_ALL=C name
-  case $1 in
-    '' | *[!A-Za-z0-9_@./-]* | *..* | *//* | @/* | *@*@*) return 1 ;;
-    @?*/runtest-?*) ;;
-    *) return 1 ;;
-  esac
-  name=${1##*/}
-  case $name in runtest-?*) return 0 ;; *) return 1 ;; esac
-}
-
 find_dune() {
   if ! command -v dune >/dev/null 2>&1; then
     if ! command -v opam >/dev/null 2>&1; then
@@ -105,14 +88,14 @@ find_dune() {
   fi
 }
 
-# Validate harness members against tools/test-harnesses.sh --list.
+# Validate harness members against tools/owed-run.sh valid-target and tools/test-harnesses.sh --list.
 if [ ${#harness_targets[@]} -gt 0 ]; then
   manifest_list=$("${BASH:-bash}" "$root/tools/test-harnesses.sh" --list 2>/dev/null) ||
     die "could not read harness manifest from tools/test-harnesses.sh --list"
   manifest_nl=$'\n'$manifest_list$'\n'
   seen_h=$'\n'
   for m in "${harness_targets[@]}"; do
-    valid_harness_member "$m" || die "invalid harness member '$m'"
+    "${BASH:-bash}" "$root/tools/owed-run.sh" valid-target --member "$m" || die "invalid harness member '$m'"
     case $manifest_nl in
       *$'\n'"$m"$'\n'*) ;;
       *) die "harness member '$m' is not in tools/test-harnesses.sh --list" ;;
@@ -143,7 +126,8 @@ fi
 if [ ${#dune_targets[@]} -gt 0 ]; then
   seen_d=$'\n'
   for a in "${dune_targets[@]}"; do
-    valid_runtest_alias "$a" || die "invalid Dune alias '$a' (expected @DIR/runtest-NAME)"
+    "${BASH:-bash}" "$root/tools/owed-run.sh" valid-target --alias "$a" ||
+      die "invalid Dune alias '$a' (expected @DIR/runtest-NAME)"
     case $seen_d in
       *$'\n'"$a"$'\n'*) die "duplicate Dune alias '$a'" ;;
     esac
@@ -195,20 +179,13 @@ done
 [ "$head1" = "$head2" ] || die "HEAD moved while recording launch state"
 
 # Allocate receipt directory outside the worktree.
-state_root=${OCANNL_TOOL_TEST_RUNS:-${HOME:-}/.ocannl-test-runs}
-[ -n "$state_root" ] && [ "$state_root" != "/.ocannl-test-runs" ] ||
-  die "cannot determine receipt directory (set HOME or OCANNL_TOOL_TEST_RUNS)"
-case $state_root in
-  /*) ;;
-  *) state_root=$root/$state_root ;;
-esac
+last_ptr=$("${BASH:-bash}" "$root/tools/owed-run.sh" linux-shell-pointer "$root") ||
+  die "cannot determine receipt pointer via tools/owed-run.sh linux-shell-pointer"
+state_root=$(dirname -- "$last_ptr")
 mkdir -p "$state_root/linux-shell" || die "cannot create $state_root/linux-shell"
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 receipt_dir=$(mktemp -d "$state_root/linux-shell/$stamp.XXXXXX") ||
   die "cannot create receipt directory under $state_root/linux-shell"
-
-wt_key="$(basename -- "$root" | tr -c 'A-Za-z0-9' '_')$(printf %s "$root" | cksum | awk '{print $1}')"
-last_ptr="$state_root/linux-shell-last-$wt_key"
 
 {
   printf '%s\n' linux-shell >"$receipt_dir/kind" &&
@@ -300,8 +277,10 @@ cd "$root" || { write_exit 2 || :; die "cannot enter $root"; }
 
 rc=0
 if [ ${#dune_targets[@]} -gt 0 ]; then
-  echo "$me: running Dune shell tests: ${dune_targets[*]}"
-  env OCANNL_BACKEND=cc dune build --root . -j "$jobs" "${dune_targets[@]}" || rc=$?
+  echo "$me: running Dune shell tests via tools/test-run.sh: ${dune_targets[*]}"
+  env OCANNL_BACKEND=cc "${BASH:-bash}" "$root/tools/test-run.sh" run --expect-backend cc build -j "$jobs" "${dune_targets[@]}" || rc=$?
+  dune_run=$("${BASH:-bash}" "$root/tools/test-run.sh" paths run last 2>/dev/null || true)
+  [ -z "$dune_run" ] || printf '%s\n' "$dune_run" >"$receipt_dir/dune-run" 2>/dev/null || :
 fi
 
 if [ "$rc" = 0 ] && { [ "$all_harnesses" = 1 ] || [ ${#harness_targets[@]} -gt 0 ]; }; then

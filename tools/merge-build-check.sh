@@ -119,7 +119,8 @@
 # alias more than the base alone does); `--plan` shows the command that lists it.
 # The coverage is read the same way: from the tree's own ask, and the alias it names is printed (a
 # dune file the PR changed can name a script the base's does not, a difference that refuses). --all
-# runs the whole harness tier whatever HEAD is. --plan alone prints the tier selection for HEAD
+# runs the whole local harness tier whatever HEAD is, while still reading both sides' changed paths
+# on a two-parent merge so --all cannot bypass the owed Linux shell leg on non-Linux hosts. --plan alone prints the tier selection for HEAD
 # without asking Dune or reading records, a PENDING tier as such. On a branch, --plan --base REV
 # reads the locally resolved base tip (fetch first to refresh a remote-tracking ref) and committed
 # HEAD. It asks the tests tier on their candidate merge in a scratch checkout outside the
@@ -221,6 +222,75 @@ read_side() {
   done <<EOF
 $out
 EOF
+}
+
+# read_linux_scripts_nul MB BASE HEAD: NUL-delimited fallback used when read_side hits a quoted
+# path (rc=3), so Linux shell scope never falsely blocks non-shell changes and stays satisfiable
+# for shell changes (gh-ocannl-2414).
+read_linux_scripts_nul() {
+  local out tag p line m rc=0
+  out=$(perl -e '
+    use strict; use warnings;
+    my ($root, $mb, $base, $head) = @ARGV;
+    sub read_z {
+      my ($a, $b) = @_;
+      open my $fh, "-|", "git", "-C", $root, "diff", "-z", "-M", "--name-status", $a, $b or exit 1;
+      local $/; my $raw = <$fh>; close $fh or exit 1;
+      my @toks = split /\0/, (defined $raw ? $raw : "");
+      my (@paths, @pairs);
+      my $i = 0;
+      while ($i < @toks) {
+        my $st = $toks[$i++]; last if !defined $st || $st eq "";
+        if ($st =~ /^[RC]/) {
+          my ($old, $new) = ($toks[$i++], $toks[$i++]);
+          push @paths, $old, $new;
+          push @pairs, [$old, $new];
+        } else {
+          push @paths, $toks[$i++];
+        }
+      }
+      return (\@paths, \@pairs);
+    }
+    my (undef, $bpairs) = read_z($mb, $base);
+    my ($hpaths, undef) = read_z($mb, $head);
+    my (%seen_h, %seen_r, $unaskable);
+    my $clean = sub { my ($x) = @_; $x =~ m{\A[A-Za-z0-9_./-]+\z} && $x !~ m{\A[-/]} && $x !~ m{(?:\A|/)\.\.(?:/|\z)} };
+    for my $p (@$hpaths) {
+      if ($p =~ /\.sh\z/) {
+        if ($clean->($p)) { $seen_h{$p} = 1; } else { $unaskable = 1; }
+      }
+      for my $pr (@$bpairs) {
+        my $other = $pr->[0] eq $p ? $pr->[1] : $pr->[1] eq $p ? $pr->[0] : undef;
+        next unless defined $other && $other =~ /\.sh\z/;
+        if ($clean->($other)) { $seen_r{$other} = 1; } else { $unaskable = 1; }
+      }
+    }
+    print "UNASKABLE\n" if $unaskable;
+    print "HEAD\t$_\n" for sort keys %seen_h;
+    print "RENAME\t$_\n" for sort keys %seen_r;
+  ' "$root" "$1" "$2" "$3") || return 1
+  while IFS=$'\t' read -r tag p; do
+    [ -n "$tag" ] || continue
+    case $tag in
+      UNASKABLE) linux_harness_all=1 ;;
+      HEAD) scripts+=("$p") ;;
+      RENAME) scripts+=("$p"); renamed_scripts+=("$p") ;;
+    esac
+  done <<EOF
+$out
+EOF
+  for p in ${scripts[@]+"${scripts[@]}"}; do
+    ask_reach "$p" || { linux_harness_all=1; break; }
+    if [ -n "$reach" ]; then
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        m=${line%% *}
+        linux_harness_members+=("$m")
+      done <<EOF
+$reach
+EOF
+    fi
+  done
 }
 
 # ask_reach PATH... sets `reach`, the commands of the harness members PATH reaches, one per line.
@@ -328,7 +398,11 @@ select_tiers() {
   case $rc in
     0) ;;
     3)
-      linux_scope_err='git quoted a path one side changed, so non-Linux cannot verify whether a shell source changed'
+      # Preserve the whole local harness tier on quoted paths, while decoding NUL-delimited Git
+      # diffs for Linux shell scope so a quoted non-shell path (especially on the base side) owes
+      # nothing new and a quoted shell path remains satisfiable (gh-ocannl-2414).
+      read_linux_scripts_nul "$mb" "$base" "$head" ||
+        linux_scope_err='the paths each side changed could not be read, so non-Linux cannot verify whether a shell source changed'
       if [ "$all" = 1 ]; then why='--all'; else why='git quoted a path one side changed, so the whole harness tier runs'; fi
       return ;;
     *)
@@ -566,8 +640,8 @@ linux_shell_needs() {
     tests=unread tests_why="$linux_scope_err"
     return
   fi
-  [ ${#scripts[@]} -gt 0 ] || return 0
-  if [ -f "$tests_dir/ask" ]; then
+  [ ${#scripts[@]} -gt 0 ] || [ "$linux_harness_all" = 1 ] || return 0
+  if [ ${#scripts[@]} -gt 0 ] && [ -f "$tests_dir/ask" ]; then
     ask_files+=("$tests_dir/ask")
   fi
   if [ ${#renamed_scripts[@]} -gt 0 ]; then
@@ -580,7 +654,7 @@ linux_shell_needs() {
     ask_files+=("$tests_dir/sweep-rename-ask")
   fi
   for af in ${ask_files[@]+"${ask_files[@]}"}; do
-    for s in "${scripts[@]}"; do
+    for s in ${scripts[@]+"${scripts[@]}"}; do
       while IFS= read -r line; do
         case $line in
           "affected: $s: sweep-driver reach unavailable"*)
@@ -597,16 +671,10 @@ linux_shell_needs() {
     sorted_d=$(printf '%s\n' "${sweep_aliases[@]}" | env LC_ALL=C sort -u)
     while IFS= read -r a; do
       [ -n "$a" ] || continue
-      case $a in
-        *[!a-zA-Z0-9_@./-]* | *..* | *//* | @/* | *@*@* | '')
-          tests=unread tests_why="affected printed an invalid sweep-driver alias: $a"; return ;;
-        @?*/runtest-?*) ;;
-        *) tests=unread tests_why="affected printed an invalid sweep-driver alias: $a"; return ;;
-      esac
+      if ! "${BASH:-bash}" "$root/tools/owed-run.sh" valid-target --alias "$a"; then
+        tests=unread tests_why="affected printed an invalid sweep-driver alias: $a"; return
+      fi
       dir=${a%/*} dir=${dir#@} name=${a##*/}
-      case $name in runtest-?*) ;; *)
-        tests=unread tests_why="affected printed an invalid sweep-driver alias: $a"; return ;;
-      esac
       if [ "$dir" != "$last_dir" ]; then
         if ! dune show aliases --root . "$dir" >"$tests_dir/sweep-aliases" 2>&1 </dev/null; then
           tests=unread tests_why="Dune could not list sweep-driver aliases in $dir"; return
@@ -640,12 +708,11 @@ EOF
     sorted_h=$(printf '%s\n' "${linux_harness_members[@]}" | env LC_ALL=C sort -u)
     while IFS= read -r m; do
       [ -n "$m" ] || continue
-      case $m in
-        '' | /* | *..* | *//* | *[!A-Za-z0-9_./-]*)
-          linux_harness_all=1; uniq_h=(); break ;;
-        *.sh) uniq_h+=("$m") ;;
-        *) linux_harness_all=1; uniq_h=(); break ;;
-      esac
+      if "${BASH:-bash}" "$root/tools/owed-run.sh" valid-target --member "$m"; then
+        uniq_h+=("$m")
+      else
+        linux_harness_all=1; uniq_h=(); break
+      fi
     done <<EOF
 $sorted_h
 EOF

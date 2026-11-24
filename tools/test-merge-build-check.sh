@@ -170,9 +170,14 @@ FAKE
   cat >"$R/tools/test-run.sh" <<'FAKE'
 #!/bin/sh
 if [ "$*" = 'paths run last' ]; then
-  printf '%s\n' "$FAKE_LAST_RUN"
+  printf '%s\n' "${FAKE_LAST_RUN:-}"
   exit
 fi
+case $1 in
+  run)
+    printf 'test-run %s\n' "$*" >>"$FAKE_RECORD"
+    exit "${FAKE_TEST_RUN_RC:-0}" ;;
+esac
 printf '%s\n' "$*" >>"$FAKE_RECORD.tiers"
 if [ -n "${FAKE_PLAN_BASE:-}" ]; then
   [ "$(git rev-parse 'HEAD^1')" = "$FAKE_PLAN_BASE" ] &&
@@ -1952,10 +1957,10 @@ owed-run: v2 linux-shell head=$head_sha writer=record exit=0 clean=yes os=Linux 
   if [ "$rc_leg" = 0 ] && [ -n "$receipt_dir" ] && [ -d "$receipt_dir" ] &&
      [ "$(cat "$receipt_dir/exit")" = 0 ] && [ "$(cat "$receipt_dir/os")" = Linux ] &&
      [ "$(cat "$receipt_dir/targets")" = '@test/operations/runtest-sweep_harness,member:tools/test-one.sh' ] &&
-     grep -qxF 'build --root . -j 4 @test/operations/runtest-sweep_harness' "$TMP/record" &&
+     grep -qxF 'test-run run --expect-backend cc build -j 4 @test/operations/runtest-sweep_harness' "$TMP/record" &&
      grep -qxF 'shell --jobs 4 --member tools/test-one.sh' "$TMP/record"; then
-    report 0 'tools/linux-shell-leg.sh runs dune + --member harnesses on Linux and links a clean receipt'
-  else report 1 'tools/linux-shell-leg.sh runs dune + --member harnesses on Linux and links a clean receipt' \
+    report 0 'tools/linux-shell-leg.sh runs dune via tools/test-run.sh + --member harnesses on Linux and links a clean receipt'
+  else report 1 'tools/linux-shell-leg.sh runs dune via tools/test-run.sh + --member harnesses on Linux and links a clean receipt' \
     "exit $rc_leg receipt=$receipt_dir record=$(cat "$TMP/record") out=$(cat "$TMP/ls-run.out")"; fi
   # Negative control: a skip-only harness (0 PASS / unexpected SKIP) is refused and never writes a passing receipt.
   rc_skip=0
@@ -2066,15 +2071,54 @@ owed-run: v2 linux-shell head=$head_sha writer=record exit=0 clean=yes os=Linux 
     report 0 'a base-side rename to *.sh queries sweep-driver reach for the renamed path'
   else report 1 'a base-side rename to *.sh queries sweep-driver reach for the renamed path' "exit $rc; $(cat "$TMP/out")"; fi
 
-  # 13. Quoted path on Darwin fails closed instead of silently owing no Linux leg.
-  fixture linux-shell-quoted
+  # 13. Quoted paths on Darwin: decoded via git diff -z so non-shell edits owe nothing, clean shell
+  #     edits keep exact scoped reach, and quoted shell paths stay fail-closed yet satisfiable.
+  fixture linux-shell-quoted-nonsh
+  git -C "$R" checkout -q base && printf 'q\n' >"$R/\"quoted\".txt" && commit_on base
+  git -C "$R" checkout -q side && last x.ml && commit_on side && merge_side
+  : >"$TMP/reach"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY run "$darwin_bin" --plan-merge
+  if [ "$rc" = 0 ] && grep -qxF 'ship-pr-merge-plan: nothing-owed' "$TMP/out"; then
+    report 0 'a base-side quoted non-shell path owes no Linux leg for a non-shell PR on Darwin'
+  else report 1 'a base-side quoted non-shell path owes no Linux leg for a non-shell PR on Darwin' "exit $rc; $(cat "$TMP/out")"; fi
+
+  fixture linux-shell-quoted-clean-sh
   git -C "$R" checkout -q base && printf 'q\n' >"$R/\"quoted\".txt" && commit_on base
   git -C "$R" checkout -q side && last tools/sub/a.sh && commit_on side && merge_side
-  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY run "$darwin_bin" --plan-merge
-  if [ "$rc" = 1 ] && [ "$(grep -c '^ship-pr-merge-plan:' "$TMP/out")" = 0 ] &&
-     has 'git quoted a path one side changed, so non-Linux cannot verify whether a shell source changed'; then
-    report 0 'a quoted path on Darwin fails closed with no plan verdict'
-  else report 1 'a quoted path on Darwin fails closed with no plan verdict' "exit $rc; $(cat "$TMP/out")"; fi
+  q_head=$(git -C "$R" rev-parse 'HEAD^2')
+  q_repo=$TMP/owed-linux-quoted.git
+  git init -q --bare "$q_repo"
+  printf '%s\ttools/test-one.sh\n' tools/sub/a.sh >"$TMP/reach"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_MANIFEST=$TMP/ls-manifest run "$darwin_bin" --plan-merge
+  if [ "$rc" = 0 ] && grep -qxF 'ship-pr-merge-plan: unadmitted linux:member:tools/test-one.sh' "$TMP/out"; then
+    report 0 'a base-side quoted path beside a clean shell edit keeps scoped Linux reach on Darwin'
+  else report 1 'a base-side quoted path beside a clean shell edit keeps scoped Linux reach on Darwin' "exit $rc; $(cat "$TMP/out")"; fi
+  plant "$q_repo" "$q_head" "$q_head^{tree}" "$q_head" "owed-run record
+
+owed-run: v2 linux-shell head=$q_head writer=record exit=0 clean=yes os=Linux source=rog:/r/q1 targets=member:tools/test-one.sh"
+  OCANNL_TOOL_OWED_RUN_URL=$q_repo FAKE_MANIFEST=$TMP/ls-manifest run "$darwin_bin" --plan-merge
+  if [ "$rc" = 0 ] && grep -qxF 'ship-pr-merge-plan: admitted linux:member:tools/test-one.sh' "$TMP/out"; then
+    report 0 'a matching Linux record admits a clean shell edit beside a base-side quoted path'
+  else report 1 'a matching Linux record admits a clean shell edit beside a base-side quoted path' "exit $rc; $(cat "$TMP/out")"; fi
+
+  fixture linux-shell-quoted-sh
+  git -C "$R" checkout -q side && printf '#!/bin/sh\n:\n' >"$R/\"quoted\".sh" && commit_on side && merge_side
+  qs_head=$(git -C "$R" rev-parse 'HEAD^2')
+  qs_repo=$TMP/owed-linux-quoted-sh.git
+  git init -q --bare "$qs_repo"
+  : >"$TMP/reach"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_MANIFEST=$TMP/ls-manifest run "$darwin_bin" --plan-merge
+  if [ "$rc" = 0 ] && grep -qxF 'ship-pr-merge-plan: unadmitted linux:harnesses' "$TMP/out" &&
+     has '-- tools/linux-shell-leg.sh --all-harnesses'; then
+    report 0 'a head-side quoted *.sh path owes linux:harnesses on Darwin (fail-closed and satisfiable)'
+  else report 1 'a head-side quoted *.sh path owes linux:harnesses on Darwin (fail-closed and satisfiable)' "exit $rc; $(cat "$TMP/out")"; fi
+  plant "$qs_repo" "$qs_head" "$qs_head^{tree}" "$qs_head" "owed-run record
+
+owed-run: v2 linux-shell head=$qs_head writer=record exit=0 clean=yes os=Linux source=rog:/r/q2 targets=harnesses"
+  OCANNL_TOOL_OWED_RUN_URL=$qs_repo FAKE_MANIFEST=$TMP/ls-manifest run "$darwin_bin" --plan-merge
+  if [ "$rc" = 0 ] && grep -qxF 'ship-pr-merge-plan: admitted linux:harnesses' "$TMP/out"; then
+    report 0 'a Linux --all-harnesses record admits a head-side quoted *.sh path on Darwin'
+  else report 1 'a Linux --all-harnesses record admits a head-side quoted *.sh path on Darwin' "exit $rc; $(cat "$TMP/out")"; fi
   : >"$TMP/reach"
 }
 harness_leg_run 'scoped owed Linux shell leg on non-Linux hosts, Linux self-satisfaction and leg publication #linux-shell' linux_shell_leg

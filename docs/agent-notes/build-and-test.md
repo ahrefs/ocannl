@@ -6064,9 +6064,9 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   print the exact `fleet-worker.sh execution leg ... --cpu --wait-window -- tools/linux-shell-leg.sh`
   command alongside `ship-pr-merge-plan:`. `tools/linux-shell-leg.sh` refuses non-Linux hosts,
   requires `dune` (and `ocamlc` for `--all-harnesses` or toolchain members), runs the requested
-  `--dune` aliases under `OCANNL_BACKEND=cc` and `--harness` (`tools/test-harnesses.sh --member`)
-  or `--all-harnesses`, rejects any harness member with 0 `PASS` checks or an unexpected `SKIP`,
-  and writes an `os=Linux` receipt outside the worktree that `tools/owed-run-report.sh`
+  `--dune` aliases through `tools/test-run.sh run --expect-backend cc build` and `--harness`
+  (`tools/test-harnesses.sh --member`) or `--all-harnesses`, rejects any harness member with 0
+  `PASS` checks or an unexpected `SKIP`, and writes an `os=Linux` receipt outside the worktree that `tools/owed-run-report.sh`
   (`tools/owed-run.sh leg-record`, via `FLEET_LEG_RECEIPT_DIR` or its per-worktree pointer)
   publishes as `owed-run: v2 linux-shell ... os=Linux ... targets=...`. A `v2 run` record carries
   no OS attestation and never satisfies `linux:*` needs, and a `linux-shell` record never

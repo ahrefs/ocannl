@@ -487,11 +487,11 @@ record_run() {
 }
 
 linux_shell_last_pointer() {
-  local base wt key
+  local base wt key target_root=${1:-$root}
   base=${OCANNL_TOOL_TEST_RUNS:-${HOME:-}/.ocannl-test-runs}
   [ -n "$base" ] && [ "$base" != "/.ocannl-test-runs" ] || return 1
-  case $base in /*) ;; *) base=$root/$base ;; esac
-  wt=$(CDPATH= cd -- "$root" && pwd -P) || return 1
+  case $base in /*) ;; *) base=$target_root/$base ;; esac
+  wt=$(CDPATH= cd -- "$target_root" && pwd -P) || return 1
   key="$(basename -- "$wt" | tr -c 'A-Za-z0-9' '_')$(printf %s "$wt" | cksum | awk '{print $1}')"
   printf '%s/linux-shell-last-%s\n' "$base" "$key"
 }
@@ -542,6 +542,20 @@ verb=${1-}
 [ $# -gt 0 ] && shift
 case $verb in
   url) printf '%s\n' "$OWED_RUN_URL" ;;
+  valid-target)
+    [ $# -ge 2 ] || die "valid-target: expected --member|--alias VALUE..."
+    mode=$1
+    shift
+    for val do
+      case $mode in
+        --member) valid_harness_member "$val" || exit 1 ;;
+        --alias) valid_runtest_alias "$val" || exit 1 ;;
+        *) die "valid-target: unknown mode '$mode'" ;;
+      esac
+    done ;;
+  linux-shell-pointer)
+    [ $# -le 1 ] || die "linux-shell-pointer: at most one WORKTREE"
+    linux_shell_last_pointer "${1:-$root}" || die "linux-shell-pointer: cannot determine receipt pointer (set HOME or OCANNL_TOOL_TEST_RUNS)" ;;
   record)
     run= print=0
     for a do
