@@ -1337,7 +1337,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   bash 5.3.9, 12 of 40 runs of `tools/test-ci-durations.sh` beside seven copies of itself, none
   of 40 with `LANG=C`; one such crash reddened the first `--jobs 4` run of the tier. It shows as
   a subject exiting 139 with nothing on stderr, and
-  `~/Library/Logs/DiagnosticReports/bash-*.ips` names `libintl_setlocale`.
+  `~/Library/Logs/DiagnosticReports/bash-*.ips` names `libintl_setlocale`. A command-prefix
+  `LC_ALL=C cmd` inside a forked subshell (such as `merged_plan` calling `show_cross_reason` in
+  `tools/merge-build-check.sh`) triggers the same `dispose_temporary_env` -> `libintl_setlocale`
+  SIGSEGV even on a single invocation under Homebrew bash 5.3.9 when neither `LANG` nor `LC_ALL`
+  is set (e.g. macOS Terminal/SSH with only `LC_CTYPE=UTF-8`, gh-ocannl-2462); standalone
+  scripts that do not source `harness-support.sh` therefore export `LANG=C` before forking and
+  pass `env LC_ALL=C` instead of a shell-prefix assignment.
 - `tools/test-ci-durations.sh` prints each failed subject's exit status, stderr,
   API-call diff and stdout (a golden diff for selector checks), before scratch cleanup
   (gh-ocannl-1993). Read these before guessing API ordering: the fetch loop is sequential.
