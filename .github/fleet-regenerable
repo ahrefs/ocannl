@@ -1,0 +1,13 @@
+# Ignored directories in an OCANNL worktree that `fleet-worker.sh farside-close`
+# and `board close` may remove with the tree (ludics#1310; grammar in
+# ludics's lib/ludics/fleetworker/farsideclose.py, THE PROJECT FILE).
+# Read from the remote's default branch (`refs/remotes/<remote>/HEAD`).
+#
+# List only ignored build-output, log, or bytecode-cache directories that
+# nothing could want after a merge (never local switches, autotune caches,
+# or benchmark fixtures). One entry per line, LF only, no inline comments.
+_build
+_build-native-ptx
+**/log_files
+**/build_files
+**/__pycache__
