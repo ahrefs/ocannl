@@ -550,3 +550,5 @@ every executed member credited with C_syntax.Render_unrolled actually emitted th
 every executed member credited with C_syntax.Render_simd_reduce actually emitted that rendering arm: true
 every executed member credited with C_syntax.Render_warp_shuffle actually emitted that rendering arm: true
 every executed member credited with C_syntax.Render_hardware_binding actually emitted that rendering arm: true
+the half SIMD reduction renders a grid with a complete vector update: true
+the half SIMD update preserves the fused product's residue through the fold: true
