@@ -6642,7 +6642,10 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `DQM create queue type <n> failed` (one per refused queue; `No more SDMA queue to allocate` is its
   reason and counts only where no DQM line was logged) and `NVRM: Xid` events, with pids normalised
   out of the signatures. Other driver lines — rog-nv's `NVRM: VM: invalid mmap context` burst from a
-  driver upgrade's last minutes — are shown, not counted. The two sets are kept apart, never
+  driver upgrade's last minutes — and userspace x86_64 `segfault at` / `traps:` lines with their
+  immediately following `Code:` opcode dump (gh-ocannl-2460) are shown in the uncounted display tier
+  (count stays 0, volatile PID/ASLR/CPU fields normalised in signatures; standalone `Code:` lines
+  such as `i915` warnings stay excluded). The two sets are kept apart, never
   unioned, and a destination of neither kind collects no window and records `-`: before the split a
   native boot collected the dxg window, whose quiet-window fall-through lands on the restricted
   `dmesg`, so every native GPU unit recorded `unavailable` while its SDMA refusals went unread. The
@@ -6695,12 +6698,14 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   moves it — which is why the block carries its deduplicated signature list uncapped even though
   the raw lines it shows are capped at 40.
 - **Check `journalctl _TRANSPORT=kernel --since @<start>` for `segfault at` on a one-off native Linux SIGSEGV**
-  (gh-ocannl-2410). The native kernel-window filter (`NATIVE_KEEP='amdgpu|kfd|NVRM:'` in
-  `tools/kernel-window.sh`) keeps only GPU-driver lines, so a userspace segfault leaves an empty window.
-  Inspect the kernel line's `ip`/`Code:` bytes, fault error code and CPU before blaming OCANNL or CUDA:
-  on `gh-ocannl-2410` (`staging#2217`), the faulting PC sat in OCaml's `caml_modify_generational_global_root`,
-  and the crash did not reproduce across `compute-sanitizer`, 24 loaded `-j 8` runs, or a full
-  `tools/cuda-native-ptx-rerun.sh -j 8 @runtest @train` rerun (`verdict: holds`).
+  (gh-ocannl-2410). Sweep runs now surface userspace `segfault at` / `traps:` lines and their
+  immediately following `Code:` opcode dump in the native window's uncounted display tier
+  (`tools/kernel-window.sh`, gh-ocannl-2460); standalone runs without a sweep window still check the
+  journal directly. Inspect the kernel line's `ip`/`Code:` bytes, fault error code and CPU before
+  blaming OCANNL or CUDA: on `gh-ocannl-2410` (`staging#2217`), the faulting PC sat in OCaml's
+  `caml_modify_generational_global_root`, and the crash did not reproduce across `compute-sanitizer`,
+  24 loaded `-j 8` runs, or a full `tools/cuda-native-ptx-rerun.sh -j 8 @runtest @train` rerun
+  (`verdict: holds`).
 - **Reading a rerun's verdict.** Adding a name means adding it in both places: the table in
   `sweep.sh` gates the rerun, this one records what the name has been seen with. Qualify a name
   by its status (`<name> <STATUS>` in `ENVIRONMENT_REFUSALS`) when the call site also fails for
