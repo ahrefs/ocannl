@@ -915,9 +915,14 @@ let classified_command_sites_with_pins_preserving_multiplicity ?stderr_capture s
     match stderr_capture with
     | None -> commands_in stanza
     | Some variable ->
-        Option.value (field stanza "action") ~default:[]
-        |> List.concat_map
-             ~f:(commands_in ~stderr_capture:{ variable; captured = false; cleared = false })
+        let actions =
+          match (field stanza "action", stanza) with
+          | Some actions, _ -> actions
+          | None, Sexp.List [ Sexp.Atom "rule"; action ] -> [ action ]
+          | None, _ -> []
+        in
+        List.concat_map actions
+          ~f:(commands_in ~stderr_capture:{ variable; captured = false; cleared = false })
   in
   List.map commands ~f:(fun (cwd, pinned, command) -> (cwd, pinned, command, classify command))
 

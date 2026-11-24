@@ -88,13 +88,13 @@
 
    {1 Verdict population output in captured stderr}
 
-   This check reads explicit rule and test actions in the scanned dune files, including [subdir]
-   stanzas. It follows [with-stderr-to] and [with-outputs-to] to directly named [run] and
-   [dynamic-run] commands using the shared executable resolver (including [%{test}] in a custom test
-   action and bare workspace public names). A program is in scope when its literal Dune library
-   dependencies, including re-exports and positive [select] alternatives, reach the Verdict library.
-   This is a declaration check: shell and external launchers, computed paths and dependencies,
-   unevaluated includes, and pipe-only stderr transfers are outside its corpus.
+   This check reads rule and test [action] fields and short [rule] actions in the scanned dune
+   files, including [subdir] stanzas. It follows [with-stderr-to] and [with-outputs-to] to directly
+   named [run] and [dynamic-run] commands using the shared executable resolver (including [%{test}]
+   in a custom test action and bare workspace public names). A program is in scope when its literal
+   Dune library dependencies, including re-exports and positive [select] alternatives, reach the
+   Verdict library. This is a declaration check: shell and external launchers, computed paths and
+   dependencies, unevaluated includes, and pipe-only stderr transfers are outside its corpus.
 
    Every covered run needs an enclosing literal empty [setenv] of the population variable or an
    [env_var] in the action's own [deps]. A shadowing binding or a clear on a sibling branch cannot
@@ -6664,13 +6664,15 @@ let verdict_capture_control () =
       let context = control_context () in
       let write file contents = write_file (Stdlib.Filename.concat root file) contents in
       List.iter context ~f:(fun (file, contents) -> write file contents);
-      List.iter [ "t/gate.ml"; "t/probe.ml"; "t/child/probe.ml"; "t/bridge.ml" ] ~f:(fun file ->
-          write file control_probe);
-      let paths =
-        [ "t/dune"; "t/gate.ml"; "t/probe.ml"; "t/child/probe.ml"; "t/bridge.ml" ]
-        @ List.map context ~f:fst
-      in
-      let run ~deps ~action =
+      let sources = [ "t/gate.ml"; "t/probe.ml"; "t/child/probe.ml"; "t/bridge.ml"; "t/self.ml" ] in
+      List.iter sources ~f:(fun file -> write file control_probe);
+      let paths = "t/dune" :: (sources @ List.map context ~f:fst) in
+      let bind value action = Printf.sprintf "(setenv %s %S %s)" verdict_population value action in
+      let self = "(run %{test})" in
+      let cleared_self = bind "" self in
+      let child = "(chdir child (run ./probe.exe))" in
+      let cleared_child = bind "" child in
+      let run ?(self_action = cleared_self) ?(extra_rule = "") ~deps action =
         write "t/dune"
           (family_gate ~elsewhere:false
           ^ Printf.sprintf
@@ -6693,18 +6695,32 @@ let verdict_capture_control () =
     (with-stderr-to %%{null} (run %%{dep:child/probe.exe}))
     (setenv %s "" (run %%{dep:child/probe.exe}))
     %s))))
+
+(test
+ ; ocannl-backend: none -- the custom action runs a synthetic test that opens no device.
+ (name self)
+ (modules self)
+ (libraries bridge)
+ (deps ocannl_config (alias runtest-gate))
+ (action
+  (with-stderr-to self.log
+   (progn %s %s))))
+%s
 |dune}
-              deps verdict_population action);
+              deps verdict_population action cleared_self self_action extra_rule);
         run_checker ~root ~exe ("." :: paths)
       in
-      let child = "(chdir child (run ./probe.exe))" in
-      let bind value action = Printf.sprintf "(setenv %s %S %s)" verdict_population value action in
-      let unprotected = run ~deps:"" ~action:child in
-      let unprotected_bare = run ~deps:"" ~action:"(run probe)" in
-      let unprotected_bin = run ~deps:"" ~action:"(run %{bin:probe})" in
-      let shadowed = run ~deps:"" ~action:(bind "" (bind "*" child)) in
-      let cleared = run ~deps:"" ~action:(bind "" child) in
-      let declared = run ~deps:("(env_var " ^ verdict_population ^ ")") ~action:child in
+      let unprotected = run ~deps:"" child in
+      let unprotected_bare = run ~deps:"" "(run probe)" in
+      let unprotected_bin = run ~deps:"" "(run %{bin:probe})" in
+      let unprotected_dynamic = run ~deps:"" "(dynamic-run %{dep:child/probe.exe})" in
+      let unprotected_self = run ~deps:"" ~self_action:self cleared_child in
+      let unprotected_short =
+        run ~deps:"" ~extra_rule:"(rule (with-stderr-to short.log (run probe)))" cleared_child
+      in
+      let shadowed = run ~deps:"" (bind "" (bind "*" child)) in
+      let cleared = run ~deps:"" cleared_child in
+      let declared = run ~deps:("(env_var " ^ verdict_population ^ ")") child in
       let refusal = "captures stderr from Verdict-linked" in
       let refuses program (status, text) =
         Poly.equal status (Unix.WEXITED 1)
@@ -6717,11 +6733,22 @@ let verdict_capture_control () =
       let file_refused = refuses file unprotected in
       let bare_refused = refuses "probe" unprotected_bare in
       let bin_refused = refuses "probe" unprotected_bin in
+      let dynamic_refused = refuses file unprotected_dynamic in
+      let self_refused = refuses Scan.test_pform unprotected_self in
+      let short_refused = refuses "probe" unprotected_short in
       printf "\nSynthetic controls: captured stderr from Verdict-linked programs.\n";
       attribute "a captured Verdict run is refused when only a sibling run clears the variable"
-        [ unprotected; unprotected_bare; unprotected_bin ];
+        [
+          unprotected;
+          unprotected_bare;
+          unprotected_bin;
+          unprotected_dynamic;
+          unprotected_self;
+          unprotected_short;
+        ];
       Verdict.p "a captured Verdict run is refused when only a sibling run clears the variable"
-        (file_refused && bare_refused && bin_refused);
+        (file_refused && bare_refused && bin_refused && dynamic_refused && self_refused
+       && short_refused);
       Verdict.p "an inner nonempty binding undoes the clear for a captured Verdict run"
         (refuses file shadowed);
       Verdict.p "a captured Verdict run passes with an empty binding or its own dependency"
@@ -6731,6 +6758,9 @@ let verdict_capture_control () =
           (file_refused, unprotected);
           (bare_refused, unprotected_bare);
           (bin_refused, unprotected_bin);
+          (dynamic_refused, unprotected_dynamic);
+          (self_refused, unprotected_self);
+          (short_refused, unprotected_short);
           (refuses file shadowed, shadowed);
           (passes cleared, cleared);
           (passes declared, declared);
