@@ -15,7 +15,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #repeat (9-25, 38, 83, 85-85e, 84), #digest (35, 36, 36b, 87, 68, 69, 71, 72, 73, 80-80c, 92), #fresh (81), #hermetic (70).
+# Groups: #repeat (9-25, 38, 83, 85-85e, 84), #digest (35, 36, 36b, 36c, 36d, 87, 68, 69, 71, 72, 73, 80-80c, 92), #fresh (81), #hermetic (70).
 #
 # Legs:
 #   9. `repeat` forces and preserves three identical dune runs while holding the
@@ -52,6 +52,17 @@
 #  36b. a passing action's diagnostic, a chained dependency error and unmarked
 #      output stay in batch context. Short, verbose and redirected command
 #      reports give the failed action ownership of its diagnostic lines.
+#  36c. managed quiet runs inject `--always-show-command-line` once before `--`
+#      (never in `cmd` or `plan`), skipping explicit short/verbose displays,
+#      existing/implied boundary flags (`--always-show-command-line`, `--release`,
+#      `-p`/`--for-release-of-packages` and prefixes) and unknown subcommands;
+#      mutants doubling or misplacing it are caught.
+#  36d. against a real dune, a managed quiet run (default and explicit
+#      `--display=quiet`, plus multiline bash commands) records `(cd ... && ...)`
+#      action boundaries so a failing claim stays in `fingerprint:` while a
+#      passing action's stderr stays in batch context; `--release`, `-p` and
+#      explicit `--always-show-command-line` stay accepted, and a mutant without
+#      the injection reproduces the boundary-free failure.
 #  38. `repeat` stops after a refused first iteration and exits 2 under the
 #      same verdict, while a merely red iteration is still repeated in full.
 #  83. `repeat` has both bounds (gh-ocannl-1252): a test past the per-test cap
@@ -758,6 +769,241 @@ leg_36_attribution() {
 }
 harness_leg_run '36b: only a failed action owns its diagnostics #digest' leg_36_attribution
 
+# Leg 36c (gh-ocannl-2442): managed quiet runs inject `--always-show-command-line`
+# once before `--`, after recording `cmd` (so `cmd` and `plan` stay the caller's),
+# and skip injection when the argv already requests a bounded display or
+# carries/implies `--always-show-command-line`.
+leg_36_quiet_boundaries() {
+  local label="managed quiet runs inject --always-show-command-line once before -- and skip explicit or conflicting flags"
+  local bargs=$TMP/boundary-args bdetail= probe want cmd_argv expected_calls
+  # Inject cases: format is "probe_args|want_boundary_args|want_raw_calls"
+  for probe in \
+    "build @cheap|3 before|build --always-show-command-line @cheap" \
+    "runtest|3 before|runtest --always-show-command-line" \
+    "test|3 before|test --always-show-command-line" \
+    "build --display=quiet @cheap|3 before|build --always-show-command-line --display=quiet @cheap" \
+    "build --display quiet @cheap|3 before|build --always-show-command-line --display quiet @cheap" \
+    "build --display=progress @cheap|3 before|build --always-show-command-line --display=progress @cheap" \
+    "build --display=tui @cheap|3 before|build --always-show-command-line --display=tui @cheap" \
+    "build --diff-command -p @cheap|3 before|build --always-show-command-line --diff-command -p @cheap" \
+    "build -fj 4 @cheap|3 before|build --always-show-command-line -fj 4 @cheap" \
+    "build --trace-file=$TMP/bt.csexp @cheap|2 before|build --always-show-command-line --trace-file=$TMP/bt.csexp @cheap" \
+    "exec ./prog.exe -- --display=short|3 before|exec --always-show-command-line ./prog.exe -- --display=short" \
+    "exec ./prog.exe -- --always-show-command-line|3 before;6 after|exec --always-show-command-line ./prog.exe -- --always-show-command-line" \
+    "build --display=short @cheap||build --display=short @cheap" \
+    "build --display short @cheap||build --display short @cheap" \
+    "build --display=s @cheap||build --display=s @cheap" \
+    "build --display=verbose @cheap||build --display=verbose @cheap" \
+    "build --display verbose @cheap||build --display verbose @cheap" \
+    "build --display=v @cheap||build --display=v @cheap" \
+    "build --verbose @cheap||build --verbose @cheap" \
+    "build --verb @cheap||build --verb @cheap" \
+    "build --always-show-command-line @cheap|3 before|build --always-show-command-line @cheap" \
+    "build --always @cheap||build --always @cheap" \
+    "build --release @cheap||build --release @cheap" \
+    "build --rel @cheap||build --rel @cheap" \
+    "build -p foo @cheap||build -p foo @cheap" \
+    "build -pfoo @cheap||build -pfoo @cheap" \
+    "build -fp foo @cheap||build -fp foo @cheap" \
+    "build --for-release-of-packages=foo @cheap||build --for-release-of-packages=foo @cheap" \
+    "build --for-r=foo @cheap||build --for-r=foo @cheap" \
+    "describe @cheap||describe @cheap" \
+    "-- --display=short build @cheap||--display=short build @cheap"; do
+    cmd_argv=${probe%%|*}
+    want=${probe#*|}
+    expected_calls=${want#*|}
+    want=${want%%|*}
+    : >"$bargs"
+    # shellcheck disable=SC2086
+    REPEAT_TEST_KEEP_BOUNDARY=1 REPEAT_TEST_BOUNDARY_ARGS=$bargs argv_probe qb run $cmd_argv
+    local got_args
+    got_args=$(tr '\n' ';' <"$bargs")
+    got_args=${got_args%;}
+    if [ "$argv_rc" != 0 ] || [ "$got_args" != "$want" ] || [ "$argv_calls" != "$expected_calls" ]; then
+      bdetail="$cmd_argv: exit $argv_rc; boundary args '${got_args:-none}' (want '${want:-none}'); calls '$argv_calls' (want '$expected_calls')"
+      break
+    fi
+    if [ "$cmd_argv" = "build @cheap" ] && grep -q -- '--always-show-command-line' "$argv_dir/cmd"; then
+      bdetail="build @cheap: --always-show-command-line leaked into recorded cmd: $(cat "$argv_dir/cmd")"
+      break
+    fi
+  done
+  if [ -z "$bdetail" ]; then
+    argv_probe qb-plan plan build @cheap
+    if [ "$argv_rc" != 0 ] || grep -q -- '--always-show-command-line' <<<"$argv_out"; then
+      bdetail="plan leaked --always-show-command-line: exit $argv_rc; $argv_out"
+    fi
+  fi
+  # Mutants: doubling the injected flag or placing it after `--` must be caught.
+  local qb_inject='set -- "$boundary_sub" --always-show-command-line "$@" ;;'
+  qb_mutant() {
+    local tag=$1
+    QB_FROM=$2 QB_TO=$3 perl -pe 's/\Q$ENV{QB_FROM}\E/$ENV{QB_TO}/' "$SRC" >"$repeat_root/tools/test-run.sh"
+    shift 3
+    if cmp -s "$SRC" "$repeat_root/tools/test-run.sh"; then
+      bdetail="mutant $tag: substitution matched nothing in $SRC"
+      cp "$SRC" "$repeat_root/tools/test-run.sh"
+      return 1
+    fi
+    : >"$bargs"
+    REPEAT_TEST_KEEP_BOUNDARY=1 REPEAT_TEST_BOUNDARY_ARGS=$bargs argv_probe "$tag" "$@"
+    cp "$SRC" "$repeat_root/tools/test-run.sh"
+  }
+  if [ -z "$bdetail" ]; then
+    qb_mutant qb-mutant-twice "$qb_inject" \
+      'set -- "$boundary_sub" --always-show-command-line --always-show-command-line "$@" ;;' run build @cheap
+    [ -n "$bdetail" ] || [ "$(grep -c '' "$bargs")" = 2 ] ||
+      bdetail="a doubled boundary flag went unseen: $(tr '\n' ';' <"$bargs"); calls: $argv_calls"
+  fi
+  if [ -z "$bdetail" ]; then
+    qb_mutant qb-mutant-after "$qb_inject" \
+      'set -- "$boundary_sub" "$@" --always-show-command-line ;;' run exec ./prog.exe -- x
+    [ -n "$bdetail" ] || grep -q ' after$' "$bargs" ||
+      bdetail="a boundary flag past -- went unseen: $(tr '\n' ';' <"$bargs"); calls: $argv_calls"
+  fi
+  if [ -z "$bdetail" ]; then report 0 "$label"; else report 1 "$label" "$bdetail"; fi
+}
+harness_leg_run '36c: managed quiet runs inject --always-show-command-line #digest' leg_36_quiet_boundaries
+
+# Leg 36d (gh-ocannl-2442): real Dune quiet run attribution and negative control.
+leg_36_quiet_boundaries_real() {
+  local label="a real quiet run keeps a failing claim with its action beside passing stderr (real dune)"
+  local dune_path qroot qruns qout qrc qdir qfp qctx qdetail=
+  if ! harness_real_dune; then
+    skip "$label" "$harness_dune_absent"
+    return
+  fi
+  dune_path=$harness_dune
+  qroot=$TMP/quiet-boundaries-real
+  qruns=$TMP/quiet-boundaries-runs
+  mkdir -p "$qroot/tools" "$qroot/t/sub dir" "$qruns"
+  cp "$SRC" "$qroot/tools/test-run.sh"
+  stage_sourced "$qroot" || { harness_abandon "$stage_error"; return; }
+  cp "$HERE/action-durations.sh" "$qroot/tools/"
+  chmod +x "$qroot/tools/test-run.sh"
+  printf '(lang dune 3.20)\n(package (name quiet_fixture))\n' >"$qroot/dune-project"
+  : >"$qroot/quiet_fixture.opam"
+  cat >"$qroot/t/dune" <<'DUNE'
+(test (name fail_claim) (modules fail_claim))
+(test (name pass_stderr) (modules pass_stderr))
+(test (name quiet_ok) (modules quiet_ok))
+(rule
+ (alias runtest-multi-fail)
+ (action
+  (chdir "sub dir"
+   (bash "echo \"can't open\" >&2\n# don't retry\necho 'FAILED: multiline failing claim' >&2\nexit 1 # won't pass"))))
+(rule
+ (alias runtest-multi-pass)
+ (action
+  (chdir "sub dir"
+   (bash "echo \"it's ok\" >&2\n# don't fail\necho 'Fatal error: multiline passing stderr' >&2"))))
+DUNE
+  cat >"$qroot/t/fail_claim.ml" <<'ML'
+let () =
+  prerr_endline "FAILED: 1 check did not hold: \"wall time\".";
+  exit 1
+ML
+  printf 'ok\n' >"$qroot/t/fail_claim.expected"
+  cat >"$qroot/t/pass_stderr.ml" <<'ML'
+let () =
+  prerr_endline "Fatal error: archive refusal caught by passing action";
+  print_endline "ok"
+ML
+  printf 'ok\n' >"$qroot/t/pass_stderr.expected"
+  cat >"$qroot/t/quiet_ok.ml" <<'ML'
+let () = print_endline "ok"
+ML
+  printf 'ok\n' >"$qroot/t/quiet_ok.expected"
+  qrun() { # tag args...
+    local tag=$1
+    shift
+    # Unset CI so Dune does not implicitly print command lines on CI runners
+    # (which would mask both the positive default-quiet path and the negative control).
+    (cd "$qroot" && env -u CI PATH=$(dirname "$dune_path"):$PATH OCANNL_TOOL_TEST_RUNS=$qruns \
+      "$qroot/tools/test-run.sh" "$@") >"$TMP/qb-real-$tag.out" 2>&1
+    qrc=$?
+    qout=$(cat "$TMP/qb-real-$tag.out")
+    qdir=$(cd "$qroot" && env -u CI PATH=$(dirname "$dune_path"):$PATH OCANNL_TOOL_TEST_RUNS=$qruns \
+      "$qroot/tools/test-run.sh" paths run last 2>/dev/null)
+  }
+  qcheck_split() { # label_tag expected_fail_line expected_pass_line
+    local tag=$1 fail_line=$2 pass_line=$3
+    qfp=$(awk '/^fingerprint:$/ { s=1; next } /^batch context / { s=0 } s { print }' <<<"$qout")
+    qctx=$(awk '/^batch context / { s=1; next } s { print }' <<<"$qout")
+    if [ "$qrc" != 1 ]; then
+      qdetail="$tag: exit $qrc (want 1): $qout"
+    elif ! grep -qF "    $fail_line" <<<"$qfp" || grep -qF "$pass_line" <<<"$qfp"; then
+      qdetail="$tag: fingerprint misattributed: fp=[$qfp] ctx=[$qctx]"
+    elif ! grep -qF "  $pass_line" <<<"$qctx" || grep -qF "$fail_line" <<<"$qctx"; then
+      qdetail="$tag: batch context misattributed: fp=[$qfp] ctx=[$qctx]"
+    fi
+  }
+  # 1. Default managed quiet run: fail_claim, pass_stderr and silent quiet_ok in one batch.
+  qrun default run build --build-dir=_b_default --cache=disabled -j 1 @t/runtest-fail_claim @t/runtest-pass_stderr @t/runtest-quiet_ok
+  qcheck_split default 'FAILED: 1 check did not hold: "wall time".' 'Fatal error: archive refusal caught by passing action'
+  if [ -z "$qdetail" ] && { ! grep -qF './fail_claim.exe' "$qdir/log" || ! grep -qF './pass_stderr.exe' "$qdir/log"; }; then
+    qdetail="default: raw log missing action command boundaries: $(cat "$qdir/log")"
+  fi
+  if [ -z "$qdetail" ] && grep -qF 'quiet_ok.exe' "$qdir/log"; then
+    qdetail="default: silent passing action unexpectedly appeared in log: $(cat "$qdir/log")"
+  fi
+  # 2. Explicit --display=quiet still records action boundaries.
+  if [ -z "$qdetail" ]; then
+    qrun explicit-quiet run build --display=quiet --build-dir=_b_quiet --cache=disabled -j 1 @t/runtest-fail_claim @t/runtest-pass_stderr
+    qcheck_split explicit-quiet 'FAILED: 1 check did not hold: "wall time".' 'Fatal error: archive refusal caught by passing action'
+  fi
+  # 3. Multiline single-quoted bash actions in a space-containing directory stay bounded too.
+  if [ -z "$qdetail" ]; then
+    qrun multiline run build --build-dir=_b_multi --cache=disabled -j 1 @t/runtest-multi-fail @t/runtest-multi-pass
+    qcheck_split multiline 'FAILED: multiline failing claim' 'Fatal error: multiline passing stderr'
+    if [ -z "$qdetail" ] && ! grep -qF "cd '_b_multi/default/t/sub dir' && " "$qdir/log"; then
+      qdetail="multiline: expected shell-quoted working directory boundary in log: $(cat "$qdir/log")"
+    fi
+  fi
+  # 4. Compatibility controls: explicit --always-show-command-line, --release, -p, and plan_aliases.
+  if [ -z "$qdetail" ]; then
+    qrun explicit-flag run build --always-show-command-line --build-dir=_b_eflag --cache=disabled @t/runtest-pass_stderr
+    [ "$qrc" = 0 ] || qdetail="explicit --always-show-command-line failed (exit $qrc): $qout"
+  fi
+  if [ -z "$qdetail" ]; then
+    qrun release-flag run build --release --cache=disabled @t/runtest-pass_stderr
+    [ "$qrc" = 0 ] || qdetail="--release failed (exit $qrc): $qout"
+  fi
+  if [ -z "$qdetail" ]; then
+    qrun pkg-flag run build -p quiet_fixture --cache=disabled @t/runtest-pass_stderr
+    [ "$qrc" = 0 ] || qdetail="-p quiet_fixture failed (exit $qrc): $qout"
+  fi
+  if [ -z "$qdetail" ]; then
+    qrun alias-check run build --always-show-command-line @t/runtest-no_such
+    case $qrc:$qout in
+      2:*"ALIAS REFUSED"*) ;;
+      *) qdetail="plan_aliases with --always-show-command-line: exit $qrc (want 2 ALIAS REFUSED): $qout" ;;
+    esac
+  fi
+  # 5. Negative control: without the --always-show-command-line injection,
+  # Dune's quiet log has no boundary and the failing claim lands in batch context
+  # beside the passing action's fatal error.
+  if [ -z "$qdetail" ]; then
+    QB_FROM='set -- "$boundary_sub" --always-show-command-line "$@" ;;' \
+      perl -pe 's/\Q$ENV{QB_FROM}\E/set -- "\$boundary_sub" "\$@" ;;/' "$SRC" >"$qroot/tools/test-run.sh"
+    if cmp -s "$SRC" "$qroot/tools/test-run.sh"; then
+      qdetail="negative control: substitution matched nothing in $SRC"
+    else
+      qrun control-no-boundaries run build --display=quiet --build-dir=_b_ctrl --cache=disabled -j 1 @t/runtest-fail_claim @t/runtest-pass_stderr
+      qfp=$(awk '/^fingerprint:$/ { s=1; next } /^batch context / { s=0 } s { print }' <<<"$qout")
+      qctx=$(awk '/^batch context / { s=1; next } s { print }' <<<"$qout")
+      if [ "$qrc" != 1 ] || grep -qF 'FAILED: 1 check did not hold' <<<"$qfp" ||
+         ! grep -qF 'FAILED: 1 check did not hold' <<<"$qctx" ||
+         ! grep -qF 'Fatal error: archive refusal caught by passing action' <<<"$qctx"; then
+        qdetail="negative control did not reproduce unmarked quiet loss: exit $qrc; fp=[$qfp] ctx=[$qctx]"
+      fi
+    fi
+    cp "$SRC" "$qroot/tools/test-run.sh"
+  fi
+  if [ -z "$qdetail" ]; then report 0 "$label"; else report 1 "$label" "$qdetail"; fi
+}
+harness_leg_run '36d: a real quiet run keeps a failing claim with its action beside passing stderr #digest' leg_36_quiet_boundaries_real
+
 # Leg 87 (gh-ocannl-1281): a red run whose log carries, at a line's start, the
 # line a GPU backend's device-init deadline writes before its process dies by
 # SIGALRM is WEDGED DEVICE, keeping dune's 1 and quoting the line -- also when
@@ -1310,11 +1556,13 @@ PY
   # program's argument: the runner's own still goes before the separator, once,
   # and the program's reaches it untouched.
   if [ -z "$slow_detail" ]; then
-    for probe in "build --trace-file $TMP/t.csexp @cheap|2 before --trace-file" \
-                 "build --trace-file=$TMP/t.csexp @cheap|2 before $TMP/t.csexp" \
+    # Positions include the runner's injected `--always-show-command-line` on
+    # quiet `build`/`exec` invocations (before caller options and `--`).
+    for probe in "build --trace-file $TMP/t.csexp @cheap|3 before --trace-file" \
+                 "build --trace-file=$TMP/t.csexp @cheap|3 before $TMP/t.csexp" \
                  "describe @cheap|" "-- --display=short build @cheap|" \
                  "exec ./prog.exe -- --trace-file=$TMP/p.csexp|OWN
-5 after $TMP/p.csexp"; do
+6 after $TMP/p.csexp"; do
       want=${probe#*|} probe=${probe%%|*}
       : >"$slow_args"
       # shellcheck disable=SC2086
@@ -1354,7 +1602,7 @@ PY
     : >"$slow_args"
     REPEAT_TEST_TRACE_ARGS=$slow_args slow_mutant slow-mutant-after "$slow_inject" \
       'set -- "$trace_sub" "$@" "--trace-file=$trace_file" ;;' run exec ./prog.exe -- x
-    [ -n "$slow_detail" ] || { grep -q '^5 after ' "$slow_args" && [ "$argv_calls" != "exec ./prog.exe -- x" ]; } ||
+    [ -n "$slow_detail" ] || { grep -q '^6 after ' "$slow_args" && [ "$argv_calls" != "exec ./prog.exe -- x" ]; } ||
       slow_detail="an option past the separator went unseen: options $(tr '\n' ';' <"$slow_args"); calls: $argv_calls"
   fi
   # A reader past its bound is KILLed and the verdict still publishes, even

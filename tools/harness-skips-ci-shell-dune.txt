@@ -9,6 +9,7 @@
 # with a dune installed, which requires every check listed here to PASS, per
 # PR. The line forms are the header of tools/test-harnesses.sh.
 
+tools/test-test-run-digest.sh	a real quiet run keeps a failing claim with its action beside passing stderr (real dune)
 tools/test-test-run-digest.sh	a manual dune running beside a managed run keeps its live trace (real dune)
 tools/test-test-run-digest.sh	finished records give elapsed seconds and distinguish executed from reused test actions (real dune)
 tools/test-test-run-bisect.sh	credentials: the run's real dune trace names neither GH_TOKEN nor FOO_API_KEY, and does name the plain variable
