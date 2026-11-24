@@ -35,10 +35,11 @@
    take a [uint4x32] block and produce every scalar precision. Each homogeneous arithmetic arm is
    swept twice, over buffer reads and with an inlined [a + b] as its first operand ([Inlined]),
    since integer promotion types the two differently; at an integer storage precision, a third time
-   over an inlined real-valued [Sqrt(a)] ([Inlined_real], gh-ocannl-1785), and a fourth as the first
-   operand of [Mod] ([Under_mod], gh-ocannl-1883), which takes integer-typed operands only.
-   Conversions are every ordered pair of distinct storage precisions the backend can store
-   ({!Ir.Backend_intf.codegen_capabilities}'s [supports_f64]).
+   over an inlined real-valued [Sqrt(a)] ([Inlined_real], gh-ocannl-1785), then as each operand of
+   [Mod] ([Under_mod], gh-ocannl-1883). [Mod] rejects a float operand. The executed integer table
+   cases below distinguish integer and floating division. Conversions are every ordered pair of
+   distinct storage precisions the backend can store ({!Ir.Backend_intf.codegen_capabilities}'s
+   [supports_f64]).
 
    gh-ocannl-1768 extended the sweep in three directions.
 
@@ -696,8 +697,10 @@ let () =
    7 % 4 = 3, [Satur01] 1 % 4 = 1, [Trunc] 7 % 4 = 3, [Not(z)] 1 % 4 = 1. On cc these did not
    compile ([%] over [fmax]'s double); Metal's [Satur01] and [Trunc] were floats too.
 
-   [b * (Not(z) / c)] over [z = 0, c = 4] is 0: [Not] is an integer truth, so 1 / 4 is integer
-   division, where cc's [? 1.0 : 0.0] divided in double, 5 * 0.25 = 1.25, stored 1.
+   For [Div], both operand positions use non-exact division and scale the quotient by [c = 4] before
+   the store. A float-typed arm would leave at least one extra unit after truncation at the store.
+   [Not(z)] and [Satur01(a)] yield one, so on the right they are added to [c] to make a divisor of
+   five. Dividing by one would pass even with a float-typed arm.
 
    The wide cases have operands a float-typed arm rounds. int32 [Trunc(k * k + one) - k * k] over [k
    = 4096] is 1: [truncf] of 2^24 + 1 is 2^24. int64 [Max(m * m + one, m * m) - m * m] and [Relu(m *
@@ -726,24 +729,33 @@ let () =
       let seed = [ (a, 7.); (b, 5.); (c, 4.); (z, 0.) ] in
       List.iter
         [
-          ("max", "Max", binop Ops.Max (r a) (r b), 3.);
-          ("min", "Min", binop Ops.Min (r a) (r b), 1.);
-          ("relu", "Relu", unop Ops.Relu (r a), 3.);
-          ("sat01", "Satur01", unop Ops.Satur01 (r a), 1.);
-          ("trunc", "Trunc", unop Ops.Trunc (r a), 3.);
-          ("not", "Not", unop Ops.Not (r z), 1.);
+          ("max", "Max", binop Ops.Max (r a) (r b), 7);
+          ("min", "Min", binop Ops.Min (r a) (r b), 5);
+          ("relu", "Relu", unop Ops.Relu (r a), 7);
+          ("sat01", "Satur01", unop Ops.Satur01 (r a), 1);
+          ("trunc", "Trunc", unop Ops.Trunc (r a), 7);
+          ("not", "Not", unop Ops.Not (r z), 1);
         ]
-        ~f:(fun (short, op, arm, want) ->
+        ~f:(fun (short, op, arm, value) ->
           run ~prec
             ~name:(Printf.sprintf "optbl_intv_%s_mod_%s" tag short)
             (Printf.sprintf "%s %s under Mod is an integer" tag op)
             (fst (binop Ops.Mod arm (r c)))
-            seed want);
-      run ~prec
-        ~name:(Printf.sprintf "optbl_intv_%s_not_div" tag)
-        (Printf.sprintf "%s Not is an integer truth, dividing as an integer" tag)
-        (fst (binop Ops.Mul (r b) (binop Ops.Div (unop Ops.Not (r z)) (r c))))
-        seed 0.);
+            seed
+            (Float.of_int (value % 4));
+          let scaled_quotient side lhs rhs quotient =
+            run ~prec
+              ~name:(Printf.sprintf "optbl_intv_%s_div_%s_%s" tag side short)
+              (Printf.sprintf "%s %s on the %s of Div gives an integer quotient" tag op side)
+              (fst (binop Ops.Mul (binop Ops.Div lhs rhs) (r c)))
+              seed
+              (Float.of_int (quotient * 4))
+          in
+          scaled_quotient "left" arm (r c) (value / 4);
+          let divisor, divisor_value =
+            if value = 1 then (binop Ops.Add arm (r c), 5) else (arm, value)
+          in
+          scaled_quotient "right" (binop Ops.Add (r a) (r b)) divisor (12 / divisor_value)));
   let wide ~prec ~base =
     let tag = Ops.prec_string prec in
     let k = node ~prec (Printf.sprintf "intv_%s_k" tag) in
@@ -778,6 +790,7 @@ let unguarded_functions =
       "a template: integer Max in the operands' common type, which it is instantiated at" );
     ( ("metal", "ocannl_min"),
       "a template: integer Min in the operands' common type, which it is instantiated at" );
+    (("metal", "ocannl_sat01_open"), "a template testing the condition in its own arithmetic type");
     ( ("metal", "threefry_round"),
       "its state passed by reference, internal to the threefry functions, which are guarded" );
   ]

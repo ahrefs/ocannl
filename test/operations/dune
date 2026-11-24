@@ -2854,17 +2854,17 @@
  (preprocess
   (pps ppx_ocannl)))
 
-;; gh-ocannl-1908: every conv and gpt workload of benchmarks/workloads, built from a synthetic
-;; fixture the way its runner builds it, plus Nn_blocks.resnet_block at stride 2: under
+;; gh-ocannl-1908: every workload of benchmarks/workloads, built from a synthetic fixture
+;; with its runner's graph builder where available, plus Nn_blocks.resnet_block at stride 2: under
 ;; op_shape_schemes=check it builds, and every graph tensor's dims equal off's. Nothing trains.
 
 (test
+ ; ocannl-backend: none -- checks frontend graphs and allocates no device context.
  (name bench_model_schemes)
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (glob_files %{project_root}/benchmarks/workloads/*.json)
-  (env_var OCANNL_BACKEND))
+  (glob_files %{project_root}/benchmarks/workloads/*.json))
  (modules bench_model_schemes)
  (libraries
   base
@@ -2874,8 +2874,8 @@
   bench_harness
   bench_conv_model
   bench_gpt_model
-  arrayjit.verdict
-  arrayjit.context)
+  bench_mlp_model
+  arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

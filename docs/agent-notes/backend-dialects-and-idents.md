@@ -93,6 +93,9 @@ files.
   of 2^32. `tensor/operation.ml` uses the gate for the backward pass of `sat01`, whose gradient
   at zero is now zero on cc. `sat01_gradient_endpoints` checks the tensor backward pass at both
   endpoints and at 0.5 with a nonzero upstream gradient.
+  Metal evaluates the condition once in `ocannl_sat01_open` and leaves the payload in the
+  ternary. The helper deduces the condition's type, so it preserves integer promotions.
+  `branchless_select` counts condition reads in the emitted Metal kernel.
 - Metal has no `double`, and f64 stays rejected in `typ_of_prec` — a declared double buffer must
   fail rather than be silently degraded; only scalar expression casts render as `float`. So a
   backend-agnostic test must never reach for `double` just to have a second precision:
@@ -244,8 +247,9 @@ files.
   backend-precision-and-simd.md, gh-ocannl-1785). Metal's integer `Max`/`Min`/`Relu` go through
   `Builtins_metal`'s `ocannl_max` / `ocannl_min`, which compare in the operands' common type, for
   the integer-promoted sums. Since gh-ocannl-1883 every backend's do, and each homogeneous arm is
-  swept a fourth time at the integer precisions, as the first operand of `Mod` (`Under_mod`):
-  the rule is in backend-precision-and-simd.md.
+  swept at the integer precisions as each operand of `Mod` (`Under_mod`). Executed quotient cases
+  check both operands of `Div`.
+  The rule is in backend-precision-and-simd.md.
 - Tensor-node debug names become identifiers verbatim in the emitted kernel, so anything the
   backend also emits as a *name* must be reserved (`ident_blacklist`). Reserve it from the
   backend's own syntax functions, never from the C spellings: `C_syntax.op_syntax_idents` renders

@@ -98,8 +98,19 @@ control (off): the model builds: true
 under check, scheme applications were checked: true
 lenet: 87 tensors
 check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+mlp_small: 30 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+mlp_wide: 30 tensors
+check and off give every tensor of the graph the same label and dims: true
 a conv workload was built: true
 a gpt workload was built: true
+a mlp workload was built: true
 under check, the model builds without a shape error: true
 control (off): the model builds: true
 under check, scheme applications were checked: true

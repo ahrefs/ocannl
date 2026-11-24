@@ -168,12 +168,13 @@ let () =
     ~f:(String.is_prefix ~prefix:"(__nv_fp8_e5m2)(");
   p_all "both shared dialects preserve operand evaluation contracts"
     [
-      (Cuda.binop_syntax, Cuda.ternop_syntax, Cuda.select_blend_syntax);
-      (Hip.binop_syntax, Hip.ternop_syntax, Hip.select_blend_syntax);
+      (Cuda.binop_syntax, Cuda.ternop_syntax, Cuda.binop_arg1_uses, Cuda.select_blend_syntax);
+      (Hip.binop_syntax, Hip.ternop_syntax, Hip.binop_arg1_uses, Hip.select_blend_syntax);
     ]
-    ~f:(fun (binop_syntax, ternop_syntax, select_blend_syntax) ->
+    ~f:(fun (binop_syntax, ternop_syntax, binop_arg1_uses, select_blend_syntax) ->
       List.is_empty
-        (Cs.operand_conditionality_violations ~binop_syntax ~ternop_syntax ~select_blend_syntax));
+        (Cs.operand_conditionality_violations ~binop_syntax ~ternop_syntax ~binop_arg1_uses
+           ~select_blend_syntax));
   (* gh-ocannl-1695: HIP blends a value select over [auto] locals at every float compute precision
      but fp8, CUDA at none (ptxas if-converts the short-circuiting spelling itself), and the blend's
      truth is the dialect's own spelling of the open unit interval. *)

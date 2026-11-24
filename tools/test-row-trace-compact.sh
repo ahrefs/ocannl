@@ -9,9 +9,15 @@
 # and scope edges included, but at a synthetic source location (`fixture/row_solver.ml`), so an
 # edit of the real solver does not select this harness (gh-ocannl-2292). Needs python3; a host
 # without it skips every leg.
-# Usage: tools/test-row-trace-compact.sh [--keep] [--only REGEX]
+# Live mode reads a completed flushing stdout trace from batch_norm_closure built with the row
+# logging gate. It checks that the live solver still yields inequalities and template mints in
+# the fixture's forms. Counts, identifiers and timings can vary. See the debug tracing skill for
+# capturing the input. The default run uses the synthetic fixtures.
+# Usage: tools/test-row-trace-compact.sh [--live TRACE] [--keep] [--only REGEX]
 set -u
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
+live_trace=
+harness_own_option --live live_trace 'a trace file'
 harness_args "$@"
 harness_require python3
 harness_scratch test-row-trace-compact
@@ -78,6 +84,17 @@ digest() { # TOOL TRACE
   rc=0
   python3 "$1" "$2" >"$out" 2>"$err" || rc=$?
 }
+if [ -n "$live_trace" ] && harness_leg 'the live row trace supplies the fixture record forms #live'; then
+  digest "$SRC" "$live_trace"
+  if [ "$rc" = 0 ] &&
+    grep -Eq '^[0-9]+ Stage1 .+ >= .+$' "$out" &&
+    grep -Eq '^[0-9]+ Stage(2|3|4|5|6[ab]|7) .+ >= .+$' "$out" &&
+    grep -Eq '^ +[0-9]+ templ [0-9]+$' "$out"; then
+    report 0 'the live digest has initial and later inequalities and template mints'
+  else
+    report 1 'the live digest has initial and later inequalities and template mints' "exit $rc; $(cat "$err")"
+  fi
+fi
 check_digest() { # TOOL [TRACE]
   digest "$1" "${2:-$TMP/trace}"
   [ "$rc" = 0 ] && cmp -s "$out" "$TMP/want" &&

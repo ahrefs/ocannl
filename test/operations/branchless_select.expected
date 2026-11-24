@@ -19,6 +19,9 @@ bs_relu_gate: no short-circuiting spelling of the select remains: true
 bs_sat01_gate: values match the select's semantics, bitwise: true
 bs_sat01_gate: the select calls the blend helper: true
 bs_sat01_gate: no short-circuiting spelling of the select remains: true
+bs_sat01_gate_int32: values match the select's semantics, bitwise: true
+bs_sat01_gate_int32: the select calls the blend helper: true
+bs_sat01_gate_int32: no short-circuiting spelling of the select remains: true
 bs_relu_composed: values match the select's semantics, bitwise: true
 bs_relu_composed: the select calls the blend helper: true
 bs_relu_composed: no short-circuiting spelling of the select remains: true
@@ -31,6 +34,8 @@ bs_where_eq: no short-circuiting spelling of the select remains: true
 bs_where_masked: values match the select's semantics, bitwise: true
 bs_where_masked: the select calls the blend helper: true
 bs_where_masked: no short-circuiting spelling of the select remains: true
+bs_sat01_gate: Metal reads the condition once: true
+bs_sat01_gate_int32: Metal reads the condition once: true
 bs_where_zero: no conditional branch on the select's lines (the backend's compiler) (CUDA: floor PTX target only): true
 bs_where_zero: Metal's AIR keeps the select's short-circuit, 1 conditional branch(es) on its line (pinned on Metal Toolchain 32023.922; gh-ocannl-2400): true
 bs_relu_gate: no conditional branch on the select's lines (the backend's compiler) (CUDA: floor PTX target only): true

@@ -2,12 +2,10 @@
    same shapes as under [off]. [@train] passed while cifar_resnet died under [check]
    (gh-ocannl-1820), because no test built a downsampling residual model with the schemes on.
 
-   Each conv and gpt workload in benchmarks/workloads is built from a synthetic fixture: the spec's
-   metadata as gen_fixtures.py records it, and zero-valued tensors of the layouts the model reads.
-   The graph is built the way its runner builds it -- bench_conv's input batch, model, loss and
-   update; [Bench_gpt_model.prepare], which bench_gpt and bench_gpt_diag share -- once per mode in a
-   fresh session, and every tensor's dims are compared. Nothing trains. [Nn_blocks.resnet_block] at
-   stride 2 joins them: the library's own downsampling block. *)
+   Each benchmark workload is built from a synthetic fixture with its metadata and zero-valued
+   tensors of the layouts the model reads. The runner's graph is built once per mode in a fresh
+   session, and every tensor's dims are compared. Nn_blocks.resnet_block at stride 2 joins them as
+   the library's own downsampling block. *)
 
 open Base
 open Ocannl
@@ -60,12 +58,21 @@ let metadata spec =
 (* The batch count only sets the batch symbol's range, so two keep the fixtures small. *)
 let n_batches spec = Int.min 2 (int_field spec "n_batches")
 
-(* The tensors each model reads, in gen_fixtures.py's layouts (build_conv, build_conv_resnet,
-   build_gpt). bench_conv reads the images and labels, the conv builders only metadata;
-   [Bench_gpt_model.prepare] reads the token ids and the data-backed weights. *)
+(* The tensors each model reads, in gen_fixtures.py's layouts. *)
 let fixture_tensors spec =
   let total = int_field spec "batch_size" * n_batches spec in
   match str_field ~default:"mlp" spec "model" with
+  | "mlp" ->
+      let dims =
+        match field spec "dims" with
+        | Some (`List dims) -> List.map dims ~f:Yojson.Safe.Util.to_int
+        | _ -> failwith "bench_model_schemes: missing MLP dims"
+      in
+      let layers = List.zip_exn (List.drop_last_exn dims) (List.tl_exn dims) in
+      [ ("x", [ total; List.hd_exn dims ]); ("y", [ total; List.last_exn dims ]) ]
+      @ List.concat_mapi layers ~f:(fun i (din, dout) ->
+          let n = i + 1 in
+          [ (Printf.sprintf "w%d" n, [ dout; din ]); (Printf.sprintf "b%d" n, [ dout ]) ])
   | "conv" ->
       let img = int_field spec "image_size" in
       [
@@ -135,12 +142,19 @@ let build_conv st () =
   let learning_rate = TDSL.O.( !. ) (Float.of_string (Bench_harness.get_meta st "lr")) in
   ignore (Train.grad_update batch_loss : Ir.Assignments.comp);
   ignore (Train.sgd_update ~learning_rate batch_loss : Ir.Assignments.comp);
-  (batch_loss, None)
+  batch_loss
 
-(* [prepare] also makes a context and initializes the parameters in it: returned for release. *)
 let build_gpt st () =
-  let prepared = Bench_gpt_model.prepare ~materialize:false st in
-  (prepared.batch_loss, Some prepared.ctx)
+  let training = Bench_harness.is_training st in
+  let leg = Bench_harness.precision_leg ~runner:"bench_gpt" ~training ~st ~base:"f32" () in
+  let { Bench_gpt_model.batch_loss; _ } = Bench_gpt_model.build_graph ~leg ~training st in
+  ignore (Bench_gpt_model.build_step ~leg ~training st batch_loss);
+  batch_loss
+
+let build_mlp st () =
+  (Bench_mlp_model.build_graph ~mp_prec:None ~no_slice:false ~materialize:false
+     ~twin_placement:Mixed_prec.Twin_auto st)
+    .batch_loss
 
 (* Every tensor of the graph, in a deterministic walk from the root: its label and its dims. The
    first [Shape.to_dims] closes the session's inference. *)
@@ -162,8 +176,7 @@ let entry_to_string (name, dims) =
 let entry_equal (n1, d1) (n2, d2) = String.equal n1 n2 && List.equal Int.equal d1 d2
 
 (* One build in a fresh session under [mode]: the graph's dims, or the shape error, and how many
-   scheme applications were checked. A builder returns its graph's root and the context it made, if
-   any, released once the dims are read. *)
+   scheme applications were checked. *)
 let run ~mode build =
   Tensor.For_testing.set_op_shape_schemes (Some mode);
   Tensor.unsafe_reinitialize ();
@@ -175,12 +188,7 @@ let run ~mode build =
         Tensor.For_testing.observe_schemes
           ~on_event:(function Tensor.Scheme.Checked _ -> Int.incr checked | _ -> ())
           (fun () ->
-            match
-              let root, ctx = build () in
-              Exn.protect
-                ~f:(fun () -> graph_dims root)
-                ~finally:(fun () -> Option.iter ctx ~f:Context.release)
-            with
+            match graph_dims (build ()) with
             | dims -> Ok dims
             | exception Row.Shape_error (msg, _) -> Error msg
             | exception Tensor.Session_error (msg, _) -> Error msg)
@@ -209,25 +217,30 @@ let parity_case name build =
       | _ -> ())
 
 let () =
+  let builders = [ ("conv", build_conv); ("gpt", build_gpt); ("mlp", build_mlp) ] in
   let built =
-    List.filter_map specs ~f:(fun spec ->
+    List.map specs ~f:(fun spec ->
         let model = str_field ~default:"mlp" spec "model" in
-        if not (List.mem [ "conv"; "gpt" ] model ~equal:String.equal) then None
-        else
-          let name = str_field ~default:"?" spec "name" in
-          let path = write_fixture ~meta:(metadata spec) (fixture_tensors spec) in
-          let st = St.read path in
-          Exn.protect
-            ~finally:(fun () ->
-              St.close st;
-              Stdlib.Sys.remove path)
-            ~f:(fun () ->
-              parity_case name (if String.equal model "conv" then build_conv st else build_gpt st));
-          Some model)
+        let build = List.Assoc.find_exn builders ~equal:String.equal model in
+        let name = str_field ~default:"?" spec "name" in
+        let meta = metadata spec in
+        let meta =
+          match (model, field spec "dims") with
+          | "mlp", Some (`List dims) -> ("n_layers", Int.to_string (List.length dims - 1)) :: meta
+          | _ -> meta
+        in
+        let path = write_fixture ~meta (fixture_tensors spec) in
+        let st = St.read path in
+        Exn.protect
+          ~finally:(fun () ->
+            St.close st;
+            Stdlib.Sys.remove path)
+          ~f:(fun () -> parity_case name (build st));
+        model)
   in
-  Verdict.case "the workload directory has conv and gpt workloads" (fun () ->
-      p_exists "a conv workload was built" built ~f:(String.equal "conv");
-      p_exists "a gpt workload was built" built ~f:(String.equal "gpt"))
+  Verdict.case "the workload directory has each benchmark model" (fun () ->
+      List.iter builders ~f:(fun (model, _) ->
+          p_exists ("a " ^ model ^ " workload was built") built ~f:(String.equal model)))
 
 (* [Nn_blocks.resnet_block] at stride 2: a strided 3x3 main path and a strided 1x1 downsample
    shortcut, with and without a channel change. *)
@@ -243,4 +256,4 @@ let () =
             TDSL.range_of_shape ~label:[ "input" ] ~batch_dims:[ 2 ] ~output_dims:[ 8; 12; 3 ] ()
           in
           let%op loss = block ~train_step:None x ++ "...|... => 0" in
-          (loss, None)))
+          loss))

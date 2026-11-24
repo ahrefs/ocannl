@@ -13148,8 +13148,10 @@ let refuse_uncovered_local_reads (plc : Tn.Placements.t)
           static_indices
           (drop_dead_loop_accesses (affine_accesses live))
       in
-      (* Deterministic: the first uncovered node in creation order names the refusal. *)
-      Hash_set.to_list read |> List.sort ~compare:Tn.compare
+      (* Report the first uncovered node the live program touches. *)
+      let positions = first_access_positions live in
+      Hash_set.to_list read
+      |> List.sort ~compare:(compare_program_order positions)
       |> List.iter ~f:(fun tn ->
           match covered tn with
           | `Covered -> ()

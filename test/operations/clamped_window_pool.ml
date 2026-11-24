@@ -26,7 +26,7 @@
    remedy.
 
    - The neutral-element gate: a padded add-family window spec ([+++], neutral 0) still demands
-   margins — physical halos remain the add-family mechanism. *)
+   margins. A padded product with a finite neutral of one reads the physical halo at both ends. *)
 
 open Base
 open Ocannl
@@ -224,5 +224,20 @@ let () =
   let _ctx = Train.forward_once ctx asum in
   p "padded add-family window still commits margins"
     (String.equal (padding_to_string ax.Tensor.value) "[1/2] elem=0.");
+
+  (* Products distinguish a finite one halo from a zero halo at both ends. *)
+  Tensor.unsafe_reinitialize ();
+  let%op px = TDSL.range_of_shape ~output_dims:[ 4 ] () + 2. in
+  let%cd prod = { product } =:* id px ~logic:"o=+w => o" [ "w" ] in
+  Shape.set_dim w 3;
+  Train.set_materialized px.Tensor.value;
+  Train.set_materialized product.Tensor.value;
+  let ctx = Context.auto () in
+  let ctx, routine = Context.compile ~name:"cw_product" ctx prod Idx.Empty in
+  let ctx = Context.run ctx routine in
+  p "padded product commits margins with neutral one"
+    (String.equal (padding_to_string px.Tensor.value) "[1/2] elem=1.");
+  p_close "padded product uses one at the window edges"
+    (Context.get_values ctx product.Tensor.value) [| 6.; 24.; 60.; 20. |] ~tol:(fun _ -> 0.);
 
   Stdio.printf "\nDone.\n%!"

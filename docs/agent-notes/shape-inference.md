@@ -579,8 +579,9 @@ files.
 - Padded (`=`-mode) windows: max/tropical-family accumulations lower with clamped window bounds
   and demand NO margins (gh-504: `Row.proj_env.clamp_padded`; interval-based range guards in
   `Assignments.to_low_level`); add-family keeps physical halos committed as tensor-node identity
-  (padded convs lower offset-free). The padded dim equation requires the input divisible by the
-  stride, and a stride-2 window only clips on the right for window ≥ 4. A padded window in the
+  (padded convs lower offset-free). The product case in `clamped_window_pool` reads a halo of ones
+  at both edges from a materialized producer. The padded dim equation requires the input divisible
+  by the stride, and a stride-2 window only clips on the right for window ≥ 4. A padded window in the
   RESULT slot is refused before any write (gh-ocannl-1550, `refuse_result_side_padded_window`,
   run from `propagate_shapes` like `refuse_unsized_kernels` below, so the refusal leaves the
   session untainted, gh-ocannl-2042); a padded window's backward writes through the same window
@@ -1250,9 +1251,9 @@ files.
   "a window pair's verdict and tags do not depend on constraint order" (both orientations, solved
   and late kernels, padded against valid), the solved-input case and the closing case.
 - Every benchmark model builds under `check` with `off`'s dims (gh-ocannl-1908):
-  `test/operations/bench_model_schemes` builds each conv and gpt workload of `benchmarks/workloads`
-  from a synthetic zero-valued fixture, through `Bench_conv_model`/`Bench_gpt_model` as the runners
-  do, plus `Nn_blocks.resnet_block` at stride 2, and compares every graph tensor's label and dims.
+  `test/operations/bench_model_schemes` builds each conv, GPT and MLP workload of
+  `benchmarks/workloads` from a synthetic zero-valued fixture through the runners' model builders.
+  It constructs the GPT runner's inference or training step at f32 with no device context.
+  It also checks `Nn_blocks.resnet_block` at stride 2 and compares every graph tensor's label and dims.
   A new workload JSON is covered without an edit; a new model kind needs its fixture layout in
-  the test's `fixture_tensors`. The mlp workloads are not covered: `bench_mlp`'s model lives in its
-  executable.
+  the test's `fixture_tensors` and a graph builder.

@@ -122,6 +122,8 @@ test/operations/accum_width.ml [run by @test/operations/runtest-accum_width]
     ... ^ "(bfloat16_to_single("
 test/operations/branchless_select.ml [run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math, @test/operations/runtest-branchless_select-outlined; also pins text this scan cannot name: computed fragment, untraced callback, opaque aggregate component, unsupplied application, mutation or unseen buffer write]
     ") != 0.0 ? ("
+    ")["
+    "["
     ... ^ "_v["
 test/operations/build_file_descriptors.ml [run by @test/operations/runtest-build_file_descriptors; also pins text this scan cannot name: untraced callback]
 test/operations/build_order_programs.ml [run by @test/operations/runtest-build_order_programs]

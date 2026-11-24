@@ -58,7 +58,17 @@ type prepared = {
   mapping : (string * string list) list;
 }
 
-let prepare ~materialize st =
+type graph = {
+  batch_loss : Tensor.t;
+  logits : Tensor.t;
+  bindings : Ir.Indexing.unit_bindings;
+  batch_n : Ir.Indexing.static_symbol;
+  n_batches : int;
+  batch_size : int;
+  seq : int;
+}
+
+let build_graph ~leg ~training st : graph =
   (* BENCH_PRECISION=bf16|f16 (gh-ocannl-492 task 4). Reduced precision enters differently in the
      two modes, and the difference is the workload's, not a limitation:
 
@@ -72,8 +82,6 @@ let prepare ~materialize st =
      gradients, and for f16 the dynamic loss scaling whose gate the task-5 legs measure.
 
      Layer-norm gains/biases and the softmax-CE head stay f32 in both. *)
-  let training = H.is_training st in
-  let leg = H.precision_leg ~runner:"bench_gpt" ~training ~st () in
   let mp_prec = leg.H.prec in
   let batch_size = H.meta_int st "batch_size" in
   let n_layer = H.meta_int st "n_layer" in
@@ -188,18 +196,26 @@ let prepare ~materialize st =
           grad_prec = (if training then Some prec else None);
         }
         batch_loss);
-  if materialize then Train.every_non_literal_materialized batch_loss;
-  (* Inference is the loss's forward code; training is the leg's step shape (backprop plus plain
-     SGD, or one of the loss-scaling shapes). Either consumes the forward code, so only one is
-     built. *)
-  let step_shape =
-    if training then
-      let learning_rate = TDSL.O.( !. ) (Float.of_string (H.get_meta st "lr")) in
-      `Train (H.train_step_parts ~leg ~learning_rate batch_loss)
-    else `Forward (Train.forward batch_loss)
+  { batch_loss; logits; bindings; batch_n; n_batches; batch_size; seq }
+
+(* Either step consumes the forward code, so only the fixture's mode is built. *)
+let build_step ~leg ~training st batch_loss =
+  if training then
+    let learning_rate = TDSL.O.( !. ) (Float.of_string (H.get_meta st "lr")) in
+    `Train (H.train_step_parts ~leg ~learning_rate batch_loss)
+  else `Forward (Train.forward batch_loss)
+
+let prepare ~materialize st =
+  let training = H.is_training st in
+  let leg = H.precision_leg ~runner:"bench_gpt" ~training ~st () in
+  let { batch_loss; logits; bindings; batch_n; n_batches; batch_size; seq } =
+    build_graph ~leg ~training st
   in
+  if materialize then Train.every_non_literal_materialized batch_loss;
+  let step_shape = build_step ~leg ~training st batch_loss in
   let ctx = Context.auto () in
   let ctx = Train.init_params ctx bindings batch_loss in
+  let n_layer = H.meta_int st "n_layer" in
   let mapping =
     ("lnf_g", [ "gamma"; "lnf" ])
     :: ("lnf_b", [ "beta"; "lnf" ])

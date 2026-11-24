@@ -19,7 +19,10 @@ files.
   syntax configs are sealed inside their `Impl` and unreachable from tests), which renders every
   (precision, operator) pair over placeholders and looks for the only C-family constructs that skip
   an operand: `?:`, `&&`, `||`. This is what forbids spelling `Where` as MSL's `select` or `Max` as
-  `(a > b ? a : b)`. The operator sweep (shared with `op_syntax_idents`) is `Ops`' derived
+  `(a > b ? a : b)`. The same sweep checks each dialect's `binop_arg1_uses` against its emitted
+  first operand. CUDA and HIP spell the `Satur01_gate` condition in both comparisons. The render
+  census reads the declared count without probing placeholder text while rendering the routine.
+  The operator sweep (shared with `op_syntax_idents`) is `Ops`' derived
   enumeration — the four operator types carry `[@@deriving enumerate]` — so a new operator cannot
   escape either check by being left off a hand-maintained list. `Ops.prec` cannot be derived that
   way (its constructors carry the phantom-typed `precision` witness), so `C_syntax.all_precs` keeps

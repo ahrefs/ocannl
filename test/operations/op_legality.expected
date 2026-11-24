@@ -40,3 +40,4 @@ viable tensorize permutations survive the gate: yes
 schedule_legality stops at the illegal op:
   Retype i3 Grid                             Legal
   Retype i5 Workgroup                        Illegal
+parallel-write refusal names the first write in program order: true

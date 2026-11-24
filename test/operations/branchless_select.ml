@@ -19,11 +19,12 @@
    at f32, f64, a half-precision condition beside an f32 result, and bf16 storage computing at f32;
    and, on cc, a gate and a [Where] composed into further arithmetic, whose rounding follows the
    [?:] spelling's C type (a gate's [0.0f] literal and a [Where] of floats both stay float). -
-   Emission, on cc: those legs call the blend and keep no [?:] spelling of their select. - Guards,
-   on cc: an index-guarded out-of-range read and a value-guarded [Get_dynamic] gather (its index
-   runs far out of range on the inactive lanes) keep [?:]; a value select over an index guard blends
-   outside and keeps the inner guard. Executed with the hazardous reads inactive. - Assembly, on
-   cc's own compiler and kernel flags: no conditional branch is attributed to a select's source
+   Emission, on cc: those legs call the blend and keep no [?:] spelling of their select. On Metal,
+   count the condition-buffer reads in the generated statements for the two [Satur01_gate] fixtures.
+   Guards, on cc: an index-guarded out-of-range read and a value-guarded [Get_dynamic] gather (its
+   index runs far out of range on the inactive lanes) keep [?:]; a value select over an index guard
+   blends outside and keeps the inner guard. Executed with the hazardous reads inactive. - Assembly,
+   on cc's own compiler and kernel flags: no conditional branch is attributed to a select's source
    lines, and those lines carry instructions, the realistic leg's included (gh-ocannl-1660); on CUDA
    and HIP (gh-ocannl-1695; HIP blends, CUDA's ptxas predicates the short-circuiting spelling
    itself), the same claim of the code object the run compiled (SASS through [ptxas] and [nvdisasm],
@@ -151,6 +152,7 @@ let mk_single = node_factory ~first_id:16220 ~dims:[| n |] ()
 let mk_double = node_factory ~prec:Ops.double ~first_id:16260 ~dims:[| n |] ()
 let mk_half = node_factory ~prec:Ops.half ~first_id:16300 ~dims:[| n |] ()
 let mk_bf16 = node_factory ~prec:Ops.bfloat16 ~first_id:16340 ~dims:[| n |] ()
+let mk_int32 = node_factory ~prec:Ops.int32 ~first_id:16380 ~dims:[| n |] ()
 
 (* The kernel's statements ({!Generated.main_logic}): not the builtins prelude, which spells [?:]
    itself (the integer-power helpers, the select helpers), and, where the kernel was rendered
@@ -477,19 +479,27 @@ let where_leg ?(else_zero = false) ?(cpu_only = false) ?axis ~name ~mk ~cmk ~cpr
     want;
   }
 
-let gate_leg ?axis ~name ~op ~semantics ~xv ~gv () =
-  let x = mk_single (name ^ "_x") and g = mk_single (name ^ "_g") in
-  let out = mk_single (name ^ "_out") in
+let gate_leg ?axis ?(mk = mk_single) ?(prec = single) ?(offset = 0.) ~name ~op ~semantics ~xv ~gv ()
+    =
+  let x = mk (name ^ "_x") and g = mk (name ^ "_g") in
+  let out = mk (name ^ "_out") in
   let i = sym () in
-  let sel = LL.Binop (op, (get x [| iter i |], single), (get g [| iter i |], single)) in
+  let at tn = (get tn [| iter i |], prec) in
+  let cond =
+    if Float.equal offset 0. then at x else (LL.Binop (Ops.Add, at x, (c offset, prec)), prec)
+  in
+  let sel = LL.Binop (op, cond, at g) in
   {
     name;
-    prec = single;
+    prec;
     cpu_only = false;
     seed = [ (x, xv); (g, gv) ];
     out;
     llc = loop_n ?axis i n (set out [| iter i |] sel);
-    want = Array.init n ~f:(fun i -> semantics xv.(i) gv.(i));
+    want =
+      Array.init n ~f:(fun i ->
+          let x = xv.(i) in
+          semantics (if Float.equal offset 0. then x else x +. offset) gv.(i));
   }
 
 (* A select inlined into further arithmetic, [out = (sel + h) - k] at f32. Both a gate's [0.0f] arm
@@ -603,6 +613,12 @@ let legs =
       ~xv:[| 0.5; 1.5; -0.5; nan; 0.; 0.75; -0.; 1. |]
       ~gv:[| -0.; nan; nan; 7.; inf; -2.5; 1.; nan |]
       ();
+    gate_leg ~name:"bs_sat01_gate_int32" ~op:Ops.Satur01_gate ~mk:mk_int32 ~prec:Ops.int32
+      ~offset:1.
+      ~semantics:(Ops.interpret_binop Ops.Satur01_gate)
+      ~xv:[| -1.; 0.; 1.; 2.; -30.; 40.; -3.; 5. |]
+      ~gv:[| 1.; 2.; 3.; 4.; 5.; 6.; 7.; 8. |]
+      ();
     (* Composed into [(sel + h) - k] with [h = k = 2^24]: the sum keeps a small [sel] exactly at
        double but rounds it away at f32, so the result shows the C type the select had. *)
     composed_leg ~name:"bs_relu_composed" ~select:`Relu_gate;
@@ -626,6 +642,22 @@ let () =
           p label (has (Lazy.force text) blend_marker));
       in_legf ~leg:leg' "%s: no short-circuiting spelling of the select remains" leg.name
         (fun label -> no_short_circuit_claim ~prec:leg.prec label (Lazy.force text)))
+
+let () =
+  let prefix = (Context.backend_facts_of_name backend_name).Ir.Backend_intf.node_ident_prefix in
+  List.iter [ "bs_sat01_gate"; "bs_sat01_gate_int32" ] ~f:(fun name ->
+      let leg = List.find_exn legs ~f:(fun leg -> String.equal leg.name name) in
+      in_legf ~leg:air_leg "%s: Metal reads the condition once" name (fun label ->
+          let condition, _ = List.hd_exn leg.seed in
+          let text = kernel_text name in
+          p label
+            (Option.value_map condition.Tn.code_name ~default:false ~f:(fun ident ->
+                 let ident = prefix ^ ident in
+                 let reads suffix =
+                   List.length
+                     (String.substr_index_all text ~may_overlap:false ~pattern:(ident ^ suffix))
+                 in
+                 reads "[" + reads ")[" = 1))))
 
 (* The assembly claim, on the shapes of the backward pass: [where cond g 0], a [Relu_gate] and the
    max-pool gate's float equality, each gating a load from a buffer argument (which the compiler
