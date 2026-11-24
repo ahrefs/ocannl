@@ -2167,11 +2167,13 @@
 # target the optimizer moves the cell's loops above the reductions (each cell keeps its
 # contributions' order), so the whole reduction accumulates wide and narrows once, in the plain
 # rendering and in privatized schedules that cover the same reduction. For a supported
-# convolution input-gradient cell with one positive affine pair (gh-ocannl-2423), the optimizer
-# groups all contributing windows and channels under the cell so the store rounds once.
+# convolution input-gradient cell with independent positive affine pairs, one per axis
+# (gh-ocannl-2423, gh-ocannl-2464), the optimizer groups all contributing windows and channels
+# under the cell so the store rounds once.
 # Where nothing widens, the move changes no value. Per-step rounding remains for affine nests
-# outside the allowlist (including multiple independent window pairs or unproved bounds),
-# concatenated cells, dynamic embedding scatters, and accumulations reading another target cell.
+# outside the allowlist (coupled pairs sharing an iterator, residue products past the cap, or
+# unproved bounds), concatenated cells, dynamic embedding scatters, and accumulations reading
+# another target cell.
 # Programmatic override: `Ir.Numerics.set_policy`.
 #bf16_arithmetic=auto
 

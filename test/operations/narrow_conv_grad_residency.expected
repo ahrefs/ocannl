@@ -24,7 +24,32 @@ FP16 stride 1: the gradient equals the f32 gradient rounded once per cell: true
 FP16 stride 2: the materialized f32 gradient equals the host sums: true
 FP16 stride 2: rounding per window differs from rounding once per cell: true
 FP16 stride 2: the gradient equals the f32 gradient rounded once per cell: true
+2-D stride (1, 1): the materialized f32 gradient equals the host sums: true
+2-D stride (1, 1): rounding per step differs from rounding once per cell: true
+2-D stride (1, 1): rounding per window differs from rounding once per cell: true
+2-D stride (1, 1): the bf16 gradient equals the f32 gradient rounded once per cell: true
+2-D stride (1, 1): the input gradient's accumulator tiles are f32: true
+2-D stride (1, 1): the privatized gradient equals the f32 gradient rounded once per cell: true
+2-D stride (2, 2): the materialized f32 gradient equals the host sums: true
+2-D stride (2, 2): rounding per step differs from rounding once per cell: true
+2-D stride (2, 2): rounding per window differs from rounding once per cell: true
+2-D stride (2, 2): the bf16 gradient equals the f32 gradient rounded once per cell: true
+2-D stride (2, 2): the input gradient's accumulator tiles are f32: true
+2-D stride (2, 2): the privatized gradient equals the f32 gradient rounded once per cell: true
+2-D stride (2, 6): the materialized f32 gradient equals the host sums: true
+2-D stride (2, 6): rounding per step differs from rounding once per cell: true
+2-D stride (2, 6): rounding per window differs from rounding once per cell: true
+2-D stride (2, 6): the bf16 gradient equals the f32 gradient rounded once per cell: true
+2-D stride (2, 6): the input gradient's accumulator tiles are f32: true
+2-D stride (2, 6): the privatized gradient equals the f32 gradient rounded once per cell: true
 a tied traversal chooses the frame with one residue nest: true
 the order witness loses the first small term at the overlapping cell: true
 the guarded nonunit-stride pair has a wide reduction in every residue: true
 the affine rewrite preserves the source contribution order and guarded cells: true
+the 2-D order witness evaluates to 5 at the doubly overlapping cell: true
+swapping the two early loops or misplacing the interleaved channel loop changes the 2-D witness: true
+the mixed-frame 2-D rewrite emits all 6 residue nests: true
+every residue nest of the guarded 2-D nonunit-stride pair widens: true
+the 2-D affine rewrite preserves the source contribution order and guarded cells: true
+coupled affine pairs sharing an iterator across axes decline: true
+independent pairs whose residue product exceeds 64 decline: true

@@ -2213,10 +2213,10 @@ val without_node_bounds : (unit -> 'a) -> 'a
 val sink_narrow_reduction_loops : t -> t
 (** In a perfect serial nest updating a narrow-float node read only at the written cell, put cell
     loops outside reductions so code generation can hold the whole reduction at [accum_prec]
-    (gh-ocannl-2362). For plain indices this is an interchange. For one supported affine pair
-    (gh-ocannl-2423), a cell loop owns every overlapping window that reaches the cell. Both preserve
-    each cell's contribution order. Part of {!post_virtualization_pipeline}, after
-    {!rewrite_one_hot_reductions}. *)
+    (gh-ocannl-2362). For plain indices this is an interchange. For independent supported positive
+    affine pairs, one per axis (gh-ocannl-2423, gh-ocannl-2464), cell loops own every overlapping
+    window that reaches the cell. Both preserve each cell's contribution order. Part of
+    {!post_virtualization_pipeline}, after {!rewrite_one_hot_reductions}. *)
 
 val rewrite_one_hot_reductions : ?static_indices:Indexing.static_symbol list -> t -> t
 (** gh-343: rewrites the narrow one-hot embedding pattern -- an [Add] reduction over a loop variable
