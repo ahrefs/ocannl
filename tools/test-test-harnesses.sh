@@ -43,6 +43,17 @@ if [ "$system_bash_version" = 3.2 ]; then
   expected_member_bash=/bin/bash
 fi
 expected_member_version=$("$expected_member_bash" -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"')
+expected_member_awk=
+if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+  expected_member_awk=$(type -P mawk 2>/dev/null || :)
+  if [ -z "$expected_member_awk" ] || [ ! -f "$expected_member_awk" ] || [ ! -x "$expected_member_awk" ]; then
+    expected_member_awk=
+    for cand in /opt/homebrew/bin/mawk /usr/local/bin/mawk; do
+      if [ -f "$cand" ] && [ -x "$cand" ]; then expected_member_awk=$cand; break; fi
+    done
+  fi
+fi
+expected_member_banner="$expected_member_version $expected_member_bash${expected_member_awk:+; awk $expected_member_awk}"
 # Empty arrays under nounset changed at 4.4, independently of the 3.2 leg.
 empty_array_expands() { # MAJOR.MINOR
   case $1 in [0-3].*|4.[0-3]) return 1 ;; *) return 0 ;; esac
@@ -343,6 +354,12 @@ for os in Linux Darwin; do
   printf '#!/bin/sh\necho %s\n' "$os" >"$TMP/uname-$os/uname"
   chmod +x "$TMP/uname-$os/uname"
 done
+# Keep fake-Darwin --ci-shell legs host-independent on Linux boxes without mawk.
+if ! type -P mawk >/dev/null 2>&1 && [ ! -x /opt/homebrew/bin/mawk ] && [ ! -x /usr/local/bin/mawk ]; then
+  host_awk=$(type -P awk 2>/dev/null || echo /usr/bin/awk)
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$host_awk" >"$TMP/uname-Darwin/mawk"
+  chmod +x "$TMP/uname-Darwin/mawk"
+fi
 SKIP_MEMBER=$first
 ci_list=$fixture/tools/harness-skips-ci-shell.txt darwin_list=$fixture/tools/harness-skips-ci-shell-darwin.txt
 dune_list=$fixture/tools/harness-skips-ci-shell-dune.txt
@@ -860,7 +877,7 @@ rm -rf "$BARRIER"; mkdir "$BARRIER"
 run --shell --jobs 3
 # What a run of one at a time prints, member by member, in the manifest's order.
 while IFS= read -r script; do
-  printf '\nHARNESS %s (shell; bash %s %s)\nran %s\nHARNESS %s exit: 0\n' "$script" "$expected_member_version" "$expected_member_bash" "$script" "$script"
+  printf '\nHARNESS %s (shell; bash %s)\nran %s\nHARNESS %s exit: 0\n' "$script" "$expected_member_banner" "$script" "$script"
 done <"$TMP/shell" >"$TMP/jobs-want"
 printf '\nharnesses: %s run, 0 failed\n' "$(wc -l <"$TMP/shell" | tr -d ' ')" >>"$TMP/jobs-want"
 if [ "$got" = 0 ] && cmp -s "$TMP/jobs-want" "$TMP/out" && cmp -s <(sort "$TMP/shell") <(sort "$RECORD"); then
@@ -969,7 +986,7 @@ for control in member bash shebang; do
     run --shell --jobs "$width"
     want=$empty_array_rc
     if [ "$got" = "$want" ] &&
-       grep -qF "(shell; bash $expected_member_version $expected_member_bash)" "$TMP/out" &&
+       grep -qF "(shell; bash $expected_member_banner)" "$TMP/out" &&
        { [ "$want" = 0 ] || { grep -q 'unbound variable' "$TMP/out" && grep -q ' run, 1 failed$' "$TMP/out"; }; }; then
       report 0 "Bash interpreter: $control empty-array control under --jobs $width exits $want"
     else report 1 "Bash interpreter: $control empty-array control under --jobs $width exits $want" "exit $got; $(tail -n 5 "$TMP/out")"; fi
@@ -1557,5 +1574,200 @@ modern_empty_array() {
   report "$control_rc" 'Bash interpreter: empty-array control passes under the modern PATH Bash'
 }
 harness_leg_run '1: modern PATH Bash expands nounset empty arrays' modern_empty_array
+
+# macOS mawk pin (gh-ocannl-2414): on Darwin, tools/test-harnesses.sh pins `awk`
+# to `mawk` inside its private interpreter directory (searching PATH then
+# standard Homebrew fallbacks), refuses with `brew install mawk` before taking a
+# fleet slot or running any member when mawk is absent (never falling back to
+# BWK awk), leaves `--list` interpreter-independent, and leaves Linux untouched.
+mawk_member=$(head -n 1 "$TMP/shell")
+cp "$fixture/$mawk_member" "$TMP/member-before-mawk"
+# A minimal PATH holding every standard tool the dispatcher needs, without mawk
+# (even on Debian/Ubuntu where /usr/bin/mawk lives beside /usr/bin/awk).
+mawk_clean_bin=$TMP/mawk-clean-bin
+mkdir -p "$mawk_clean_bin"
+for tool in bash sh env uname mktemp ln rm cat sed grep tr wc sort head tail cut dirname basename chmod perl awk sleep; do
+  tool_path=$(type -P "$tool" 2>/dev/null || :)
+  [ -n "$tool_path" ] && ln -s "$tool_path" "$mawk_clean_bin/$tool"
+done
+mawk_darwin_bin=$TMP/mawk-darwin-bin
+mawk_linux_bin=$TMP/mawk-linux-bin
+mkdir -p "$mawk_darwin_bin" "$mawk_linux_bin"
+printf '#!/bin/sh\necho Darwin\n' >"$mawk_darwin_bin/uname"
+printf '#!/bin/sh\necho Linux\n' >"$mawk_linux_bin/uname"
+chmod +x "$mawk_darwin_bin/uname" "$mawk_linux_bin/uname"
+
+# Remove Homebrew fallbacks in a fixture copy so the missing-mawk refusal is
+# deterministic even on Macs with /opt/homebrew/bin/mawk installed.
+mawk_no_fallback=$fixture/tools/test-harnesses-no-fallback.sh
+python3 - "$subject" "$mawk_no_fallback" <<'PY_MAWK_NO_FB' || exit 2
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text()
+anchor = 'darwin_mawk_fallbacks=(/opt/homebrew/bin/mawk /usr/local/bin/mawk)'
+assert text.count(anchor) == 1
+Path(sys.argv[2]).write_text(text.replace(anchor, 'darwin_mawk_fallbacks=()'))
+PY_MAWK_NO_FB
+chmod +x "$mawk_no_fallback"
+
+# Missing mawk on Darwin: refuses with exit 2 naming `brew install mawk`, takes
+# no fleet slot, and executes no member.
+: >"$RECORD"
+: >"$TMP/mawk-fw-calls"
+mawk_missing_rc=0
+(cd "$TMP" && env PATH="$mawk_darwin_bin:$mawk_clean_bin" OCANNL_TOOL_FLEET_WORKER="$fake_fw" \
+  FAKE_FW_CALLS="$TMP/mawk-fw-calls" "$mawk_no_fallback" --member "$mawk_member") >"$TMP/mawk-missing.out" 2>&1 || mawk_missing_rc=$?
+if [ "$mawk_missing_rc" = 2 ] && [ ! -s "$RECORD" ] && [ ! -s "$TMP/mawk-fw-calls" ] &&
+   grep -qF 'brew install mawk' "$TMP/mawk-missing.out" &&
+   grep -qF 'no fallback' "$TMP/mawk-missing.out"; then
+  report 0 'macOS mawk pin: missing mawk refuses (exit 2) naming brew install mawk before fleet slot or member'
+else
+  report 1 'macOS mawk pin: missing mawk refuses (exit 2) naming brew install mawk before fleet slot or member' \
+    "exit $mawk_missing_rc; calls=$(cat "$TMP/mawk-fw-calls"); out=$(cat "$TMP/mawk-missing.out")"
+fi
+
+# --list on Darwin stays interpreter-independent even when mawk is absent.
+: >"$RECORD"
+mawk_list_rc=0
+(cd "$TMP" && env PATH="$mawk_darwin_bin:$mawk_clean_bin" "$mawk_no_fallback" --member "$mawk_member" --list) \
+  >"$TMP/mawk-list.out" 2>&1 || mawk_list_rc=$?
+if [ "$mawk_list_rc" = 0 ] && [ ! -s "$RECORD" ] && [ "$(cat "$TMP/mawk-list.out")" = "$mawk_member" ]; then
+  report 0 'macOS mawk pin: --list stays interpreter-independent when mawk is absent'
+else
+  report 1 'macOS mawk pin: --list stays interpreter-independent when mawk is absent' \
+    "exit $mawk_list_rc; out=$(cat "$TMP/mawk-list.out")"
+fi
+
+# Linux with no mawk anywhere runs unaffected and keeps the HARNESS line free of `; awk`.
+cat >"$fixture/$mawk_member" <<'MAWK_PROBE_LINUX'
+#!/usr/bin/env bash
+printf 'awk_path=%s\n' "$(type -P awk)"
+MAWK_PROBE_LINUX
+chmod +x "$fixture/$mawk_member"
+mawk_linux_rc=0
+(cd "$TMP" && env PATH="$mawk_linux_bin:$mawk_clean_bin" "$mawk_no_fallback" --member "$mawk_member") \
+  >"$TMP/mawk-linux.out" 2>&1 || mawk_linux_rc=$?
+if [ "$mawk_linux_rc" = 0 ] &&
+   grep -qxF "awk_path=$mawk_clean_bin/awk" "$TMP/mawk-linux.out" &&
+   ! grep -qF '; awk ' "$TMP/mawk-linux.out"; then
+  report 0 'macOS mawk pin: Linux is unaffected when mawk is absent and leaves awk unpinned'
+else
+  report 1 'macOS mawk pin: Linux is unaffected when mawk is absent and leaves awk unpinned' \
+    "exit $mawk_linux_rc; out=$(cat "$TMP/mawk-linux.out")"
+fi
+
+# Present mawk on Darwin: pins `awk` for direct, nested bash, and env-shebang
+# calls at both --jobs 1 and --jobs 4, absolutizing a relative PATH entry and
+# honoring a fallback path when PATH has no mawk.
+mkdir -p "$TMP/mawk-stub-dir"
+mawk_stub_dir=$(CDPATH= cd -- "$TMP/mawk-stub-dir" && pwd)
+cat >"$mawk_stub_dir/mawk" <<'MAWK_STUB'
+#!/bin/sh
+printf 'STUB_MAWK:%s\n' "$*"
+MAWK_STUB
+chmod +x "$mawk_stub_dir/mawk"
+cat >"$TMP/awk-shebang.awk" <<'AWK_SHEBANG'
+#!/usr/bin/env awk
+BEGIN { print "unused" }
+AWK_SHEBANG
+chmod +x "$TMP/awk-shebang.awk"
+export AWK_SHEBANG_SUBJECT="$TMP/awk-shebang.awk"
+cat >"$fixture/$mawk_member" <<'MAWK_PROBE_DARWIN'
+#!/usr/bin/env bash
+printf 'direct=%s\n' "$(awk probe-direct)"
+printf 'nested=%s\n' "$(bash -c 'awk probe-nested')"
+printf 'shebang=%s\n' "$("$AWK_SHEBANG_SUBJECT")"
+MAWK_PROBE_DARWIN
+chmod +x "$fixture/$mawk_member"
+
+for width in 1 4; do
+  mawk_pin_rc=0
+  (cd "$TMP" && env PATH="mawk-stub-dir:$mawk_darwin_bin:$mawk_clean_bin" \
+    "$mawk_no_fallback" --member "$mawk_member" --jobs "$width") >"$TMP/mawk-pin-$width.out" 2>&1 || mawk_pin_rc=$?
+  if [ "$mawk_pin_rc" = 0 ] &&
+     grep -qF "; awk $mawk_stub_dir/mawk)" "$TMP/mawk-pin-$width.out" &&
+     grep -qxF 'direct=STUB_MAWK:probe-direct' "$TMP/mawk-pin-$width.out" &&
+     grep -qxF 'nested=STUB_MAWK:probe-nested' "$TMP/mawk-pin-$width.out" &&
+     grep -qxF "shebang=STUB_MAWK:$TMP/awk-shebang.awk" "$TMP/mawk-pin-$width.out"; then
+    report 0 "macOS mawk pin: Darwin pins direct, nested and env-shebang awk via relative PATH (--jobs $width)"
+  else
+    report 1 "macOS mawk pin: Darwin pins direct, nested and env-shebang awk via relative PATH (--jobs $width)" \
+      "exit $mawk_pin_rc; out=$(cat "$TMP/mawk-pin-$width.out")"
+  fi
+done
+
+# Fallback lookup when PATH lacks mawk.
+mawk_with_fb=$fixture/tools/test-harnesses-with-fb.sh
+python3 - "$subject" "$mawk_with_fb" "$mawk_stub_dir/mawk" <<'PY_MAWK_FB' || exit 2
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text()
+anchor = 'darwin_mawk_fallbacks=(/opt/homebrew/bin/mawk /usr/local/bin/mawk)'
+assert text.count(anchor) == 1
+Path(sys.argv[2]).write_text(text.replace(anchor, f'darwin_mawk_fallbacks=("{sys.argv[3]}")'))
+PY_MAWK_FB
+chmod +x "$mawk_with_fb"
+mawk_fb_rc=0
+(cd "$TMP" && env PATH="$mawk_darwin_bin:$mawk_clean_bin" "$mawk_with_fb" --member "$mawk_member") \
+  >"$TMP/mawk-fb.out" 2>&1 || mawk_fb_rc=$?
+if [ "$mawk_fb_rc" = 0 ] &&
+   grep -qF "; awk $mawk_stub_dir/mawk)" "$TMP/mawk-fb.out" &&
+   grep -qxF 'direct=STUB_MAWK:probe-direct' "$TMP/mawk-fb.out"; then
+  report 0 'macOS mawk pin: Darwin falls back to configured mawk path when PATH lacks mawk'
+else
+  report 1 'macOS mawk pin: Darwin falls back to configured mawk path when PATH lacks mawk' \
+    "exit $mawk_fb_rc; out=$(cat "$TMP/mawk-fb.out")"
+fi
+
+# Planted #2244 control with real mawk: `in`-inside-assignment yields `[; x]`
+# under mawk (failing the pinned Darwin run) while macOS BWK `/usr/bin/awk`
+# yields `[x]` (passing unpinned).
+real_mawk=$(type -P mawk 2>/dev/null || :)
+if [ -z "$real_mawk" ] || [ ! -x "$real_mawk" ]; then
+  real_mawk=
+  for cand in /opt/homebrew/bin/mawk /usr/local/bin/mawk; do
+    if [ -f "$cand" ] && [ -x "$cand" ]; then real_mawk=$cand; break; fi
+  done
+fi
+planted_2244_leg() {
+  if [ -z "$real_mawk" ]; then
+    harness_not_applicable 'no real mawk installed on this host for the #2244 control'
+    return
+  fi
+  local real_mawk_dir=$TMP/real-mawk-bin
+  rm -rf "$real_mawk_dir"; mkdir -p "$real_mawk_dir"
+  ln -s "$real_mawk" "$real_mawk_dir/mawk"
+  cat >"$fixture/$mawk_member" <<'PLANTED_2244'
+#!/usr/bin/env bash
+out=$(awk 'BEGIN { a["k"] = ("k" in a) ? a["k"] "; x" : "x"; print "got=[" a["k"] "]" }')
+printf '%s\n' "$out"
+[ "$out" = 'got=[x]' ]
+PLANTED_2244
+  chmod +x "$fixture/$mawk_member"
+  local pinned_rc=0
+  (cd "$TMP" && env PATH="$real_mawk_dir:$mawk_darwin_bin:$mawk_clean_bin" \
+    "$mawk_no_fallback" --member "$mawk_member") >"$TMP/mawk-2244-pinned.out" 2>&1 || pinned_rc=$?
+  if [ "$pinned_rc" = 1 ] && grep -qxF 'got=[; x]' "$TMP/mawk-2244-pinned.out"; then
+    report 0 'macOS mawk pin: planted #2244 in-inside-assignment fails under pinned mawk (got=[; x])'
+  else
+    report 1 'macOS mawk pin: planted #2244 in-inside-assignment fails under pinned mawk (got=[; x])' \
+      "exit $pinned_rc; out=$(cat "$TMP/mawk-2244-pinned.out")"
+  fi
+  if [ "$(uname -s 2>/dev/null)" = Darwin ] && [ -x /usr/bin/awk ]; then
+    local unpinned_rc=0
+    (cd "$TMP" && env PATH="/usr/bin:/bin" "$fixture/$mawk_member") >"$TMP/mawk-2244-unpinned.out" 2>&1 || unpinned_rc=$?
+    if [ "$unpinned_rc" = 0 ] && grep -qxF 'got=[x]' "$TMP/mawk-2244-unpinned.out"; then
+      report 0 'macOS mawk pin: same planted #2244 script passes unpinned under macOS BWK /usr/bin/awk (got=[x])'
+    else
+      report 1 'macOS mawk pin: same planted #2244 script passes unpinned under macOS BWK /usr/bin/awk (got=[x])' \
+        "exit $unpinned_rc; out=$(cat "$TMP/mawk-2244-unpinned.out")"
+    fi
+  fi
+}
+harness_leg_run '2: planted #2244 control fails under pinned mawk' planted_2244_leg
+
+cp "$TMP/member-before-mawk" "$fixture/$mawk_member"
+rm -f "$mawk_no_fallback" "$mawk_with_fb"
+unset AWK_SHEBANG_SUBJECT
 
 finish
