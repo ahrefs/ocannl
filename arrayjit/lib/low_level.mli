@@ -722,10 +722,17 @@ val rounded_read_prec : t -> Tnode.t -> Ops.prec option
     (gh-ocannl-1975). What a schedule has to know about an operand a recognizer sees through. *)
 
 val mentions_rng_conversion : scalar_t -> bool
-(** Whether an RNG lane conversion occurs anywhere in the expression (not inside a [Local_scope]).
-    Such a conversion picks its result type and the random bits it consumes from the precision it
-    renders at, so the expression renders at its target's storage precision and an accumulation
-    carrying it keeps a storage-width accumulator. *)
+(** Whether an RNG conversion occurs in the expression, stopping at scopes and dynamic indices. Such
+    a conversion picks its result type and the random bits it consumes from the precision it renders
+    at, so the expression renders at its target's storage precision and an accumulation carrying it
+    keeps a storage-width accumulator. *)
+
+val rendered_store_prec :
+  comp_prec:(Ops.prec -> Ops.prec) -> store_prec:Ops.prec -> scalar_t -> Ops.prec
+(** The precision at which a [Set] or [Set_dynamic] renders its value. An RNG conversion pins
+    storage precision. A leaf, an explicit round, or a transparent wrapper around either also uses
+    storage precision so a copy stays a copy. Other expressions use the backend's [comp_prec] to
+    keep arithmetic intermediates wide. *)
 
 val typed_at : prec:Ops.prec -> scalar_t -> bool
 (** Whether the expression, rendered at the float precision [prec], has that precision's C type --

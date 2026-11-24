@@ -265,12 +265,14 @@ val state_config : key:String.t -> data:String.t -> unit
     commandline, the environment, the config file and any profile -- so a test that states the
     configuration it tests is not outranked by an ambient [OCANNL_<KEY>] (gh-ocannl-2354). Raises
     [Invalid_argument] naming the key when a commandline argument sets [key] to a different value,
-    for the bootstrap keys, [profile], the keys initializing {!settings}, and [detach_c_stderr], and
-    for unregistered keys or spellings other than lowercase letters, digits and underscores without
-    the [ocannl_] prefix. Supply initialization keys on the command line, in the environment, or in
-    the config file where supported. To change a field of {!settings} in process, assign it
-    directly. Since gh-ocannl-2395, a statement of a snapshot input is refused before
-    {!restore_settings} can read it. State a key read by a lazy before its first force. *)
+    for the bootstrap keys, [profile], the keys initializing {!settings}, and keys read only during
+    [Utils] initialization, including stderr detachment, debug-runtime settings, startup cleanup
+    flags and the device-init deadline. It also refuses unregistered keys and spellings other than
+    lowercase letters, digits and underscores without the [ocannl_] prefix. Supply initialization
+    keys on the command line, in the environment, or in the config file where supported. To change a
+    field of {!settings} in process, assign it directly. Since gh-ocannl-2395, a statement of a
+    snapshot input is refused before {!restore_settings} can read it. State a key read by a lazy
+    before its first force. *)
 
 val unstate_config : String.t -> unit
 (** Withdraws [key]'s in-process statement, if any; the other sources answer for it again. *)

@@ -101,10 +101,12 @@ dxg_window_summary() { # start-utc end-utc [boot-verdict] -- kernel lines on std
 # A native boot's GPU drivers' own refusals (gh-ocannl-1034), read from the same kernel journal.
 #
 # Kept: every line from the GPU drivers -- `amdgpu`, KFD (`kfd`, `amdkfd`) and NVIDIA's resource
-# manager (`NVRM:`) -- and nothing else. A native box's kernel log is mostly NOT about the GPU (NIC
-# link changes, input devices, workqueue warnings, the nvme queue census at every resume), and none
-# of it is evidence about a unit's device; the dxg filter's `misc dxg` match does the same job for
-# the bridge. Within the drivers' lines nothing is dropped: they are rare outside a boot or a
+# manager (`NVRM:`) -- plus system-sleep lines (`NATIVE_SLEPT`) and userspace crash diagnostics
+# (`NATIVE_SEGFAULT`, `NATIVE_TRAP`, and an immediately following `NATIVE_FAULT_CODE` line), and
+# nothing else. A native box's kernel log is mostly NOT about the GPU (NIC link changes, input
+# devices, workqueue warnings, the nvme queue census at every resume, i915 `WARN_ON` traces), and
+# none of it is evidence about a unit's device; the dxg filter's `misc dxg` match does the same job
+# for the bridge. Within the drivers' lines nothing is dropped: they are rare outside a boot or a
 # resume, and a resume INSIDE a unit's window -- which logs `ring sdma0 uses VM inv eng ...` -- is
 # worth seeing beside a failure even though it counts for nothing.
 #
@@ -125,15 +127,36 @@ dxg_window_summary() { # start-utc end-utc [boot-verdict] -- kernel lines on std
 # which is how the process whose queue was refused dies -- is not a kernel line; the sweep reads it
 # from the unit's log instead (ENVIRONMENT_ASSERTIONS in tools/environment-refusals.sh).
 #
-# NOT counted, and shown: any other driver line. rog-nv's journal holds 57 `NVRM: VM: invalid mmap
-# context` lines and an `NVRM: API mismatch` from the last minutes of a driver upgrade before its
-# reboot (2026-09-22), and nothing has established what those mean for a unit; they surface as
-# signatures, which move the fingerprint, and promoting one to a counted refusal is a line here once
-# something has.
+# NOT counted, and shown:
+#   - Any other GPU-driver line. rog-nv's journal holds 57 `NVRM: VM: invalid mmap context` lines
+#     and an `NVRM: API mismatch` from the last minutes of a driver upgrade before its reboot
+#     (2026-09-22), and nothing has established what those mean for a unit; they surface as
+#     signatures, which move the fingerprint, and promoting one to a counted refusal is a line here
+#     once something has.
+#   - Userspace x86_64 crash lines (`segfault at` / `traps:` and an immediately following `Code:`
+#     opcode dump, gh-ocannl-2460), read through a fail-closed allowlist of kernel-prefixed lines so
+#     a one-off SIGSEGV or trap during a native GPU unit surfaces its faulting PC, `Code:` bytes,
+#     error code and CPU in the window without manual `journalctl` archaeology (gh-ocannl-2410) and
+#     without triggering a spurious GPU-refusal rerun (count stays 0, `window_red` stays false).
+#     Recognised forms (closed, x86_64 kernel `show_signal_msg` / `show_signal` / `show_opcodes`,
+#     after a `journalctl` syslog/ISO `kernel: ` prefix, bare `kernel: `, or `dmesg -T` `[...]`):
+#       1. `<comm>[<pid>]: segfault at <hex> ip <hex> sp <hex> error <hex>( ...)?`
+#       2. `traps: <comm>[<pid>] <desc> ip:<hex> sp:<hex> error:<hex>( ...)?`
+#       3. `Code: <hex-or-<hex> bytes>` or `Code: Unable to access opcode bytes at 0x<hex>.`,
+#          ONLY when immediately following a matched (1) or (2) line in the raw stream.
+#     Deliberately NOT matched: standalone `Code:` lines (e.g. kernel `WARN_ON` / `i915` `RIP:` +
+#     `Code:` stack dumps), `Code:` lines separated from a fault line by any intervening line,
+#     kernel-mode `traps:` lines lacking `ip:<hex> sp:<hex> error:<hex>`, unprefixed lines, prose
+#     merely containing `segfault at` or `traps:`, and non-x86 fault formats. Userspace fault lines
+#     are excluded from the driver refusal counter even when the crashing binary or VMA path contains
+#     a driver name (e.g. `libdrm_amdgpu.so`).
 NATIVE_KEEP='amdgpu|kfd|NVRM:'
 NATIVE_QUEUE_REFUSED='DQM create queue type [0-9]+ failed'
 NATIVE_SDMA_EXHAUSTED='No more SDMA queue to allocate'
 NATIVE_XID='NVRM: Xid '
+NATIVE_SEGFAULT='^.+[[][0-9]+]: segfault at [0-9a-f]+ ip [0-9a-f]+ sp [0-9a-f]+ error [0-9a-f]+($| )'
+NATIVE_TRAP='^traps: .+[[][0-9]+] .+ ip:[0-9a-f]+ sp:[0-9a-f]+ error:[0-9a-f]+($| )'
+NATIVE_FAULT_CODE='^Code: (([0-9a-f][0-9a-f]|<[0-9a-f][0-9a-f]>)( ([0-9a-f][0-9a-f]|<[0-9a-f][0-9a-f]>))* *|Unable to access opcode bytes at 0x[0-9a-f]+[.]) *$'
 
 # A SYSTEM SLEEP inside the window (gh-ocannl-1039). A suspend and resume keeps the boot id, so the
 # replaced-guest check cannot see it, and the unit's tests were frozen across it: a test's elapsed
@@ -151,27 +174,97 @@ NATIVE_XID='NVRM: Xid '
 # since 10-01, tuf 15 since 09-25, each paired with its entry, `(s2idle)` on both.
 NATIVE_SLEPT=' PM: (suspend (entry|exit)|hibernation: hibernation (entry|exit))'
 
+# Partition raw native kernel lines in a single pass so a userspace fault naming a GPU library
+# (e.g. `libdrm_amdgpu.so`) is shown once, never counted as a driver refusal, and keeps its
+# immediately following `Code:` line without admitting standalone kernel-warning `Code:` dumps.
+native_select_lines() { # mode (driver|slept|display) -- kernel lines on stdin
+  awk -v mode="$1" \
+    -v keep_re="$NATIVE_KEEP" \
+    -v slept_re="$NATIVE_SLEPT" \
+    -v segfault_re="$NATIVE_SEGFAULT" \
+    -v trap_re="$NATIVE_TRAP" \
+    -v code_re="$NATIVE_FAULT_CODE" '
+    {
+      msg = $0
+      has_prefix = 0
+      if (sub(/^([^ ]+ +[0-9]+ [0-9][0-9]:[0-9][0-9]:[0-9][0-9] [^ ]+ |[0-9][0-9][0-9][0-9]-[^ ]+ [^ ]+ )?kernel: /, "", msg)) {
+        has_prefix = 1
+      } else if (substr(msg, 1, 1) == "[" && (dmesg_end = index(msg, "] ")) > 1) {
+        # String slice rather than /^\[[^]]*\] /: older one-true-awk builds close `[^]]` early.
+        msg = substr(msg, dmesg_end + 2)
+        has_prefix = 1
+      }
+      is_fault = has_prefix && (msg ~ segfault_re || msg ~ trap_re)
+      is_code = has_prefix && prev_fault && (msg ~ code_re)
+      prev_fault = is_fault
+      is_driver = (!is_fault && !is_code) && ($0 ~ keep_re)
+      is_slept = (!is_fault && !is_code) && ($0 ~ slept_re)
+      if (mode == "driver") {
+        if (is_driver) print
+      } else if (mode == "slept") {
+        if (is_slept) print
+      } else if (mode == "display") {
+        if (is_driver || is_slept || is_fault || is_code) print
+      }
+    }
+  '
+}
+
+# POSIX BRE sed script normalizing native kernel lines for bytewise fingerprint comparison.
+# A fingerprint compares signatures bytewise against the previous failure, so per-run volatile
+# fields -- KFD `pid 85562`, NVIDIA `pid=1234`, and a userspace crash's PID, fault address, ip,
+# sp, VMA ASLR base and CPU/core/socket -- must be normalized so a standing red does not report
+# `fingerprint moved` on every run. Sleep lines (`PM: ...`) become signatures too, because the
+# stable fact that moves a fingerprint is that the box slept.
+#   - strips syslog/ISO `kernel: `, bare `kernel: `, and `dmesg -T` `[...]` prefixes;
+#   - on userspace `segfault at` / `traps:` lines, normalizes PID, fault address, ip, sp, VMA ASLR
+#     base and CPU/core/socket via the shared `:fault` block while keeping comm, trap kind, error
+#     code, VMA name, relative offset and mapping size;
+#   - on `Code:` lines, preserves opcode bytes verbatim and normalizes an unreadable-address
+#     message;
+#   - on driver and sleep lines, replaces KFD `pid <n>` and NVIDIA `pid=<n>` with `N`.
+NATIVE_SIGNATURE_SED='
+s/^[^:]*:[0-9][0-9]:[0-9][0-9][^ ]* [^ ]* kernel: //
+s/^kernel: //
+s/^\[[^]]*\] //
+/\[[0-9][0-9]*\]: segfault at [0-9a-f][0-9a-f]* ip [0-9a-f][0-9a-f]* sp [0-9a-f][0-9a-f]* error [0-9a-f]/{
+  s/\[[0-9][0-9]*\]: segfault at [0-9a-f][0-9a-f]* ip [0-9a-f][0-9a-f]* sp [0-9a-f][0-9a-f]* error /[N]: segfault at ADDR ip ADDR sp ADDR error /
+  b fault
+}
+/^traps: .*\[[0-9][0-9]*\] .* ip:[0-9a-f][0-9a-f]* sp:[0-9a-f][0-9a-f]* error:[0-9a-f]/{
+  s/^\(traps: .*\)\[[0-9][0-9]*\]\( .* \)ip:[0-9a-f][0-9a-f]* sp:[0-9a-f][0-9a-f]* error:/\1[N]\2ip:ADDR sp:ADDR error:/
+  b fault
+}
+/^Code: /{
+  s/^Code: Unable to access opcode bytes at 0x[0-9a-f][0-9a-f]*\. *$/Code: Unable to access opcode bytes at 0xADDR./
+  b
+}
+s/pid [0-9][0-9]*/pid N/g
+s/pid=[0-9][0-9]*/pid=N/g
+b
+:fault
+s/\( in .*\)\[\([0-9a-f][0-9a-f]*\),[0-9a-f][0-9a-f]*+\([0-9a-f][0-9a-f]*\)\]/\1[\2,ADDR+\3]/
+s/\( in .*\)\[[0-9a-f][0-9a-f]*+\([0-9a-f][0-9a-f]*\)\]/\1[ADDR+\2]/
+s/ likely on CPU [0-9][0-9]* (core [0-9][0-9]*, socket [0-9][0-9]*)$/ likely on CPU N (core N, socket N)/
+s/ likely on CPU [0-9][0-9]*$/ likely on CPU N/
+'
+
 native_window_summary() { # start-utc end-utc [boot-verdict] -- kernel lines on stdin, block on stdout
-  local all kept refusals xids slept
+  local all driver display refusals xids slept
   all=$(cat)
-  kept=$(printf '%s\n' "$all" | grep -E "$NATIVE_KEEP") || true
-  slept=$(printf '%s\n' "$all" | grep -E "$NATIVE_SLEPT") || true
-  refusals=$(printf '%s\n' "$kept" | grep -cE "$NATIVE_QUEUE_REFUSED") || true
+  driver=$(printf '%s\n' "$all" | native_select_lines driver) || true
+  slept=$(printf '%s\n' "$all" | native_select_lines slept) || true
+  display=$(printf '%s\n' "$all" | native_select_lines display) || true
+  refusals=$(printf '%s\n' "$driver" | grep -cE "$NATIVE_QUEUE_REFUSED") || true
   [ "$refusals" -gt 0 ] ||
-    refusals=$(printf '%s\n' "$kept" | grep -c "$NATIVE_SDMA_EXHAUSTED") || true
-  xids=$(printf '%s\n' "$kept" | grep -c "$NATIVE_XID") || true
+    refusals=$(printf '%s\n' "$driver" | grep -c "$NATIVE_SDMA_EXHAUSTED") || true
+  xids=$(printf '%s\n' "$driver" | grep -c "$NATIVE_XID") || true
   refusals=$((refusals + xids))
-  [ -n "$kept" ] || refusals=0
+  [ -n "$driver" ] || refusals=0
   printf '=== native window %s..%s (utc) ===\n' "$1" "$2"
-  # The signature is the line from the driver's name on, with the process ids that differ between
-  # two equally refused runs replaced: `pid 85562` in KFD's line, `pid=1234` in an Xid event. A
-  # fingerprint compares these bytewise, and a pid would make a standing SDMA red report
-  # `fingerprint moved` on every run. The first two expressions strip the timestamp in the
-  # journal's form and in `dmesg -T`'s.
-  # The sleep's own lines are shown and become signatures too, after the drivers' lines: what moves
-  # a fingerprint is that the box slept, which these say in a stable form.
-  { [ -z "$kept" ] || printf '%s\n' "$kept"; [ -z "$slept" ] || printf '%s\n' "$slept"; } | window_lines native \
-    's/^.* kernel: //; s/^\[[^]]*\] //; s/pid [0-9][0-9]*/pid N/g; s/pid=[0-9][0-9]*/pid=N/g'
+  # Raw lines stay verbatim (capped at 40) so forensics retain exact timestamps, PIDs, addresses,
+  # CPU numbers and `Code:` bytes; signatures strip volatile fields so repeated runs compare equal.
+  [ -z "$display" ] || printf '%s\n' "$display" | window_lines native "$NATIVE_SIGNATURE_SED"
   window_verdict native "$refusals" "${3:-}" "${slept:+slept}"
 }
 

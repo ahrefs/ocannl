@@ -153,14 +153,30 @@ let () =
         && Option.is_none (Utils.stated_config key))
 
 let () =
-  p_all ~min:3 "a startup-only input or compatibility spelling is refused, naming the key"
-    [ ("log_level", "2"); ("detach_c_stderr", "false"); ("big_models", "true") ]
+  p_all ~min:6 "a startup-only input or compatibility spelling is refused, naming the key"
+    [
+      ("log_level", "2");
+      ("detach_c_stderr", "false");
+      ("big_models", "true");
+      ("debug_backend", "text");
+      ("clean_up_build_files_on_startup", "true");
+      ("device_init_deadline", "0");
+    ]
     ~f:(fun (key, data) ->
       match Utils.state_config ~key ~data with
       | () ->
+          Stdlib.Printf.eprintf "startup statement accepted for %s\n" key;
           Utils.unstate_config key;
           false
       | exception Invalid_argument message ->
           String.is_substring message ~substring:(Printf.sprintf "~key:%S" key)
           && String.is_substring message ~substring:"startup setting"
-          && Option.is_none (Utils.stated_config key))
+          && Option.is_none (Utils.stated_config key));
+  (* Artifact writers read this prefix again after startup cleanup. *)
+  Utils.with_stated_config
+    [ ("build_files_prefix", "config_statement_precedence_stated") ]
+    (fun () ->
+      p "the artifact prefix remains configurable in process"
+        (String.equal
+           (Utils.get_global_arg ~default:"" ~arg_name:"build_files_prefix")
+           "config_statement_precedence_stated"))

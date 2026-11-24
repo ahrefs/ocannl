@@ -1180,6 +1180,14 @@ byte-for-byte. The batch's baseline exited 0 (`20261110T173928Z-99425`).
   With a zero addend on the host, the same removal also fails the bitwise readback at
   `narrow_compute_f32=true` (`20261122T214552Z-20651`, exit 1). The zero-addend fixture passes
   with the render-time clause in place (`20261122T214748Z-75163`, exit 0).
+- The packed draw in `scope_collapse_rounding` keeps the `Where` condition at single for both
+  single and half stores (gh-ocannl-2437). On mac-studio (cc, M4 Max), making `rng_collapsible`
+  always accept drops the half-store scope under both policies and breaks bitwise parity when half
+  computes in single (`20261124T123531Z-98081`, exit 1). Reading lane zero at every position breaks
+  parity at both store widths under both policies (`20261124T123400Z-65147`, exit 1).
+- Removing the RNG arm of `Low_level.rendered_store_prec` on mac-studio (cc, M4 Max) fails the half
+  residual claim when half computes in single (`20261124T130243Z-97660`, exit 1). The inlined
+  subtraction runs in single and keeps the residual that the storage pin should erase.
 
 ## Leg-gate independence and ambient-policy alignment (gh-ocannl-2434)
 
