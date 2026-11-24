@@ -20,3 +20,8 @@ chain: footprint reduced: true
 train: loss trajectory parity across buffer_aliasing: PASS
 train: loss decreased: true
 train: footprint reduced: true
+replay: the materialized reader matches the closed form: true
+replay: the forward result matches its materialized run and the closed form: true
+replay: unrelated intermediates still share storage: true
+replay: the observable virtual result stays recomputable: true
+replay: the host read matches the materialized reader: true

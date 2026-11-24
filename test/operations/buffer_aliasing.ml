@@ -1,4 +1,4 @@
-(* gh-ocannl-489 liveness-based buffer aliasing (the memory planner). Four layers:
+(* gh-ocannl-489 liveness-based buffer aliasing (the memory planner):
 
    1. Unit checks of the pure arena planner [Backends.plan_arena_offsets]: liveness-disjoint
    same-precision items share bytes; overlapping spans, cross-precision pairs and always-live items
@@ -18,6 +18,9 @@
    planner targets): the loss trajectory is bitwise identical with the planner on and off (a
    miscolored interval corrupts values — this catches it), the loss stays host-readable (the
    observation intent [Train.grad_update] declares), and the step's working footprint shrinks.
+
+   4. An observable virtual result replays a non-observable buffer after the routine runs
+   (gh-ocannl-2461).
 
    The [buffer_aliasing] gate is flipped via the environment between sections; the config is read
    afresh at each compile. Printed facts are booleans/PASS lines so the expected output stays
@@ -79,8 +82,8 @@ let () =
   let tnode l = (NTDSL.init ~l ~prec:Ir.Ops.single ~o:[ 1 ] ~f:(fun _ -> 0.) ()).Tensor.value in
   let a = tnode "sink_a" and b = tnode "sink_b" and c = tnode "sink_c" in
   let idcs = [| Ir.Indexing.Fixed_idx 0 |] in
-  let set t v = LL.Set { tn = t; idcs; llsc = v; debug = "" } in
-  let get t = LL.Get (t, idcs) in
+  let set t v = Ll_test.set t idcs v in
+  let get t = Ll_test.get t idcs in
   let sunk lines = LL.flat_lines [ LL.sink_zero_outs (LL.unflat_lines lines) ] in
   (let result =
      sunk [ LL.Zero_out a; LL.Zero_out b; set c (LL.Constant 1.); set a (get c); set b (get a) ]
@@ -229,3 +232,78 @@ let () =
      links two apart are liveness-disjoint and share bytes on both the statement-granularity (CPU)
      and segment-granularity (GPU) planners. *)
   p "train: footprint reduced" (train_mem_on < train_mem_off)
+
+let () =
+  let open Ll_test in
+  let width = 16 in
+  let mk = node_factory ~first_id:246100 ~dims:[| width |] () in
+  let run_replay ~name ~aliasing ~stored =
+    Unix.putenv "OCANNL_BUFFER_ALIASING" (Bool.to_string aliasing);
+    let early = mk "early" and tap = mk "tap" and middle = mk "middle" in
+    let late = mk "late" and last = mk "last" and out = mk "out" in
+    Tn.set_observable tap;
+    materialize out;
+    let write tn value =
+      let i = sym () in
+      loop_n i width (set_at tn (iter i) (value i))
+    in
+    let plus source bias i = add (get source [| iter i |]) (c bias) in
+    let llc =
+      List.reduce_exn ~f:seq
+        [
+          write early tick;
+          write tap (plus early 10.);
+          write middle (plus tap 20.);
+          write late (plus middle 40.);
+          write last (plus late 80.);
+          write out (plus last 160.);
+        ]
+    in
+    let materialized = [ early; middle; late; last ] @ if stored then [ tap ] else [] in
+    let lowered = optimize ~name ~materialized llc in
+    (* A cut at each producer gives the GPU planner the same disjoint lifetimes as cc. *)
+    let lowered_transform o =
+      List.map (LL.flat_lines [ o.LL.llc ]) ~f:(fun llc -> { o with LL.llc })
+    in
+    let ctx, routine =
+      Context.compile ~name ~prelowered:lowered ~lowered_transform (Context.auto ())
+        Asgns.empty_comp Ir.Indexing.Empty
+    in
+    (* The test config prefills fresh outputs, including those that share bytes. *)
+    (Context.run ctx routine, early, tap, middle, last, out)
+  in
+  let ref_ctx, _, ref_tap, _, _, ref_out =
+    run_replay ~name:"buffer_alias_replay_reference" ~aliasing:false ~stored:true
+  in
+  let ctx, early, tap, middle, last, out =
+    run_replay ~name:"buffer_alias_replay" ~aliasing:true ~stored:false
+  in
+  let expected bias = Array.init width ~f:(fun i -> Float.of_int i +. bias) in
+  let exact = Array.equal Float.equal in
+  let ref_values = Context.get_values ref_ctx ref_tap in
+  p "replay: the materialized reader matches the closed form" (exact ref_values (expected 11.));
+  p "replay: the forward result matches its materialized run and the closed form"
+    (let values = Context.get_values ctx out in
+     exact values (expected 311.) && exact values (Context.get_values ref_ctx ref_out));
+  let aliased tn =
+    match Context.observability ctx tn with
+    | Unobservable_aliased [ v ] -> Tn.equal v tn
+    | _ -> false
+  in
+  p "replay: unrelated intermediates still share storage" (aliased middle && aliased last);
+  p "replay: the observable virtual result stays recomputable"
+    (match Context.observability ctx tap with
+    | Recomputable -> true
+    | Unobservable_aliased [ root; leaf ] when Tn.equal root tap && Tn.equal leaf early ->
+        eprintf "replay: Unobservable_aliased through the early buffer\n%!";
+        false
+    | status ->
+        eprintf "replay: unexpected classification %s\n%!"
+          (Option.value (Context.observability_tag status) ~default:"readable");
+        false);
+  p "replay: the host read matches the materialized reader"
+    (match Context.get_values ctx tap with
+    | values -> exact values ref_values
+    | exception Utils.User_error msg ->
+        eprintf "replay: %s\n%!" msg;
+        false)

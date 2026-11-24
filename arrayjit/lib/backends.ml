@@ -108,15 +108,38 @@ let size_in_bytes_of (key : Tn.t) =
   let prec = Lazy.force key.Tn.storage_prec in
   Array.fold (Lazy.force key.Tn.dims) ~init:1 ~f:( * ) * Ops.prec_in_bytes prec
 
+(* gh-ocannl-2461: an observable virtual result replays after the routine has returned. Its reads
+   extend buffer lifetimes beyond the last use in the scheduled code. Follow the same stored
+   computations and scope retractions as [Context.observability]; a materialized value shields its
+   own inputs from replay. *)
+let observable_replay_buffers (ctx : Low_level.optimize_ctx) =
+  let { Low_level.computations; placements; _ } = ctx in
+  let visited = Hash_set.create (module Tn) in
+  let buffers = Hash_set.create (module Tn) in
+  let rec visit tn =
+    if not (Hash_set.mem visited tn || Host_inits.mem tn) then (
+      Hash_set.add visited tn;
+      if Tn.Placements.known_non_virtual placements tn then Hash_set.add buffers tn
+      else
+        Option.iter (Hashtbl.find computations tn) ~f:(fun components ->
+            List.iter components ~f:(fun (_, code) ->
+                let facts = Low_level.replay_facts ~placements ~self:tn code in
+                Set.iter facts.replay_reads ~f:visit)))
+  in
+  Hashtbl.iter_keys computations ~f:(fun tn ->
+      if Tn.is_observable tn && not (Tn.Placements.known_non_virtual placements tn) then visit tn);
+  buffers
+
 (* gh-ocannl-489 liveness-based buffer aliasing, the per-compile planning half: live spans over the
    FINAL segment sequence (post-schedule, post-fission -- cross-nest merges and kernel cuts change
    which accesses can interleave, so pre-schedule spans would be unsound), filtered down to the
    aliasing-eligible nodes. Eligible = in-context working nodes that the routine writes before any
    read: not read-only, not read-before-write (excludes recurrent nodes and reliance on alloc-time
-   zeros), not observable (host reads must stay valid), not host-initialized (live before the
-   program), not constants, not the merge node. Callers run this BEFORE backend codegen: the
-   candidates registered on [optimize_ctx.alias_candidates] make codegen drop the [restrict]
-   qualifier on their kernel parameters (an actually-aliased [restrict] pair is a miscompile).
+   zeros), neither observable nor a replay buffer for an observable result, not host-initialized
+   (live before the program), not constants, not the merge node. Callers run this BEFORE backend
+   codegen: the candidates registered on [optimize_ctx.alias_candidates] make codegen drop the
+   [restrict] qualifier on their kernel parameters (an actually-aliased [restrict] pair is a
+   miscompile).
    Position granularity: statements on backends that synchronize between top-level statements (the C
    backends -- no hardware workgroup binding, parallel dispatches join), segments otherwise (GPU
    kernels lack grid-wide sync between statements). [lowered] is the whole-routine (pre-fission)
@@ -126,23 +149,27 @@ let size_in_bytes_of (key : Tn.t) =
    whole-routine lowering only, never on the kernel sequence: a node failing it gets no live span in
    any schedule, so the arena keeps it apart from every other node. Shared with the device-memory
    floor ([link_floor], gh-ocannl-1554), which counts such nodes in full. *)
-let alias_eligible ~(lowered : Low_level.optimized) (tn : Tn.t) : bool =
-  let plc = lowered.Low_level.optimize_ctx.placements in
-  match Hashtbl.find lowered.Low_level.traced_store tn with
-  | None -> false
-  | Some node ->
-      Tn.Placements.is_in_context_force plc tn (Site "45:export-span")
-      && (not node.Low_level.read_only)
-      && (not node.Low_level.read_before_write)
-      && (node.Low_level.zeroed_out || node.Low_level.has_assignment)
-      (* Written but never consumed in-routine means the write is an EXPORT for later routines
-         (parameter initialization is the ubiquitous case) -- its lifetime extends past this
-         routine, so it must keep dedicated bytes. *)
-      && node.Low_level.read_by_other
-      && (not (Tn.is_observable tn))
-      && (not (Host_inits.mem tn))
-      && (not (Tn.Placements.known_constant plc tn))
-      && not (Option.exists lowered.Low_level.merge_node ~f:(Tn.equal tn))
+let alias_eligible ~(lowered : Low_level.optimized) =
+  let ctx = lowered.Low_level.optimize_ctx in
+  let plc = ctx.placements in
+  let replay_buffers = lazy (observable_replay_buffers ctx) in
+  fun (tn : Tn.t) ->
+    match Hashtbl.find lowered.Low_level.traced_store tn with
+    | None -> false
+    | Some node ->
+        Tn.Placements.is_in_context_force plc tn (Site "45:export-span")
+        && (not node.Low_level.read_only)
+        && (not node.Low_level.read_before_write)
+        && (node.Low_level.zeroed_out || node.Low_level.has_assignment)
+        (* Written but never consumed in-routine means the write is an EXPORT for later routines
+           (parameter initialization is the ubiquitous case) -- its lifetime extends past this
+           routine, so it must keep dedicated bytes. *)
+        && node.Low_level.read_by_other
+        && (not (Tn.is_observable tn))
+        && (not (Host_inits.mem tn))
+        && (not (Tn.Placements.known_constant plc tn))
+        && (not (Option.exists lowered.Low_level.merge_node ~f:(Tn.equal tn)))
+        && not (Hash_set.mem (Lazy.force replay_buffers) tn)
 
 let plan_alias_spans ~(name : string) ~(limits : hardware_limits) ~(lowered : Low_level.optimized)
     ~(segments : Low_level.optimized list) : (Tn.t, int * int) Base.Hashtbl.t option =
