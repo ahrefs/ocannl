@@ -77,6 +77,7 @@ module Cuda = struct
   (* gh-ocannl-707, gh-ocannl-1338: the names nvrtc fails to compile as a kernel name after the
      prelude, measured by [tools/vendor_idents.exe]. *)
   let vendor_routine_idents = Vendor_idents_cuda.names
+  let workgroup_start_alignment = 1
 
   (* gh-ocannl-2426: CUDA's [CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES] reports static shared memory to 1
      B. Measured on rog-nv-linux (RTX 5070 Ti, run 20261122T165804Z-1226811): the 9x21, 9x11 and
@@ -228,6 +229,10 @@ module Hip = struct
      prelude, measured by [tools/vendor_idents.exe]. *)
   let vendor_routine_idents = Vendor_idents_hip.names
 
+  (* gh-ocannl-2465: LLVM AMDGPU can align LDS arrays to 16 B. Padding is between arrays: 17 B and
+     15 B retain a 47 B layout on both gfx1102 and gfx1151. *)
+  let workgroup_start_alignment = 16
+
   (* gh-ocannl-2426: HIP's [HIP_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES] reports static shared memory to 1
      B on both discrete and unified memory. Measured on tuf-amd-linux (gfx1102 discrete, run
      20261122T165816Z-762875) and minix-amd-linux (gfx1151 unified, run 20261122T165826Z-1286312),
@@ -354,6 +359,7 @@ module Make (Dialect : sig
   val div_f64 : string option
   val fp8_from_float_syntax : string * string
   val vendor_routine_idents : string list
+  val workgroup_start_alignment : int
   val workgroup_reporting_granule : int
 
   val convert_precision :
@@ -412,6 +418,7 @@ struct
 
   let barrier_syntax = Some "__syncthreads();"
   let shared_decl_prefix = Some "__shared__ "
+  let workgroup_start_alignment = Dialect.workgroup_start_alignment
   let workgroup_reporting_granule = Dialect.workgroup_reporting_granule
   let restrict_keyword = Some "__restrict__"
 

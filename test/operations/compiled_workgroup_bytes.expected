@@ -14,4 +14,5 @@ no compiled kernel allocates more workgroup memory than its charge rounded to th
 some aligned compiled kernel allocates exactly its positive charge: true
 the 37-byte unaligned staged kernel allocates exactly its granule-rounded bound: true
 two-array odd-byte probes distinguish 16 B kernel-total rounding over 4 B-aligned arrays from exact-sum and per-array rounding: true
+HIP odd-byte pairs charge inter-array padding and preserve the trailing array size: true
 some unaligned seeded kernel allocates exactly its granule-rounded bound, not a coarser multiple: true

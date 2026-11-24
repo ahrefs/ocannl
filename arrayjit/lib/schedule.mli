@@ -1439,12 +1439,13 @@ val kernel_workgroup_bytes :
   mma_triples:(Ops.prec * Ops.prec * Ops.prec) list ->
   int
 (** The workgroup-shared charge of a kernel declaring [arrays] (each one array's declared bytes) and
-    tile-MMA emission scopes of the [(d, a, b)] storage triples [mma_triples]: every array rounded
-    up to the backend's {!field:Backend_intf.workgroup_allocation_alignment} (gh-ocannl-1330), plus
-    the backend's per-kernel {!field:Backend_intf.mma_kernel_workgroup_bytes} over the triples, once
-    (gh-ocannl-1255). What {!workgroup_memory_bytes} charges the code it reads, and what a seeding
-    prediction of it charges the tiles and scopes every completion of a sketch declares
-    ([Sketch_families]), so the two round and count alike. *)
+    tile-MMA emission scopes of the [(d, a, b)] storage triples [mma_triples]. The allocations
+    include the backend's per-kernel {!field:Backend_intf.mma_kernel_workgroup_bytes} over the
+    triples (gh-ocannl-1255). Each size is rounded up to
+    {!field:Backend_intf.workgroup_allocation_alignment} (gh-ocannl-1330), with
+    {!field:Backend_intf.workgroup_start_alignment} padding between arrays, charged for the largest
+    possible footprint across array orders (gh-ocannl-2465). {!workgroup_memory_bytes} and the
+    seeding predictions ([Sketch_families]) use the same charge. *)
 
 val workgroup_memory_bytes :
   capabilities:Backend_intf.codegen_capabilities -> Low_level.optimized -> int

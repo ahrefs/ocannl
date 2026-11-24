@@ -1026,8 +1026,11 @@ module type C_syntax_config = sig
   (** The granule, in bytes, the device's allocator rounds each [shared_decl_prefix] array up to
       (gh-ocannl-1330), published as
       {!Backend_intf.codegen_capabilities.workgroup_allocation_alignment} for the schedule-level
-      estimate to round each allocation by. Metal: 4 (measured). Default 1: the declared sizes add
-      up exactly. *)
+      estimate to round each allocation by. Metal: 4 (measured). Default 1. *)
+
+  val workgroup_start_alignment : int
+  (** Upper bound on a shared array's start alignment in bytes, published as
+      {!Backend_intf.codegen_capabilities.workgroup_start_alignment}. HIP: 16. Default 1. *)
 
   val workgroup_reporting_granule : int
   (** The granule, in bytes, the driver rounds a compiled kernel's reported static workgroup-shared

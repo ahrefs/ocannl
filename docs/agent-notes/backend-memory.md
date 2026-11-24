@@ -699,7 +699,7 @@ files.
   opaque (a cudajit attribute binding would supersede them). The claim is AT MOST: a device compiler
   may drop an array it proves dead, and an over-charge only costs candidates. The comparison rounds
   the charge up to `codegen_capabilities.workgroup_reporting_granule` (gh-ocannl-2426), distinct
-  from the per-array `workgroup_allocation_alignment`: Metal's `staticThreadgroupMemoryLength`
+  from the per-array size and start alignments: Metal's `staticThreadgroupMemoryLength`
   rounds the kernel's 4 B-rounded total up to 16 B (M4 Max, `20261122T165750Z-3778`: 9x21, 9x11 and
   9x17 f16 fused products charged 4476, 4296 and 4404 B reported 4480, 4304 and 4416 B, with 4304 %
   32 = 16 ruling out a coarser granule; two-array probes of 17+15 B [exact 32, 4 B-charged 36] and
@@ -709,17 +709,19 @@ files.
   (`rog-nv-linux`, `20261122T165804Z-1226811`) and HIP (`tuf-amd-linux` discrete gfx1102
   `20261122T165816Z-762875` and `minix-amd-linux` unified gfx1151 `20261122T165826Z-1286312`,
   byte-identical on both) report to 1 B (4474, 4294 and 4402 B on the same f16 fused products).
-  On HIP, the two-array probes also showed LLVM AMDGPU aligning each `__shared__` array's start to
-  16 B without rounding the trailing array (17+15 B -> 47, 17+17 B -> 49, 33+33 B -> 81 B), which
-  exceeds `workgroup_allocation_alignment = 1` when an unaligned array precedes another array (tracked
-  as a deferred follow-up from gh-ocannl-2426; in the `half_local_odd` and `half_local_9x11`
-  fixtures the unaligned product incurred no inter-array padding beside the 4096 B of aligned tiles,
-  which shows it sat last in those fixtures, not that seeding enforces that order). Non-vacuity
+  HIP's LLVM AMDGPU compiler can align `__shared__` array starts to 16 B (gh-ocannl-2465). The
+  two-array probes reported 47 B for 17+15 B, 49 B for 17+17 B, and 81 B for 33+33 B. The scheduler
+  uses `workgroup_start_alignment` to bound inter-array padding. It subtracts the smallest padding
+  any nonempty array could leave at the end because the compiler chooses the order. The 17+15 B
+  probe on gfx1151 unified memory failed on the base with a 32 B charge
+  (`20261124T102402Z-37756`). In the `half_local_odd` and `half_local_9x11` fixtures the odd product
+  sits last beside aligned tiles. The bound allows it to sit earlier, so HIP uses the dedicated
+  odd-byte probes for its equality witnesses. Non-vacuity
   claims require an aligned kernel matching its positive charge exactly (`charged % 16 = 0`), a
   single-array 37 B `byte` staged probe hitting its granule-rounded bound (48 B on Metal, 37 B on
   CUDA and HIP — distinguishing 1 B from 2 B without requiring MMA), two-array odd-byte probes
   (17+15 B and 17+17 B, both reporting 48 B on Metal) where allocation alignment and reporting
-  granule differ, and (where f16 tensorization is advertised) an unaligned seeded kernel
+  granule differ, and (on CUDA and Metal where f16 tensorization is advertised) an unaligned seeded kernel
   (`half_local_odd` 9x21, `half_local_9x11` 9x11) hitting its granule-rounded bound below a 32 B
   multiple. With one unaligned array on Metal the 16 B reporting
   granule still absorbs the 4 B per-array term, so `metal_threadgroup_overflow` owns that term.

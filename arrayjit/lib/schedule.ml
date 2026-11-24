@@ -10154,14 +10154,29 @@ let workgroup_allocation_bytes ~(capabilities : Backend_intf.codegen_capabilitie
   let align = max 1 capabilities.Backend_intf.workgroup_allocation_alignment in
   (bytes + align - 1) / align * align
 
-(* The one charge both the gate's estimate and the seeding predictions of it apply: each array
-   rounded, plus the backend's per-kernel tile-MMA term over the scopes' storage triples
-   (gh-ocannl-1255: once for the kernel, not once per scope). *)
+(* The gate and the seeding predictions lay out the same allocations, including the backend's
+   tile-MMA scratch once per kernel (gh-ocannl-1255). *)
 let kernel_workgroup_bytes ~(capabilities : Backend_intf.codegen_capabilities) ~arrays ~mma_triples
     =
   let alloc = workgroup_allocation_bytes ~capabilities in
-  List.sum (module Int) arrays ~f:alloc
-  + alloc (capabilities.Backend_intf.mma_kernel_workgroup_bytes ~triples:mma_triples)
+  let scratch = capabilities.Backend_intf.mma_kernel_workgroup_bytes ~triples:mma_triples in
+  let align = capabilities.Backend_intf.workgroup_start_alignment in
+  if align <= 1 then List.sum (module Int) arrays ~f:alloc + alloc scratch
+  else
+    (* The compiler chooses the order of the arrays. Charging each array through the aligned start
+       of its successor and removing the least possible final padding gives the largest footprint
+       over those orders (gh-ocannl-2465). Zero bytes contribute no array. *)
+    let padded, trailing =
+      List.fold (scratch :: arrays)
+        ~init:(0, align - 1)
+        ~f:(fun (total, trailing) bytes ->
+          let bytes = alloc bytes in
+          if bytes = 0 then (total, trailing)
+          else
+            let padded = (bytes + align - 1) / align * align in
+            (total + padded, Int.min trailing (padded - bytes)))
+    in
+    Int.max 0 (padded - trailing)
 
 let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
     (opt : Low_level.optimized) : int =
