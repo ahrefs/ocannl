@@ -6240,13 +6240,14 @@ let skip_list_census content =
     branches is the passing constant -- [if on_cpu then ok else true] is [(not on_cpu) || ok]. The
     For a nonrecursive [let] with a flat tuple pattern of variables and wildcards, each variable
     sees only its position in a same-arity tuple literal. A tuple can be returned through an [if]
-    with two arms, [match], local [let] or a sequence; every terminal value must be a tuple literal
-    of that arity. The enclosing condition and branch scopes survive projection. The claim is
-    refused when one disjunct is RUN-CONSTANT and another is computed by the test: the gate decides
-    the verdict wherever it is closed. For a [gated] claim, a disjunct that makes its own [~when_]
-    false -- a conjunct of the gate, negated -- is dropped first: the claim is never evaluated where
-    it holds. A disjunct that is a constant -- a literal, a library value -- is neither, so a claim
-    over the configuration and constants alone is no fold.
+    with two arms, [match], local [let] (including [let%op] and [let%cd]) or a sequence; every
+    terminal value must be a tuple literal of that arity. The enclosing condition and branch scopes
+    survive projection. A branch can return the passing Boolean after a diagnostic or local binding.
+    The claim is refused when one disjunct is RUN-CONSTANT and another is computed by the test: the
+    gate decides the verdict wherever it is closed. For a [gated] claim, a disjunct that makes its
+    own [~when_] false -- a conjunct of the gate, negated -- is dropped first: the claim is never
+    evaluated where it holds. A disjunct that is a constant -- a literal, a library value -- is
+    neither, so a claim over the configuration and constants alone is no fold.
 
     {2 Run-constant}
 
@@ -6402,10 +6403,29 @@ let folded_unread_members =
     "in_legf";
   ]
 
+(* The scanner sees these bindings before PPX expansion. The extension still owns its value binding,
+   and the continuation supplies the result being projected. *)
+let dsl_let expr =
+  match expr.pexp_desc with
+  | Pexp_extension
+      ( ({ txt = "op" | "cd"; _ } as name),
+        PStr
+          [
+            ({ pstr_desc = Pstr_eval (({ pexp_desc = Pexp_let _; _ } as inner), attributes); _ } as
+             item);
+          ] ) ->
+      Some
+        ( inner,
+          fun result ->
+            let item = { item with pstr_desc = Pstr_eval (result, attributes) } in
+            { expr with pexp_desc = Pexp_extension (name, PStr [ item ]) } )
+  | _ -> None
+
 let rec tuple_projection ~index ~arity expr =
   let project = tuple_projection ~index ~arity in
   let rebuild desc = { expr with pexp_desc = desc } in
-  match (strip_constraints expr).pexp_desc with
+  let expr = strip_constraints expr in
+  match expr.pexp_desc with
   | Pexp_tuple parts when List.length parts = arity -> List.nth parts index
   | Pexp_ifthenelse (condition, yes, Some no) ->
       Option.map2 (project yes) (project no) ~f:(fun yes no ->
@@ -6419,7 +6439,8 @@ let rec tuple_projection ~index ~arity expr =
       Option.map (project body) ~f:(fun body -> rebuild (Pexp_let (rec_flag, bindings, body)))
   | Pexp_sequence (setup, result) ->
       Option.map (project result) ~f:(fun result -> rebuild (Pexp_sequence (setup, result)))
-  | _ -> None
+  | _ ->
+      Option.bind (dsl_let expr) ~f:(fun (inner, rebuild) -> Option.map (project inner) ~f:rebuild)
 
 let folded_gate_census content =
   let ast = Read.structure_of content in
@@ -6458,11 +6479,13 @@ let folded_gate_census content =
     | Ppat_tuple parts -> List.for_all parts ~f:irrefutable
     | _ -> false
   in
-  let is_bool expr value =
-    match (strip_constraints expr).pexp_desc with
+  let rec is_bool expr value =
+    let expr = strip_constraints expr in
+    match expr.pexp_desc with
     | Pexp_construct ({ txt = Ppxlib.Longident.Lident name; _ }, None) ->
         String.equal name (if value then "true" else "false")
-    | _ -> false
+    | Pexp_let (_, _, result) | Pexp_sequence (_, result) -> is_bool result value
+    | _ -> Option.value_map (dsl_let expr) ~default:false ~f:(fun (inner, _) -> is_bool inner value)
   in
   let walker =
     object (self)

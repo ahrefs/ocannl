@@ -7272,13 +7272,25 @@ let folded_gate_controls =
   let declined, clean =
     if not on_gpu then (true, true)
     else
-      match compile (Context.auto ()) with
+      let%op out = src *. 2.0 in
+      match compile (Context.auto ()) out with
       | Ok result -> result.declined, result.clean
       | Error _ -> false, false
   in
   p "declined" declined;
   p "clean" clean|ocaml},
         [ "not (not on_gpu)"; "not (not on_gpu)" ] );
+      ( "refuses a tuple component that passes after printing a skip diagnostic",
+        {ocaml|let () =
+  let checked, _ =
+    if on_gpu then (gpu_check (Context.auto ()), false)
+    else
+      let reason = "GPU unavailable" in
+      Stdio.eprintf "%s\n" reason;
+      (true, true)
+  in
+  p "the check holds" checked|ocaml},
+        [ "on_gpu" ] );
       ( "accepts a tuple component computed on both sides of a backend gate",
         {ocaml|let checked, _ =
   if on_gpu then (gpu_check (Context.auto ()), true)
@@ -7557,6 +7569,8 @@ let run_probe_token_controls () =
       {|[ ("all_rows", List.for_all rows ~f:row_ok) ]|} [ "all_rows" ];
     probe_token_control "accepts a stdout probe token with a nonempty population witness"
       {|[ ("all_rows", not (List.is_empty rows) && List.for_all rows ~f:row_ok) ]|} [];
+    probe_token_control "accepts a stdout probe token that explicitly permits empty input"
+      {|[ ("all_rows", if List.is_empty rows then true else List.for_all rows ~f:row_ok) ]|} [];
     probe_token_control "accepts separate stdout tokens for independently checked rows"
       {|[ ("first_row", row_ok first); ("second_row", row_ok second) ]|}
       ~parent:

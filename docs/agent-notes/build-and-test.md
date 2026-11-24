@@ -3219,15 +3219,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   sees what they never checked.
   For gh-ocannl-2435 the reader projects a nonrecursive flat tuple binding into its individual
   variables when every terminal value is a matching tuple literal. An `if`, `match`, local
-  `let` or sequence can return the tuple, as the original `hip_scratch_budget` did. Other
-  destructuring and qualified component access remain outside the reader.
+  `let` (including `let%op` and `let%cd`) or sequence can return the tuple, as the original
+  `hip_scratch_budget` did. A side-effecting setup can still end in an unconditional pass.
+  Other destructuring and qualified component access remain outside the reader.
 - A subprocess can hide a vacuous quantifier by emitting one success token from `List.for_all`
   and claiming its presence in the parent (gh-ocannl-2435). In argv-selected probes that print
   literal tags via `List.iter` over a literal `(tag, ok)` table, `verdict_ratchet` checks the
   producer's Boolean for a nonempty witness using the same provenance as a Verdict Boolean.
   Emit one token per row and check the expected token list with `p_all ~min`, as in
-  `dominant_kernel_mma_ceiling`, or include a nonempty witness in the producer. The scanner's
-  header lists the exact AST shapes. General cross-process provenance, including exit codes,
+  `dominant_kernel_mma_ceiling`, or include a nonempty witness in the producer. If emptiness is
+  intended to pass, say why at the site and spell out the empty case with
+  `if List.is_empty rows then true else List.for_all rows ~f`. The scanner's header lists
+  the exact AST shapes. General cross-process provenance, including exit codes,
   stdout transport, differently constructed tables and the receiving claim, is a review boundary.
 - **A run-time hatch is the claim's argument, not a disjunct of its value** (gh-ocannl-996). A claim
   that executed but cannot be judged on this run -- a timing envelope over a window the instrument
