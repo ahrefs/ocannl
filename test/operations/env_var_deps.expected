@@ -300,6 +300,8 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-gh1133_summary
   test/operations/dune                     @runtest-gpu_cotenants
   test/operations/dune                     @runtest-half_unary_math-reproducible
+  test/operations/dune                     @runtest-harness_census
+  test/operations/dune                     @runtest-harness_census_control
   test/operations/dune                     @runtest-heap_local_arrays-outlined
   test/operations/dune                     @runtest-hello_world_op
   test/operations/dune                     @runtest-kernel_attribution

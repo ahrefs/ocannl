@@ -282,6 +282,8 @@ census_total_ratchet.ml: [scanner-refusal:69eae464e65486966fad9baf77c30d51] prov
 census_total_ratchet.ml: [scanner-refusal:f9313f61cc480e2fb8d0b3cd6b1ae843] provenance constructor allowances (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:ac43499e46e4fb95bbea30412af203b6] counts remain review-visible (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:84d226496601429f470c41aba20a39c2] adopted-count allowance cannot (claim) is catalogued beside census_total_ratchet.expected: true
+census_total_ratchet.ml: [scanner-refusal:992a8057c2edff63b85a6a203b6b5701] harness census allows (claim) is catalogued beside census_total_ratchet.expected: true
+census_total_ratchet.ml: [scanner-refusal:fef03fd6e82a5c2c2c628b5a571c8299] census refuses standalone (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:531d64a37eb2ccc8b4c3fee2c5a2fac9] quoted-source entry spans (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:22c73fdc7f08c48d003aabefe9f59d17] checked in contributes (claim) is catalogued beside census_total_ratchet.expected: true
 codegen_text_inventory.ml has exactly the explicitly assigned refusal controls: true
