@@ -326,6 +326,7 @@ let () =
         stride_w = 2;
       };
       { pos_h = 13; pos_w = 7; taps_h = 5; taps_w = 5; channels_2d = 3; stride_h = 2; stride_w = 6 };
+      { pos_h = 5; pos_w = 4; taps_h = 3; taps_w = 2; channels_2d = 3; stride_h = 4; stride_w = 3 };
     ]
   in
   Test_utils.with_policy
@@ -459,8 +460,9 @@ let () =
   p_all2 "the 2-D affine rewrite preserves the source contribution order and guarded cells"
     (evaluate rewritten) before ~f:Float.equal
 
-(* gh-ocannl-2464: decline controls for the remaining allowlist boundaries — coupled affine pairs
-   sharing an iterator across axes, and a residue-tuple product above the 64-nest cap. *)
+(* gh-ocannl-2464: decline controls paired with passing boundary twins for the remaining allowlist
+   boundaries — coupled affine pairs sharing an iterator across axes, a residue-tuple product above
+   the 64-nest cap, and a single-axis shorter-scan frame exceeding 64 residues. *)
 let () =
   let open Ll_test in
   let equal_paths = List.equal (List.equal Ir.Indexing.equal_symbol) in
@@ -478,6 +480,22 @@ let () =
     match LL.serial_accum_widths ~serialized:(fun _ _ -> false) ~tn:coupled_out coupled_rw with
     | [ s ] -> not s.LL.sa_widens
     | _ -> false);
+  let ui = sym () and uk = sym () and ud = sym () and uj = sym () and ut = sym () in
+  let uncoupled_out =
+    node_factory ~prec:bf16 ~first_id:24648 ~dims:[| 12; 12 |] () "ncgr_uncoupled"
+  in
+  let u0 = aff [ (1, ui); (1, uj) ] 0 and u1 = aff [ (1, uk); (1, ut) ] 0 in
+  let uncoupled_body =
+    set uncoupled_out [| u0; u1 |] (add_own (get uncoupled_out [| u0; u1 |]) (embed ud))
+  in
+  let uncoupled_src =
+    loop_n ui 4 (loop_n uk 4 (loop_n ud 2 (loop_n uj 4 (loop_n ut 4 uncoupled_body))))
+  in
+  let uncoupled_rw = LL.sink_narrow_reduction_loops uncoupled_src in
+  p "an uncoupled 2-D twin of the same shape widens"
+    (match LL.serial_accum_widths ~serialized:(fun _ _ -> false) ~tn:uncoupled_out uncoupled_rw with
+    | [ s ] -> s.LL.sa_widens
+    | _ -> false);
   let i1 = sym () and j1 = sym () and i2 = sym () and j2 = sym () and c = sym () in
   let over_out = node_factory ~prec:bf16 ~first_id:24646 ~dims:[| 200; 200 |] () "ncgr_over_cap" in
   let o0 = aff [ (9, i1); (10, j1) ] 0 and o1 = aff [ (9, i2); (10, j2) ] 0 in
@@ -486,11 +504,24 @@ let () =
   let over_rw = LL.sink_narrow_reduction_loops over_src in
   p "independent pairs whose residue product exceeds 64 decline"
     (equal_paths (nest_paths over_rw) (nest_paths over_src));
-  let p1 = sym () and k1 = sym () and p2 = sym () and k2 = sym () and ch = sym () in
-  let amp_out = node_factory ~prec:bf16 ~first_id:24647 ~dims:[| 7000; 16 |] () "ncgr_amp_cap" in
-  let a0 = aff [ (65, p1); (1, k1) ] 0 and a1 = aff [ (1, p2); (1, k2) ] 0 in
-  let amp_body = set amp_out [| a0; a1 |] (add_own (get amp_out [| a0; a1 |]) (embed ch)) in
-  let amp_src = loop_n p1 100 (loop_n p2 6 (loop_n ch 2 (loop_n k1 66 (loop_n k2 3 amp_body)))) in
+  let bi1 = sym () and bj1 = sym () and bi2 = sym () and bj2 = sym () and bc = sym () in
+  let cap_out = node_factory ~prec:bf16 ~first_id:24649 ~dims:[| 200; 200 |] () "ncgr_at_cap" in
+  let b0 = aff [ (8, bi1); (9, bj1) ] 0 and b1 = aff [ (8, bi2); (9, bj2) ] 0 in
+  let cap_body = set cap_out [| b0; b1 |] (add_own (get cap_out [| b0; b1 |]) (embed bc)) in
+  let cap_src =
+    loop_n bi1 10 (loop_n bi2 10 (loop_n bc 2 (loop_n bj1 9 (loop_n bj2 9 cap_body))))
+  in
+  let cap_rw = LL.sink_narrow_reduction_loops cap_src in
+  let cap_widths = LL.serial_accum_widths ~serialized:(fun _ _ -> false) ~tn:cap_out cap_rw in
+  p "independent pairs at the 64-residue boundary emit 64 residue nests"
+    (List.length cap_widths = 64);
+  p_all "every residue nest at the 64-residue boundary widens" cap_widths ~f:(fun s ->
+      s.LL.sa_widens);
+  let p1 = sym () and k1 = sym () and ch = sym () in
+  let amp_out = node_factory ~prec:bf16 ~first_id:24647 ~dims:[| 7000 |] () "ncgr_amp_cap" in
+  let a0 = aff [ (65, p1); (1, k1) ] 0 in
+  let amp_body = set_at amp_out a0 (add_own (get amp_out [| a0 |]) (embed ch)) in
+  let amp_src = loop_n p1 100 (loop_n ch 2 (loop_n k1 66 amp_body)) in
   let amp_rw = LL.sink_narrow_reduction_loops amp_src in
-  p "a pair whose shorter-scan frame exceeds 64 declines instead of amplifying the scan"
+  p "a 1-D pair whose shorter-scan frame exceeds 64 declines instead of amplifying the scan"
     (equal_paths (nest_paths amp_rw) (nest_paths amp_src))

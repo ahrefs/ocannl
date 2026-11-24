@@ -2171,9 +2171,9 @@
 # (gh-ocannl-2423, gh-ocannl-2464), the optimizer groups all contributing windows and channels
 # under the cell so the store rounds once.
 # Where nothing widens, the move changes no value. Per-step rounding remains for affine nests
-# outside the allowlist (coupled pairs sharing an iterator, residue products past the cap, or
-# unproved bounds), concatenated cells, dynamic embedding scatters, and accumulations reading
-# another target cell.
+# outside the allowlist (coupled pairs sharing an iterator, a shorter-scan frame or residue product
+# past the 64-nest cap, or unproved bounds), concatenated cells, dynamic embedding scatters, and
+# accumulations reading another target cell.
 # Programmatic override: `Ir.Numerics.set_policy`.
 #bf16_arithmetic=auto
 

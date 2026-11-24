@@ -774,11 +774,12 @@ files.
   dominates the whole reduction can bound its transfers on a padded tail. After one residue is
   privatized, an untouched sibling write still identifies its entry width by statement identity.
   If the surviving entry width is ambiguous, the candidate declines. Coupled affine pairs sharing
-  an iterator across axes, other affine forms, residue products above 64 and dynamic scatters keep
-  per-step rounding. The affine path is pinned by `narrow_conv_grad_residency` (1-D including a
-  split tail, a disjoint window with gaps, and FP16; 2-D overlapping and mixed bf16 parity against
-  the once-rounded f32 twin, privatized f32 tiles, a hand-built mixed-frame 2-D order witness, and
-  coupled-pair / residue-budget declines). The 1-D overlapping FP16 fixture selects `Fp16_wide`
+  an iterator across axes, other affine forms, any axis whose shorter-scan frame exceeds 64
+  residues or residue-tuple products above 64, and dynamic scatters keep per-step rounding. The
+  affine path is pinned by `narrow_conv_grad_residency` (1-D including a split tail, a disjoint
+  window with gaps, FP16, and the shorter-scan-over-64 decline; 2-D overlapping, mixed, and
+  all-injective bf16 parity against the once-rounded f32 twin, privatized f32 tiles, a hand-built
+  mixed-frame 2-D order witness, and coupled-pair / residue-budget boundary controls). The 1-D overlapping FP16 fixture selects `Fp16_wide`
   explicitly and starts at 2048 to match the BF16 fixture's spacing of two at 256, so the same
   window contributions expose per-window rounding in both formats. The plain path is pinned by
   `lowered_nest_order`'s narrow legs and `narrow_grad_residency` (a bf16 dense layer's three

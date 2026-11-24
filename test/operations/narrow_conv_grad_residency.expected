@@ -42,6 +42,11 @@ FP16 stride 2: the gradient equals the f32 gradient rounded once per cell: true
 2-D stride (2, 6): the bf16 gradient equals the f32 gradient rounded once per cell: true
 2-D stride (2, 6): the input gradient's accumulator tiles are f32: true
 2-D stride (2, 6): the privatized gradient equals the f32 gradient rounded once per cell: true
+2-D stride (4, 3): the materialized f32 gradient equals the host sums: true
+2-D stride (4, 3): rounding per step differs from rounding once per cell: true
+2-D stride (4, 3): the bf16 gradient equals the f32 gradient rounded once per cell: true
+2-D stride (4, 3): the input gradient's accumulator tiles are f32: true
+2-D stride (4, 3): the privatized gradient equals the f32 gradient rounded once per cell: true
 a tied traversal chooses the frame with one residue nest: true
 the order witness loses the first small term at the overlapping cell: true
 the guarded nonunit-stride pair has a wide reduction in every residue: true
@@ -52,5 +57,8 @@ the mixed-frame 2-D rewrite emits all 6 residue nests: true
 every residue nest of the guarded 2-D nonunit-stride pair widens: true
 the 2-D affine rewrite preserves the source contribution order and guarded cells: true
 coupled affine pairs sharing an iterator across axes decline: true
+an uncoupled 2-D twin of the same shape widens: true
 independent pairs whose residue product exceeds 64 decline: true
-a pair whose shorter-scan frame exceeds 64 declines instead of amplifying the scan: true
+independent pairs at the 64-residue boundary emit 64 residue nests: true
+every residue nest at the 64-residue boundary widens: true
+a 1-D pair whose shorter-scan frame exceeds 64 declines instead of amplifying the scan: true

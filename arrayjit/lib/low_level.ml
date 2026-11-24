@@ -13859,6 +13859,19 @@ let sink_narrow_reduction_loops (llc : t) : t =
         b_step : int;
         descending : bool;
       }
+
+      type binding = {
+        frame : frame;
+        qmax : int;
+        lo : int;
+        hi : int;
+        owner : Indexing.symbol;
+        step : Indexing.symbol;
+        i_terms : (int * Indexing.symbol) list;
+        i_offset : int;
+        j_terms : (int * Indexing.symbol) list;
+        j_offset : int;
+      }
     end in
     let exception Unsupported in
     let iprec = Ops.index_prec () in
@@ -13988,14 +14001,14 @@ let sink_narrow_reduction_loops (llc : t) : t =
             let remaining = List.filter all ~f:(fun (s, _) -> not (is_overlapping_sym s)) in
             let phase combo =
               let bindings =
-                List.map combo ~f:(fun (f, r, qmax, lo, hi) ->
+                List.map combo ~f:(fun (frame, r, qmax, lo, hi) ->
                     let owner = Indexing.get_symbol () and step = Indexing.get_symbol () in
-                    let qdir, q0 = if f.F.descending then (-1, qmax) else (1, 0) in
-                    let i_terms = [ (1, owner); (-qdir * f.F.b_step, step) ] in
-                    let i_offset = add lo (-mul f.F.b_step q0) in
-                    let j_terms = [ (qdir * f.F.a_step, step) ] in
-                    let j_offset = add r (mul f.F.a_step q0) in
-                    (f, qmax, lo, hi, owner, step, i_terms, i_offset, j_terms, j_offset))
+                    let qdir, q0 = if frame.F.descending then (-1, qmax) else (1, 0) in
+                    let i_terms = [ (1, owner); (-qdir * frame.F.b_step, step) ] in
+                    let i_offset = add lo (-mul frame.F.b_step q0) in
+                    let j_terms = [ (qdir * frame.F.a_step, step) ] in
+                    let j_offset = add r (mul frame.F.a_step q0) in
+                    { F.frame; qmax; lo; hi; owner; step; i_terms; i_offset; j_terms; j_offset })
               in
               let others =
                 List.map remaining ~f:(fun (s, n) ->
@@ -14004,22 +14017,15 @@ let sink_narrow_reduction_loops (llc : t) : t =
               let writes =
                 List.filter_map others ~f:(fun (s, l) -> Option.some_if (is_write s) l)
               in
-              let owners =
-                List.map bindings ~f:(fun (_, _, lo, hi, owner, _, _, _, _, _) -> (owner, hi - lo))
-              in
+              let owners = List.map bindings ~f:(fun b -> (b.F.owner, b.F.hi - b.F.lo)) in
               let cell_loops = writes @ owners in
               let reductions =
                 List.filter_map all ~f:(fun (s, _) ->
-                    match
-                      List.find bindings ~f:(fun (f, _, _, _, _, _, _, _, _, _) ->
-                          sym_eq s f.F.early)
-                    with
-                    | Some (_, qmax, _, _, _, step, _, _, _, _) -> Some (step, qmax)
+                    match List.find bindings ~f:(fun b -> sym_eq s b.F.frame.F.early) with
+                    | Some b -> Some (b.F.step, b.F.qmax)
                     | None ->
                         if
-                          List.exists bindings ~f:(fun (f, _, _, _, _, _, _, _, _, _) ->
-                              sym_eq s f.F.late)
-                          || is_write s
+                          List.exists bindings ~f:(fun b -> sym_eq s b.F.frame.F.late) || is_write s
                         then None
                         else find others s)
               in
@@ -14027,18 +14033,16 @@ let sink_narrow_reduction_loops (llc : t) : t =
               let range s = Option.map (find order s) ~f:(fun hi -> (0, hi)) in
               let subst s =
                 match
-                  List.find_map bindings
-                    ~f:(fun (f, _, _, _, _, _, i_terms, i_offset, j_terms, j_offset) ->
-                      if sym_eq s f.F.i then Some (i_terms, i_offset)
-                      else if sym_eq s f.F.j then Some (j_terms, j_offset)
+                  List.find_map bindings ~f:(fun b ->
+                      if sym_eq s b.F.frame.F.i then Some (b.F.i_terms, b.F.i_offset)
+                      else if sym_eq s b.F.frame.F.j then Some (b.F.j_terms, b.F.j_offset)
                       else None)
                 with
                 | Some res -> res
                 | None -> ([ (1, Option.value_map (find others s) ~default:s ~f:fst) ], 0)
               in
               let is_reparametrized s =
-                List.exists bindings ~f:(fun (_, _, _, _, owner, step, _, _, _, _) ->
-                    sym_eq s owner || sym_eq s step)
+                List.exists bindings ~f:(fun b -> sym_eq s b.F.owner || sym_eq s b.F.step)
               in
               let normalize ~symbols ~offset =
                 let index = Indexing.affine ~symbols ~offset in
@@ -14098,11 +14102,11 @@ let sink_narrow_reduction_loops (llc : t) : t =
                      && Affine.separates ~range ~concurrent:is_cell_loop ~syms:cell_syms ~coords)
               then raise Unsupported;
               let bound_guards =
-                List.concat_map bindings ~f:(fun (f, _, _, _, _, _, i_terms, i_offset, _, _) ->
-                    let i_index = normalize ~symbols:i_terms ~offset:i_offset in
+                List.concat_map bindings ~f:(fun b ->
+                    let i_index = normalize ~symbols:b.F.i_terms ~offset:b.F.i_offset in
                     [
                       compare_index (Indexing.Fixed_idx 0) i_index;
-                      compare_index i_index (Indexing.Fixed_idx f.F.imax);
+                      compare_index i_index (Indexing.Fixed_idx b.F.frame.F.imax);
                     ])
               in
               let guards = bound_guards @ List.map guards ~f:arg in
