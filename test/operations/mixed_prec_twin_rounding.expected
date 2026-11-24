@@ -207,3 +207,11 @@ half slice of f32 data, auto: the twin's rounding reaches the value: true
 a materialized twin reads its buffer: true
 the virtual twin reads no buffer of its own: true
 the virtual twin rounds its master in the expression, through no local: true
+raw values use the requested master precision: true
+raw values retain the bits that the half twin rounds away: true
+the half twin reads rounded values: true
+raw values outside the scope use the session default: true
+a nested explicit request pins the original master: true
+conflicting explicit scopes refuse a default-initialized master: true
+an explicit master precision mismatch names both precisions and the parameter: true
+a master precision refusal restores the parameter scope: true

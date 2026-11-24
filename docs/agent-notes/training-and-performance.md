@@ -17,6 +17,15 @@ files.
   `Session_error` when that set is empty rather than silently compiling empty routines
   (gh-ocannl-670: the gh-465 test initially "passed" parameter parity because no optimizer step
   ran on either side). `?params` on each helper overrides the derivation.
+- `Mixed_prec.with_master_weights ~master_prec` sets the precision of raw parameter values
+  before host ndarray allocation (gh-ocannl-2445). The cast hook runs after allocation, by which
+  point the ndarray has fixed the node's precision and may already have rounded its values.
+  The override is scoped to differentiable DSL parameter literals. A parameter with a conflicting
+  specified precision, such as a wrapped ndarray, is refused when the scope names a master
+  precision. Nested scopes share the explicit precision so the first hook pins the original
+  master. Conflicting explicit requests are refused before the inner callback.
+  `mixed_prec_twin_rounding` checks the stored values and the twin on cc and Metal.
+  `one_hot_cast_twin` exercises the f64-to-f32 gather on backends that support f64.
 - Being a parameter is a property of INITIALIZATION, not of trainability (gh-ocannl-1743): what keys
   on `params` is who sets the value (`init_params`, the forward-consumption refusal, the shape
   solver's `is_param` terminal rows, `Precision_policy`'s `param_prec`, `Parallel`'s replication,

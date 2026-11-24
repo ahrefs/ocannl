@@ -1054,8 +1054,8 @@ struct
     let require_grad = Fn.non Tensor.is_prohibit_grad Grad_spec.grad_spec in
     let t =
       match (value, values, param_init) with
-      | Some value, None, None -> Tensor.term_init ~grad_spec:Prohibit_grad [| value |]
-      | None, Some values, None -> Tensor.term_init ~grad_spec:Prohibit_grad values
+      | Some value, None, None -> Tensor.param_value_init ~require_grad [| value |]
+      | None, Some values, None -> Tensor.param_value_init ~require_grad values
       | None, None, Some param_init -> param_init
       | None, None, None ->
           if Tensor.is_prohibit_grad Grad_spec.grad_spec then

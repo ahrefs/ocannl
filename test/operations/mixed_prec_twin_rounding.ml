@@ -94,6 +94,76 @@ let forward ?bindings ?launch_values y ~out_prec =
   let ctx = Train.forward_once ?bindings ?launch_values (Context.auto ()) y in
   ((Context.get_values ctx y.Tensor.value).(0), ctx)
 
+let literal_master () =
+  Tensor.unsafe_reinitialize ();
+  let saved = !Tensor.default_value_prec in
+  Tensor.default_value_prec := Ops.half;
+  Exn.protect
+    ~finally:(fun () -> Tensor.default_value_prec := saved)
+    ~f:(fun () ->
+      (* Above the constant-fill limit: the initial values are packed before the hook runs. *)
+      let n = 32 in
+      let rounded = Array.init n ~f:(fun i -> Float.of_int (i + 1)) in
+      let values = Array.map rounded ~f:(fun v -> v +. (2. **. -12.)) in
+      let param = TDSL.param ~values ~output_dims:[ n ] "literal_master" in
+      let twin =
+        MP.with_master_weights ~master_prec:Ops.single ~prec:Ops.half (fun () -> param ())
+      in
+      let master = Set.choose_exn twin.Tensor.params in
+      let%op y = twin *. 1.0 in
+      let _, ctx = forward y ~out_prec:Ops.single in
+      p "raw values use the requested master precision"
+        (Ops.equal_prec (Lazy.force master.value.storage_prec) Ops.single);
+      p_all2 ~min:n "raw values retain the bits that the half twin rounds away"
+        (Context.get_values ctx master.value)
+        values ~f:Float.equal;
+      p_all2 ~min:n "the half twin reads rounded values"
+        (Context.get_values ctx y.Tensor.value)
+        rounded ~f:Float.equal;
+      let outside = param () in
+      p "raw values outside the scope use the session default"
+        (Ops.equal_prec (Lazy.force outside.Tensor.value.storage_prec) Ops.half))
+
+let explicit_master_mismatch () =
+  Tensor.unsafe_reinitialize ();
+  let saved_hook = !Tensor.param_postprocess and saved_prec = !Tensor.param_value_prec in
+  let nd = Ir.Ndarray.create_array ~debug:"explicit_master" ~dims:[| 1 |] ~padding:None Ops.half in
+  p "an explicit master precision mismatch names both precisions and the parameter"
+    (match
+       MP.with_master_weights ~master_prec:Ops.single ~prec:Ops.bfloat16 (fun () ->
+           TDSL.wrap_param ~l:"explicit_master" ~i:[] ~o:[ 1 ] nd ())
+     with
+    | _ -> false
+    | exception Utils.User_error msg ->
+        String.is_substring msg ~substring:"explicit_master"
+        && String.is_substring msg
+             ~substring:
+               (Printf.sprintf "has precision %s, expected %s" (Ops.prec_string Ops.half)
+                  (Ops.prec_string Ops.single)));
+  (* The refusal taints inference, so compare the restored scope before starting another graph. *)
+  p "a master precision refusal restores the parameter scope"
+    (phys_equal !Tensor.param_postprocess saved_hook
+    && Option.equal Ops.equal_prec !Tensor.param_value_prec saved_prec)
+
+let nested_masters () =
+  Tensor.unsafe_reinitialize ();
+  let param () = TDSL.param "nested_master" ~output_dims:[ 2 ] () in
+  let twin =
+    MP.with_master_weights ~prec:Ops.bfloat16 (fun () ->
+        MP.with_master_weights ~master_prec:Ops.half ~prec:Ops.half param)
+  in
+  let master = Set.choose_exn twin.Tensor.params in
+  p "a nested explicit request pins the original master"
+    (Ops.equal_prec (Lazy.force master.value.storage_prec) Ops.half);
+  p "conflicting explicit scopes refuse a default-initialized master"
+    (match
+       MP.with_master_weights ~master_prec:Ops.single ~prec:Ops.bfloat16 (fun () ->
+           MP.with_master_weights ~master_prec:Ops.half ~prec:Ops.half param)
+     with
+    | _ -> false
+    | exception Utils.User_error msg ->
+        String.is_substring msg ~substring:"conflicts with enclosing master_prec")
+
 (* The two arms of the header's sentence, at one twin precision. *)
 let slot prec =
   let name = Ops.prec_string prec in
@@ -270,4 +340,7 @@ let () =
   backward ();
   refresh ();
   slice ();
-  emission ()
+  emission ();
+  literal_master ();
+  nested_masters ();
+  explicit_master_mismatch ()

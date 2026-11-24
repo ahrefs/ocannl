@@ -11438,10 +11438,13 @@
 
 ; gh-ocannl-1866: a mixed-precision cast twin rounds its f32 master at the twin's precision under
 ; every placement, executed on master values the twin's precision cannot represent.
+; gh-ocannl-2445: keep the 32-element master on the host-backed initializer path.
 
 (test
  (name mixed_prec_twin_rounding)
  (package neural_nets_lib)
+ (action
+  (run %{test} --ocannl_limit_constant_fill_size=16))
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))

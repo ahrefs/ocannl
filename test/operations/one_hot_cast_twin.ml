@@ -379,16 +379,11 @@ let () =
                 else Ll_test.cycle_flat ~radix:3 ~dims:wte_dims ~modulus:7 ~offset:2. ~stride:1. idx)
           in
           let ids = Nn_blocks.class_ids_of_int_list ~label:"ids_f64" [ 3; 5 ] in
-          let saved_prec = !Tensor.default_value_prec in
-          Tensor.default_value_prec := Ops.double;
           let wte_twin =
-            Exn.protect
-              ~f:(fun () ->
-                MP.with_master_weights ~placement:MP.Twin_virtual ~master_prec:Ops.double
-                  ~prec:Ops.single (fun () ->
-                    TDSL.param ~values:wte_vals "wte_f64" ~input_dims:[ vocab ]
-                      ~output_dims:[ d_model ] ()))
-              ~finally:(fun () -> Tensor.default_value_prec := saved_prec)
+            MP.with_master_weights ~placement:MP.Twin_virtual ~master_prec:Ops.double
+              ~prec:Ops.single (fun () ->
+                TDSL.param ~values:wte_vals "wte_f64" ~input_dims:[ vocab ] ~output_dims:[ d_model ]
+                  ())
           in
           let%op emb = wte_twin * Nn_blocks.one_hot_of_ids ~num_classes:vocab ids in
           Tn.update_prec emb.Tensor.value Ops.double;
