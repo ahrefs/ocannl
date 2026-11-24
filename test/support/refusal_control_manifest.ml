@@ -482,6 +482,8 @@ let raw_entries =
         "[scanner-refusal:f9313f61cc480e2fb8d0b3cd6b1ae843] provenance constructor allowances";
         "[scanner-refusal:ac43499e46e4fb95bbea30412af203b6] counts remain review-visible";
         "[scanner-refusal:84d226496601429f470c41aba20a39c2] adopted-count allowance cannot";
+        "[scanner-refusal:992a8057c2edff63b85a6a203b6b5701] harness census allows";
+        "[scanner-refusal:fef03fd6e82a5c2c2c628b5a571c8299] census refuses standalone";
         "[scanner-refusal:531d64a37eb2ccc8b4c3fee2c5a2fac9] quoted-source entry spans";
         "[scanner-refusal:22c73fdc7f08c48d003aabefe9f59d17] checked in contributes";
       ] );

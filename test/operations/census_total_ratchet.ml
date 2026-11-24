@@ -125,6 +125,13 @@ let allowed =
       reason = "the extracted-diagnostic floor, a hand-written constant of the scan";
     };
     {
+      golden = Golden "test/operations/harness_census.expected";
+      pattern =
+        "^[A-Za-z0-9_./-]+\\.\\(sh\\|py\\)\t[A-Za-z_.][A-Za-z0-9_./*-]*\\(\ttie\\|\tdeclares\t\\(-\\|--only \
+         '[^'\t]+'\\)\\)?$";
+      reason = "a census row quotes repository paths and a harness's literal leg selector";
+    };
+    {
       golden = Golden "test/operations/ll_test_ratchet.expected";
       pattern = {|^Source floor: [^ ]+ >= [0-9]+$\| -- records<=[0-9]+ traversals<=[0-9]+: |};
       reason =
@@ -453,6 +460,14 @@ let controls () =
          (refused_by "test/operations/ll_test_ratchet.expected" (adopted_row ^ " total=170"))
        = 3
     && List.length (refused_by "x/a.expected" adopted_row) = 2);
+  let census_golden = "test/operations/harness_census.expected" in
+  let census_row = "tools/test-test-run-options.sh\ttest/operations/fixture.py" in
+  p_empty "the harness census allows numbers in literal leg selectors"
+    ~over:(numbers_of ~golden:census_golden (census_row ^ "\tdeclares\t--only '^102b:'"))
+    (refused_by census_golden (census_row ^ "\tdeclares\t--only '^102b:'"));
+  p_all "the harness census refuses standalone or trailing totals"
+    [ "total\t510"; census_row ^ " 510" ]
+    ~f:(fun text -> List.length (refused_by census_golden text) = 1);
   p "a quoted-source entry spans the quotation and not the reason written after it"
     (at [ 50 ]
        (refused_by "test/operations/verdict_ratchet.expected"

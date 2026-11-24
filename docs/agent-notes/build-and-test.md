@@ -132,6 +132,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   tier fixtures cannot see diagnostics from the real compile tier.
   `prepush_scan_membership` is listed explicitly because its Dune corpus is the single live
   stanza that defines the family.
+- **Harness reach is a reviewed golden** (gh-ocannl-2381). Run
+  `dune build @test/operations/runtest-harness_census` for the diff and
+  `tools/promote.sh test/operations/harness_census.expected` to accept intended rows. The scan uses
+  `affected --harness-census` in the live checkout so its file inventory agrees with the prepush
+  reader. It reruns through `(universe)` because Git's inventory can change independently of
+  Dune's dependencies. The golden keeps each member and reached path, with a tie marker for
+  more than one owner, and each declared glob with its leg selector. This catches a path
+  substitution even when the total stays the same. Use the full census for the source location
+  and token behind a row.
 - **What reaches the scans is wider than what looks like infrastructure.** Two members of
   `@test/operations/scans` census sources across the tree, tests included, so a test-only edit can
   turn them red with no config key, stanza or new file in the diff. `codegen_text_inventory`

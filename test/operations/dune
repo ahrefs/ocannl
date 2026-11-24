@@ -119,7 +119,7 @@
 ; A scan whose per-test alias this list omits is one `@scans` skips silently. `env_var_deps` checks
 ; that: it derives the family from rules that either glob the repository recursively or declare its
 ; source tree -- which is what makes a scan repo-wide -- rather than from a second copy of this list.
-; Three members are listed by hand. `schedule_refusal_scan` reads two named
+; The following members are listed by hand. `schedule_refusal_scan` reads two named
 ; library sources (schedule.ml, sketch_families.ml), not a glob, a source tree or a root document,
 ; and it is a `(test)`. It is listed by hand because an edit to those sources trips it exactly as a
 ; config key trips `test_config_consistency`, and a push whose last step ran `@scans` without it went
@@ -128,6 +128,8 @@
 ; `env_var_deps` cannot derive it. Fixtures are copied from neighbours, so its guards should run
 ; on every push through `tools/fmt-check.sh`, even though their corpus is local.
 ; `prepush_scan_membership` reads only this dune file to check the production scans reader.
+; `harness_census` reads the live checkout through affected, whose file inventory can change
+; independently of Dune's source tree. Its producer uses (universe) to rerun on every build.
 
 (alias
  (name scans)
@@ -176,6 +178,7 @@
   (alias runtest-gc_witness_scan_control)
   (alias runtest-generated_lock_scan)
   (alias runtest-generated_lock_scan_control)
+  (alias runtest-harness_census)
   (alias runtest-label_dispatch_scan)
   (alias runtest-label_dispatch_scan_control)
   (alias runtest-label_dispatch_scan_refusal_control)
@@ -464,6 +467,7 @@
   (alias runtest-gh1133_summary)
   (alias runtest-gpu_cotenants)
   (alias runtest-half_unary_math-reproducible)
+  (alias runtest-harness_census)
   (alias runtest-heap_local_arrays-outlined)
   (alias runtest-kernel_attribution)
   (alias runtest-label_dispatch_scan)
@@ -9725,6 +9729,21 @@
   arrayjit.context)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: none -- projects the harness reach census without selecting a backend.
+ (alias runtest-harness_census)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (universe)
+  (sandbox always))
+ (action
+  ; When Git Bash is unavailable on Windows the driver reports a skip, leaving no corrected file.
+  (progn
+   (run %{dep:sweep_harness_driver.exe} %{dep:harness_census.sh})
+   (diff? harness_census.expected harness_census.expected.corrected))))
 
 ; gh-ocannl-1669: cc declares Local arrays past the stack budget on the heap, function scope and
 ; pool-chunk privatized tiles alike, each budget pinned on both sides and executed.
