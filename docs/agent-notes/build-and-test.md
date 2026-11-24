@@ -7045,6 +7045,14 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   the same way. Each
   reader keeps its own whitelist rather than share a module, since what each may decode differs
   and each harness rewrites its own subject's whitelist line to build its twins.
+- **Named intermediate test outputs in receipts** (gh-ocannl-2441). A producer with a literal
+  `target` or `targets` can share its checker's per-test alias. This gives the
+  `executed` inventory Dune rule ownership for the startup stderr captures and the seeded
+  benchmark output. The runner reads those declarations from top-level, unconditional rules in
+  local test-tree `dune` files. The trace still supplies every recorded process and its targets.
+  A generator's output does not gain ownership through a test dependency. Leg 80c of
+  `tools/test-test-run-digest.sh` checks that a cold receipt includes its capture producer and
+  excludes a generator it actually ran, and that the warm receipt is empty.
 
 ### Skip coverage
 

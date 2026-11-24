@@ -125,6 +125,8 @@
 (rule
  ; ocannl-backend: none -- startup_streams.exe links no backend; the claim is about which stream
  ; the startup banner and the unknown-key warning go to, neither of which names a backend.
+ (alias runtest-default_stderr)
+ (package neural_nets_lib)
  (target default_stderr.raw)
  (deps ocannl_config ocannl_ambient)
  (action
@@ -168,6 +170,8 @@
 
 (rule
  ; ocannl-backend: none -- startup bootstrap decisions and sourcing trace only.
+ (alias runtest-bootstrap_precedence)
+ (package neural_nets_lib)
  (target bootstrap_precedence.raw)
  (deps ocannl_config ocannl_ambient bootstrap_conflict/ocannl_config)
  (action
