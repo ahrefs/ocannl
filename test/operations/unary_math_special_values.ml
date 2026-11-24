@@ -115,7 +115,7 @@ let () = Stdio.eprintf "unary-math-special-values backend: %s\n" backend_name
 let is_metal = String.equal backend_name "metal"
 let is_cuda = String.equal backend_name "cuda"
 let is_hip = String.equal backend_name "hip"
-let is_cc = List.mem [ "cc"; "multidev_cc" ] backend_name ~equal:String.equal
+let is_cc = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 
 (* gh-ocannl-1710: CUDA's math policy, through the reader its compile and rendering use. Its fast
    intrinsics (and their contracts) apply only when it is on. *)

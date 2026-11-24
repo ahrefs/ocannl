@@ -808,7 +808,7 @@ let seed_leg ?(declines = false) ?(row = `Batch)
           ~f:Fn.id);
     let exact_leg =
       Verdict.leg
-        ~when_:(List.mem [ "cuda"; "hip"; "metal" ] backend_name ~equal:String.equal)
+        ~when_:(Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name))
         ~on:backend_name ()
     in
     let matches_exactly ~against ~want name what_ran got =
