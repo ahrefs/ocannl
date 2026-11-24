@@ -606,7 +606,8 @@ let wide_draw ~name ~scope =
 (* A [Where] condition evaluates in single at either destination precision. Inlining its draw leaves
    the condition's generator alone but makes the draw visible to the store's RNG test. When half
    arithmetic would widen, pinning the selected subtraction to half rounds off the residual before
-   it can be measured. *)
+   it can be measured. The comparison checks the draw itself and selects a distinct sentinel for a
+   lane mismatch. *)
 let packed_draw_at_store ~policy =
   List.iter [ f32; half ] ~f:(fun store ->
       let same_store = Ops.equal_prec store f32 in
@@ -627,9 +628,8 @@ let packed_draw_at_store ~policy =
       in
       let ref_draw = Ll_test.get packed i in
       let mid = plain_scope ~orig_indices:i (fnode (name ^ "_mid")) draw in
-      let cutoff = 0.75 in
       let write out value =
-        let cond = LL.Binop (Ops.Cmplt, (value, f32), (Ll_test.c cutoff, f32)) in
+        let cond = LL.Binop (Ops.Cmpeq, (value, f32), (ref_draw, f32)) in
         let half_draw = LL.Unop (Ops.Round_prec, (ref_draw, half)) in
         let residual = LL.Binop (Ops.Sub, (ref_draw, f32), (half_draw, store)) in
         Ll_test.set out i
@@ -656,8 +656,11 @@ let packed_draw_at_store ~policy =
         Ll_test.execute ~name optimized ~seed:[] ~read:[ packed; scoped; materialized; unscoped ]
       with
       | [ draws; actual; reference; inlined ] ->
-          let no_residual = Array.map draws ~f:(fun x -> if Float.(x < cutoff) then 0. else -1.) in
+          let no_residual = Array.create ~len:n 0. in
           let widened = (not same_store) && Ops.equal_prec (compute store) f32 in
+          (* Single equality is bitwise for these positive, finite values. *)
+          p_all ~min:n (format ^ ": the reference lanes are positive finite draws")
+            (Array.to_list draws) ~f:(fun x -> Float.(0. < x && x < 1.));
           p
             (format ^ ": the scoped packed draw matches the materialized draw bitwise")
             (Array.length reference = n && same_bits actual reference);

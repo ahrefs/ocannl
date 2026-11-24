@@ -149,9 +149,11 @@ exposed_update: the kept form's values, bitwise: true
 exposed_update: the local stays unless the collapse is exact: true
 draw: the kept form's values, bitwise: true
 draw: the local stays unless the collapse is exact: true
+single: the reference lanes are positive finite draws: true
 single: the scoped packed draw matches the materialized draw bitwise: true
 single: the packed draw scope stays exactly when the store precision differs: true
 single: the residual distinguishes early half rounding exactly when expected: true
+half: the reference lanes are positive finite draws: true
 half: the scoped packed draw matches the materialized draw bitwise: true
 half: the packed draw scope stays exactly when the store precision differs: true
 half: the residual distinguishes early half rounding exactly when expected: true
@@ -315,9 +317,11 @@ exposed_update: the kept form's values, bitwise: true
 exposed_update: the local stays unless the collapse is exact: true
 draw: the kept form's values, bitwise: true
 draw: the local stays unless the collapse is exact: true
+single: the reference lanes are positive finite draws: true
 single: the scoped packed draw matches the materialized draw bitwise: true
 single: the packed draw scope stays exactly when the store precision differs: true
 single: the residual distinguishes early half rounding exactly when expected: true
+half: the reference lanes are positive finite draws: true
 half: the scoped packed draw matches the materialized draw bitwise: true
 half: the packed draw scope stays exactly when the store precision differs: true
 half: the residual distinguishes early half rounding exactly when expected: true
