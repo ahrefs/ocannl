@@ -68,8 +68,6 @@ let padded_window ?(reduce = `Sum) win x w =
 
 (* {2 Executed forms} *)
 
-let exn_message = function Row.Shape_error (msg, _) -> msg | e -> Stdlib.Printexc.to_string e
-
 let read ctx t =
   (Ir.Tnode.dims_without_padding t.Tensor.value, Context.get_values ctx t.Tensor.value)
 
@@ -86,7 +84,7 @@ let executes label ~dims ~want build =
         read (Train.forward_once (Context.auto ()) t) t
       with
       | exception e ->
-          Stdio.eprintf "%s: raised %s\n%!" label (exn_message e);
+          Stdio.eprintf "%s: raised %s\n%!" label (Shape_test.exn_message e);
           pf "%s: executes" label false
       | got -> matches label ~dims ~want got)
 

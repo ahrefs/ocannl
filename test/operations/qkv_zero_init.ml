@@ -91,12 +91,7 @@ let folded_seed_claims ~tag ~what ~pre ~out ~seed ~want ~matches =
     List.mapi real ~f:(fun i q ->
         let o = apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p:q pre) pre in
         let name = tag ^ Int.to_string i in
-        match
-          Context.compile_outcome ~name ~prelowered:o
-            ~lowered_transform:(fun x -> [ x ])
-            ~provenance:Outcome.User_schedule ~candidate:name (Lazy.force Ll_test.base_ctx)
-            Ir.Assignments.empty_comp Ir.Indexing.Empty
-        with
+        match Ll_test.link_outcome ~name ~provenance:Outcome.User_schedule ~candidate:name o with
         | Error (Outcome.Classified { phase; cause; _ }) ->
             Stdio.eprintf "%s seed %d (mma=%b) rejected at %s: %s\n" what i q.Autotune.sk_mma
               (Sexp.to_string (Outcome.sexp_of_phase phase))

@@ -3,9 +3,7 @@ open Ocannl
 
 type outcome = Refused_at_construction of string | Refused_later of string | Ran
 
-let error_message = function
-  | Row.Shape_error (msg, _) -> msg
-  | exn -> Stdlib.Printexc.to_string exn
+let exn_message = function Row.Shape_error (msg, _) -> msg | exn -> Stdlib.Printexc.to_string exn
 
 (* A solver refusal can leave the open suffix tainted (gh-ocannl-1301). The prior closure is still
    usable, but the suffix has to be discarded before the next case can build shapes. *)
@@ -19,4 +17,4 @@ let expect_shape_error build =
   with_rewind (fun () ->
       match build () with
       | exception Row.Shape_error (msg, _) -> Refused_at_construction msg
-      | run -> ( match run () with () -> Ran | exception exn -> Refused_later (error_message exn)))
+      | run -> ( match run () with () -> Ran | exception exn -> Refused_later (exn_message exn)))

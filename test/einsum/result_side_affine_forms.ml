@@ -89,8 +89,6 @@ let strided ~stride ~offset a =
 
 (* {2 Executed forms} *)
 
-let exn_message = function Row.Shape_error (msg, _) -> msg | e -> Stdlib.Printexc.to_string e
-
 let read ctx t =
   (Ir.Tnode.dims_without_padding t.Tensor.value, Context.get_values ctx t.Tensor.value)
 
@@ -102,7 +100,7 @@ let executes label ~dims ~want build =
         read (Train.forward_once (Context.auto ()) t) t
       with
       | exception e ->
-          Stdio.eprintf "%s: raised %s\n%!" label (exn_message e);
+          Stdio.eprintf "%s: raised %s\n%!" label (Shape_test.exn_message e);
           pf "%s: executes" label false
       | got -> matches label ~dims ~want got)
 
@@ -575,7 +573,7 @@ let run_renderer () =
           run (fun x w -> Operation.einsum "s, 2*o=+1+k; k => s, o" ~grad_spec:pg x w ()) )
       with
       | exception e ->
-          Stdio.eprintf "renderer: raised %s\n%!" (exn_message e);
+          Stdio.eprintf "renderer: raised %s\n%!" (Shape_test.exn_message e);
           p "the %op route of 2*o=+1+k executes" false
       | (ppx_dims, ppx_vals), (raw_dims, raw_vals) ->
           p "the %op route of 2*o=+1+k has the plain string's extent"
