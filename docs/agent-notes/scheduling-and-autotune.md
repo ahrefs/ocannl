@@ -1219,8 +1219,10 @@ files.
   `tile_loops`. An unanchored shared stage wraps the statement holding the scope instead of the
   scope-nested tile loop (`rewrite_loop_holder` in `schedule.ml`). `stage_scope_anchor`.
   `Schedule.apply_opt_op` checks the program every op leaves and refuses, typed and naming the op,
-  a violation the op ADDED (a malformed entry is not the next op's fault);
-  the race queries alone called the `Grid` retype and the `Stage` legal.
+  a violation the op ADDED (a malformed entry is not the next op's fault). The race queries
+  alone called the `Grid` retype and the `Stage` legal. The decline census groups these refusals
+  as `scope_grammar` and `privatize_tile_lifetime`, independently of the op and node named in
+  the diagnostic (gh-ocannl-1537).
   `schedule_op_scope_purity` (gh-ocannl-2313) pins the impure-body arm: an anchored `Stage` checks
   the staged reads' paths, then inserts a load at every occurrence of the anchor.
   `validate_loop_binders` requires unique loop symbols at optimize entry. Schedule rewrites can

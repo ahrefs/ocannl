@@ -342,11 +342,10 @@ let find_loop ?in_scopes axis (llc : Low_level.t) : Low_level.t option =
    [Invalid_argument] its direct callers expect. Every [invalid_arg]/[failwith] that schedule
    application can reach in this file is either this or carries an [(* invariant: ... *)] marker,
    which [test/operations/schedule_refusal_scan] enforces. *)
-let refuse detail =
+let refuse ?(check = "Schedule.apply") detail =
   raise
     (Schedule_outcome.Cause_at
-       ( Schedule_outcome.Transform,
-         Schedule_outcome.Illegal_schedule { check = "Schedule.apply"; detail } ))
+       (Schedule_outcome.Transform, Schedule_outcome.Illegal_schedule { check; detail }))
 
 (* Rewrites every [For_loop] whose index is [sym] (a materializing transform duplicates a loop per
    copy, and a later op must reach all the copies). Loops inside [Local_scope] bodies are IN scope
@@ -5690,10 +5689,10 @@ let apply_opt_op ~app (opt : Low_level.optimized) (op : optop) : Low_level.optim
   let applied = apply_opt_op_unchecked ~app opt op in
   let llc = applied.Low_level.llc in
   Option.iter (scope_grammar_added ~before:opt.Low_level.llc ~after:llc) ~f:(fun v ->
-      refuse (scope_grammar_message ~op v));
+      refuse ~check:"scope_grammar" (scope_grammar_message ~op v));
   List.iter !(app.privatized) ~f:(fun (target, tile) ->
       Option.iter (privatized_tile_split ~tile llc) ~f:(fun (loop, axis) ->
-          refuse
+          refuse ~check:"privatize_tile_lifetime"
             ("Schedule." ^ optop_label op ^ ": the hardware-typed loop "
            ^ Indexing.symbol_ident loop ^ " ("
             ^ Sexp.to_string (Low_level.sexp_of_axis_type axis)
