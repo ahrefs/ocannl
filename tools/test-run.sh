@@ -486,6 +486,10 @@
 # explicit_trace_file). The same read records `executed` when it has a complete
 # run-owned trace. See tools/action-durations.sh for the recognised process
 # forms. Each TSV row names the process program and its observed action.
+# For additional named file targets it joins trace rows to literal targets
+# of unconditional top-level rules with explicit per-test aliases in local
+# test-tree dune files. Package-filtered or redirected source roots, included
+# stanzas, and ownership inherited through dependencies are outside this census.
 # Older formats, caller-owned traces, a caller-set DUNE_TRACE and repeat
 # sets leave the inventory unavailable. After cancellation, trace diagnostics can
 # land after the verdict. A batch naming a test with a sibling golden the batch
@@ -1364,6 +1368,36 @@ alias_dune_files() { # the dune files of this tree, NUL-terminated
     fi
   )
 }
+
+# Additional receipt targets must be owned by an explicit per-test alias on
+# the producing (rule ...) itself. Read literal local (target[s] ...) fields
+# in top-level rules under the test trees. Gate-dependent rules, included and
+# dynamically generated stanzas, subdirs and interpolated fields stay out.
+# In particular a generator built as a dependency does not inherit ownership.
+test_rule_targets() { # NUL-delimited source dune file paths on stdin
+  perl -e "$dune_reader_perl"'
+    local $/ = "\0";
+    while (my $file = <STDIN>) {
+      chomp $file;
+      $file =~ s{\A\./}{};
+      next unless $file =~ m{\A((?:test|arrayjit/test)(?:/[A-Za-z0-9_.+-]+)*)/dune\z};
+      my $dir = $1;
+      my $forms = eval { read_dune($file) } or next;
+      for my $rule (@$forms) {
+        next unless ref $rule && @$rule && !ref $rule->[0] && $rule->[0] eq "rule";
+        my %fields = map { $_->[0] => $_ } grep { ref $_ && @$_ && !ref $_->[0] } @$rule;
+        next if exists $fields{"enabled_if"};
+        my $aliases = $fields{"alias"} // $fields{"aliases"} // next;
+        next unless grep { !ref $_ && /\A(?:runtest|slow|train)-[A-Za-z0-9_.-]+\z/ } @$aliases;
+        my $targets = $fields{"target"} // $fields{"targets"} // next;
+        my (undef, @names) = @$targets;
+        next if grep { ref $_ || !/\A[A-Za-z0-9_+-][A-Za-z0-9_.+-]*\z/ } @names;
+        print "$dir/$_\n" for @names;
+      }
+    }
+  '
+}
+
 alias_dune_dirs() { # the directories holding a dune file or a subdir's rules, `.` for the top; 1 incomplete
   local list=() f
   # NUL-delimited, so a path git would quote (a non-ASCII name) is read as
@@ -2134,6 +2168,8 @@ supervisor_perl=$lock_census_perl'
       open(STDOUT, ">", "$own/slowest.tmp") or POSIX::_exit(126);
       # A category override can hide every process from an otherwise complete trace.
       my @inventory = exists $ENV{DUNE_TRACE} ? () : ("--executed-to", "$own/executed.tmp");
+      push @inventory, "--test-rule-targets", "$own/test-rule-targets.tmp"
+        if @inventory && -s "$own/test-rule-targets.tmp";
       # The credential harness copies the trace by its argument position.
       exec("bash", $reader, "-n", "5", $trace, @inventory);
       POSIX::_exit(127);
@@ -2167,7 +2203,7 @@ supervisor_perl=$lock_census_perl'
         $why = $lines[-1] if @lines;
       }
     }
-    unlink "$own/slowest.tmp", "$own/executed.tmp", "$own/slowest.err";
+    unlink "$own/slowest.tmp", "$own/executed.tmp", "$own/slowest.err", "$own/test-rule-targets.tmp";
     if (defined $why) {
       chomp $why;
       $write->("$own/slowest-skipped", substr($why, 0, 300) . "\n");
@@ -2675,6 +2711,24 @@ explicit_build_root() { # dune argv; 0 iff it names a build dir or root before d
     esac
   done
   return 1
+}
+local_dune_rules() { # dune argv; whether the local rule census applies to this batch
+  local arg dir=$PWD
+  [ -z "${DUNE_ROOT+x}" ] || return 1
+  for arg do
+    case $arg in
+      --) break ;;
+      --ro* | -p* | --only-p* | --for-release-of-p*) return 1 ;;
+    esac
+  done
+  [ -e dune-project ] || [ -e dune-workspace ] || return 1
+  # An ancestor workspace outranks a project, and the outermost marker wins ties.
+  while [ "$dir" != / ]; do
+    dir=${dir%/*}
+    dir=${dir:-/}
+    [ ! -e "$dir/dune-workspace" ] && { [ -e dune-workspace ] || [ ! -e "$dir/dune-project" ]; } ||
+      return 1
+  done
 }
 record_promotions() { # in `_resolve`, after dune exited, whose SECONDS the cap's are
   local build_dir=${DUNE_BUILD_DIR:-_build} version major minor stream
@@ -6034,6 +6088,10 @@ case $sub in
     if ! explicit_trace_file "$@"; then
       case $1 in
         build | runtest | test | exec)
+          if [ -z "${DUNE_TRACE+x}" ] && local_dune_rules "$@"; then
+            test_rule_targets < <(alias_dune_files) >"$run_dir/test-rule-targets.tmp" ||
+              rm -f "$run_dir/test-rule-targets.tmp"
+          fi
           trace_file=$run_dir/trace.csexp
           case $trace_file in /*) ;; *) trace_file=$PWD/$trace_file ;; esac
           trace_sub=$1

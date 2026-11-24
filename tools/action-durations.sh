@@ -42,6 +42,9 @@
 #                      an empty file for a complete trace with no matching rows.
 #                      The caller must know the trace includes process events.
 #                      A complete trace with no processes is successful in this mode.
+#   --test-rule-targets PATH
+#                      with --executed-to, a local Dune rule census from
+#                      test-run.sh, one context-relative target path per line.
 #   -h, --help         this header
 #
 # The trace records no alias membership, so a row names its action by what it
@@ -79,13 +82,13 @@
 # The executed inventory uses only process records from a complete trace.
 # It accepts named Dune runtest, slow and train alias actions in any directory,
 # and .exe.output, .actual and .coverage targets under test/ or arrayjit/test/.
-# Named .raw startup captures and .out/.log benchmark intermediates fall
-# outside that file-target allowlist. Anonymous alias actions and targetless
-# processes must run a built .exe in one of the test trees. The TSV holds
-# distinct program and action pairs with tabs and line breaks excluded from
-# fields. Alias membership, shell argv,
-# subprocesses Dune did not trace, and incomplete traces are outside this
-# inventory.
+# Other file targets in those trees must match the literal targets of a Dune
+# rule with an explicit per-test alias, as supplied by --test-rule-targets.
+# The census cannot add rows for processes absent from the trace. Anonymous
+# alias actions and targetless processes must run a built .exe in one of the
+# test trees. The TSV holds distinct program and action pairs with tabs and line
+# breaks excluded from fields. Dependency closure, shell argv, subprocesses
+# Dune did not trace, and incomplete traces are outside this inventory.
 
 set -euo pipefail
 
@@ -98,6 +101,7 @@ dirs=
 processes_json=
 json_to=
 executed_to=
+test_rule_targets=
 trace=
 
 die() {
@@ -145,6 +149,11 @@ while [ $# -gt 0 ]; do
     executed_to=$2
     shift 2
     ;;
+  --test-rule-targets)
+    [ $# -ge 2 ] && [ -n "$2" ] || die "--test-rule-targets needs a path"
+    test_rule_targets=$2
+    shift 2
+    ;;
   -h | --help)
     sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
@@ -162,6 +171,7 @@ case "$group" in '' | prog | dir) ;; *) die "--group wants prog or dir, got: $gr
 [ -z "$dirs" ] || [ -n "$tsv" ] || die "--dirs leads --tsv rows; it needs --tsv"
 [ -z "$processes_json" ] || [ -z "$rows$prog_re$group$tsv$json_to$executed_to" ] ||
   die "--processes-json takes no row selection or table options"
+[ -z "$test_rule_targets" ] || [ -n "$executed_to" ] || die "--test-rule-targets needs --executed-to"
 rows=${rows:-20}
 trace=${trace:-$root/_build/trace.csexp}
 [ -f "$trace" ] || die "no trace at $trace (build something first, or name one)"
@@ -169,14 +179,15 @@ trace=${trace:-$root/_build/trace.csexp}
 # exec, so the reader is ONE process: tools/test-run.sh bounds it with a KILL
 # that must reach the parse itself where a process group cannot be signalled
 # (Git Bash), not just a shell whose python would outlive it.
-exec python3 - "$trace" "$rows" "$prog_re" "$group" "$tsv" "$dirs" "$processes_json" "$json_to" "$executed_to" <<'PY'
+exec python3 - "$trace" "$rows" "$prog_re" "$group" "$tsv" "$dirs" "$processes_json" "$json_to" \
+    "$executed_to" "$test_rule_targets" <<'PY'
 import json
 import os
 import posixpath
 import re
 import sys
 
-path, rows, prog_re, group, tsv, dirs, processes_json, json_to, executed_to = (
+path, rows, prog_re, group, tsv, dirs, processes_json, json_to, executed_to, test_rule_targets = (
     sys.argv[1], int(sys.argv[2]), *sys.argv[3:])
 try:
     prog_pat = re.compile(prog_re) if prog_re else None
@@ -412,7 +423,7 @@ def test_tree(path):
     return path.startswith(('test/', 'arrayjit/test/'))
 
 
-def executed_test(f):
+def executed_test(f, owned_targets):
     prog = f.get('prog')
     if not isinstance(prog, str) or not prog:
         return None
@@ -421,6 +432,7 @@ def executed_test(f):
     name = posixpath.basename(prog)
     raw_targets = f.get('target_files')
     targets = raw_targets if isinstance(raw_targets, list) else []
+    owned = None
     for target in targets:
         if not isinstance(target, str) or not target.startswith(build_prefix):
             continue
@@ -428,8 +440,12 @@ def executed_test(f):
         if alias is None:
             if test_tree(rel) and rel.endswith(('.exe.output', '.actual', '.coverage')):
                 return name, rel
+            if owned is None and test_tree(rel) and rel in owned_targets:
+                owned = rel
         elif re.fullmatch(r'(?:runtest|slow|train)(?:-[\w.-]+)?', alias):
             return name, alias_action(alias, rel)
+    if owned is not None:
+        return name, owned
     # New Dune records an anonymous digest for alias actions. A path under a
     # test build directory still identifies the executable.
     if targets and not all(isinstance(t, str) and t.startswith(build_prefix) and
@@ -459,9 +475,16 @@ for kind, t, f in events:
 done += [(key[1], max(0, last - key[1]), 'open', f) for key, f in started.items()]
 complete = bool(events) and truncated is None and events[-1][0] == (b'config', b'exit')
 if executed_to and complete:
+    owned_targets = set()
+    if test_rule_targets:
+        try:
+            with open(test_rule_targets, encoding='utf-8') as census:
+                owned_targets = set(census.read().splitlines())
+        except (OSError, UnicodeError):
+            sys.exit('action-durations.sh: could not read test-rule targets')
     executed = set()
     for _, _, _, fields in done:
-        row = executed_test(fields)
+        row = executed_test(fields, owned_targets)
         if row and not any(c in field for field in row for c in '\t\r\n'):
             executed.add(row)
     try:

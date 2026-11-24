@@ -1774,9 +1774,21 @@ leg_80_receipt() {
 (executable (name ordinary) (modules ordinary))
 (rule (target ordinary.actual) (action (with-stdout-to %{target} (run ./ordinary.exe))))
 (rule (alias runtest-ordinary) (action (diff ordinary.expected ordinary.actual)))
+(executable (name capture) (modules capture))
+(executable (name generator) (modules generator))
+(rule (target generated.raw) (action (with-stdout-to %{target} (run ./generator.exe))))
+(rule
+ (alias runtest-capture)
+ (targets capture.raw capture.raw.log)
+ (deps generated.raw)
+ (action (with-stdout-to capture.raw (with-stderr-to capture.raw.log (run ./capture.exe)))))
+(rule (alias runtest-capture) (action (diff capture.expected capture.raw)))
 DUNE
   printf 'let () = print_endline "ordinary"\n' >"$root/test/ordinary.ml"
   printf 'ordinary\n' >"$root/test/ordinary.expected"
+  printf 'let () = print_endline "capture"; prerr_endline "captured stderr"\n' >"$root/test/capture.ml"
+  printf 'capture\n' >"$root/test/capture.expected"
+  printf 'let () = print_endline "generated"\n' >"$root/test/generator.ml"
   cat >"$root/test/baseline.ml" <<'ML'
 let () =
   Out_channel.with_open_text (Sys.getenv "RECEIPT_WITNESS") (fun f -> output_string f "ran\n");
@@ -1791,7 +1803,7 @@ ML
       RECEIPT_WITNESS=$TMP/receipt-witness bash tools/test-run.sh "$@"
   )
   for phase in cold warm forced filtered; do
-    set -- @test/runtest-baseline @test/runtest-ordinary
+    set -- @test/runtest-baseline @test/runtest-ordinary @test/runtest-capture
     case $phase in
       forced) set -- --force @test/runtest-baseline ;;
       filtered) set -- --build-dir="$root/filtered-build" @test/runtest-baseline ;;
@@ -1808,6 +1820,13 @@ ML
       fi
       mv "$TMP/receipt-witness" "$TMP/receipt-witness.$phase"
       expected=$(printf 'baseline.exe\ttest/baseline.exe.output\nordinary.exe\ttest/ordinary.actual')
+      if [ "$phase" = cold ]; then
+        if [ "$(cat "$root/_build/default/test/generated.raw")" != generated ] ||
+           [ "$(cat "$root/_build/default/test/capture.raw.log")" != 'captured stderr' ]; then
+          harness_abandon "$phase: the generator and capture did not produce their named outputs"; return
+        fi
+        expected=$(printf '%s\ncapture.exe\ttest/capture.raw\n' "$expected" | LC_ALL=C sort)
+      fi
     else
       if [ -e "$TMP/receipt-witness" ]; then
         harness_abandon "$phase: baseline unexpectedly executed"; return
