@@ -133,13 +133,16 @@
 # and lists are checked and before any member starts; a caller's own enclosing
 # slot is reused, not doubled. A slot that never ran it (refused, or the
 # registry unreachable) exits 75 with `harnesses: FAILED (exit 75): SLOT
-# REFUSED` and no member run; otherwise the run's own status is the exit
-# status. --list takes no slot, and no probe answer (CI, a machine outside the
+# REFUSED` and no member run; otherwise the copy records its status only on
+# explicit exits via `exit_with` (leaving the record empty on an untrapped
+# signal or implicit abort so `fleet_slot_rerun` propagates the slot status).
+# --list takes no slot, and no probe answer (CI, a machine outside the
 # fleet, OCANNL_TOOL_FLEET_WORKER=none) runs the members directly, silently.
 set -u
 # Set only by this script, for the copy of itself it runs inside the fleet
-# slot (take_fleet_slot): the file that says it started and, at its exit, its
-# status. Cleared, so no member's own run of this script inherits it.
+# slot (take_fleet_slot): the file that says it started and, written only by
+# `exit_with` on explicit exits, its status. Cleared, so no member's own run
+# of this script inherits it.
 slot_record=${OCANNL_TOOL_HARNESSES_IN_SLOT-}
 unset OCANNL_TOOL_HARNESSES_IN_SLOT
 [ -z "$slot_record" ] || : >"$slot_record" || exit 2
@@ -345,7 +348,9 @@ stop_serial_relays() {
 # arrives dies on delivery rather than outliving the run, while an untrapped
 # signal still runs the EXIT trap at once. The parallel run ends its relay
 # with exit traps, not a reset, which would restore that default and skip the
-# EXIT trap.
+# EXIT trap. Do not write `$slot_record` here -- only `exit_with` records it
+# (gh-ocannl-2450), because an untrapped TERM/HUP runs this trap with the
+# previous command's `$?` before Bash re-raises the signal.
 trap '' HUP INT TERM
 trap - HUP INT TERM
 trap 'stop_serial_relays; rm -rf ${scratch[@]+"${scratch[@]}"}' EXIT
