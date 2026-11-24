@@ -926,7 +926,8 @@ exercise() {
       sleep 15 >/dev/null &
       printf '%s\n' "$!" >"$LINGER_PID" ;;
     stalled-downstream)
-      perl -e 'print STDERR (("x" x 63) . "\n") x 8192'
+      # Exceed both the 64 KiB default pipe and the 1 MiB pipe size uutils cat sets via F_SETPIPE_SZ.
+      perl -e 'print STDERR (("x" x 63) . "\n") x 32768'
       ocannl_fixture_undefined_function
       [ -z "${STALL_DONE:-}" ] || : >"$STALL_DONE" ;;
   esac
