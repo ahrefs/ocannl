@@ -13,6 +13,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 subject="$script_dir/fmt-check.sh"
 . "$script_dir/../scripts/harness-support.sh"
 harness_args "$@"
+harness_require perl
 harness_scratch fmt-check
 fixture_dir=$TMP
 # No leg reaches this host's fleet: the default command's slot (gh-ocannl-1519) is driven by
@@ -135,7 +136,11 @@ esac
 [ -z "${GH_TOKEN+x}${FOO_API_KEY+x}" ] || { echo "credentials reached dune" >&2; exit 3; }
 [ "${FMT_CHECK_PLAIN:-}" = kept ] || { echo "the plain variable did not reach dune" >&2; exit 4; }
 [ -z "${FAKE_DUNE_LOG:-}" ] || echo "$step${FAKE_SLOT_HELD:+@slot}" >>"$FAKE_DUNE_LOG"
-[ -z "${FAKE_DUNE_KILL_CHECK:-}" ] || kill -KILL "$PPID"
+case ${FAKE_DUNE_KILL_CHECK:-} in
+  '') ;;
+  1) kill -KILL "$PPID" ;;
+  *) kill "-$FAKE_DUNE_KILL_CHECK" "$PPID" ;;
+esac
 exit "$status"
 EOF
 chmod +x "$fake_switch/opam" "$fake_switch/dune"
@@ -245,9 +250,22 @@ case ${FAKE_FW_MODE:-} in
   unreachable) echo "EXECUTION SLOT UNREACHABLE anchor: registry unread, no slot taken"; exit 4 ;;
   # The check runs, and then the wrapper's own supervision fails.
   wrapfail) FAKE_SLOT_HELD=1 "$@"; exit 9 ;;
+  # Simulate an inner tool whose EXIT trap writes 0 before dying on an untrapped signal (gh-ocannl-2450).
+  exit-trap-TERM | exit-trap-HUP)
+    sig=${FAKE_FW_MODE#exit-trap-}
+    exec perl -e '$SIG{TERM} = "DEFAULT"; $SIG{HUP} = "DEFAULT"; exec @ARGV or exit 127;' \
+      "${BASH:-bash}" -c '
+        slot_record=$OCANNL_TOOL_FMT_CHECK_IN_SLOT
+        : >"$slot_record"
+        trap "" HUP INT TERM
+        trap - HUP INT TERM
+        trap '\''status=$?; echo "$status" >"$slot_record"'\'' EXIT
+        true
+        kill "-$1" "$$"
+      ' _ "$sig" ;;
 esac
 echo "EXECUTION SLOT fakebox: slot 1 of 4 held for: $*" >&2
-FAKE_SLOT_HELD=1 exec "$@"
+FAKE_SLOT_HELD=1 exec perl -e '$SIG{TERM} = "DEFAULT"; $SIG{HUP} = "DEFAULT"; exec @ARGV or exit 127;' "$@"
 EOF
 chmod +x "$fake_fw"
 slot_leg() { # LABEL WANT_RC WANT_STEPS WANT_SLOT VERDICT_PREFIX [env ARG...] [-- SUBJECT_ARG...]
@@ -308,6 +326,22 @@ slot_leg "a check killed in the slot still ends in a verdict" \
   137 "fmt@slot " "execution slot --wait 600 --cpu" \
   "fmt-check: FAILED (exit 137): the check under the fleet slot ended without a status" \
   FAKE_DUNE_KILL_CHECK=1
+slot_leg "a check killed by TERM in the slot still ends in a verdict" \
+  143 "fmt@slot " "execution slot --wait 600 --cpu" \
+  "fmt-check: FAILED (exit 143): the check under the fleet slot ended without a status" \
+  FAKE_DUNE_KILL_CHECK=TERM
+slot_leg "a check killed by HUP in the slot still ends in a verdict" \
+  129 "fmt@slot " "execution slot --wait 600 --cpu" \
+  "fmt-check: FAILED (exit 129): the check under the fleet slot ended without a status" \
+  FAKE_DUNE_KILL_CHECK=HUP
+slot_leg "an inner EXIT trap writing 0 on untrapped TERM does not produce a false green" \
+  143 "" "execution slot --wait 600 --cpu" \
+  "fmt-check: FAILED (exit 143): the check under the fleet slot died on signal 15 (recorded 0 ignored)" \
+  FAKE_FW_MODE=exit-trap-TERM
+slot_leg "an inner EXIT trap writing 0 on untrapped HUP does not produce a false green" \
+  129 "" "execution slot --wait 600 --cpu" \
+  "fmt-check: FAILED (exit 129): the check under the fleet slot died on signal 1 (recorded 0 ignored)" \
+  FAKE_FW_MODE=exit-trap-HUP
 slot_leg "the check's recorded status wins over the wrapper's own failure after it" \
   0 "fmt@slot scans@slot " "execution slot --wait 600 --cpu" "fmt-check: PASSED" FAKE_FW_MODE=wrapfail
 slot_leg "a fleet-worker.sh that does not answer the probe runs the builds directly" \

@@ -133,24 +133,34 @@
 # and lists are checked and before any member starts; a caller's own enclosing
 # slot is reused, not doubled. A slot that never ran it (refused, or the
 # registry unreachable) exits 75 with `harnesses: FAILED (exit 75): SLOT
-# REFUSED` and no member run; otherwise the run's own status is the exit
-# status. --list takes no slot, and no probe answer (CI, a machine outside the
+# REFUSED` and no member run; otherwise the copy records its status only on
+# explicit exits via `exit_with` (leaving the record empty on an untrapped
+# signal or implicit abort so `fleet_slot_rerun` propagates the slot status).
+# --list takes no slot, and no probe answer (CI, a machine outside the
 # fleet, OCANNL_TOOL_FLEET_WORKER=none) runs the members directly, silently.
 set -u
 # Set only by this script, for the copy of itself it runs inside the fleet
-# slot (take_fleet_slot): the file that says it started and, at its exit, its
-# status. Cleared, so no member's own run of this script inherits it.
+# slot (take_fleet_slot): the file that says it started and, written only by
+# `exit_with` on explicit exits, its status. Cleared, so no member's own run
+# of this script inherits it.
 slot_record=${OCANNL_TOOL_HARNESSES_IN_SLOT-}
 unset OCANNL_TOOL_HARNESSES_IN_SLOT
 [ -z "$slot_record" ] || : >"$slot_record" || exit 2
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
+# Record the slot status only on explicit exits, never from the EXIT trap: on an
+# untrapped TERM/HUP Bash runs the EXIT trap with the previous command's $?
+# before re-raising the signal (gh-ocannl-2450).
+exit_with() {
+  [ -z "$slot_record" ] || echo "$1" >"$slot_record"
+  exit "$1"
+}
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit_with 2
 group=all list=0 expected= ci_shell=0 ci_real_dune=0 affected=0 since= files=() jobs=1
 original_args=("$@")
 while [ $# -gt 0 ]; do
   arg=$1
   case $arg in
     --shell|--toolchain|--promotion)
-      [ "$group" = all ] || { echo "choose one harness group" >&2; exit 2; }
+      [ "$group" = all ] || { echo "choose one harness group" >&2; exit_with 2; }
       group=${arg#--} ;;
     --list) list=1 ;;
     --ci-shell) ci_shell=1 ;;
@@ -158,57 +168,57 @@ while [ $# -gt 0 ]; do
     --affected) affected=1 ;;
     --jobs)
       [ $# -ge 2 ] && [[ $2 =~ ^[1-9][0-9]*$ ]] ||
-        { echo "test-harnesses.sh: --jobs needs a positive integer" >&2; exit 2; }
+        { echo "test-harnesses.sh: --jobs needs a positive integer" >&2; exit_with 2; }
       jobs=$2
       shift ;;
     --since)
-      [ $# -ge 2 ] && [ -n "$2" ] || { echo "test-harnesses.sh: --since needs a base revision" >&2; exit 2; }
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "test-harnesses.sh: --since needs a base revision" >&2; exit_with 2; }
       since=$2
       shift ;;
     --files)
       shift
-      [ $# -ge 1 ] || { echo "test-harnesses.sh: --files needs at least one path" >&2; exit 2; }
+      [ $# -ge 1 ] || { echo "test-harnesses.sh: --files needs at least one path" >&2; exit_with 2; }
       files=("$@")
       break ;;
     --expected-skips)
-      [ $# -ge 2 ] && [ -n "$2" ] || { echo "test-harnesses.sh: --expected-skips needs a file" >&2; exit 2; }
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "test-harnesses.sh: --expected-skips needs a file" >&2; exit_with 2; }
       expected=$2
       shift ;;
-    -h|--help) sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "test-harnesses.sh: unknown argument '$arg'" >&2; exit 2 ;;
+    -h|--help) sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'; exit_with 0 ;;
+    *) echo "test-harnesses.sh: unknown argument '$arg'" >&2; exit_with 2 ;;
   esac
   shift
 done
 if [ "$ci_shell" = 1 ] && [ "$ci_real_dune" = 1 ]; then
   echo "test-harnesses.sh: choose one of --ci-shell and --ci-real-dune" >&2
-  exit 2
+  exit_with 2
 fi
 if [ "$ci_shell" = 1 ] || [ "$ci_real_dune" = 1 ]; then
   [ "$group" = all ] && [ -z "$expected" ] || {
     echo "test-harnesses.sh: --ci-shell and --ci-real-dune take no group and no --expected-skips" >&2
-    exit 2
+    exit_with 2
   }
   group=shell
 fi
 if [ "$affected" = 1 ]; then
   if [ -n "$since" ] && [ ${#files[@]} -gt 0 ]; then
     echo "test-harnesses.sh: --affected: choose one of --since and --files" >&2
-    exit 2
+    exit_with 2
   fi
   [ -n "$since" ] || [ ${#files[@]} -gt 0 ] ||
-    { echo "test-harnesses.sh: --affected needs --since BASE or --files PATH..." >&2; exit 2; }
+    { echo "test-harnesses.sh: --affected needs --since BASE or --files PATH..." >&2; exit_with 2; }
   [ -z "$expected" ] && [ "$ci_shell" = 0 ] && [ "$ci_real_dune" = 0 ] || {
     echo "test-harnesses.sh: --affected selects what the change reaches, so it takes no --expected-skips and no CI form" >&2
-    exit 2
+    exit_with 2
   }
   for path in ${files[@]+"${files[@]}"}; do
     case $path in
-      ''|-*) echo "test-harnesses.sh: --affected: '$path' is no repository path --files can ask about" >&2; exit 2 ;;
+      ''|-*) echo "test-harnesses.sh: --affected: '$path' is no repository path --files can ask about" >&2; exit_with 2 ;;
     esac
   done
 elif [ -n "$since" ] || [ ${#files[@]} -gt 0 ]; then
   echo "test-harnesses.sh: --since and --files are --affected's" >&2
-  exit 2
+  exit_with 2
 fi
 # This is the sole membership list: CI selects groups from this entrypoint.
 manifest() {
@@ -338,10 +348,12 @@ stop_serial_relays() {
 # arrives dies on delivery rather than outliving the run, while an untrapped
 # signal still runs the EXIT trap at once. The parallel run ends its relay
 # with exit traps, not a reset, which would restore that default and skip the
-# EXIT trap.
+# EXIT trap. Do not write `$slot_record` here -- only `exit_with` records it
+# (gh-ocannl-2450), because an untrapped TERM/HUP runs this trap with the
+# previous command's `$?` before Bash re-raises the signal.
 trap '' HUP INT TERM
 trap - HUP INT TERM
-trap 'status=$?; stop_serial_relays; rm -rf ${scratch[@]+"${scratch[@]}"}; [ -z "$slot_record" ] || echo "$status" >"$slot_record"' EXIT
+trap 'stop_serial_relays; rm -rf ${scratch[@]+"${scratch[@]}"}' EXIT
 # Refuse a list (exit 2, before any member runs) holding any line but the
 # three forms the header names, or an entry naming a harness this run does not
 # select, or one listed twice.
@@ -366,7 +378,7 @@ validate_list() { # FILE OPTION
     esac
     if [ -n "$why" ]; then
       echo "test-harnesses.sh: $2 $1:$n: $why" >&2
-      exit 2
+      exit_with 2
     fi
   done <"$1"
 }
@@ -375,7 +387,7 @@ readable_lists() { # OPTION FILE...
   shift
   for list_file in "$@"; do
     [ -f "$list_file" ] && [ -r "$list_file" ] ||
-      { echo "test-harnesses.sh: $option: cannot read $list_file" >&2; exit 2; }
+      { echo "test-harnesses.sh: $option: cannot read $list_file" >&2; exit_with 2; }
   done
 }
 dune_list=$root/tools/harness-skips-ci-shell-dune.txt
@@ -387,7 +399,7 @@ if [ "$ci_shell" = 1 ]; then
   [ "$(uname -s 2>/dev/null)" != Darwin ] || lists+=("$root/tools/harness-skips-ci-shell-darwin.txt")
   readable_lists --ci-shell "${lists[@]}"
   joined=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-ci-shell.XXXXXX") ||
-    { echo "test-harnesses.sh: cannot create the --ci-shell list" >&2; exit 2; }
+    { echo "test-harnesses.sh: cannot create the --ci-shell list" >&2; exit_with 2; }
   scratch+=("$joined")
   for list_file in "${lists[@]}"; do cat "$list_file"; echo; done >"$joined/harness-skips-ci-shell+.txt"
   expected=$joined/harness-skips-ci-shell+.txt
@@ -403,18 +415,18 @@ if [ "$ci_real_dune" = 1 ]; then
     case $line in ''|'#'*) continue ;; esac
     case $with_legs in *$'\n'"${line%%$'\t'*}"$'\n'*) continue ;; esac
     echo "test-harnesses.sh: --ci-real-dune: no leg selector for ${line%%$'\t'*}, which $dune_list names" >&2
-    exit 2
+    exit_with 2
   done <"$dune_list"
   while IFS=$'\t' read -r script _; do
     case $shell_members in *$'\n'"$script"$'\n'*) continue ;; esac
     echo "test-harnesses.sh: --ci-real-dune: $script has a leg selector and is no shell-tier member" >&2
-    exit 2
+    exit_with 2
   done < <(real_dune_legs)
 fi
 if [ -n "$expected" ]; then
   case $expected in /*) ;; *) expected=$PWD/$expected ;; esac
   [ -f "$expected" ] && [ -r "$expected" ] ||
-    { echo "test-harnesses.sh: --expected-skips: cannot read $expected" >&2; exit 2; }
+    { echo "test-harnesses.sh: --expected-skips: cannot read $expected" >&2; exit_with 2; }
   validate_list "$expected" --expected-skips
 fi
 # --affected's commands (see the header) as `HARNESS<TAB>ERE` lines in
@@ -428,7 +440,7 @@ read_affected() {
   # The two forms `affected --harnesses` prints (tools/affected-tests.sh).
   local form=$'^([^ \t\r\']+)( --only \'([^\t\r\']+)\')?$'
   dir=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-affected.XXXXXX") ||
-    { echo "test-harnesses.sh: cannot create the --affected scratch directory" >&2; exit 2; }
+    { echo "test-harnesses.sh: cannot create the --affected scratch directory" >&2; exit_with 2; }
   scratch+=("$dir")
   ask=(--since "$since")
   [ ${#files[@]} = 0 ] || ask=(--files "${files[@]}")
@@ -436,7 +448,7 @@ read_affected() {
   if [ "$rc" != 0 ]; then
     cat "$dir/err" >&2
     echo "test-harnesses.sh: --affected: affected --harnesses ${ask[*]} exited $rc (above), so what this change reaches is not known; nothing run" >&2
-    exit 2
+    exit_with 2
   fi
   [ -n "$slot_record" ] || cat "$dir/err" >&2
   # A line is judged against every member: a group only keeps some of the good ones.
@@ -457,7 +469,7 @@ read_affected() {
     fi
     if [ -z "$reached" ]; then
       echo "test-harnesses.sh: --affected: line $n of what affected --harnesses printed is no command of a member, once: $line" >&2
-      exit 2
+      exit_with 2
     fi
   done <"$dir/commands" >"$affected_table"
 }
@@ -467,7 +479,7 @@ if [ "$affected" = 1 ] && [ ! -s "$affected_table" ]; then
     if [ "$group" = all ]; then what='no harness'; else what="no harness of the $group group"; fi
     printf '\nharnesses: 0 run, 0 failed (this change reaches %s)\n' "$what"
   fi
-  exit 0
+  exit_with 0
 fi
 # The fleet's run-time correctness slot (see the header): the whole run, this
 # script again, inside one `execution slot --cpu`. Taken here, after every
@@ -476,11 +488,11 @@ fi
 take_fleet_slot() {
   local candidates slot_dir
   candidates=$root/tools/fleet-worker-candidates.sh
-  [ -r "$candidates" ] || { echo "test-harnesses.sh: cannot read $candidates" >&2; exit 2; }
+  [ -r "$candidates" ] || { echo "test-harnesses.sh: cannot read $candidates" >&2; exit_with 2; }
   # shellcheck source=fleet-worker-candidates.sh
   . "$candidates"
   slot_dir=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-slot.XXXXXX") ||
-    { echo "test-harnesses.sh: cannot create the slot's scratch directory" >&2; exit 2; }
+    { echo "test-harnesses.sh: cannot create the slot's scratch directory" >&2; exit_with 2; }
   scratch+=("$slot_dir")
   # The script by its absolute path: the copy runs from wherever the caller is.
   fleet_slot_rerun OCANNL_TOOL_HARNESSES_IN_SLOT "$slot_dir" harnesses "the harnesses" -- \
@@ -489,7 +501,7 @@ take_fleet_slot() {
 [ "$list" = 1 ] || [ -n "$slot_record" ] || take_fleet_slot
 if [ -n "$expected" ]; then
   record=$(mktemp "${TMPDIR:-/tmp}/test-harnesses-skips.XXXXXX") ||
-    { echo "test-harnesses.sh: cannot create the skip record" >&2; exit 2; }
+    { echo "test-harnesses.sh: cannot create the skip record" >&2; exit_with 2; }
   scratch+=("$record")
   export OCANNL_TOOL_HARNESS_STRICT=1 OCANNL_TOOL_HARNESS_EXPECTED_SKIPS=$expected \
     OCANNL_TOOL_HARNESS_SKIP_RECORD=$record
@@ -505,7 +517,7 @@ if [ "$ci_real_dune" = 1 ]; then
   export OCANNL_TOOL_HARNESS_STRICT=1
 fi
 failures=0 total=0
-cd "$root" || exit 2
+cd "$root" || exit_with 2
 # The members this run selects, in the manifest's order: its script, the
 # command --list prints for it, and its arguments as one --only selector
 # (empty: every leg).
@@ -532,20 +544,20 @@ while read -r tier script; do
   fi
   run_scripts+=("$script") run_commands+=("$command") run_selectors+=("$selector") run_tiers+=("$tier")
 done < <(manifest)
-[ "$total" -gt 0 ] || { echo "no harnesses selected" >&2; exit 2; }
-[ "$list" = 1 ] && exit 0
+[ "$total" -gt 0 ] || { echo "no harnesses selected" >&2; exit_with 2; }
+[ "$list" = 1 ] && exit_with 0
 # Pin both member interpreters and nested subjects, including env shebangs.
 member_bash=${BASH:-bash}
 if /bin/bash -c '[ "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}" = 3.2 ]' 2>/dev/null; then
   member_bash=/bin/bash
 fi
-member_version=$("$member_bash" -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"') || exit 2
-interpreter_dir=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-bash.XXXXXX") || exit 2
+member_version=$("$member_bash" -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"') || exit_with 2
+interpreter_dir=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-bash.XXXXXX") || exit_with 2
 scratch+=("$interpreter_dir")
-ln -s "$member_bash" "$interpreter_dir/bash" || exit 2
+ln -s "$member_bash" "$interpreter_dir/bash" || exit_with 2
 export PATH="$interpreter_dir:$PATH"
 outputs=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-output.XXXXXX") ||
-  { echo "test-harnesses.sh: cannot create the member output directory" >&2; exit 2; }
+  { echo "test-harnesses.sh: cannot create the member output directory" >&2; exit_with 2; }
 scratch+=("$outputs")
 member_output() { # SCRIPT: sets output
   output=$outputs/${1//\//_}.out
@@ -639,12 +651,12 @@ serial_member() { # SCRIPT STDOUT STDERR [ARGS...] (STDOUT empty unless --ci-rea
   rm -f "$done_flag"
   : >"$error" || {
     echo 'test-harnesses.sh: cannot create the live stderr capture file' >&2
-    exit 2
+    exit_with 2
   }
   if [ -n "$out" ]; then
     : >"$out" || {
       echo 'test-harnesses.sh: cannot create the live stdout capture file' >&2
-      exit 2
+      exit_with 2
     }
   fi
   perl -e "$serial_relay_perl" "$error" "$done_flag" >&2 &
@@ -677,7 +689,7 @@ member_ended() { # INDEX RC OUTPUT: ordinary failures count once per member
       printf 'HARNESS %s exit: %s\n' "$script" "$rc"
       stop_members
       printf 'harnesses: interrupted (exit %s)\n' "$rc" >&2
-      exit "$rc" ;;
+      exit_with "$rc" ;;
   esac
   diagnostic=$(LC_ALL=C grep -a -m 1 -E -- "$command_not_found" "$3") || scan_rc=$?
   case $scan_rc in
@@ -723,9 +735,9 @@ else
   # child, so its status is this shell's to wait for. No `wait -n`: this runs
   # under the Bash 3.2 a Mac ships, so a member's end is seen by polling its
   # pid, which the shell has reaped by then.
-  trap 'stop_members; exit 129' HUP
-  trap 'stop_members; exit 130' INT
-  trap 'stop_members; exit 143' TERM
+  trap 'stop_members; exit_with 129' HUP
+  trap 'stop_members; exit_with 130' INT
+  trap 'stop_members; exit_with 143' TERM
   started=0 printed=0 running=0 interrupted=
   while [ "$printed" -lt "$total" ] && [ -z "$interrupted" ]; do
     progressed=0
@@ -757,9 +769,9 @@ else
     done
     [ "$progressed" = 1 ] || sleep 0.2
   done
-  trap 'exit 129' HUP
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
+  trap 'exit_with 129' HUP
+  trap 'exit_with 130' INT
+  trap 'exit_with 143' TERM
   if [ -n "$interrupted" ]; then
     # The members beside it are stopped, then every member that ran is
     # printed, in order, before the run ends with the interrupting status.
@@ -772,7 +784,7 @@ else
       printf 'HARNESS %s exit: %s\n' "$script" "${ended[i]}"
     done
     printf 'harnesses: interrupted (exit %s)\n' "$interrupted" >&2
-    exit "$interrupted"
+    exit_with "$interrupted"
   fi
 fi
 stale=0
@@ -824,4 +836,4 @@ printf '\nharnesses: %s run, %s failed' "$total" "$failures"
 [ "$ci_shell" = 0 ] || printf '; %s hidden-dune skip(s) misfiled' "$misfiled"
 [ "$ci_real_dune" = 0 ] || printf '; %s real-dune check(s) did not pass' "$unreached"
 printf '\n'
-exit $((failures + stale + misfiled + unreached > 0 ? 1 : 0))
+exit_with $((failures + stale + misfiled + unreached > 0 ? 1 : 0))
