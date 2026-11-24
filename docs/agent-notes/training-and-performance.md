@@ -300,7 +300,7 @@ files.
   for replay. `EXPLAIN_ONLY` takes the snapshot from the archive and names the missing
   `.tsv.stock` path before building when a marked TSV lacks it. Direct `gh1442_agreement.py`
   replays take the snapshot via `--stock-tsv` and read stock arms (and `--fit-mma`) from it
-  alone; a missing census-selected `F_seeded[...]` incumbent is diagnosed as `seeded_unmatched`
+  alone; a missing census-selected `F_seeded[...]` incumbent is diagnosed as `seeded_plan_unmatched`
   (exit 1, matching `preset_unmatched`), and an empty snapshot exits 2. Stock fits use the
   snapshot too: `gh1253_cells.sh` passes `.tsv.stock` to `gh1600_txn_fit.py`, `gh1821_geometry_fit.py`
   reads `.tsv.stock` when present, and both refuse a marked mixed TSV without its snapshot with

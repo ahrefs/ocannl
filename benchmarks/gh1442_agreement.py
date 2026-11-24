@@ -24,7 +24,7 @@ Usage: gh1442_agreement.py TSV NAME=EXPLAIN [NAME=EXPLAIN ...] [--pick NAME=OUT 
            `stock_snapshot_missing` on stderr and no report. Archive provenance comes solely from
            this marker. Supply --stock-tsv explicitly for older mixed TSVs without the marker.
            Stock explain arms and --fit-mma read only the stock rows; explicit --pick arms read
-           TSV so profile picks can join their own rows. A digest join needs a positive
+           the main TSV so profile picks can join their own rows. A digest join needs a positive
            measurement in a current 12-column stock row.
 
 The explain lines and the rows join by label: model_explain labels its sketch leaves as the tuner
@@ -32,7 +32,7 @@ does. The stock `seeded` uses the census's plan, which can be a configured prese
 makes no changes. The `default` and that preset join using the tuner's preset digest, including
 schedules timed under another label (`timed_as` in the report). A needed preset with a missing
 timing is reported as `preset_unmatched`, and a census-selected `F_seeded[...]` incumbent missing
-from the stock rows is reported as `seeded_unmatched` (both exit 1). A serial `default` uses
+from the stock rows is reported as `seeded_plan_unmatched` (both exit 1). A serial `default` uses
 `baseline`. With no census, `seeded` uses a single `F_seeded[...]` label if available. Repeated
 readings keep the fastest.
 
@@ -401,7 +401,7 @@ def main():
                 print(f"{name}: preset_unmatched label={label!r} digest={stock.digest or 'unavailable'}")
                 report_ok = False
             elif stock.uses_seeded_plan(label):
-                print(f"{name}: seeded_unmatched label={label!r} plan={stock.plan!r}")
+                print(f"{name}: seeded_plan_unmatched label={label!r} plan={stock.plan!r}")
                 report_ok = False
         if len(joined) < 2:
             print(f"gh1442_agreement: {name}: fewer than two candidates join the rows",

@@ -52,7 +52,7 @@ import statistics
 import sys
 
 import bench_output
-from gh1600_txn_fit import replicates
+from gh1600_txn_fit import replicates, row_label
 
 GEO = re.compile(r"gpu (\d+)x(\d+)x(\d+)/(\d+)x(\d+)( bgrid)?( coal-[kn])?")
 
@@ -106,14 +106,8 @@ def load(out, arm):
                                             for spec in fields.get("kernels", "").split(";") if spec]
         rows = []
         for pos, label in enumerate(order):
-            row = label
-            if label == "default":
-                # The untuned candidate: `baseline` in the timing rows (gh1600_txn_fit's row_label).
-                row = "baseline" if "baseline" in times else None
-            if label == "seeded":
-                seeded = [t for t in times if t.startswith("F_seeded[")]
-                row = seeded[0] if len(seeded) == 1 else None
-            if row not in times or label not in kernels:
+            row = row_label(label, times)
+            if row is None or label not in kernels:
                 continue
             fills = explain[label][2]
             ks = [{"c": float(x["c"]), "m": float(x["m"]), "wg": int(x["wg"]), "thr": int(x["thr"]),

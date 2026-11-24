@@ -466,7 +466,7 @@ PY
     >"$TMP/runs/mixed-fits/trunc-direct.out" 2>"$TMP/runs/mixed-fits/trunc-direct.err" || got=$?
   check 'direct agreement fails on a truncated stock snapshot missing F_seeded[stock]' test "$got" = 1
   check 'direct agreement diagnoses the missing seeded incumbent' \
-    grep -qxF "shipped: seeded_unmatched label='seeded' plan='F_seeded[stock]'" \
+    grep -qxF "shipped: seeded_plan_unmatched label='seeded' plan='F_seeded[stock]'" \
       "$TMP/runs/mixed-fits/trunc-direct.out"
   check 'truncated snapshot still keeps remaining candidates on stock timings' \
     grep -qxF "  shipped: 'W_sketch[control]' measured_ms=1.000000 rank_ms=1.250000 admitted=true" \
@@ -476,7 +476,7 @@ PY
     EXPLAIN_ONLY="$trunc_dir" STUB_MUTATION=stock-serial-profile
   check 'EXPLAIN_ONLY fails on a truncated stock snapshot missing F_seeded[stock]' test "$got" = 1
   check 'EXPLAIN_ONLY diagnoses the missing seeded incumbent' \
-    grep -qxF "shipped: seeded_unmatched label='seeded' plan='F_seeded[stock]'" \
+    grep -qxF "shipped: seeded_plan_unmatched label='seeded' plan='F_seeded[stock]'" \
       "$TMP/runs/trunc-replay/out/${site}_agreement.txt"
 
   : >"$TMP/runs/mixed-fits/empty.tsv.stock"
