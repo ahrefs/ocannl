@@ -6838,6 +6838,54 @@ let () =
      in
      fun () -> in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
       [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
+    ( "refuses a partially applied local gate helper capturing an unchanged ambient policy before \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let check policy () =
+  Ll_test.advertised ~backend_name:"cuda" ~policy ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ()
+let available = check (Ir.Numerics.get ())
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () ->
+      let leg = Verdict.leg ~on:"cuda" ~when_:(available ()) () in
+      in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "accepts a deferred lazy sub_leg referenced in an unforced lazy binding before \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub =
+  Verdict.sub_leg gpu ~on:"cuda"
+    ~when_:(lazy (Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ()))
+let _unused = lazy (in_leg ~leg:sub "unused" (fun label -> p label true))
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg:sub "tf32 replay" (fun label -> p label true))|ocaml},
+      [] );
+    ( "refuses a shared deferred lazy sub_leg used across two separate invocations of a \
+       Test_utils.with_policy helper",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub =
+  Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let check enabled =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = enabled })
+    (fun () -> in_leg ~leg:sub "tf32 replay" (fun label -> p label true))
+let () =
+  check false;
+  check true|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses a leg gating on an unqualified capability field inside an inline iterator callback",
+      {ocaml|let caps = Context.codegen_capabilities (Context.auto ())
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:(List.exists [ caps ] ~f:(fun c -> c.workgroup_allocation_alignment = 4))
+    ()
+let () = Verdict.in_leg ~leg "aligned" (fun label -> Verdict.p label true)|ocaml},
+      [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
     ( "refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy",
       {ocaml|open Verdict.Claims
 let leg =
