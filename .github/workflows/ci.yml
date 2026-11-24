@@ -1433,8 +1433,10 @@ jobs:
 
   # The affected reader's full no-op audit (gh-ocannl-2447) has its own
   # verdict so a failure in another harness cannot obscure it.
+  # Run against the workflow ref's revision. An older expected_sha may
+  # check out a harness that predates --self-check.
   harness-affected-self-check:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && !inputs.windows_only && inputs.ocaml_compiler == '5.5.x' && (!inputs.expected_sha || inputs.expected_sha == github.sha)
     name: Affected reader no-op audit
     runs-on: ubuntu-latest
     # Allow for toolchain setup and the full sweep on slower hosted runners.
