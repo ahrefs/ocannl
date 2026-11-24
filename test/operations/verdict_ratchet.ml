@@ -6739,6 +6739,41 @@ let () =
       check ~leg:safe ();
       check ~leg:stale ())|ocaml},
       [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
+    ( "refuses a deferred lazy sub_leg used unwrapped before Test_utils.with_policy inside the \
+       same local helper call",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub =
+  Verdict.sub_leg gpu ~on:"cuda"
+    ~when_:(lazy (Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ()))
+let run () =
+  in_leg ~leg:sub "before policy" (fun label -> p label true);
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg:sub "under policy" (fun label -> p label true))
+let () = run ()|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
+    ( "refuses an ambient-policy leg used inside a named iterator callback under \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let stale =
+  Verdict.leg ~on:"cuda"
+    ~when_:(Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+    ()
+let check () = in_leg ~leg:stale "tf32 replay" (fun label -> p label true)
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> List.iter [ () ] ~f:check)|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
+    ( "refuses a leg gated on a non-allowlisted capability field bound by an enclosing match",
+      {ocaml|let caps = Context.codegen_capabilities (Context.auto ())
+let () =
+  match caps with
+  | { workgroup_allocation_alignment = alignment; _ } ->
+      let leg = Verdict.leg ~on:"cuda" ~when_:(alignment = 4) () in
+      Verdict.in_leg ~leg "aligned" (fun label -> Verdict.p label true)|ocaml},
+      [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
     ( "refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy",
       {ocaml|open Verdict.Claims
 let leg =
