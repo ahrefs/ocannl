@@ -410,6 +410,12 @@ files.
   macro, `OCANNL_HALF_FMA`, defined by the same `#if` — so both configurations agree by
   construction rather than by inspection. Any new fp16 op admitted to the vector path needs the
   same treatment.
+- The dedicated half SIMD FMA case in `reduction_forms` (gh-ocannl-2457) sizes its extent from
+  the configured vector width and puts two cancelling products one grid step apart. A small
+  contribution in another lane survives when the update precedes the fold and rounds away when a
+  fused scalar-tail update follows the fold.
+  The 64-term RNG case can spend all its terms seeding chains, and its folded results can agree
+  under both rounding orders even where an update runs.
 - **Under the default `cc_backend_fp_contract=auto`, an f16 value depends on the kernel's shape on
   a native-fp16 x86 host** (gh-ocannl-1679): there `FLOAT_TO_HALF` is a no-op cast, so gcc's own
   `-ffp-contract=fast` fuses the IR's rounded product into its add (`vfmadd231sh`) wherever it

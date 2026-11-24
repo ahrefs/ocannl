@@ -2555,3 +2555,93 @@ let () =
           | Cs.Render_parallel_grid _ ->
               (* Exhaustive over {!Cs.loop_rendering}; these arms are [Out_of_scope] above. *)
               assert false))
+
+let () =
+  let vector_bytes = (Lazy.force hardware_limits).simd_vector.bytes in
+  let leg =
+    Verdict.leg ~when_:(on_cpu && vector_bytes >= 8 && Lazy.force native_fp16) ~on:backend_name ()
+  in
+  let evidence =
+    lazy
+      (let prec = Ops.half in
+       let elt_bytes = Ops.prec_in_bytes prec in
+       (* Sixteen full vectors leave room for updates even with four chains and let the layout
+          chooser trade off the horizontal fold against the number of trips. *)
+       let extent = 16 * (vector_bytes / elt_bytes) in
+       let lanes =
+         Ir.Backend_intf.simd_reduce_lanes_for ~vector_bytes ~elt_bytes ~extent |> Option.value_exn
+       in
+       let chains = Ir.Backend_intf.simd_reduce_chains ~lanes ~extent in
+       let step = lanes * chains in
+       let node = Ll_test.node_factory ~prec ~first_id:!next_id ~dims:[| extent |] () in
+       let out = node ~dims:[| 1 |] "rffmaout" and x = node "rffmax" in
+       List.iter [ out; x ] ~f:Ll_test.materialize;
+       let k = Ll_test.sym () in
+       let acc = [| Ll_test.fixed 0 |] in
+       (* The positive product lies halfway between two half values and rounds up to 1 + 2^-6. The
+          negated product initializes the first lane of the first chain. Its paired positive product
+          leaves -2^-11 in a fused update and zero after separate rounding. A small contribution in
+          lane 1 survives a fold after cancellation. It rounds away if the grid folds first and
+          performs the fused update in the scalar tail. *)
+       let a = 0x1.08p0 and b = 0x1.f8p-1 in
+       let small = 0x1p-13 in
+       let seed = 0x1p-12 in
+       let x_values = Array.create ~len:extent 0. in
+       x_values.(0) <- -.a;
+       x_values.(1) <- small;
+       x_values.(step) <- a;
+       let product =
+         LL.Binop (Ops.Mul, (Ll_test.get x [| Ll_test.iter k |], prec), (Ll_test.c b, prec))
+       in
+       let update = LL.Binop (Ops.Add, (Ll_test.get out acc, prec), (product, prec)) in
+       let prog =
+         {
+           llc = Ll_test.loop_n k extent (Ll_test.set out acc update);
+           raw = None;
+           r = Ll_test.sym ();
+           k;
+           out;
+           materialized = [ out; x ];
+           seed = [ (out, [| seed |]); (x, x_values) ];
+           bindings = Idx.Empty;
+           bind = (fun _ -> ());
+           verify = [];
+         }
+       in
+       let values, _, _, _, render =
+         Test_utils.with_policy
+           (fun p -> { p with Numerics.fp16_arithmetic = Fp16_narrow })
+           (fun () ->
+             execute ~name:"rf_half_simd_fma" ~prog
+               ~sched:[ Sched.Retype { axis = k; ty = LL.Vectorized } ])
+       in
+       let product = a *. b in
+       let initial = -.round prec product in
+       let other_lane = round prec (small *. b) in
+       let finish partial = round prec (seed +. partial) in
+       let fold lane = round prec (lane +. other_lane) in
+       let fused = finish (fold (round prec (initial +. product))) in
+       let separate = finish (fold 0.) in
+       let scalar_tail = finish (round prec (fold initial +. product)) in
+       Stdio.eprintf
+         "  rf_half_simd_fma extent %d: %s\n\
+         \  half SIMD FMA result %h, fused %h, separately rounded %h, scalar tail %h (not part of \
+          the golden)\n"
+         extent (Cs.render_summary_string render) values.(0) fused separate scalar_tail;
+       (extent, lanes, chains, render.Cs.loops, values.(0), fused, separate, scalar_tail))
+  in
+  in_leg ~leg "the half SIMD reduction renders a grid with a complete vector update" (fun label ->
+      let extent, lanes, chains, loops, _, _, _, _ = Lazy.force evidence in
+      p_exists label loops ~f:(fun loop ->
+          match loop.Cs.rendering with
+          | Cs.Render_simd_reduce { target = `Cell; lanes = actual_lanes; chains = actual_chains }
+            ->
+              actual_lanes = lanes && actual_chains = chains && extent >= 2 * lanes * chains
+          | _ -> false));
+  in_leg ~leg "the half SIMD update preserves the fused product's residue through the fold"
+    (fun label ->
+      let _, _, _, _, got, fused, separate, scalar_tail = Lazy.force evidence in
+      p label
+        (Float.equal got fused
+        && (not (Float.equal fused separate))
+        && not (Float.equal fused scalar_tail)))
