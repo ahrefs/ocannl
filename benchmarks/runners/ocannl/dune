@@ -89,6 +89,14 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(library
+ (name bench_mlp_model)
+ (package neural_nets_lib)
+ (modules bench_mlp_model)
+ (libraries base bench_harness ocannl arrayjit.ir)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (executables
  (names
   bench_mlp
@@ -117,6 +125,7 @@
   bench_harness
   bench_conv_model
   bench_gpt_model
+  bench_mlp_model
   bench_json
   bench_out
   bench_retime

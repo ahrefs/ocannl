@@ -1249,9 +1249,9 @@ files.
   "a window pair's verdict and tags do not depend on constraint order" (both orientations, solved
   and late kernels, padded against valid), the solved-input case and the closing case.
 - Every benchmark model builds under `check` with `off`'s dims (gh-ocannl-1908):
-  `test/operations/bench_model_schemes` builds each conv and gpt workload of `benchmarks/workloads`
-  from a synthetic zero-valued fixture, through `Bench_conv_model`/`Bench_gpt_model` as the runners
-  do, plus `Nn_blocks.resnet_block` at stride 2, and compares every graph tensor's label and dims.
+  `test/operations/bench_model_schemes` builds each conv, GPT and MLP workload of
+  `benchmarks/workloads` from a synthetic zero-valued fixture through the runners' model builders.
+  It constructs the GPT runner's inference or training step at f32 with no device context.
+  It also checks `Nn_blocks.resnet_block` at stride 2 and compares every graph tensor's label and dims.
   A new workload JSON is covered without an edit; a new model kind needs its fixture layout in
-  the test's `fixture_tensors`. The mlp workloads are not covered: `bench_mlp`'s model lives in its
-  executable.
+  the test's `fixture_tensors` and a graph builder.

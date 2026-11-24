@@ -53,13 +53,16 @@ type precision_leg = {
           window then sees) and makes the static leg — which never adjusts — diverge outright. *)
 }
 
-(** Parses [BENCH_PRECISION] / [BENCH_STATIC_SCALE] / [BENCH_GATE_INTERVAL]. [runner] prefixes error
-    messages; [training] is {!is_training} of the fixture — the gate legs measure the cost of the
-    loss-scaling gate, which only a training step has, so on a forward-only fixture they are refused
-    rather than silently ignored. *)
-let precision_leg ~runner ~training ?st () =
+(** Parses [BENCH_PRECISION] / [BENCH_STATIC_SCALE] / [BENCH_GATE_INTERVAL]. An explicit [base]
+    overrides [BENCH_PRECISION]. [runner] prefixes error messages; [training] is {!is_training} of
+    the fixture — the gate legs measure the cost of the loss-scaling gate, which only a training
+    step has, so on a forward-only fixture they are refused rather than silently ignored. *)
+let precision_leg ~runner ~training ?st ?base () =
+  let requested =
+    match base with Some _ -> base | None -> Stdlib.Sys.getenv_opt "BENCH_PRECISION"
+  in
   let base, prec =
-    match Stdlib.Sys.getenv_opt "BENCH_PRECISION" with
+    match requested with
     | None | Some "" | Some "0" | Some "f32" -> ("f32", None)
     | Some "bf16" -> ("bf16", Some Ir.Ops.bfloat16)
     | Some "f16" -> ("f16", Some Ir.Ops.half)
