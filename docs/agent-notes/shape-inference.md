@@ -329,12 +329,13 @@ files.
   (gh-ocannl-2463). A packed `Shape_row` runs with the draws at stage 6a and with the other
   constraints at stage 6b. After an equality solves a row, its stored total can be emitted back
   into the worklist, so the pass also tracks totals emitted before the next closing. The staged
-  stores pin both partition directions and the emission. No store was found where the two
-  `packed_minimum_demand` exclusions (`deferred_dims`,
-  `in_param_bound_component`) change an outcome (staged attempts are refused on the base too). The same test pins both
-  agreeing rules at two lane widths (9 single and 6 double cells, three blocks each, by constants
-  and by minima; an f64 leg): forcing one coefficient on either rule fails its case. A reduced draw's leaf axis under the result guessed
-  1 at stage 5 (`close_dim_terminal`): it now waits until stage 7 while a non-parameter result
+  stores pin both partition directions and put the row equality directly in the Stage6b worklist
+  to pin the emission. No store was found where the two `packed_minimum_demand` exclusions
+  (`deferred_dims`, `in_param_bound_component`) change an outcome (staged attempts are refused on
+  the base too). The same test pins both agreeing rules at two lane widths (9 single and 6 double
+  cells, three blocks each, by constants and by minima; an f64 leg): forcing one coefficient on
+  either rule fails its case. A reduced draw's leaf axis under the result guessed 1 at stage 5
+  (`close_dim_terminal`): it now waits until stage 7 while a non-parameter result
   above it, through `res` links, still has such a minimum, unless the walk meets an axis a held
   window or concat equation defers: stage 7 does not close that axis to its minimum first, so the
   leaf keeps its stage-5 guess. No program reaching that guard was found; a staged store in
