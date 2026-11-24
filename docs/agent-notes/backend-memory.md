@@ -736,6 +736,15 @@ files.
   1556896 -> 1425668 B once measured properly (cc: 1556640 -> 1425540). When one backend's
   numeric assertion inverts while its parity assertions pass, suspect the measurement API before
   the pass under test — and check whether a sibling backend already fixed the same thing.
+- **Buffers read by an observable virtual replay keep dedicated bytes** (gh-ocannl-2461).
+  `Backends.alias_eligible` uses the lineage's placement-aware replay facts for observable
+  stored computations. The walk follows virtual dependencies and stops at materialized or
+  host-initialized leaves. A buffer reached by a replay the host can run outlives its last
+  scheduled read, so eligibility excludes it for both the arena and the link floor. A replay
+  refused for a launch index, merge buffer or settled `Local` dependency extends no lifetime.
+  The `buffer_aliasing` fixture compares the virtual host read with a materialized reference
+  and verifies that unrelated intermediates and buffers needed only by a launch-bound tap still
+  alias.
 - Rematerialization (gh-ocannl-498) is a PLANNING pass, not a search: `Memory_budget.fit` picks
   `Inline` flips from `Backends.score_footprint` (the arena layout's own bytes) versus the
   recompute cost `flip_candidates` already carries (the cost model's per-instantiation count since

@@ -14,9 +14,6 @@ let exemptions =
     ( "test/operations/affine_lowering.ml",
       Scan.Migration { records = 0; traversals = 3 },
       "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/buffer_aliasing.ml",
-      Scan.Migration { records = 1; traversals = 0 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
     ( "test/operations/cpu_vectorized.ml",
       Scan.Migration { records = 0; traversals = 1 },
       "links ll_test for operand helpers only; still hand-builds Low_level" );
