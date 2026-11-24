@@ -644,11 +644,10 @@ let () =
         (fun label -> no_short_circuit_claim ~prec:leg.prec label (Lazy.force text)))
 
 let () =
-  let metal = Verdict.leg ~when_:on_air ~on:backend_name () in
   let prefix = (Context.backend_facts_of_name backend_name).Ir.Backend_intf.node_ident_prefix in
   List.iter [ "bs_sat01_gate"; "bs_sat01_gate_int32" ] ~f:(fun name ->
       let leg = List.find_exn legs ~f:(fun leg -> String.equal leg.name name) in
-      in_legf ~leg:metal "%s: Metal reads the condition once" name (fun label ->
+      in_legf ~leg:air_leg "%s: Metal reads the condition once" name (fun label ->
           let condition, _ = List.hd_exn leg.seed in
           let text = kernel_text name in
           p label

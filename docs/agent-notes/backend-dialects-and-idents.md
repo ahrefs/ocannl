@@ -247,7 +247,8 @@ files.
   backend-precision-and-simd.md, gh-ocannl-1785). Metal's integer `Max`/`Min`/`Relu` go through
   `Builtins_metal`'s `ocannl_max` / `ocannl_min`, which compare in the operands' common type, for
   the integer-promoted sums. Since gh-ocannl-1883 every backend's do, and each homogeneous arm is
-  swept at the integer precisions as each operand of `Mod` and `Div` (`Under_integer`).
+  swept at the integer precisions as each operand of `Mod` (`Under_mod`). Executed quotient cases
+  check both operands of `Div`.
   The rule is in backend-precision-and-simd.md.
 - Tensor-node debug names become identifiers verbatim in the emitted kernel, so anything the
   backend also emits as a *name* must be reserved (`ident_blacklist`). Reserve it from the

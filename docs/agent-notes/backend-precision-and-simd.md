@@ -582,9 +582,10 @@ files.
   `Builtins_cc`'s `OCANNL_MAX`/`OCANNL_MIN` (a statement expression over `__auto_type`, so each
   operand is spelled and evaluated once), and the `ocannl_max`/`ocannl_min` templates of
   `Builtins_cuda`, `Builtins_hip` and `Builtins_metal`. Integer `Trunc` is its operand and integer
-  `Not` a `== 0` truth. `op_table_compile`'s `Under_integer` family compiles every homogeneous arm as
-  either operand of `Mod` and `Div` at each integer precision. `Mod` rejects a float-typed arm at
-  compile time, while the executed `b * (Not(z) / c)` case detects a fractional quotient.
+  `Not` a `== 0` truth. `op_table_compile`'s `Under_mod` family compiles every homogeneous arm on
+  both sides of `Mod`, which rejects a float-typed operand at each integer precision. Executed
+  cases for `Max`, `Min`, `Relu`, `Satur01`, `Trunc` and `Not` scale a non-exact quotient before
+  the integer store to distinguish integer and floating division on either side of `Div`.
   `integer_promotion_folds` executes the integer `Satur01_gate` boundary
   (gh-ocannl-1647).
 - **A `Max`/`Min` neutral element is the slot's extreme at an integer precision** (gh-ocannl-2081).

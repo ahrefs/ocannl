@@ -22,10 +22,9 @@ type arm =
           precision, which the renderer computes in float and converts once (gh-ocannl-1785), so an
           integer arm never meets a float operand -- no mixed [min(uchar, double)], no [%] over a
           double. *)
-  | Under_integer of Ops.binop * [ `Left | `Right ] * arm
-      (** A homogeneous arithmetic arm at an integer storage precision as either operand of [Mod] or
-          [Div]. An integer-VALUED float would fail to compile under [Mod] and silently change the
-          quotient under [Div] (gh-ocannl-1883). *)
+  | Under_mod of [ `Left | `Right ] * arm
+      (** At integer storage precision, [Mod] rejects a float-typed operand on either side, even
+          when the arm's value is an integer (gh-ocannl-1883). *)
   | Lanes of arm
       (** A homogeneous arithmetic arm applied cell by cell over a [Vectorized] loop, every operand
           read at the loop index: what the explicit-SIMD rendering takes (gh-ocannl-1768). *)
@@ -44,9 +43,9 @@ let rec arm_name = function
   | Convert_from q -> "convert from " ^ Ops.prec_string q
   | Inlined arm -> arm_name arm ^ " over an inlined operand"
   | Inlined_real arm -> arm_name arm ^ " over an inlined real-valued operand"
-  | Under_integer (op, side, arm) ->
+  | Under_mod (side, arm) ->
       let side = match side with `Left -> "left" | `Right -> "right" in
-      arm_name arm ^ " as the " ^ side ^ " operand of " ^ Sexp.to_string (Ops.sexp_of_binop op)
+      arm_name arm ^ " as the " ^ side ^ " operand of Mod"
   | Lanes arm -> arm_name arm ^ " over vector lanes"
   | Lanes_uniform arm -> arm_name arm ^ " over vector lanes, its last operand uniform"
   | Reduce op -> "vector reduction " ^ Sexp.to_string (Ops.sexp_of_binop op)
@@ -55,7 +54,7 @@ let rec arm_name = function
 let is_vector_arm = function
   | Lanes _ | Lanes_uniform _ | Reduce _ | Reduce_fma -> true
   | Unary _ | Binary _ | Ternary _ | Vector _ | Convert_from _ | Inlined _ | Inlined_real _
-  | Under_integer _ ->
+  | Under_mod _ ->
       false
 
 (* A value select: an operator that yields one of its operands, the other evaluated only
@@ -72,7 +71,7 @@ let rec is_select = function
       match Ops.binop_conditionality op with
       | Ops.Gated_second -> true
       | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> false)
-  | Inlined arm | Inlined_real arm | Under_integer (_, _, arm) -> is_select arm
+  | Inlined arm | Inlined_real arm | Under_mod (_, arm) -> is_select arm
   | Unary _ | Vector _ | Convert_from _ | Lanes _ | Lanes_uniform _ | Reduce _ | Reduce_fma -> false
 
 type verdict =
@@ -154,7 +153,7 @@ let arms_at ~precs store =
       | Unary op -> Ops.is_homogeneous_prec_unop op
       | Binary op -> Ops.is_homogeneous_prec_binop op
       | Ternary op -> Ops.is_homogeneous_prec_ternop op
-      | Vector _ | Convert_from _ | Inlined _ | Inlined_real _ | Under_integer _ | Lanes _
+      | Vector _ | Convert_from _ | Inlined _ | Inlined_real _ | Under_mod _ | Lanes _
       | Lanes_uniform _ | Reduce _ | Reduce_fma ->
           false
     in
@@ -165,8 +164,7 @@ let arms_at ~precs store =
         if homogeneous arm && Ops.is_integer store then Some (Inlined_real arm) else None)
     @ (if Ops.is_integer store then
          List.concat_map (List.filter arithmetic ~f:homogeneous) ~f:(fun arm ->
-             List.concat_map [ Ops.Mod; Ops.Div ] ~f:(fun op ->
-                 List.map [ `Left; `Right ] ~f:(fun side -> Under_integer (op, side, arm))))
+             [ Under_mod (`Left, arm); Under_mod (`Right, arm) ])
        else [])
     @ List.map Ops.all_of_vec_unop ~f:(fun op -> Vector op)
     @ conversions
@@ -274,11 +272,11 @@ let rec statement o k arm : LL.t =
   | Inlined_real (Binary op) -> store (LL.Binop (op, real, read o.c s))
   | Inlined_real (Ternary op) -> store (LL.Ternop (op, real, read o.b s, read o.c s))
   | Inlined_real arm -> statement o k arm
-  | Under_integer (consumer, side, arm) -> (
+  | Under_mod (side, arm) -> (
       let consume value =
         let arg = (value, s) and other = read o.c s in
         let left, right = match side with `Left -> (arg, other) | `Right -> (other, arg) in
-        store (LL.Binop (consumer, left, right))
+        store (LL.Binop (Ops.Mod, left, right))
       in
       match arm with
       | Unary op -> consume (LL.Unop (op, read o.a s))
@@ -311,7 +309,7 @@ let rec c_reference_refuses ~store ~compute arm =
   | Ternary op -> raises (fun () -> Ops.ternop_c_syntax compute op)
   | Vector op -> raises (fun () -> Ops.vec_unop_c_syntax compute op)
   | Convert_from from -> raises (fun () -> Ops.c_convert_precision ~from ~to_:store)
-  | Inlined arm | Inlined_real arm | Under_integer (_, _, arm) | Lanes arm | Lanes_uniform arm ->
+  | Inlined arm | Inlined_real arm | Under_mod (_, arm) | Lanes arm | Lanes_uniform arm ->
       c_reference_refuses ~store ~compute arm
   | Reduce op -> c_reference_refuses ~store ~compute (Binary op)
   | Reduce_fma -> c_reference_refuses ~store ~compute (Ternary Ops.FMA)
