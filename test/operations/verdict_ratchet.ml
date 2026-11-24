@@ -6571,6 +6571,48 @@ let () =
       let leg = Verdict.leg ~on:"cuda" ~when_:available () in
       in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
       [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
+    ( "refuses an eager ambient read stored in a record before Test_utils.with_policy and \
+       projected inside",
+      {ocaml|open Verdict.Claims
+type status = { available : bool }
+let status =
+  {
+    available =
+      Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ();
+  }
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () ->
+      let leg = Verdict.leg ~on:"cuda" ~when_:status.available () in
+      in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
+    ( "refuses an ambient-policy leg returned by a local helper before Test_utils.with_policy and \
+       used inside",
+      {ocaml|open Verdict.Claims
+let make () =
+  Verdict.leg ~on:"cuda"
+    ~when_:(Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+    ()
+let leg = make ()
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ll_test.advertised (without ~policy)" ] );
+    ( "accepts an ambient-policy leg returned by a local helper called inside Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let make () =
+  Verdict.leg ~on:"cuda"
+    ~when_:(Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+    ()
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () ->
+      let leg = make () in
+      in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
+      [] );
     ( "accepts a deferred lazy sub_leg first forced inside Test_utils.with_policy",
       {ocaml|open Verdict.Claims
 let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()

@@ -831,6 +831,9 @@ accepts a leg passing ~policy explicitly to Ll_test.advertised outside Test_util
 accepts a partially applied Ll_test.advertised alias when the full call supplies ~policy: true
 refuses ?policy:None and unchanged ~policy:(Ir.Numerics.get ()) on Ll_test.advertised outside Test_utils.with_policy: true
 refuses an eager ambient read hoisted before Test_utils.with_policy even when Verdict.leg sits inside: true
+refuses an eager ambient read stored in a record before Test_utils.with_policy and projected inside: true
+refuses an ambient-policy leg returned by a local helper before Test_utils.with_policy and used inside: true
+accepts an ambient-policy leg returned by a local helper called inside Test_utils.with_policy: true
 accepts a deferred lazy sub_leg first forced inside Test_utils.with_policy: true
 accepts a deferred lazy sub_leg first forced through a named callback passed to Test_utils.with_policy: true
 accepts a leg whose gate uses an inline let-binding inside Test_utils.with_policy or a deferred sub_leg: true

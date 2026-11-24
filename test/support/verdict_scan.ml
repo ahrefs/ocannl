@@ -7830,33 +7830,49 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
       method! attribute _ attr = attr
 
       (* Resolve a record expression through local [let]s, [lazy], [Lazy.force] and trailing
-         [let]/[sequence] wrappers to a record literal, so projecting [.field] inspects only that
-         field's expression rather than unrelated sibling fields (e.g. [(Lazy.force
-         hang).killed]). *)
-      method resolve_record_field env record field_name =
+         [let]/[sequence] wrappers to a record literal, preserving the evaluation scope of any
+         eagerly evaluated record binding so projecting [.field] inspects only that field's
+         expression at the scope where it actually ran. *)
+      method resolve_record_field ~eval_kind env record field_name =
         let seen = Hash_set.create (module Int) in
-        let rec find env expr =
+        let rec find ~ek env expr =
           let expr = strip expr in
           match expr.pexp_desc with
           | Pexp_record (fields, base) -> (
               match
                 List.find_map fields ~f:(fun ({ txt; _ }, value) ->
-                    if String.equal (Ppxlib.Longident.last_exn txt) field_name then Some (value, env)
+                    if String.equal (Ppxlib.Longident.last_exn txt) field_name then
+                      Some (value, env, ek)
                     else None)
               with
               | Some hit -> Some hit
-              | None -> Option.bind base ~f:(find env))
-          | Pexp_lazy inner -> find env inner
-          | Pexp_sequence (_, b) -> find env b
+              | None -> Option.bind base ~f:(find ~ek env))
+          | Pexp_lazy inner -> find ~ek env inner
+          | Pexp_sequence (_, b) -> find ~ek env b
           | Pexp_let (rec_flag, bindings, b) ->
-              let denotes = self#denotations env rec_flag bindings in
-              let scope = self#bind_group env bindings denotes in
-              find scope b
+              let saved = current_eval_kind in
+              current_eval_kind <- Some ek;
+              let scope =
+                Exn.protect
+                  ~finally:(fun () -> current_eval_kind <- saved)
+                  ~f:(fun () ->
+                    let denotes = self#denotations env rec_flag bindings in
+                    self#bind_group env bindings denotes)
+              in
+              find ~ek scope b
           | Pexp_ident { txt = Lident name; _ } -> (
               match Lexical_scope.lookup env name with
               | Some v when (not (Hash_set.mem seen v.lg_id)) && List.is_empty v.lg_proj ->
                   Hash_set.add seen v.lg_id;
-                  Option.bind v.lg_rhs ~f:(fun (rhs, rhs_env) -> find rhs_env rhs)
+                  Option.bind v.lg_rhs ~f:(fun (rhs, rhs_env) ->
+                      let next_ek =
+                        if v.lg_is_call_arg then ek
+                        else
+                          match (strip rhs).pexp_desc with
+                          | Pexp_function _ | Pexp_lazy _ -> ek
+                          | _ -> v.lg_eval_kind
+                      in
+                      find ~ek:next_ek rhs_env rhs)
               | _ -> None)
           | Pexp_apply (callee, [ (Nolabel, arg) ]) -> (
               match (strip callee).pexp_desc with
@@ -7864,7 +7880,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                   match resolve_longident env txt with
                   | `External ([ "Lazy"; "force" ] | [ "Base"; "Lazy"; "force" ])
                   | `Unqualified "force" ->
-                      find env arg
+                      find ~ek env arg
                   | `Unqualified name -> (
                       match Lexical_scope.lookup env name with
                       | Some v when not (Hash_set.mem seen v.lg_id) -> (
@@ -7872,7 +7888,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                           match v.lg_rhs with
                           | Some (rhs, rhs_env) -> (
                               match (strip rhs).pexp_desc with
-                              | Pexp_function (_, _, Pfunction_body body) -> find rhs_env body
+                              | Pexp_function (_, _, Pfunction_body body) -> find ~ek rhs_env body
                               | _ -> None)
                           | None -> None)
                       | _ -> None)
@@ -7880,7 +7896,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
               | _ -> None)
           | _ -> None
         in
-        find env record
+        find ~ek:eval_kind env record
 
       method resolve_option_arg env expr =
         let seen = Hash_set.create (module Int) in
@@ -8084,10 +8100,10 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
           | Pexp_field (record, { txt; loc }) -> (
               let fline = loc.loc_start.pos_lnum in
               let field_name = Ppxlib.Longident.last_exn txt in
-              let resolved_field = self#resolve_record_field env record field_name in
+              let resolved_field = self#resolve_record_field ~eval_kind env record field_name in
               (match resolved_field with
-              | Some (field_expr, field_env) ->
-                  walk ~eval_kind ~in_explicit_policy field_env field_expr
+              | Some (field_expr, field_env, field_eval) ->
+                  walk ~eval_kind:field_eval ~in_explicit_policy field_env field_expr
               | None ->
                   walk_projected ~eval_kind ~in_explicit_policy env [ P_field field_name ] record);
               match resolve_longident env txt with
@@ -8652,28 +8668,96 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
 
       method resolve_legs ~wrapper_ids env expr =
         let seen = Hash_set.create (module Int) in
-        let rec go env expr =
+        let rec go ~wids env expr =
           let expr = strip expr in
-          match self#find_leg_at expr.pexp_loc.loc_start.pos_cnum wrapper_ids with
+          match self#find_leg_at expr.pexp_loc.loc_start.pos_cnum wids with
           | Some rec_ -> [ rec_ ]
           | None -> (
               match expr.pexp_desc with
-              | Pexp_ident { txt = Lident name; _ } -> (
-                  match Lexical_scope.lookup env name with
-                  | Some v when (not (Hash_set.mem seen v.lg_id)) && List.is_empty v.lg_proj -> (
+              | Pexp_ident { txt; _ } -> (
+                  match lookup_local_val env txt with
+                  | Some v when not (Hash_set.mem seen v.lg_id) -> (
                       Hash_set.add seen v.lg_id;
-                      match v.lg_rhs with Some (rhs, rhs_env) -> go rhs_env rhs | None -> [])
+                      let v_wids =
+                        match v.lg_eval_kind with
+                        | Lg_eager scopes -> List.map scopes ~f:fst
+                        | Lg_deferred _ -> wids
+                      in
+                      match v.lg_rhs with
+                      | Some (rhs, rhs_env) -> go_proj ~wids:v_wids rhs_env v.lg_proj rhs
+                      | None -> [])
                   | _ -> [])
-              | Pexp_ifthenelse (_, t, Some f) -> go env t @ go env f
-              | Pexp_match (_, cases) -> List.concat_map cases ~f:(fun c -> go env c.pc_rhs)
-              | Pexp_sequence (_, b) -> go env b
+              | Pexp_apply _ -> (
+                  match
+                    Option.bind (resolve_local_fn_chain env expr) ~f:(fun (fn_id, _) ->
+                        Hashtbl.find fn_def_by_id fn_id)
+                  with
+                  | Some (_, body, fn_env) -> go ~wids fn_env body
+                  | None -> [])
+              | Pexp_field (record, { txt; _ }) ->
+                  let fname = Ppxlib.Longident.last_exn txt in
+                  go_proj ~wids env [ P_field fname ] record
+              | Pexp_ifthenelse (_, t, Some f) -> go ~wids env t @ go ~wids env f
+              | Pexp_match (_, cases) -> List.concat_map cases ~f:(fun c -> go ~wids env c.pc_rhs)
+              | Pexp_sequence (_, b) -> go ~wids env b
               | Pexp_let (rec_flag, bindings, b) ->
                   let denotes = self#denotations env rec_flag bindings in
                   let scope = self#bind_group env bindings denotes in
-                  go scope b
+                  go ~wids scope b
+              | _ -> [])
+        and go_proj ~wids env proj expr =
+          match proj with
+          | [] | P_opaque :: _ -> go ~wids env expr
+          | step :: rest -> (
+              let expr = strip expr in
+              match expr.pexp_desc with
+              | Pexp_tuple es -> (
+                  match step with
+                  | P_tuple i when i < List.length es -> go_proj ~wids env rest (List.nth_exn es i)
+                  | _ -> [])
+              | Pexp_record (fields, base) -> (
+                  match step with
+                  | P_field fname -> (
+                      match
+                        List.find_map fields ~f:(fun ({ txt; _ }, v) ->
+                            if String.equal (Ppxlib.Longident.last_exn txt) fname then Some v
+                            else None)
+                      with
+                      | Some f_expr -> go_proj ~wids env rest f_expr
+                      | None -> Option.value_map base ~default:[] ~f:(go_proj ~wids env proj))
+                  | _ -> [])
+              | Pexp_ident { txt; _ } -> (
+                  match lookup_local_val env txt with
+                  | Some v when not (Hash_set.mem seen v.lg_id) -> (
+                      Hash_set.add seen v.lg_id;
+                      let v_wids =
+                        match v.lg_eval_kind with
+                        | Lg_eager scopes -> List.map scopes ~f:fst
+                        | Lg_deferred _ -> wids
+                      in
+                      match v.lg_rhs with
+                      | Some (rhs, rhs_env) -> go_proj ~wids:v_wids rhs_env (v.lg_proj @ proj) rhs
+                      | None -> [])
+                  | _ -> [])
+              | Pexp_apply _ -> (
+                  match
+                    Option.bind (resolve_local_fn_chain env expr) ~f:(fun (fn_id, _) ->
+                        Hashtbl.find fn_def_by_id fn_id)
+                  with
+                  | Some (_, body, fn_env) -> go_proj ~wids fn_env proj body
+                  | None -> [])
+              | Pexp_ifthenelse (_, t, Some f) ->
+                  go_proj ~wids env proj t @ go_proj ~wids env proj f
+              | Pexp_match (_, cases) ->
+                  List.concat_map cases ~f:(fun c -> go_proj ~wids env proj c.pc_rhs)
+              | Pexp_sequence (_, b) -> go_proj ~wids env proj b
+              | Pexp_let (rec_flag, bindings, b) ->
+                  let denotes = self#denotations env rec_flag bindings in
+                  let scope = self#bind_group env bindings denotes in
+                  go_proj ~wids scope proj b
               | _ -> [])
         in
-        go env expr
+        go ~wids:wrapper_ids env expr
 
       method mark_apply_spine expr =
         let rec go e =
