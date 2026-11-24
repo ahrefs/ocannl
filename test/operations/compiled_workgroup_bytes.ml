@@ -23,8 +23,9 @@
    some aligned kernel's figure must equal its positive charge exactly (a dropped term of the charge
    shows on it), a single-array 37 B [byte] staged probe must equal its granule-rounded bound (48 B
    on Metal, 37 B on CUDA and HIP — catching granule 1 vs 2 as well as coarser Metal granules, with
-   no MMA requirement), and where f16 tensorization is advertised some unaligned seeded kernel must
-   equal its granule-rounded bound below a 32 B multiple.
+   no MMA requirement). On HIP, two-array probes pin inter-array padding separately from the
+   trailing array. On CUDA and Metal, where f16 tensorization is advertised, some unaligned seeded
+   kernel must equal its granule-rounded bound below a 32 B multiple.
 
    Candidates: every whole-routine seed [Autotune.search_seeding] proposes under the device's own
    limits and capabilities (sketch and coalesced; staged, tensorized and [Fuse_epilogue] twins
@@ -86,11 +87,13 @@ type outcome =
           backend's. *)
   | Crashed of string
 
+type byte_pair = { kernel : kernel; metal_charge : int; hip_min : int; hip_charge : int }
+
 let all_kernels : kernel list ref = ref []
 let all_outcomes : (string * outcome) list ref = ref []
 let probe_kernels : kernel list ref = ref []
 let probe_outcomes : (string * outcome) list ref = ref []
-let two_tier_kernels : kernel list ref = ref []
+let byte_pairs : byte_pair list ref = ref []
 let two_tier_outcomes : (string * outcome) list ref = ref []
 let one_line msg = String.prefix (String.tr ~target:'\n' ~replacement:' ' msg) 300
 
@@ -351,23 +354,19 @@ let run_byte_probe ~stage_v ~tag ~bi ~cols =
   report ~granule ~tag ~label:tag outcome;
   ((tag, outcome), match outcome with Compiled ks -> ks | _ -> [])
 
-let two_tier_rounding =
-  let caps = Context.codegen_capabilities (Context.auto ()) in
-  is_gpu
-  && caps.Ir.Backend_intf.workgroup_allocation_alignment = 4
-  && caps.Ir.Backend_intf.workgroup_reporting_granule = 16
-
-let two_tier_leg = Verdict.leg ~when_:two_tier_rounding ~on:backend_name ()
+let on_metal = String.equal backend_name "metal"
+let on_hip = String.equal backend_name "hip"
+let two_tier_leg = Verdict.leg ~when_:on_metal ~on:backend_name ()
+let hip_lds_leg = Verdict.leg ~when_:on_hip ~on:backend_name ()
 
 let () =
   fixture "dense" (gemm ~m:32 ~k:64 ~n:64 "cwb_dense");
   (* The product left to the fused tail alone: a tensorized fused twin places it, routine-local, in
      workgroup-shared memory whole. *)
   fixture ~materialize:false "dense_local" (gemm ~m:32 ~k:32 ~n:32 "cwb_dense_local");
-  (* Odd f16 products left to the fused tail alone (378 B and 198 B): neither is a multiple of 16 B,
-     so they exercise [workgroup_reporting_granule] on every GPU backend (gh-ocannl-2426). 9x11's 16
-     B-rounded bound is 4304 B (16 mod 32 on Metal; 4294 B on CUDA and HIP), ruling out a coarser
-     granule as well as a finer one. *)
+  (* Odd f16 products left to the fused tail alone (378 B and 198 B). On Metal, 9x11's reported
+     bound is 4304 B (16 mod 32), and on CUDA it is 4294 B. HIP can charge up to 15 B extra here
+     because the compiler can leave the odd product at the end of the LDS layout. *)
   fixture ~materialize:false "half_local_odd"
     (gemm ~prec:Ir.Ops.half ~out_prec:Ir.Ops.half ~m:9 ~k:32 ~n:21 "cwb_half_local_odd");
   fixture ~materialize:false "half_local_9x11"
@@ -390,21 +389,23 @@ let () =
     let out, ks = run_byte_probe ~stage_v:false ~tag:"cwb_byte_odd_37" ~bi:37 ~cols:16 in
     probe_outcomes := [ out ];
     probe_kernels := ks);
-  (* Two-array odd-byte probes where allocation alignment (4 B) and reporting granule (16 B) differ
-     (Metal): 17+15 B (exact 32, 4 B-charged 36 -> 48, ruling out 16 B of exact bytes = 32) and
-     17+17 B (exact 34, 4 B-charged 40 -> 48, ruling out 16 B per array = 64). *)
-  if two_tier_rounding then (
+  (* Metal reports 48 B for both 4 B-rounded sums (36 B and 40 B). On HIP, the two possible orders
+     of 17+15 B are bounded by 47 B, and either order of 17+17 B occupies 49 B. The equal sizes also
+     expose any padding charged after the final array. *)
+  if on_metal || on_hip then (
     let o1, k1 = run_byte_probe ~stage_v:true ~tag:"cwb_byte_pair_17_15" ~bi:17 ~cols:15 in
     let o2, k2 = run_byte_probe ~stage_v:true ~tag:"cwb_byte_pair_17_17" ~bi:17 ~cols:17 in
     two_tier_outcomes := [ o1; o2 ];
-    two_tier_kernels := k1 @ k2)
+    byte_pairs :=
+      List.map k1 ~f:(fun kernel -> { kernel; metal_charge = 36; hip_min = 33; hip_charge = 47 })
+      @ List.map k2 ~f:(fun kernel -> { kernel; metal_charge = 40; hip_min = 49; hip_charge = 49 }))
 
 let () =
   let outcomes = !all_outcomes @ !probe_outcomes @ !two_tier_outcomes
-  and kernels = !all_kernels @ !probe_kernels @ !two_tier_kernels
+  and kernels = !all_kernels @ !probe_kernels @ List.map !byte_pairs ~f:(fun pair -> pair.kernel)
   and seeded_kernels = !all_kernels
   and probe = !probe_kernels
-  and two_tier = !two_tier_kernels in
+  and byte_pairs = !byte_pairs in
   let limits = Context.hardware_limits (Context.auto ()) in
   let f16_mma_when, f16_mma_agg =
     match
@@ -433,8 +434,14 @@ let () =
   in_leg ~leg:two_tier_leg
     "two-array odd-byte probes distinguish 16 B kernel-total rounding over 4 B-aligned arrays from \
      exact-sum and per-array rounding" (fun label ->
-      p_all ~min:2 label two_tier ~f:(fun k -> k.compiled = k.reported_bound && k.compiled = 48));
-  gated_exists ?aggregation:f16_mma_agg ~when_:f16_mma_when ~on:backend_name
+      p_all ~min:2 label byte_pairs ~f:(fun { kernel = k; metal_charge; _ } ->
+          k.charged = metal_charge && k.compiled = k.reported_bound && k.compiled = 48));
+  in_leg ~leg:hip_lds_leg
+    "HIP odd-byte pairs charge inter-array padding and preserve the trailing array size"
+    (fun label ->
+      p_all ~min:2 label byte_pairs ~f:(fun { kernel = k; hip_min; hip_charge; _ } ->
+          k.charged = hip_charge && k.compiled >= hip_min));
+  gated_exists ?aggregation:f16_mma_agg ~when_:(f16_mma_when && not on_hip) ~on:backend_name
     "some unaligned seeded kernel allocates exactly its granule-rounded bound, not a coarser \
      multiple"
     seeded_kernels ~f:(fun k ->

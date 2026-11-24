@@ -1528,8 +1528,11 @@ module type C_syntax_config = sig
   (** The granule, in bytes, the device's allocator rounds each [shared_decl_prefix] array up to
       (gh-ocannl-1330), published as
       {!Backend_intf.codegen_capabilities.workgroup_allocation_alignment} for the schedule-level
-      estimate to round each allocation by. Metal: 4 (measured). Default 1: the declared sizes add
-      up exactly. *)
+      estimate to round each allocation by. Metal: 4 (measured). Default 1. *)
+
+  val workgroup_start_alignment : int
+  (** Upper bound on a shared array's start alignment in bytes, published as
+      {!Backend_intf.codegen_capabilities.workgroup_start_alignment}. HIP: 16. Default 1. *)
 
   val workgroup_reporting_granule : int
   (** The granule, in bytes, the driver rounds a compiled kernel's reported static workgroup-shared
@@ -1615,6 +1618,7 @@ let codegen_capabilities (module Config : C_syntax_config) =
     mma_operand_fragments = Config.mma_operand_fragments;
     mma_kernel_workgroup_bytes = Config.mma_kernel_workgroup_bytes;
     workgroup_allocation_alignment = Config.workgroup_allocation_alignment;
+    workgroup_start_alignment = Config.workgroup_start_alignment;
     workgroup_reporting_granule = Config.workgroup_reporting_granule;
     (* gh-ocannl-1168: [extent / warp_size] slots where the lane all-reduce spans several whole
        simdgroups -- a shuffle-capable backend with barriers and shared declarations, an f32/f64
@@ -3324,6 +3328,7 @@ struct
   let mma_kernel_prologue ~triples:_ = []
   let mma_kernel_workgroup_bytes ~triples:_ = 0
   let workgroup_allocation_alignment = 1
+  let workgroup_start_alignment = 1
   let workgroup_reporting_granule = 1
   let float_log_style = if Input.full_printf_support then "%g" else "%de-3"
 
