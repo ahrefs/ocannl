@@ -926,6 +926,7 @@ exercise() {
       sleep 15 >/dev/null &
       printf '%s\n' "$!" >"$LINGER_PID" ;;
     stalled-downstream)
+      # The 512 KiB payload saturates the stalled-reader socket's 16 KiB send buffer.
       perl -e 'print STDERR (("x" x 63) . "\n") x 8192'
       ocannl_fixture_undefined_function
       [ -z "${STALL_DONE:-}" ] || : >"$STALL_DONE" ;;
