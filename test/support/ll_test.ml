@@ -846,15 +846,63 @@ let run ?ctx ?bindings ?launch ?fresh_zero ~name o ~seed =
     gh-ocannl-1283). A schedule that requests tensorization and declines at codegen renders its
     scalar fallback, which computes the same values: parity alone cannot tell the two apart, so a
     claim about an executed TENSORIZED candidate requires {!rendered_tensorized} of this census
-    beside its values. *)
+    beside its values.
+
+    Every node in [read] must be backed by a stored device buffer in the executed context
+    ([Context.Stored] and not placed [Virtual], gh-ocannl-2452): reading a [Virtual] node — whether
+    recomputed on demand or backed only by an external seed the routine never wrote — or a
+    [Host_init]-only node raises [Invalid_argument] rather than silently observing values the
+    routine did not store. Unobservable and missing outcomes ([Local], aliased, slice view, etc.)
+    keep [Context.get_values]'s [User_error] diagnostics. *)
 let execute_with_census ?ctx ?bindings ?launch ?fresh_zero ~name (o : LL.optimized) ~seed
     ~(read : Tn.t list) =
   let ctx, routine = run_routine ?ctx ?bindings ?launch ?fresh_zero ~name o ~seed in
+  let check_stored tn =
+    let obs = Context.observability ctx tn in
+    if Tn.Placements.known_virtual (Context.placements ctx) tn then
+      invalid_arg
+        (Printf.sprintf
+           "Ll_test.execute_with_census: node %s is placed Virtual in routine %s, so readback \
+            would %s rather than observe a buffer the routine stored; materialize it before \
+            optimization"
+           (Tn.debug_name tn) routine.Context.name
+           (match obs with
+           | Context.Stored -> "read an externally seeded buffer the routine never wrote"
+           | Context.Recomputable -> "recompute it on read"
+           | _ -> "not observe a stored buffer"))
+    else
+      match obs with
+      | Context.Stored -> ()
+      | Context.Recomputable ->
+          invalid_arg
+            (Printf.sprintf
+               "Ll_test.execute_with_census: node %s is recomputable on read rather than stored in \
+                routine %s; materialize it before optimization"
+               (Tn.debug_name tn) routine.Context.name)
+      | Context.Host_init ->
+          invalid_arg
+            (Printf.sprintf
+               "Ll_test.execute_with_census: node %s has only host-init data and no stored device \
+                buffer in routine %s; materialize it before optimization"
+               (Tn.debug_name tn) routine.Context.name)
+      | Context.Unobservable_local _ | Context.Unobservable_aliased _ | Context.Unobservable_merge _
+      | Context.Launch_bound _ | Context.Needs_context _ | Context.Slice_view _
+      | Context.Not_computed ->
+          (* Every remaining observability outcome is already refused by [Context.get_values] with
+             its full [User_error] diagnostic (provenance, cap advice, dependency path). *)
+          ignore (Context.get_values ctx tn : float array);
+          invalid_arg
+            (Printf.sprintf "Ll_test.execute_with_census: node %s is not Stored in routine %s (%s)"
+               (Tn.debug_name tn) routine.Context.name
+               (Option.value (Context.observability_tag obs) ~default:"unreadable"))
+  in
+  List.iter read ~f:check_stored;
   (List.map read ~f:(Context.get_values ctx), routine.Context.mma)
 
-(** {!run}, then read back [read] in order. Same materialization requirement, on both lists. The
-    routine, and with it the mma census, is discarded: a test executing a tensorized candidate calls
-    {!execute_with_census} instead. *)
+(** {!run}, then read back [read] in order. Same materialization requirement, on both lists —
+    enforced on [read] by {!execute_with_census}, which refuses [Virtual] and [Host_init] nodes
+    instead of recomputing or copying host-init data. The routine, and with it the mma census, is
+    discarded: a test executing a tensorized candidate calls {!execute_with_census} instead. *)
 let execute ?ctx ?bindings ?launch ?fresh_zero ~name o ~seed ~read =
   fst (execute_with_census ?ctx ?bindings ?launch ?fresh_zero ~name o ~seed ~read)
 

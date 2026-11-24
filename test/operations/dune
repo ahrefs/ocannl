@@ -10675,6 +10675,26 @@
   ll_test
   test_utils))
 
+; gh-ocannl-2452: Ll_test.execute_with_census / execute must read back only stored context buffers,
+; refusing Virtual (recomputable or externally seeded) and Host_init nodes while preserving Local
+; refusals.
+
+(test
+ (name ll_test_execute_stored)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules ll_test_execute_stored)
+ (libraries
+  base
+  stdio
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.verdict
+  ll_test))
+
 (executable
  (name ll_test_ratchet)
  (modules ll_test_ratchet)
