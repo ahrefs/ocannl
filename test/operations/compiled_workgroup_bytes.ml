@@ -407,13 +407,16 @@ let () =
   and probe = !probe_kernels
   and byte_pairs = !byte_pairs in
   let limits = Context.hardware_limits (Context.auto ()) in
-  let f16_mma_when, f16_mma_agg =
-    match
-      Ll_test.tensorized_capability ~is_gpu ~is_cpu ~limits ~a_prec:Ir.Ops.half ~b_prec:Ir.Ops.half
-        ~d_prec:Ir.Ops.half
-    with
-    | `Advertised -> (is_gpu, None)
-    | `Withheld aggregation -> (false, Some aggregation)
+  let seeded_f16_leg =
+    let when_, aggregation =
+      match
+        Ll_test.tensorized_capability ~is_gpu ~is_cpu ~limits ~a_prec:Ir.Ops.half
+          ~b_prec:Ir.Ops.half ~d_prec:Ir.Ops.half
+      with
+      | `Advertised -> (on_metal || String.equal backend_name "cuda", None)
+      | `Withheld aggregation -> (false, Some aggregation)
+    in
+    Verdict.leg ?aggregation ~when_ ~on:backend_name ()
   in
   in_leg ~leg "every seeded candidate compiles, or is refused typed" (fun label ->
       p_all ~min:1 label outcomes ~f:(function _, Crashed _ -> false | _ -> true));
@@ -441,8 +444,8 @@ let () =
     (fun label ->
       p_all ~min:2 label byte_pairs ~f:(fun { kernel = k; hip_min; hip_charge; _ } ->
           k.charged = hip_charge && k.compiled >= hip_min));
-  gated_exists ?aggregation:f16_mma_agg ~when_:(f16_mma_when && not on_hip) ~on:backend_name
+  in_leg ~leg:seeded_f16_leg
     "some unaligned seeded kernel allocates exactly its granule-rounded bound, not a coarser \
-     multiple"
-    seeded_kernels ~f:(fun k ->
-      k.charged % 16 <> 0 && k.compiled = k.reported_bound && k.reported_bound % 32 <> 0)
+     multiple" (fun label ->
+      p_exists label seeded_kernels ~f:(fun k ->
+          k.charged % 16 <> 0 && k.compiled = k.reported_bound && k.reported_bound % 32 <> 0))
