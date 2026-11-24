@@ -62,16 +62,10 @@
 # OCANNL_TOOL_OWED_RUN_PUSH_RETRIES) with exponential backoff (PUSH_BACKOFF * 2^(attempt-1) seconds;
 # default 2s -> 2s, 4s, 8s, override via OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF, 0 for no sleep). Each
 # publish retry re-reads refs/owed-runs/<head> and merges earlier lines before pushing with
-# --force-with-lease. Authentication and authorization errors are detected by `is_auth_failure`'s
-# closed case-insensitive line-substring denylist on git stderr (`authentication failed`,
-# `authentication required`, `could not read username`, `could not read password`,
-# `terminal prompts disabled`, `permission denied`, `permission to * denied`, `access denied`,
-# `write access to repository not granted`, `invalid username or password`,
-# `invalid username or token`, `bad credentials`, `password authentication is not supported`,
-# `password authentication was removed`, `host key verification failed`, `returned error: 401`,
-# `returned error: 403`, `http 401`, `http 403`, `401 unauthorized`, `403 forbidden`) and fail
-# immediately with no retry. Other stderr shapes retry up to the bound; `check` and `prune` do not
-# retry.
+# --force-with-lease. Authentication and authorization errors (credential prompts, permission or
+# authorization denials, HTTP 401/403, host-key failures — owned by `is_auth_failure`'s closed
+# case-insensitive line-substring denylist on C-locale git stderr) fail immediately with no retry.
+# Other stderr shapes retry up to the bound; `check` and `prune` do not retry.
 #
 # The waiver is the way through for a head no record can certify (a run on a box the record
 # cannot reach, a release hotfix): `waive --head SHA --reason '<the run it cites, or the decision
@@ -99,9 +93,12 @@ case $PUSH_RETRIES in '' | *[!0-9]* | 0?*) echo "$me: OCANNL_TOOL_OWED_RUN_PUSH_
 PUSH_BACKOFF=${OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF:-2}
 case $PUSH_BACKOFF in '' | *[!0-9]* | 0?*) echo "$me: OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF must be a non-negative integer" >&2; exit 2 ;; esac
 SCHEMA=v2
-_owed_out_file=
-_owed_err_file=
-trap 'rm -f "${_owed_out_file:-}" "${_owed_err_file:-}"' EXIT
+_owed_scratch=
+ensure_scratch() {
+  [ -n "$_owed_scratch" ] && return 0
+  _owed_scratch=$(mktemp -d "${TMPDIR:-/tmp}/owed-run.XXXXXX") || die "could not create a temporary directory"
+  trap 'rm -rf "${_owed_scratch:-}"' EXIT
+}
 
 die() { echo "$me: $*" >&2; exit 2; }
 refuse() { echo "$me: REFUSED -- $* (records on $OWED_RUN_URL)"; exit 1; }
@@ -112,7 +109,7 @@ bounded() { perl -e 'alarm shift; exec @ARGV or exit 127' "$FETCH_CAP" "$@"; }
 # A read never prompts, reads no ambient credential helper's prompt, and keeps English diagnostics.
 rgit() { LC_ALL=C GIT_TERMINAL_PROMPT=0 bounded git -C "$root" "$@"; }
 
-# is_auth_failure STDERR: true when any line matches the closed auth/authorization denylist above.
+# is_auth_failure STDERR: true when any line matches the closed auth/authorization denylist.
 is_auth_failure() {
   local lc l
   [ -n "$1" ] || return 1
@@ -146,51 +143,49 @@ is_auth_failure() {
   return 1
 }
 
+# retry_or_die PREFIX STEP ERR RC: shared retry tail for publish and on_record_master.
+# Uses caller's `attempt`, `max_attempts`, and `delay`.
+retry_or_die() {
+  local prefix=$1 step=$2 err=$3 rc=$4
+  if is_auth_failure "$err"; then
+    [ -z "$err" ] || printf '%s\n' "$err" >&2
+    die "${prefix}could not $step: authentication/authorization failed (not retried)"
+  fi
+  if [ "$attempt" -ge "$max_attempts" ]; then
+    [ -z "$err" ] || printf '%s\n' "$err" >&2
+    die "${prefix}could not $step after $attempt attempt(s)"
+  fi
+  echo "$me: ${prefix}could not $step (attempt $attempt/$max_attempts, exit $rc); retrying in ${delay}s" >&2
+  [ -z "$err" ] || printf '%s\n' "$err" >&2
+  [ "$delay" = 0 ] || sleep "$delay"
+  attempt=$((attempt + 1))
+  delay=$((delay * 2))
+}
+
 # remote_ref REF: sets `remote_sha` to what REF names on OWED_RUN_URL, empty when it names nothing.
 # Nonzero status when the repository could not be read; sets `remote_err` to stderr on failure.
-# Uses temp files rather than pipes so an orphaned transport helper cannot hold $(...) past FETCH_CAP.
+# Uses scratch files rather than pipes so an orphaned transport helper cannot hold $(...) past FETCH_CAP.
 remote_ref() {
-  local rc=0 out_file= err_file=
+  local rc=0
   remote_sha=
   remote_err=
-  out_file=$(mktemp "${TMPDIR:-/tmp}/owed-run-out.XXXXXX" 2>/dev/null) || out_file=
-  err_file=$(mktemp "${TMPDIR:-/tmp}/owed-run-err.XXXXXX" 2>/dev/null) || err_file=
-  _owed_out_file=$out_file _owed_err_file=$err_file
-  if [ -n "$out_file" ] && [ -n "$err_file" ]; then
-    rgit ls-remote "$OWED_RUN_URL" "$1" >"$out_file" 2>"$err_file" || rc=$?
-    if [ "$rc" != 0 ]; then
-      remote_err=$(cat "$err_file" 2>/dev/null)
-      rm -f "$out_file" "$err_file"
-      _owed_out_file= _owed_err_file=
-      return "$rc"
-    fi
-    remote_sha=$(awk -v r="$1" '$2 == r { print $1 }' "$out_file")
-    rm -f "$out_file" "$err_file"
-    _owed_out_file= _owed_err_file=
-  else
-    rm -f "${out_file:-}" "${err_file:-}"
-    _owed_out_file= _owed_err_file=
-    local out
-    out=$(rgit ls-remote "$OWED_RUN_URL" "$1" 2>/dev/null) || return $?
-    remote_sha=$(printf '%s\n' "$out" | awk -v r="$1" '$2 == r { print $1 }')
+  ensure_scratch
+  rgit ls-remote "$OWED_RUN_URL" "$1" >"$_owed_scratch/out" 2>"$_owed_scratch/err" || rc=$?
+  if [ "$rc" != 0 ]; then
+    remote_err=$(cat "$_owed_scratch/err" 2>/dev/null)
+    return "$rc"
   fi
+  remote_sha=$(awk -v r="$1" '$2 == r { print $1 }' "$_owed_scratch/out")
   return 0
 }
 # fetch_objects REF...: the objects of REF... into this repository; no ref or FETCH_HEAD written.
-# Sets `remote_err` to captured output on failure. Uses a temp file to stay independent of pipe EOF.
+# Sets `remote_err` to captured output on failure. Uses a scratch file to stay independent of pipe EOF.
 fetch_objects() {
-  local rc=0 err_file=
+  local rc=0
   remote_err=
-  err_file=$(mktemp "${TMPDIR:-/tmp}/owed-run-err.XXXXXX" 2>/dev/null) || err_file=
-  _owed_err_file=$err_file
-  if [ -n "$err_file" ]; then
-    rgit fetch --quiet --no-tags --no-write-fetch-head --refmap= "$OWED_RUN_URL" "$@" >"$err_file" 2>&1 || rc=$?
-    [ "$rc" = 0 ] || remote_err=$(cat "$err_file" 2>/dev/null)
-    rm -f "$err_file"
-    _owed_err_file=
-  else
-    rgit fetch --quiet --no-tags --no-write-fetch-head --refmap= "$OWED_RUN_URL" "$@" >/dev/null 2>&1 || rc=$?
-  fi
+  ensure_scratch
+  rgit fetch --quiet --no-tags --no-write-fetch-head --refmap= "$OWED_RUN_URL" "$@" >"$_owed_scratch/err" 2>&1 || rc=$?
+  [ "$rc" = 0 ] || remote_err=$(cat "$_owed_scratch/err" 2>/dev/null)
   return "$rc"
 }
 
@@ -301,10 +296,11 @@ waiver_line() {
 # Retries non-auth read/fetch/push failures up to PUSH_RETRIES times with exponential backoff,
 # re-reading the remote ref before each attempt so lease-contended or dropped pushes merge cleanly.
 publish() {
-  local h=$1 line=$2 ref="refs/owed-runs/$1" old msg existing tree commit err_file=
+  local h=$1 line=$2 ref="refs/owed-runs/$1" old msg existing tree commit
   local max_attempts=$((PUSH_RETRIES + 1)) attempt=1 delay=$PUSH_BACKOFF rc err step
   git -C "$root" cat-file -e "$h^{commit}" 2>/dev/null || die "$h is not a commit in this checkout"
   tree=$(git -C "$root" rev-parse "$h^{tree}") || die "no tree for $h"
+  ensure_scratch
   while :; do
     rc=0 step= err=
     remote_ref "$ref" || rc=$?
@@ -330,36 +326,18 @@ publish() {
       if [ "$rc" = 0 ]; then
         msg+=$line
         commit=$(printf '%s\n' "$msg" | git -C "$root" commit-tree "$tree" -p "$h") || die "could not write the record commit"
-        err_file=$(mktemp "${TMPDIR:-/tmp}/owed-run-err.XXXXXX" 2>/dev/null) || err_file=
-        _owed_err_file=$err_file
-        if [ -n "$err_file" ]; then
-          LC_ALL=C bounded git -C "$root" push --quiet --force-with-lease="$ref:$old" "$OWED_RUN_URL" "$commit:$ref" >"$err_file" 2>&1 || rc=$?
-          [ "$rc" = 0 ] || err=$(cat "$err_file" 2>/dev/null)
-          rm -f "$err_file"
-          _owed_err_file=
-        else
-          LC_ALL=C bounded git -C "$root" push --quiet --force-with-lease="$ref:$old" "$OWED_RUN_URL" "$commit:$ref" >/dev/null 2>&1 || rc=$?
+        LC_ALL=C bounded git -C "$root" push --quiet --force-with-lease="$ref:$old" "$OWED_RUN_URL" "$commit:$ref" >"$_owed_scratch/err" 2>&1 || rc=$?
+        if [ "$rc" != 0 ]; then
+          err=$(cat "$_owed_scratch/err" 2>/dev/null)
+          step="push $ref to $OWED_RUN_URL"
         fi
-        [ "$rc" = 0 ] || step="push $ref to $OWED_RUN_URL"
       fi
     fi
     if [ "$rc" = 0 ]; then
       echo "$me: published $ref on $OWED_RUN_URL: $line"
       return 0
     fi
-    if is_auth_failure "$err"; then
-      [ -z "$err" ] || printf '%s\n' "$err" >&2
-      die "could not $step: authentication/authorization failed (not retried)"
-    fi
-    if [ "$attempt" -ge "$max_attempts" ]; then
-      [ -z "$err" ] || printf '%s\n' "$err" >&2
-      die "could not $step after $attempt attempt(s)"
-    fi
-    echo "$me: could not $step (attempt $attempt/$max_attempts, exit $rc); retrying in ${delay}s" >&2
-    [ -z "$err" ] || printf '%s\n' "$err" >&2
-    [ "$delay" = 0 ] || sleep "$delay"
-    attempt=$((attempt + 1))
-    delay=$((delay * 2))
+    retry_or_die '' "$step" "$err" "$rc"
   done
 }
 
@@ -391,19 +369,7 @@ on_record_master() {
       [ "$rc" -le 1 ] || die "record: could not compare $h with master on $OWED_RUN_URL"
       return "$rc"
     fi
-    if is_auth_failure "$err"; then
-      [ -z "$err" ] || printf '%s\n' "$err" >&2
-      die "record: could not $step: authentication/authorization failed (not retried)"
-    fi
-    if [ "$attempt" -ge "$max_attempts" ]; then
-      [ -z "$err" ] || printf '%s\n' "$err" >&2
-      die "record: could not $step after $attempt attempt(s)"
-    fi
-    echo "$me: record: could not $step (attempt $attempt/$max_attempts, exit $rc); retrying in ${delay}s" >&2
-    [ -z "$err" ] || printf '%s\n' "$err" >&2
-    [ "$delay" = 0 ] || sleep "$delay"
-    attempt=$((attempt + 1))
-    delay=$((delay * 2))
+    retry_or_die 'record: ' "$step" "$err" "$rc"
   done
 }
 
@@ -552,8 +518,9 @@ EOF
     tip=$remote_sha
     is_sha "$tip" || die "prune: $OWED_RUN_URL has no master"
     if [ $# = 0 ]; then
-      out=$(rgit ls-remote "$OWED_RUN_URL" 'refs/owed-runs/*') || die "prune: could not list refs/owed-runs on $OWED_RUN_URL"
-      set -- $(printf '%s\n' "$out" | awk '{ sub("^refs/owed-runs/", "", $2); print $2 }')
+      ensure_scratch
+      rgit ls-remote "$OWED_RUN_URL" 'refs/owed-runs/*' >"$_owed_scratch/out" 2>"$_owed_scratch/err" || die "prune: could not list refs/owed-runs on $OWED_RUN_URL"
+      set -- $(awk '{ sub("^refs/owed-runs/", "", $2); print $2 }' "$_owed_scratch/out")
     fi
     fetch_objects refs/heads/master || die "prune: could not fetch master from $OWED_RUN_URL"
     dels=()

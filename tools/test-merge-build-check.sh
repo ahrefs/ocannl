@@ -1140,8 +1140,20 @@ FAKEGIT
     report 0 'publish replaces a non-commit record ref under the existing lease'
   else report 1 'publish replaces a non-commit record ref under the existing lease' \
     "bad=$bad_rc waive=$waive_rc check=$orc; $(cat "$TMP/owed-out")"; fi
-  # Hanging fetch with a lingering child holding stderr open: must still time out within FETCH_CAP (no pipe hang).
-  mkdir -p "$TMP/hangfetchbin"
+  # Hanging ls-remote and fetch with a lingering child holding stdout/stderr open: must still time
+  # out within FETCH_CAP (on base, remote_ref's $(rgit ls-remote ...) pipe hung for the full 6s).
+  mkdir -p "$TMP/hanglsbin" "$TMP/hangfetchbin"
+  cat >"$TMP/hanglsbin/git" <<FAKEGIT
+#!/bin/sh
+for a do
+  case \$a in
+    ls-remote)
+      sleep 6 &
+      exec sleep 6 ;;
+  esac
+done
+exec "$GIT" "\$@"
+FAKEGIT
   cat >"$TMP/hangfetchbin/git" <<FAKEGIT
 #!/bin/sh
 for a do
@@ -1153,7 +1165,17 @@ for a do
 done
 exec "$GIT" "\$@"
 FAKEGIT
-  chmod +x "$TMP/hangfetchbin/git"
+  chmod +x "$TMP/hanglsbin/git" "$TMP/hangfetchbin/git"
+  started=$SECONDS
+  hang_ls_rc=0
+  (cd "$R" && PATH=$TMP/hanglsbin:$TMP/gitbin:$SYS_PATH \
+    OCANNL_TOOL_OWED_RUN_FETCH_CAP=1 OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL \
+    "$BASH" tools/owed-run.sh check "$APART_HEAD" runtest) >"$TMP/owed-out" 2>&1 || hang_ls_rc=$?
+  ls_took=$((SECONDS - started))
+  if [ "$hang_ls_rc" = 3 ] && [ "$ls_took" -lt 5 ] && grep -qF 'could not be read within 1s: unreadable' "$TMP/owed-out"; then
+    report 0 "a hanging ls-remote with a child holding stdout/stderr open still returns exit 3 at FETCH_CAP (${ls_took}s < 5s)"
+  else report 1 'a hanging ls-remote with a child holding stdout/stderr open still returns exit 3 at FETCH_CAP' \
+    "exit=$hang_ls_rc took=${ls_took}s; $(cat "$TMP/owed-out")"; fi
   started=$SECONDS
   hang_rc=0
   (cd "$R" && PATH=$TMP/hangfetchbin:$TMP/gitbin:$SYS_PATH \
