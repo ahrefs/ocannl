@@ -7641,10 +7641,17 @@ box.
   raises; `Utils.unstate_config` withdraws one (gh-ocannl-2354). A statement ranks above every
   source a run is given: the commandline, every `OCANNL_<KEY>`, the config file and any profile.
   A commandline argument that contradicts it is refused at the statement, naming the key, and so is
-  a key resolved while `Utils` initializes (`profile`, bootstrap keys, `Utils.settings` inputs,
-  and `detach_c_stderr`, gh-ocannl-2395). The build derives the snapshot inputs from the
-  assignments to `Utils.settings` and requires a recognized initializer for every field. Use a
-  startup source to test resolution, or vary the mutable field directly to test its consumers.
+  a startup-only `Utils` key (`profile`, bootstrap keys, `Utils.settings` inputs, stderr
+  detachment, artifact cleanup, debug-runtime initialization and the device-init deadline,
+  gh-ocannl-2395 and gh-ocannl-2455).
+  The build derives snapshot inputs from the assignments to `Utils.settings` and requires a
+  recognized initializer for every field. It also derives startup-only keys from direct getter
+  sites in eagerly initialized expressions in `utils.ml`, including nested module structures.
+  Conditional reads count because their decision is already made when initialization finishes.
+  Statements of `build_files_prefix` still take effect because artifact writers read it through
+  `artifacts_subdir` after startup.
+  The generator's header specifies the source forms it reads. Use a startup source to test
+  resolution, or vary the mutable field directly to test its consumers.
   Before gh-ocannl-2395 a statement could change a snapshot when followed by
   `Utils.restore_settings`. The setter now rejects those keys before the restore can read them.
   Never write `Utils.config_file_args`. The config file's table ranks below the environment. A
