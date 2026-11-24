@@ -47,6 +47,12 @@
 # sent a TERM, and what ran is printed -- and so does a signal to this
 # script. N is a positive integer; 1, the default, runs one member at a time
 # with its output live, as before the option.
+# A caller can set OCANNL_TOOL_HARNESS_TIMINGS_FILE to an absolute scratch path
+# to collect a row per finished member. The dispatcher appends in manifest order,
+# outside the member's output and verdict. This write is best-effort. Whole
+# seconds run from invocation to observed exit, before serial relay drain or
+# any wait to print an already-reaped member's output. Parallel rows are
+# flushed at exit, including on handled interruption.
 # In serial, each member writes its captured stderr (and stdout under
 # --ci-real-dune) directly to its per-member output file while a dispatcher-
 # owned live relay streams that file to stderr (and stdout). Verdict scans
@@ -353,7 +359,11 @@ stop_serial_relays() {
 # previous command's `$?` before Bash re-raises the signal.
 trap '' HUP INT TERM
 trap - HUP INT TERM
-trap 'stop_serial_relays; rm -rf ${scratch[@]+"${scratch[@]}"}' EXIT
+cleanup_harnesses() {
+  stop_serial_relays
+  rm -rf ${scratch[@]+"${scratch[@]}"}
+}
+trap cleanup_harnesses EXIT
 # Refuse a list (exit 2, before any member runs) holding any line but the
 # three forms the header names, or an entry naming a harness this run does not
 # select, or one listed twice.
@@ -499,6 +509,8 @@ take_fleet_slot() {
     "${BASH:-bash}" "$root/tools/$(basename -- "$0")" "${original_args[@]+"${original_args[@]}"}"
 }
 [ "$list" = 1 ] || [ -n "$slot_record" ] || take_fleet_slot
+timing_file=${OCANNL_TOOL_HARNESS_TIMINGS_FILE:-}
+unset OCANNL_TOOL_HARNESS_TIMINGS_FILE
 if [ -n "$expected" ]; then
   record=$(mktemp "${TMPDIR:-/tmp}/test-harnesses-skips.XXXXXX") ||
     { echo "test-harnesses.sh: cannot create the skip record" >&2; exit_with 2; }
@@ -664,12 +676,16 @@ serial_member() { # SCRIPT STDOUT STDERR [ARGS...] (STDOUT empty unless --ci-rea
   if [ -n "$out" ]; then
     perl -e "$serial_relay_perl" "$out" "$done_flag" &
     serial_relays+=("$!")
+  fi
+  local started_at=$SECONDS
+  if [ -n "$out" ]; then
     OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" "$@" \
       >"$out" 2>"$error" || rc=$?
   else
     OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" "$@" \
       2>"$error" || rc=$?
   fi
+  member_elapsed=$((SECONDS - started_at))
   case $rc in
     # A descendant may outlive the interrupted member with stderr or stdout open.
     129|130|143)
@@ -682,11 +698,17 @@ serial_member() { # SCRIPT STDOUT STDERR [ARGS...] (STDOUT empty unless --ci-rea
   rm -f "$done_flag"
   capture_status "$script" "$rc" "$serial_relay_rc"
 }
-member_ended() { # INDEX RC OUTPUT: ordinary failures count once per member
+member_timing() { # INDEX RC ELAPSED
+  [ -n "$timing_file" ] || return 0
+  # The optional timing sink cannot add a diagnostic to a shared-red log.
+  { printf 'HARNESS %s finished in %ss (exit %s)\n' "${run_commands[$1]}" "$3" "$2" >>"$timing_file"; } 2>/dev/null || :
+}
+member_ended() { # INDEX RC OUTPUT ELAPSED: ordinary failures count once per member
   local script=${run_scripts[$1]} rc=$2 diagnostic scan_rc=0
   case $rc in
     129|130|143)
       printf 'HARNESS %s exit: %s\n' "$script" "$rc"
+      member_timing "$1" "$rc" "$4"
       stop_members
       printf 'harnesses: interrupted (exit %s)\n' "$rc" >&2
       exit_with "$rc" ;;
@@ -699,9 +721,14 @@ member_ended() { # INDEX RC OUTPUT: ordinary failures count once per member
   esac
   [ "$scan_rc" = 1 ] || [ "$rc" != 0 ] || rc=1
   printf 'HARNESS %s exit: %s\n' "$script" "$rc"
+  if [ "$jobs" = 1 ]; then
+    member_timing "$1" "$rc" "$4"
+  else
+    ended[$1]=$rc
+  fi
   [ "$rc" = 0 ] || failures=$((failures + 1))
 }
-pids=() ended=()
+pids=() ended=() member_started=() member_times=()
 stop_members() { # TERM every member still running beside the others, and wait for each
   local i rc
   for ((i = 0; i < ${#pids[@]}; i++)); do
@@ -709,7 +736,15 @@ stop_members() { # TERM every member still running beside the others, and wait f
     kill -TERM "${pids[i]}" 2>/dev/null
     rc=0
     wait "${pids[i]}" 2>/dev/null || rc=$?
-    ended[i]=$rc
+    ended[i]=$rc member_times[i]=$((SECONDS - member_started[i]))
+  done
+}
+record_parallel_timings() {
+  local i
+  [ -n "$timing_file" ] || return 0
+  for ((i = 0; i < ${#pids[@]}; i++)); do
+    [ -n "${ended[i]-}" ] || continue
+    member_timing "$i" "${ended[i]}" "${member_times[i]}"
   done
 }
 member_argv() { # INDEX: sets args
@@ -728,13 +763,15 @@ if [ "$jobs" = 1 ]; then
     else
       serial_member "$script" '' "$output.err" ${args[@]+"${args[@]}"} || rc=$?
     fi
-    member_ended "$i" "$rc" "$output.err"
+    member_ended "$i" "$rc" "$output.err" "$member_elapsed"
   done
 else
   # Up to $jobs members at once (see the header), each this shell's own
   # child, so its status is this shell's to wait for. No `wait -n`: this runs
   # under the Bash 3.2 a Mac ships, so a member's end is seen by polling its
   # pid, which the shell has reaped by then.
+  # A completed member can still be waiting for its turn to print.
+  trap 'record_parallel_timings; cleanup_harnesses' EXIT
   trap 'stop_members; exit_with 129' HUP
   trap 'stop_members; exit_with 130' INT
   trap 'stop_members; exit_with 143' TERM
@@ -745,6 +782,7 @@ else
       [ -z "${ended[i]-}" ] && ! kill -0 "${pids[i]}" 2>/dev/null || continue
       rc=0
       wait "${pids[i]}" || rc=$?
+      member_times[i]=$((SECONDS - member_started[i]))
       ended[i]=$rc running=$((running - 1)) progressed=1
       # Seen as it ends, not when its output comes up: no member starts after it.
       case $rc in 129|130|143) interrupted=$rc; break ;; esac
@@ -754,6 +792,7 @@ else
       script=${run_scripts[started]}
       member_output "$script"
       member_argv "$started"
+      member_started[started]=$SECONDS
       OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" ${args[@]+"${args[@]}"} \
         >"$output" 2>"$output.err" </dev/null &
       pids[started]=$!
@@ -764,7 +803,7 @@ else
       member_output "$script"
       printf '\nHARNESS %s (%s; bash %s %s)\n' "${run_commands[printed]}" "${run_tiers[printed]}" "$member_version" "$member_bash"
       cat "$output" "$output.err"
-      member_ended "$printed" "${ended[printed]}" "$output.err"
+      member_ended "$printed" "${ended[printed]}" "$output.err" "${member_times[printed]}"
       printed=$((printed + 1)) progressed=1
     done
     [ "$progressed" = 1 ] || sleep 0.2

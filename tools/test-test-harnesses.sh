@@ -13,6 +13,8 @@
 # --jobs runs members beside one another and prints each one's output whole,
 # in the manifest's order (gh-ocannl-2002).
 # Bash missing-command diagnostics fail the member at either width.
+# The timing file is checked against only complete rows for the commands the
+# fixture selects, with decimal elapsed seconds and the member's exit status.
 # Serial relays are owned directly by the dispatcher, drain within a bound
 # after ordinary completion, and leave no relay behind on TERM to the
 # dispatcher PID alone, in both ordinary serial and --ci-real-dune runs.
@@ -68,6 +70,8 @@ name=${0#"$FIXTURE/"}
 printf '%s\n' "$name" >>"$RECORD"
 [ "$PWD" = "$FIXTURE" ] || exit 90
 [ -z "${OCANNL_TOOL_HARNESS_SUBJECT+x}" ] || exit 91
+[ -z "${OCANNL_TOOL_HARNESS_TIMINGS_FILE+x}" ] || exit 92
+[ "$name" != "${DELAY_MEMBER:-}" ] || sleep 1
 if [ -n "${BARRIER:-}" ]; then
   # Passed only beside another member: two of them here at once, ever.
   : >"$BARRIER/$$"
@@ -81,6 +85,7 @@ fi
 [ -z "${ECHO_NAME:-}" ] || echo "ran $name"
 # Held until stopped: a TERM ends it as a harness's cleanup trap would.
 if [ "$name" = "${HOLD_MEMBER:-}" ]; then trap 'exit 143' TERM; while :; do sleep 0.1; done; fi
+[ "$name" != "${TERM_DISPATCHER_MEMBER:-}" ] || kill -TERM "$PPID"
 [ -z "${SLOT_RECORD:-}" ] || printf '%s slot=%s\n' "$name" "${FAKE_SLOT_HELD-none}" >>"$SLOT_RECORD"
 if [ -n "${ENV_RECORD:-}" ]; then
   wake=unset
@@ -827,6 +832,30 @@ else
   report 1 '--jobs 3 runs members beside one another, each output whole and in the manifest order' \
     "exit $got: $(diff "$TMP/jobs-want" "$TMP/out" | head -n 8 | tr '\n' '|')"
 fi
+# Time the selected command, including its selector, without changing the dispatcher's log.
+for width in 1 2; do
+  : >"$TMP/timings"
+  OCANNL_TOOL_HARNESS_TIMINGS_FILE=$TMP/timings DELAY_MEMBER=$af_leg FAIL_MEMBER=$af_leg \
+    run --jobs "$width" --affected --since HEAD~1
+  if [ "$got" = 1 ] &&
+     [ "$(sed -E 's/ in [0-9]+s \(exit / in SECONDSs (exit /' "$TMP/timings")" = \
+       "HARNESS $af_whole finished in SECONDSs (exit 0)
+HARNESS $af_leg --only '$af_ere' finished in SECONDSs (exit 7)" ] &&
+     grep -Eq ' finished in [1-9][0-9]*s \(exit 7\)$' "$TMP/timings" &&
+     ! grep -q ' finished in ' "$TMP/out"; then
+    report 0 "width $width records elapsed seconds for just the selected harness commands"
+  else report 1 "width $width records elapsed seconds for just the selected harness commands" \
+    "exit $got; $(cat "$TMP/timings"); $(tail -n 8 "$TMP/out")"; fi
+done
+cp "$TMP/out" "$TMP/timed-out"
+OCANNL_TOOL_HARNESS_TIMINGS_FILE=$TMP/no-timing-directory/timings DELAY_MEMBER=$af_leg FAIL_MEMBER=$af_leg \
+  run --jobs 2 --affected --since HEAD~1
+if [ "$got" = 1 ] && cmp -s "$TMP/timed-out" "$TMP/out"; then
+  report 0 'an unavailable timing file leaves the verdict and compared log intact'
+else report 1 'an unavailable timing file leaves the verdict and compared log intact' \
+  "exit $got; $(diff "$TMP/timed-out" "$TMP/out")"; fi
+
+
 rm -rf "$BARRIER"; mkdir "$BARRIER"
 head -n 2 "$TMP/shell" >"$TMP/jobs-two"
 run --shell --jobs 1
@@ -841,6 +870,22 @@ if [ "$got" = 1 ] && cmp -s <(sort "$TMP/shell") <(sort "$RECORD") &&
    grep -qxF "HARNESS $FAIL_MEMBER exit: 7" "$TMP/out" && grep -q ' run, 1 failed$' "$TMP/out"; then
   report 0 '--jobs: a failing member stays red while every other member runs'
 else report 1 '--jobs: a failing member stays red while every other member runs' "exit $got: $(tail -n 3 "$TMP/out" | tr '\n' '|')"; fi
+# The third member can signal only once the second was observed to finish.
+# The first is still blocking manifest-order output at that point.
+first=$(sed -n '1p' "$TMP/shell")
+second=$(sed -n '2p' "$TMP/shell")
+: >"$TMP/timings"
+OCANNL_TOOL_HARNESS_TIMINGS_FILE=$TMP/timings HOLD_MEMBER=$first FAIL_MEMBER= \
+  TERM_DISPATCHER_MEMBER=$(sed -n '3p' "$TMP/shell") run --shell --jobs 2
+if [ "$got" = 143 ] &&
+   [ "$(sed -nE '1,2s/ in [0-9]+s \(exit / in SECONDSs (exit /p' "$TMP/timings")" = \
+     "HARNESS $first finished in SECONDSs (exit 143)
+HARNESS $second finished in SECONDSs (exit 0)" ] &&
+   ! grep -qF "HARNESS $second exit:" "$TMP/out"; then
+  report 0 'TERM to the parallel dispatcher records timings still waiting for manifest-order output'
+else report 1 'TERM to the parallel dispatcher records timings still waiting for manifest-order output' \
+  "exit $got; $(cat "$TMP/timings"); $(tail -n 8 "$TMP/out")"; fi
+
 # A member that ends on a signal ends the run with that status as soon as it
 # is seen to have ended: the first member, still running, is stopped, and the
 # third, whose turn its slot was, never starts -- though the second's output
