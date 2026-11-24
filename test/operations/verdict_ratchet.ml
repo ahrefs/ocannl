@@ -6582,6 +6582,59 @@ let () =
     (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
     (fun () -> in_leg ~leg:sub "tf32 replay" (fun label -> p label true))|ocaml},
       [] );
+    ( "accepts a deferred lazy sub_leg first forced through a named callback passed to \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub =
+  Verdict.sub_leg gpu ~on:"cuda"
+    ~when_:(lazy (Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ()))
+let check () = in_leg ~leg:sub "tf32 replay" (fun label -> p label true)
+let () = Test_utils.with_policy (fun p -> { p with Ir.Numerics.tf32_matmuls = true }) check|ocaml},
+      [] );
+    ( "accepts a leg whose gate uses an inline let-binding inside Test_utils.with_policy or a \
+       deferred sub_leg",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub =
+  Verdict.sub_leg gpu ~on:"cuda"
+    ~when_:
+      (lazy
+        (let available =
+           Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ()
+         in
+         available))
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () ->
+      let leg =
+        Verdict.leg ~on:"cuda"
+          ~when_:
+            (let available =
+               Ll_test.advertised ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ()
+             in
+             available)
+          ()
+      in
+      in_leg ~leg "inline let" (fun label -> p label true);
+      in_leg ~leg:sub "lazy inline let" (fun label -> p label true))|ocaml},
+      [] );
+    ( "refuses a partial Ll_test.advertised binding capturing an unchanged ambient policy before \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let advertised = Ll_test.advertised ~policy:(Ir.Numerics.get ()) ~backend_name:"cuda"
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () ->
+      let leg =
+        Verdict.leg ~on:"cuda"
+          ~when_:(advertised ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ())
+          ()
+      in
+      in_leg ~leg "tf32 replay" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
     ( "refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy",
       {ocaml|open Verdict.Claims
 let leg =
