@@ -61,14 +61,14 @@ def gh_format(template, *args):
                   lambda m: m[0][0] if m[1] is None else str(args[int(m[1])]), template)
 
 
-def expression(value, event, windows=False, compiler=''):
+def expression(value, event, windows=False, compiler='', *, expected_sha='', sha=''):
     # This is the workflow's small expression vocabulary, not a second matrix.
     # Parse and whitelist the translated AST so a new operator fails loudly.
     value = value.removeprefix('${{').removesuffix('}}').strip()
-    tokens = re.findall(r"'(?:[^']*)'|github\.event_name|inputs\.[a-z_]+|fromJSON|format|&&|\|\||!=|==|!|[(),]|\s+", value)
+    tokens = re.findall(r"'(?:[^']*)'|github\.(?:event_name|sha)|inputs\.[a-z_]+|fromJSON|format|&&|\|\||!=|==|!|[(),]|\s+", value)
     assert ''.join(tokens) == value, value
     mapping = {'github.event_name': 'event', 'inputs.windows_only': 'windows',
-               'inputs.ocaml_compiler': 'compiler',
+               'inputs.ocaml_compiler': 'compiler', 'inputs.expected_sha': 'expected_sha', 'github.sha': 'sha',
                '&&': ' and ', '||': ' or ', '!': ' not '}
     translated = ''.join(mapping.get(token, token) for token in tokens).strip()
     tree = ast.parse(translated, mode='eval')
@@ -79,7 +79,7 @@ def expression(value, event, windows=False, compiler=''):
         if isinstance(node, ast.Call):
             assert isinstance(node.func, ast.Name) and node.func.id in ('fromJSON', 'format')
     return eval(compile(tree, '<workflow expression>', 'eval'), {'__builtins__': {}},
-                dict(event=event, windows=windows, compiler=compiler,
+                dict(event=event, windows=windows, compiler=compiler, expected_sha=expected_sha, sha=sha,
                      fromJSON=json.loads, format=gh_format))
 
 
@@ -530,6 +530,13 @@ if leg == 'matrix':
     scheduled_guard = re.search(r'^  harness-legs-alone:\n(    if: .*\n)', source, re.M)[1]
     assert scheduled_guard.startswith('    if: ' + SCHEDULED_GUARD), 'scheduled side-job guard moved'
     controls(extra_job('new-scheduled-job', scheduled_guard))
+    audit_guard = job_block(source, 'harness-affected-self-check').splitlines()[0].removeprefix('    if: ')
+    _, ordinary = compiler_input(source)
+    head, ancestor = 'a' * 40, 'b' * 40
+    assert expression(audit_guard, 'workflow_dispatch', compiler=ordinary, expected_sha=head, sha=head), \
+        'an ordinary dispatch pinned to its own revision skips the affected reader audit'
+    assert not expression(audit_guard, 'workflow_dispatch', compiler=ordinary, expected_sha=ancestor, sha=head), \
+        'a dispatch of an older checkout runs the affected reader audit'
     axis, shards = harness_shards(source)
     rejects_order(harness_shards, source.replace('shard: ' + axis, 'shard: ' + json.dumps(shards[:-1]), 1),
                   'a missing harness shard', 'harness shards must cover')
@@ -545,6 +552,7 @@ if leg == 'matrix':
     print('PASS every scheduled-only compiler dispatches as exactly its scheduled job')
     print('PASS side jobs are read from ci.yml: a new guarded job joins the selection')
     print('PASS a scheduled side job runs on the schedule and an ordinary dispatch, never per PR or in the fallback')
+    print('PASS the affected reader audit runs when dispatch pins its own head and skips an ancestor checkout')
     print('PASS ubuntu main and train shards are exactly 1/N..N/N, over the aliases ci-shard.sh shards')
     print('PASS an ordinary dispatch runs one macOS job, main; the schedule adds its train job')
     print('PASS every build step piping into tee has pipefail; the PowerShell one exits with dune\'s status')
@@ -555,8 +563,9 @@ if leg == 'matrix':
         'train 2/2 entries moved; update the mutants below'
     side_guard = "github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'"
     assert source.count(side_guard) == 2, 'side-job guard text moved; update the mutants below'
+    # Other scheduled jobs may share this guard. Each named replacement below
+    # must change the source before it can count as a rejected mutant.
     scheduled_text = scheduled_guard.strip().removeprefix('if: ')
-    assert source.count(scheduled_text) == 4, 'scheduled side-job guard text moved; update the mutants below'
     build_guard = "  run:\n    if: github.event_name != 'pull_request'\n"
     assert source.count(build_guard) == 1, 'build matrix guard moved; update the mutants below'
     compiler_axis = "&& format('[\"{0}\"]', inputs.ocaml_compiler)"
