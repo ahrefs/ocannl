@@ -1,0 +1,25 @@
+the optimizer leaves v virtual: true
+raw Context.observability classifies the unseeded virtual node as Recomputable: true
+raw Context.get_values recomputes the virtual node to its exact values: true
+execute_with_census refuses reading a Virtual (Recomputable) node: true
+execute refuses reading a Virtual (Recomputable) node: true
+optimize_and_execute refuses reading a Virtual (Recomputable) node: true
+execute_with_census refuses when any node in ~read is Virtual alongside a stored node: true
+seeding a virtual node makes Context.observability report Stored: true
+raw Context.get_values on a seeded virtual node returns the uploaded sentinel: true
+execute_with_census refuses reading a seeded Virtual node: true
+execute refuses reading a seeded Virtual node: true
+raw Context.observability classifies an uncompiled host-init node as Host_init: true
+raw Context.get_values on a Host_init node returns its host-init array: true
+execute_with_census refuses reading a Host_init node with no stored buffer: true
+the reduction intermediate is finalized Local: true
+the virtual reader of the Local intermediate stays Virtual: true
+raw Context.observability classifies the intermediate as Unobservable_local: true
+raw Context.observability classifies the virtual reader as Unobservable_local with path: true
+execute preserves refused_as_local for a Local node: true
+execute preserves User_error dependency path for an unreadable Virtual node reading Local: true
+reading the materialized output of the virtualized program succeeds: true
+re-optimizing with ~materialized:[ v ] leaves v non-virtual: true
+materialized v reads back its exact computed values: true
+materialized out reads back its exact computed values: true
+an empty ~read list succeeds: true

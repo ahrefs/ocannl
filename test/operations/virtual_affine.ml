@@ -474,7 +474,15 @@ let case_scatter_replay ~name ~height ~reading ~policy ~capped () =
     List.filter_map read ~f:(fun tn ->
         Option.some_if (not (known_virtual opt tn)) (tn, blank (Tn.num_elems tn)))
   in
-  let actual = execute ~name opt ~seed ~read in
+  let actual =
+    match reading with
+    | `Committed_observer ->
+        (* [matched] is intentionally committed [Virtual] here and observed via recompute-on-read,
+           which [execute] refuses because it requires stored buffers; [reduced] is materialized. *)
+        let ctx = run ~name opt ~seed in
+        List.map read ~f:(Context.get_values ctx)
+    | _ -> execute ~name opt ~seed ~read
+  in
   let mat =
     execute ~name:(name ^ "_mat")
       (optimize ~materialized:[ tgt; matched ] llc)
