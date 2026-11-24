@@ -13,8 +13,11 @@ raw Context.observability classifies an uncompiled host-init node as Host_init: 
 raw Context.get_values on a Host_init node returns its host-init array: true
 execute_with_census refuses reading a Host_init node with no stored buffer: true
 the reduction intermediate is finalized Local: true
+the virtual reader of the Local intermediate stays Virtual: true
 raw Context.observability classifies the intermediate as Unobservable_local: true
+raw Context.observability classifies the virtual reader as Unobservable_local with path: true
 execute preserves refused_as_local for a Local node: true
+execute preserves User_error dependency path for an unreadable Virtual node reading Local: true
 reading the materialized output of the virtualized program succeeds: true
 re-optimizing with ~materialized:[ v ] leaves v non-virtual: true
 materialized v reads back its exact computed values: true

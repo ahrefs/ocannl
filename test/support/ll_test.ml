@@ -859,42 +859,40 @@ let execute_with_census ?ctx ?bindings ?launch ?fresh_zero ~name (o : LL.optimiz
   let ctx, routine = run_routine ?ctx ?bindings ?launch ?fresh_zero ~name o ~seed in
   let check_stored tn =
     let obs = Context.observability ctx tn in
-    if Tn.Placements.known_virtual (Context.placements ctx) tn then
-      invalid_arg
-        (Printf.sprintf
-           "Ll_test.execute_with_census: node %s is placed Virtual in routine %s, so readback \
-            would %s rather than observe a buffer the routine stored; materialize it before \
-            optimization"
-           (Tn.debug_name tn) routine.Context.name
-           (match obs with
-           | Context.Stored -> "read an externally seeded buffer the routine never wrote"
-           | Context.Recomputable -> "recompute it on read"
-           | _ -> "not observe a stored buffer"))
-    else
-      match obs with
-      | Context.Stored -> ()
-      | Context.Recomputable ->
+    match obs with
+    | Context.Stored ->
+        if Tn.Placements.known_virtual (Context.placements ctx) tn then
           invalid_arg
             (Printf.sprintf
-               "Ll_test.execute_with_census: node %s is recomputable on read rather than stored in \
-                routine %s; materialize it before optimization"
+               "Ll_test.execute_with_census: node %s is placed Virtual in routine %s, so readback \
+                would read an externally seeded buffer the routine never wrote rather than observe \
+                a buffer the routine stored; materialize it before optimization"
                (Tn.debug_name tn) routine.Context.name)
-      | Context.Host_init ->
-          invalid_arg
-            (Printf.sprintf
-               "Ll_test.execute_with_census: node %s has only host-init data and no stored device \
-                buffer in routine %s; materialize it before optimization"
-               (Tn.debug_name tn) routine.Context.name)
-      | Context.Unobservable_local _ | Context.Unobservable_aliased _ | Context.Unobservable_merge _
-      | Context.Launch_bound _ | Context.Needs_context _ | Context.Slice_view _
-      | Context.Not_computed ->
-          (* Every remaining observability outcome is already refused by [Context.get_values] with
-             its full [User_error] diagnostic (provenance, cap advice, dependency path). *)
-          ignore (Context.get_values ctx tn : float array);
-          invalid_arg
-            (Printf.sprintf "Ll_test.execute_with_census: node %s is not Stored in routine %s (%s)"
-               (Tn.debug_name tn) routine.Context.name
-               (Option.value (Context.observability_tag obs) ~default:"unreadable"))
+    | Context.Recomputable ->
+        invalid_arg
+          (Printf.sprintf
+             "Ll_test.execute_with_census: node %s is placed %s and recomputable on read in \
+              routine %s rather than stored; materialize it before optimization"
+             (Tn.debug_name tn)
+             (if Tn.Placements.known_virtual (Context.placements ctx) tn then "Virtual"
+              else "non-materialized")
+             routine.Context.name)
+    | Context.Host_init ->
+        invalid_arg
+          (Printf.sprintf
+             "Ll_test.execute_with_census: node %s has only host-init data and no stored device \
+              buffer in routine %s; materialize it before optimization"
+             (Tn.debug_name tn) routine.Context.name)
+    | Context.Unobservable_local _ | Context.Unobservable_aliased _ | Context.Unobservable_merge _
+    | Context.Launch_bound _ | Context.Needs_context _ | Context.Slice_view _ | Context.Not_computed
+      ->
+        (* Every remaining observability outcome is already refused by [Context.get_values] with its
+           full [User_error] diagnostic (provenance, cap advice, dependency path, launch index). *)
+        ignore (Context.get_values ctx tn : float array);
+        invalid_arg
+          (Printf.sprintf "Ll_test.execute_with_census: node %s is not Stored in routine %s (%s)"
+             (Tn.debug_name tn) routine.Context.name
+             (Option.value (Context.observability_tag obs) ~default:"unreadable"))
   in
   List.iter read ~f:check_stored;
   (List.map read ~f:(Context.get_values ctx), routine.Context.mma)
