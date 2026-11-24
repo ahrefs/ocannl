@@ -7671,6 +7671,32 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
         | _ -> None)
     | _ -> None
   in
+  let tuple_selector env callee =
+    let seen = Hash_set.create (module Int) in
+    let rec go env expr =
+      match (strip expr).pexp_desc with
+      | Pexp_ident { txt; _ } -> (
+          match resolve_longident env txt with
+          | `External ([ "Stdlib"; "fst" ] | [ "Base"; "fst" ] | [ "Core"; "fst" ]) ->
+              Some (P_tuple 0)
+          | `External ([ "Stdlib"; "snd" ] | [ "Base"; "snd" ] | [ "Core"; "snd" ]) ->
+              Some (P_tuple 1)
+          | `Unqualified "fst" when Option.is_none (Lexical_scope.lookup env "fst") ->
+              Some (P_tuple 0)
+          | `Unqualified "snd" when Option.is_none (Lexical_scope.lookup env "snd") ->
+              Some (P_tuple 1)
+          | `Local_val v -> follow v
+          | `Unqualified name -> Option.bind (Lexical_scope.lookup env name) ~f:follow
+          | _ -> None)
+      | _ -> None
+    and follow v =
+      if Hash_set.mem seen v.lg_id || not (List.is_empty v.lg_proj) then None
+      else (
+        Hash_set.add seen v.lg_id;
+        match v.lg_rhs with Some (rhs, rhs_env) -> go rhs_env rhs | None -> None)
+    in
+    go env callee
+  in
   let iterator_kind env callee =
     match (strip callee).pexp_desc with
     | Pexp_ident { txt; _ } -> (
@@ -8054,11 +8080,20 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                     match
                       List.find_map all_args ~f:(fun (albl, aexpr, aenv, aeval) ->
                           match albl with
-                          | (Ppxlib.Asttypes.Labelled al | Optional al) when String.equal al l ->
-                              Some (aexpr, aenv, aeval)
+                          | Ppxlib.Asttypes.Labelled al when String.equal al l ->
+                              Some (`Direct (aexpr, aenv, aeval))
+                          | Ppxlib.Asttypes.Optional al when String.equal al l ->
+                              Some (`Optional (aexpr, aenv, aeval))
                           | _ -> None)
                     with
-                    | Some hit -> Some hit
+                    | Some (`Direct hit) -> Some hit
+                    | Some (`Optional (aexpr, aenv, aeval)) -> (
+                        match self#resolve_option_arg aenv aexpr with
+                        | `None_lit -> Option.map default_opt ~f:(fun d -> (d, acc, None))
+                        | `Some_expr (inner, inner_env) ->
+                            if Option.is_some default_opt then Some (inner, inner_env, aeval)
+                            else Some (aexpr, aenv, aeval)
+                        | `Opaque -> Some (aexpr, aenv, aeval))
                     | None -> Option.map default_opt ~f:(fun d -> (d, acc, None)))
                 | Ppxlib.Asttypes.Nolabel ->
                     let k = !nl_idx in
@@ -8123,18 +8158,21 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                             let call_env, _ = self#bind_local_call fn_env params all_args in
                             check call_env body))
                   | None -> (
-                      let base, _ = flatten_apply expr in
-                      match (strip base).pexp_desc with
-                      | Pexp_ident { txt; _ } -> (
-                          match resolve_longident env txt with
-                          | `External [ "Ir"; "Numerics"; "get" ] -> true
-                          | `Local_val v -> check_fn_result v
-                          | `Unqualified name -> (
-                              match Lexical_scope.lookup env name with
-                              | Some v -> check_fn_result v
-                              | None -> false)
-                          | _ -> false)
-                      | _ -> false)))
+                      let base, app_args = flatten_apply expr in
+                      match (tuple_selector env base, app_args) with
+                      | Some sel, [ (Ppxlib.Asttypes.Nolabel, arg) ] -> check_proj env [ sel ] arg
+                      | _ -> (
+                          match (strip base).pexp_desc with
+                          | Pexp_ident { txt; _ } -> (
+                              match resolve_longident env txt with
+                              | `External [ "Ir"; "Numerics"; "get" ] -> true
+                              | `Local_val v -> check_fn_result v
+                              | `Unqualified name -> (
+                                  match Lexical_scope.lookup env name with
+                                  | Some v -> check_fn_result v
+                                  | None -> false)
+                              | _ -> false)
+                          | _ -> false))))
           | Pexp_ident { txt; _ } -> (
               match lookup_local_val env txt with
               | Some v ->
@@ -8217,7 +8255,12 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                           ~f:(fun () ->
                             let call_env, _ = self#bind_local_call fn_env params all_args in
                             check_proj call_env proj body))
-                  | None -> false)
+                  | None -> (
+                      let base, app_args = flatten_apply expr in
+                      match (tuple_selector env base, app_args) with
+                      | Some sel, [ (Ppxlib.Asttypes.Nolabel, arg) ] ->
+                          check_proj env (sel :: proj) arg
+                      | _ -> false))
               | Pexp_let (rec_flag, bindings, body) ->
                   let denotes = self#denotations env rec_flag bindings in
                   let scope = self#bind_group env bindings denotes in
@@ -9061,13 +9104,18 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                           ~f:(fun () ->
                             let call_env, _ = self#bind_local_call fn_env params all_args in
                             walk_projected ~eval_kind ~in_explicit_policy call_env proj body))
-                  | None ->
-                      (match step with
-                      | P_field fname when expr_is_cap_record env expr ->
-                          record_path ~line:expr.pexp_loc.loc_start.pos_lnum
-                            [ "Ir"; "Backend_intf"; fname ]
-                      | _ -> ());
-                      walk ~eval_kind ~in_explicit_policy env expr)
+                  | None -> (
+                      let base, app_args = flatten_apply expr in
+                      match (tuple_selector env base, app_args) with
+                      | Some sel, [ (Ppxlib.Asttypes.Nolabel, arg) ] ->
+                          walk_projected ~eval_kind ~in_explicit_policy env (sel :: proj) arg
+                      | _ ->
+                          (match step with
+                          | P_field fname when expr_is_cap_record env expr ->
+                              record_path ~line:expr.pexp_loc.loc_start.pos_lnum
+                                [ "Ir"; "Backend_intf"; fname ]
+                          | _ -> ());
+                          walk ~eval_kind ~in_explicit_policy env expr))
               | _ ->
                   (match step with
                   | P_field fname when expr_is_cap_record env expr ->
@@ -9101,12 +9149,20 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                         match
                           List.find_map call_args ~f:(fun (albl, aexpr, aenv, aeval) ->
                               match albl with
-                              | (Ppxlib.Asttypes.Labelled al | Optional al) when String.equal al l
-                                ->
-                                  Some (aexpr, aenv, aeval)
+                              | Ppxlib.Asttypes.Labelled al when String.equal al l ->
+                                  Some (`Direct (aexpr, aenv, aeval))
+                              | Ppxlib.Asttypes.Optional al when String.equal al l ->
+                                  Some (`Optional (aexpr, aenv, aeval))
                               | _ -> None)
                         with
-                        | Some hit -> Some hit
+                        | Some (`Direct hit) -> Some hit
+                        | Some (`Optional (aexpr, aenv, aeval)) -> (
+                            match self#resolve_option_arg aenv aexpr with
+                            | `None_lit -> Option.map pm.pm_default ~f:(fun (d, e) -> (d, e, None))
+                            | `Some_expr (inner, inner_env) ->
+                                if Option.is_some pm.pm_default then Some (inner, inner_env, aeval)
+                                else Some (aexpr, aenv, aeval)
+                            | `Opaque -> Some (aexpr, aenv, aeval))
                         | None -> Option.map pm.pm_default ~f:(fun (d, e) -> (d, e, None)))
                     | Ppxlib.Asttypes.Nolabel ->
                         let nolabels =
@@ -9219,11 +9275,20 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                        match
                          List.find_map call_args ~f:(fun (albl, aexpr, aenv, _) ->
                              match albl with
-                             | (Ppxlib.Asttypes.Labelled al | Optional al) when String.equal al l ->
-                                 Some (aexpr, aenv)
+                             | Ppxlib.Asttypes.Labelled al when String.equal al l ->
+                                 Some (`Direct (aexpr, aenv))
+                             | Ppxlib.Asttypes.Optional al when String.equal al l ->
+                                 Some (`Optional (aexpr, aenv))
                              | _ -> None)
                        with
-                       | Some hit -> Some hit
+                       | Some (`Direct hit) -> Some hit
+                       | Some (`Optional (aexpr, aenv)) -> (
+                           match self#resolve_option_arg aenv aexpr with
+                           | `None_lit -> pm.pm_default
+                           | `Some_expr (inner, inner_env) ->
+                               if Option.is_some pm.pm_default then Some (inner, inner_env)
+                               else Some (aexpr, aenv)
+                           | `Opaque -> Some (aexpr, aenv))
                        | None -> pm.pm_default)
                    | Ppxlib.Asttypes.Nolabel ->
                        let nolabels =
@@ -9375,7 +9440,12 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                         ~f:(fun () ->
                           let call_env, _ = self#bind_local_call fn_env params all_args in
                           go_proj ~wids call_env proj body)
-                  | _ -> [])
+                  | _ -> (
+                      let base, app_args = flatten_apply expr in
+                      match (tuple_selector env base, app_args) with
+                      | Some sel, [ (Ppxlib.Asttypes.Nolabel, arg) ] ->
+                          go_proj ~wids env (sel :: proj) arg
+                      | _ -> []))
               | Pexp_ifthenelse (_, t, Some f) ->
                   go_proj ~wids env proj t @ go_proj ~wids env proj f
               | Pexp_match (scrut, cases) ->
@@ -9580,7 +9650,10 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
             let is_named_def =
               match Hashtbl.find fn_id_by_expr_pos pos with
               | Some def_id -> not (Option.exists replaying_fn_id ~f:(Int.equal def_id))
-              | None -> false
+              | None -> (
+                  match Hashtbl.find anon_fn_id_by_pos pos with
+                  | Some def_id -> not (Option.exists replaying_fn_id ~f:(Int.equal def_id))
+                  | None -> false)
             in
             if is_named_def then in_uninvoked_fn_def <- true;
             Exn.protect
@@ -9685,6 +9758,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                                   Hashtbl.set anon_fn_id_by_pos ~key:fpos ~data:next_id;
                                   next_id
                             in
+                            Hashtbl.set fn_expr_by_id ~key:id ~data:(f_stripped, env);
                             Some (`Anon, id, [])
                         | _ -> (
                             match resolve_local_fn_chain env f_expr with
@@ -9696,14 +9770,12 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                                         (`Named, v.lg_id, []))
                                 | _ -> None))
                       in
-                      Option.iter target_fn ~f:(fun (cb_kind, fn_id, partial_args) ->
+                      Option.iter target_fn ~f:(fun (_cb_kind, fn_id, partial_args) ->
                           let add_iter_call site_pos elem_args =
                             if should_record then
                               Hashtbl.add_multi local_calls ~key:fn_id
                                 ~data:(site_pos, partial_args @ elem_args, active_wrappers);
-                            match cb_kind with
-                            | `Named -> iterator_rewalks := (fn_id, site_pos) :: !iterator_rewalks
-                            | `Anon -> ()
+                            iterator_rewalks := (fn_id, site_pos) :: !iterator_rewalks
                           in
                           let dummy_idx =
                             {

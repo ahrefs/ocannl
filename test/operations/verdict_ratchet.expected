@@ -862,6 +862,9 @@ refuses a production call projected from a record returned by a local helper: tr
 refuses two sub_legs sharing a named lazy condition when the first is claimed before Test_utils.with_policy: true
 refuses a shared deferred lazy sub_leg used across two separate nested-helper invocations: true
 refuses a leg gated on a non-allowlisted capability field matched by a function helper: true
+refuses a production call in an optional default triggered by ?arg:None: true
+refuses a shared deferred lazy sub_leg used across two elements of an inline iterator callback: true
+refuses a leg reading an unqualified capability field selected through fst: true
 refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy: true
 refuses an ambient-policy leg used inside a local helper called from a Test_utils.with_policy callback: true
 refuses a deferred lazy sub_leg explicitly forced with Lazy.force before Test_utils.with_policy: true

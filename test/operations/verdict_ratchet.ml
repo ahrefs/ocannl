@@ -6953,6 +6953,29 @@ let () =
   let leg = mk (Context.codegen_capabilities (Context.auto ())) in
   Verdict.in_leg ~leg "aligned" (fun label -> Verdict.p label true)|ocaml},
       [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
+    ( "refuses a production call in an optional default triggered by ?arg:None",
+      {ocaml|let available ?(ready = Option.is_some (Autotune.detect_conv llc)) () = ready
+let leg = Verdict.leg ~on:"cuda" ~when_:(available ?ready:None ()) ()
+let () = Verdict.in_leg ~leg "conv" (fun label -> Verdict.p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses a shared deferred lazy sub_leg used across two elements of an inline iterator \
+       callback",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let () =
+  List.iter [ false; true ] ~f:(fun enabled ->
+      Test_utils.with_policy
+        (fun p -> { p with Ir.Numerics.tf32_matmuls = enabled })
+        (fun () -> in_leg ~leg:sub "tf32 replay" (fun label -> p label true)))|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses a leg reading an unqualified capability field selected through fst",
+      {ocaml|let caps = Context.codegen_capabilities (Context.auto ())
+let pair = (caps, ())
+let leg =
+  Verdict.leg ~on:"cuda" ~when_:((fst pair).workgroup_allocation_alignment = 4) ()
+let () = Verdict.in_leg ~leg "aligned" (fun label -> Verdict.p label true)|ocaml},
+      [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
     ( "refuses an ambient-policy leg used inside a named callback passed to Test_utils.with_policy",
       {ocaml|open Verdict.Claims
 let leg =
