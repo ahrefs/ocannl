@@ -918,8 +918,10 @@ files.
   `finish_inference`: a failed closure of OTHER work would otherwise poison a closed tensor's lazies
   (OCaml lazies re-raise their first exception). Tests that deliberately continue after an
   expected shape error must `Tensor.rewind_to_last_closure ()` when `Shape.taint_provenance ()` is
-  set (`test_symbolic_extents.ml`), and a test that closes an operand to inspect it (e.g. via
-  `Shape.to_padding`) can no longer then give it a padded consumer — read the fields instead
+  set (`Shape_test.expect_shape_error` does this for two-phase construction/run probes,
+  `Shape_test.with_rewind` for tests that check the taint itself). A test that closes an operand
+  to inspect it (e.g. via `Shape.to_padding`) can no longer then give it a padded consumer — read
+  the fields instead
   (`neutral_elem_guard.ml`).
 - Every write to a module-level mutable binding of `row.ml`, `shape.ml` or `tensor.ml` (a `ref`,
   `Hashtbl`, `Hash_set`, ..., or since gh-ocannl-1573 a mutable field of a module-level record value

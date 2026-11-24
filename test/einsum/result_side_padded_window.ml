@@ -116,21 +116,7 @@ let run_positive_controls () =
       let _ctx = Train.forward_once (Context.auto ()) r in
       p "a result-side stride-only axis builds and runs" true)
 
-type outcome = Refused_at_construction of string | Refused_later of string | Ran
-
-let exn_message = function Row.Shape_error (msg, _) -> msg | e -> Stdlib.Printexc.to_string e
-
-(* [build] constructs the operation and returns the thunk that compiles and runs it. A case refused
-   after construction leaves the session tainted (gh-ocannl-1301); it is rewound, so the next case
-   starts from the last closure. A refusal at construction taints nothing ([run_untainted]). *)
-let attempt build =
-  let outcome =
-    match build () with
-    | exception Row.Shape_error (msg, _) -> Refused_at_construction msg
-    | run -> ( match run () with () -> Ran | exception e -> Refused_later (exn_message e))
-  in
-  if Option.is_some (Shape.taint_provenance ()) then Tensor.rewind_to_last_closure ();
-  outcome
+open Shape_test
 
 let forward t () = ignore (Train.forward_once (Context.auto ()) t : Context.t)
 
@@ -140,7 +126,7 @@ let refused ?(print_message = false) label ~window ~spec build =
         Printf.sprintf "%s: refused at construction, naming the result-side padded window %s" label
           window
       in
-      match attempt build with
+      match expect_shape_error build with
       | Refused_at_construction msg ->
           if print_message then Stdio.printf "%s: %s\n" label msg;
           let names_it =
@@ -224,10 +210,7 @@ let run_refusals () =
    after its claims, so a taint cannot leak into the next. *)
 let refused_untainted label build =
   case (label ^ ", then an unrelated operation") (fun () ->
-      Exn.protect
-        ~finally:(fun () ->
-          if Option.is_some (Shape.taint_provenance ()) then Tensor.rewind_to_last_closure ())
-        ~f:(fun () ->
+      with_rewind (fun () ->
           let refused =
             match build () with
             | exception Row.Shape_error (msg, _) ->

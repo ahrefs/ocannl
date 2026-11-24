@@ -240,6 +240,12 @@
   arrayjit.ir
   arrayjit.autotune))
 
+(library
+ (name shape_test)
+ (package neural_nets_lib)
+ (modules shape_test)
+ (libraries base ocannl))
+
 ; The bitwise-premise helpers of the padded-window tests, once (gh-ocannl-2334): [Premise_scan]
 ; reads this source across files, its closed [support_sources].
 

@@ -734,19 +734,7 @@ let run_uncarried_kernel_binary () =
 
 (* {2 Refused coefficients} *)
 
-type outcome = Refused_at_construction of string | Refused_later of string | Ran
-
-(* [build] constructs the operation and returns the thunk that compiles and runs it. A failed case
-   leaves the session tainted (gh-ocannl-1301); it is rewound, so the next case starts from the last
-   closure. *)
-let attempt build =
-  let outcome =
-    match build () with
-    | exception Row.Shape_error (msg, _) -> Refused_at_construction msg
-    | run -> ( match run () with () -> Ran | exception e -> Refused_later (exn_message e))
-  in
-  if Option.is_some (Shape.taint_provenance ()) then Tensor.rewind_to_last_closure ();
-  outcome
+open Shape_test
 
 let forward t () = ignore (Train.forward_once (Context.auto ()) t : Context.t)
 
@@ -755,7 +743,7 @@ let refused ?(print_message = false) label ~axis ~spec build =
       let claim_label =
         Printf.sprintf "%s: refused at construction, naming the affine axis %s" label axis
       in
-      match attempt build with
+      match expect_shape_error build with
       | Refused_at_construction msg ->
           if print_message then Stdio.printf "%s: %s\n" label msg;
           let names_it =
@@ -782,12 +770,12 @@ let kernel () = ndarray [ 3 ] k3
    determine the kernel, so the unpadded form is not here.) Without a capture the spec alone decides
    it, so the refusal comes while the tensor is built, naming the spec too (gh-ocannl-1983); a
    capture leaves it to projection derivation, after construction, which rewinds through
-   [attempt]. *)
+   [expect_shape_error]. *)
 let refused_unsized ?(print_message = false) label ~at build =
   case label (fun () ->
       Tensor.unsafe_reinitialize ();
       let claim_label = label ^ ": refused, naming the unsized kernel and the remedies" in
-      match attempt (fun () -> forward (build ())) with
+      match expect_shape_error (fun () -> forward (build ())) with
       | (Refused_later msg | Refused_at_construction msg) as outcome ->
           if print_message then Stdio.printf "%s: %s\n" label msg;
           let names_it =
