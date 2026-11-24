@@ -374,10 +374,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   overrun refusal calls four fifths tight. The width is what buys the room: one member at a time
   the same tier took 1071 s and 1056 s, a whole run 1167 s and 1154 s at load 3, and one at load 3.6
   overran the 1200 s of that day, a bound barely over a measured pass. Re-measure before trusting a figure older than the manifest:
-  the tier's cost has tripled since one read 470 s. Tier pass lines omit elapsed times so shared
-  failures compare without timing noise (gh-ocannl-1950); to recover the per-tier split, time
-  `dune build --root . @check @test/operations/scans` and
-  `tools/test-harnesses.sh --shell --jobs 4` separately under the same reservation.
+  the tier's cost has tripled since one read 470 s. Successful builds retain a whole-second
+  summary for the completed tiers and the harness commands that ran, including scoped selectors
+  (gh-ocannl-2433). Parallel harness rows measure from launch to observed exit and can overlap.
+  The tests tier includes its alias and owed-record reads, and the harness tier includes any
+  scoped refusal followed by the whole set. Initial selection and toolchain setup precede the
+  timers. Standalone failures also print the summary. Failed ship-pr builds keep timing out of
+  their logs because the shared-red gate compares the lines with a second build of the base
+  (gh-ocannl-1950). The same rule applies to compile-only rechecks. Use the retained summaries
+  from successful runs to track growth in the harness set and per-alias cost.
   The tier is
   `tools/test-harnesses.sh --affected --files PATH...` over every path the HEAD side changed since
   the merge base, both names of a rename, a path the base side renamed by its other name too,

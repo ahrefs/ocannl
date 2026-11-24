@@ -9,7 +9,8 @@
 # an unrecognized line or an unmapped script), what covers a script no member reaches (#cover:
 # an alias of the list the tests tier runs that affected's exact line says names it, never one
 # outside that list, an OWED list or a near-miss line), the toolchain fallback through opam env, the exit
-# statuses, stable tier lines across different run durations, that the build of the base alone
+# statuses, elapsed seconds on successful and standalone runs, stable logs across failed
+# ship-pr runs of different durations, that the build of the base alone
 # narrows as the merge does, that this repository's mapping gives shared support the whole tier
 # and a manifest edit less, and that
 # .github/ship-pr-merge-build runs the script with every tracked path an input. Fake dune, opam,
@@ -34,7 +35,7 @@
 # runs twice, then with a planted failing case. It compares bytes and rejects the exact unittest
 # timing line; tracebacks and FAILED must survive. It does not scan Dune or Python source text.
 # The #compile-only leg checks `--compile-only` against fake dune/opam (skipping format, tests,
-# owed-run and harness tiers, identical timing-free logs for base-alone comparison, opam fallback,
+# owed-run and harness tiers, timings on success, stable red logs for base-alone comparison, opam fallback,
 # one-parent HEAD, and usage refusals with incompatible flags). The #compile-only-real leg runs
 # `--compile-only` through real Dune on a minimal OCaml project modelled on staging #2170 x #2173:
 # a compatible moved base passes without running the other tiers, while an incompatible union
@@ -51,7 +52,7 @@ harness_scratch test-merge-build-check
 HERE=$(cd "$(dirname "$0")" && pwd)
 # The fixtures' own git: no ambient configuration, identity or repository selection.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
-  GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
+  GIT_COMMON_DIR GIT_CEILING_DIRECTORIES SHIP_PR_MERGE_BASE_SHA SHIP_PR_MERGE_HEAD_SHA
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
   GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
   GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
@@ -68,6 +69,10 @@ if [ "$1 $2" = 'show aliases' ]; then
   exit 0
 fi
 printf '%s\n' "$*" >>"$FAKE_RECORD"
+if [ "${FAKE_TERM_DURING_DUNE:-0}" = 1 ]; then
+  kill -TERM "$PPID"
+  exit 0
+fi
 sleep "${FAKE_TIER_DELAY:-0}"
 case " $* " in *' -j '*) exit "${FAKE_TESTS_RC:-${FAKE_DUNE_RC:-0}}" ;; esac
 exit "${FAKE_DUNE_RC:-0}"
@@ -110,6 +115,9 @@ case " $* " in
 esac
 printf 'shell %s\n' "$*" >>"$FAKE_RECORD"
 sleep "${FAKE_TIER_DELAY:-0}"
+if [ -n "${FAKE_MEMBER_TIMING:-}" ] && [ -n "${OCANNL_TOOL_HARNESS_TIMINGS_FILE:-}" ]; then
+  printf '%s\n' "$FAKE_MEMBER_TIMING" >>"$OCANNL_TOOL_HARNESS_TIMINGS_FILE"
+fi
 case " $* " in *' --affected '*) exit "${FAKE_SCOPED_RC:-0}" ;; esac
 exit "${FAKE_SHELL_RC:-0}"
 FAKE
@@ -466,7 +474,8 @@ fi
 if harness_leg 'the format tier runs first, its scans off, and a red one ends the run #tiers'; then
   R=$APART run "$TMP/dunebin"
   if [ "$rc" = 0 ] && [ "$(tiers | sed -n 1p)" = 'fmt scans=0' ] && has 'merge-build-check: format tier passed' &&
-     [ "$(grep -n 'tier passed' "$TMP/out" | sed -n 1p)" = "$(grep -n 'format tier passed' "$TMP/out")" ]; then
+     [ "$(grep -n '^merge-build-check: .* tier passed$' "$TMP/out" | sed -n 1p)" = \
+       "$(grep -nxF 'merge-build-check: format tier passed' "$TMP/out")" ]; then
     report 0 'the formatter gate runs before the compile tier, with its scans off'
   else report 1 'the formatter gate runs before the compile tier, with its scans off' "exit $rc; $(tiers); $(cat "$TMP/out")"; fi
   FAKE_FMT_RC=1 R=$APART run "$TMP/dunebin"
@@ -811,12 +820,14 @@ $(run_line "$APART_HEAD" 'build @test/training/train-a -j 1')"
   fixture owed-same
   first x.ml && commit_on base
   git -C "$R" checkout -q side && first x.ml && commit_on side && merge_side
-  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  SHIP_PR_MERGE_BASE_SHA=base SHIP_PR_MERGE_HEAD_SHA=head \
+    OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
   cp "$TMP/out" "$TMP/owed-same-out"
   merge_rc=$rc
   sha=$(git -C "$R" commit-tree 'HEAD^1^{tree}' -p 'HEAD^1' -p 'HEAD^2' -m 'the base alone') &&
     git -C "$R" checkout -q --detach "$sha"
-  OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
+  SHIP_PR_MERGE_BASE_SHA=base SHIP_PR_MERGE_HEAD_SHA=head \
+    OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
   if [ "$(git -C "$R" rev-parse 'HEAD^1^{tree}')" = "$(git -C "$R" rev-parse 'base^{tree}')" ] &&
      [ "$merge_rc" = 1 ] && [ "$rc" = 1 ] && cmp -s "$TMP/out" "$TMP/owed-same-out"; then
     report 0 'a merge whose tree is the base'"'"'s logs as the base alone does (it changes nothing)'
@@ -974,27 +985,40 @@ owed_record_leg() {
 }
 harness_leg_run 'the fleet hook publishes only eligible receipts from its own leg #owed-record' owed_record_leg
 
-# Use the same tree twice, but force each tier across a different whole-second duration.
-# Compare complete logs without normalizing digits, including the shared shell-red scenario.
-if harness_leg 'whole logs are identical across run durations #run'; then
-  for shell_rc in 0 1; do
-    case $shell_rc in
-      0) shell_line='merge-build-check: harness tier passed' ;;
-      1) shell_line='merge-build-check: harness tier FAILED (tools/test-harnesses.sh exit 1)' ;;
-    esac
-    FAKE_SHELL_RC=$shell_rc FAKE_TIER_DELAY=0 R=$BOTH_SCRIPT run "$TMP/dunebin"
-    first_rc=$rc
-    cp "$TMP/out" "$TMP/out-first"
-    FAKE_SHELL_RC=$shell_rc FAKE_TIER_DELAY=2 R=$BOTH_SCRIPT run "$TMP/dunebin"
-    if [ "$first_rc" = "$shell_rc" ] && [ "$rc" = "$shell_rc" ] &&
-       has 'merge-build-check: compile tier passed' && has "$shell_line" &&
-       cmp -s "$TMP/out-first" "$TMP/out"; then
-      report 0 "the same tree prints identical whole logs with shell exit $shell_rc despite different durations"
-    else
-      report 1 "the same tree prints identical whole logs with shell exit $shell_rc despite different durations" \
-        "exits $first_rc, $rc; first: $(cat "$TMP/out-first"); second: $(cat "$TMP/out")"
-    fi
+# ship-pr compares exact log lines from a failed merge and the base alone.
+# Standalone failures and successful ship-pr builds still report their timing.
+if harness_leg 'tier timings and stable ship-pr failure logs #run'; then
+  timing() { grep -qE "^merge-build-check: $1 tier $2 in $3s" "$TMP/out"; }
+  export FAKE_MEMBER_TIMING='HARNESS tools/test-fixture.sh finished in 1s (exit 0)'
+  SHIP_PR_MERGE_BASE_SHA=base SHIP_PR_MERGE_HEAD_SHA=head \
+    FAKE_TIER_DELAY=1 R=$BOTH_SCRIPT run "$TMP/dunebin"
+  if [ "$rc" = 0 ] && timing format passed '[0-9]+' && timing compile passed '[1-9][0-9]*' &&
+     timing tests passed '[0-9]+' && timing harness passed '[1-9][0-9]*' && has "$FAKE_MEMBER_TIMING"; then
+    report 0 'a successful ship-pr build reports all four tier times and the harness member rows'
+  else report 1 'a successful ship-pr build reports all four tier times and the harness member rows' "exit $rc; $(cat "$TMP/out")"; fi
+  FAKE_SHELL_RC=1 FAKE_TIER_DELAY=1 R=$BOTH_SCRIPT run "$TMP/dunebin"
+  if [ "$rc" = 1 ] && timing compile passed '[1-9][0-9]*' && timing harness FAILED '[1-9][0-9]*' &&
+     has 'harness tier FAILED (tools/test-harnesses.sh exit 1)' && has "$FAKE_MEMBER_TIMING"; then
+    report 0 'a standalone failure reports both passed and failed tier times'
+  else report 1 'a standalone failure reports both passed and failed tier times' "exit $rc; $(cat "$TMP/out")"; fi
+  for delay in 0 1; do
+    SHIP_PR_MERGE_BASE_SHA=base SHIP_PR_MERGE_HEAD_SHA=head \
+      FAKE_SHELL_RC=1 FAKE_TIER_DELAY=$delay R=$BOTH_SCRIPT run "$TMP/dunebin"
+    case $delay in 0) first_rc=$rc; cp "$TMP/out" "$TMP/out-first" ;; esac
   done
+  if [ "$first_rc" = 1 ] && [ "$rc" = 1 ] && cmp -s "$TMP/out-first" "$TMP/out" &&
+     ! grep -qE ' tier (passed|FAILED) in [0-9]+s' "$TMP/out" && ! has "$FAKE_MEMBER_TIMING"; then
+    report 0 'failed ship-pr builds produce identical whole logs across different durations'
+  else report 1 'failed ship-pr builds produce identical whole logs across different durations' \
+    "exits $first_rc, $rc; $(diff "$TMP/out-first" "$TMP/out")"; fi
+  unset FAKE_MEMBER_TIMING
+  SHIP_PR_MERGE_BASE_SHA=base SHIP_PR_MERGE_HEAD_SHA=head \
+    FAKE_TERM_DURING_DUNE=1 R=$BOTH_SCRIPT run "$TMP/dunebin"
+  if [ "$rc" = 143 ] && has 'format tier passed' &&
+     ! grep -qE '^merge-build-check: .* tier (passed|FAILED) in [0-9]+s' "$TMP/out"; then
+    report 0 'TERM during a ship-pr compile keeps the completed format timing out of the log'
+  else report 1 'TERM during a ship-pr compile keeps the completed format timing out of the log' \
+    "exit $rc; $(cat "$TMP/out")"; fi
 fi
 
 # The scope. FAKE_REACH stands for the mapping; the fixtures above reach nothing without it, which
@@ -1261,7 +1285,7 @@ build --root . -j 4 $(tr '\n' ' ' <"$TMP/cover-list" | sed 's/ $//')" ] &&
   COVER_SWEEP=$R
   FAKE_LIST=$TMP/cover-list FAKE_NAMED=$TMP/cover-named run "$TMP/dunebin"
   covered "$SWEEP alone runs no harness: $SWEEP_ALIAS, which the tests tier runs, names it" "$SWEEP" "$SWEEP_ALIAS"
-  cp "$TMP/out" "$TMP/cover-merge"
+  sed '/^merge-build-check: passed$/q' "$TMP/out" >"$TMP/cover-merge"
   cover_fixture cover-census "$CENSUS"
   FAKE_LIST=$TMP/cover-list FAKE_NAMED=$TMP/cover-named run "$TMP/dunebin"
   covered "$CENSUS alone runs no harness: $CENSUS_ALIAS, which the tests tier runs, names it" "$CENSUS" "$CENSUS_ALIAS"
@@ -1322,9 +1346,9 @@ build --root . -j 4 $(tr '\n' ' ' <"$TMP/cover-list" | sed 's/ $//')" ] &&
   sha=$(git -C "$COVER_SWEEP" commit-tree 'HEAD^1^{tree}' -p 'HEAD^1' -p 'HEAD^2' -m 'the base alone') &&
     git -C "$COVER_SWEEP" checkout -q --detach "$sha"
   FAKE_LIST=$TMP/cover-list FAKE_NAMED=$TMP/cover-named R=$COVER_SWEEP run "$TMP/dunebin"
-  if [ "$rc" = 0 ] && cmp -s "$TMP/out" "$TMP/cover-merge"; then
+  if [ "$rc" = 0 ] && cmp -s <(sed '/^merge-build-check: passed$/q' "$TMP/out") "$TMP/cover-merge"; then
     report 0 'the build of the base alone reads the same coverage as the merge'
-  else report 1 'the build of the base alone reads the same coverage as the merge' "exit $rc; $(diff "$TMP/cover-merge" "$TMP/out")"; fi
+  else report 1 'the build of the base alone reads the same coverage as the merge' "exit $rc; $(diff "$TMP/cover-merge" <(sed '/^merge-build-check: passed$/q' "$TMP/out"))"; fi
 fi
 
 # The real tools/test-harnesses.sh on the real path of an ask, its `affected --harnesses` a
@@ -1429,29 +1453,23 @@ if harness_leg '--compile-only runs only the Dune setup and compile tier #compil
      has 'compile tier FAILED (dune exit 3)' && ! has 'merge-build-check: passed'; then
     report 0 '--compile-only exits 1 when the compile tier fails'
   else report 1 '--compile-only exits 1 when the compile tier fails' "exit $rc; $(cat "$TMP/record"); $(cat "$TMP/out")"; fi
-  # Whole logs are timing-free across durations and match between merge and base-alone on shared failure.
-  for dune_rc in 0 1; do
-    FAKE_DUNE_RC=$dune_rc FAKE_TIER_DELAY=0 R=$BOTH_SCRIPT run "$TMP/dunebin" --compile-only
-    first_rc=$rc
-    cp "$TMP/out" "$TMP/compile-only-first"
-    FAKE_DUNE_RC=$dune_rc FAKE_TIER_DELAY=1 R=$BOTH_SCRIPT run "$TMP/dunebin" --compile-only
-    if [ "$first_rc" = "$dune_rc" ] && [ "$rc" = "$dune_rc" ] &&
-       cmp -s "$TMP/compile-only-first" "$TMP/out"; then
-      report 0 "--compile-only prints identical whole logs with dune exit $dune_rc across durations"
-    else
-      report 1 "--compile-only prints identical whole logs with dune exit $dune_rc across durations" \
-        "exits $first_rc, $rc; first: $(cat "$TMP/compile-only-first"); second: $(cat "$TMP/out")"
-    fi
-  done
+  # A compile-only recheck observes the same ship-pr failure-log contract.
+  SHIP_PR_MERGE_BASE_SHA=base SHIP_PR_MERGE_HEAD_SHA=head \
+    FAKE_TIER_DELAY=1 R=$BOTH_SCRIPT run "$TMP/dunebin" --compile-only
+  if [ "$rc" = 0 ] && grep -qE '^merge-build-check: compile tier passed in [1-9][0-9]*s$' "$TMP/out"; then
+    report 0 '--compile-only reports the elapsed compile time on success'
+  else report 1 '--compile-only reports the elapsed compile time on success' "exit $rc; $(cat "$TMP/out")"; fi
   fixture compile-only-base-alone
   first x.ml && commit_on base
   git -C "$R" checkout -q side && last x.ml && commit_on side && merge_side
-  FAKE_DUNE_RC=1 run "$TMP/dunebin" --compile-only
+  SHIP_PR_MERGE_BASE_SHA=base SHIP_PR_MERGE_HEAD_SHA=head \
+    FAKE_DUNE_RC=1 run "$TMP/dunebin" --compile-only
   merge_rc=$rc
   cp "$TMP/out" "$TMP/compile-only-merge"
   sha=$(git -C "$R" commit-tree 'HEAD^1^{tree}' -p 'HEAD^1' -p 'HEAD^2' -m 'the base alone') &&
     git -C "$R" checkout -q --detach "$sha"
-  FAKE_DUNE_RC=1 run "$TMP/dunebin" --compile-only
+  SHIP_PR_MERGE_BASE_SHA=base SHIP_PR_MERGE_HEAD_SHA=head \
+    FAKE_DUNE_RC=1 FAKE_TIER_DELAY=1 run "$TMP/dunebin" --compile-only
   if [ "$merge_rc" = 1 ] && [ "$rc" = 1 ] && cmp -s "$TMP/compile-only-merge" "$TMP/out"; then
     report 0 '--compile-only emits identical logs on merge and base-alone for a shared compile failure'
   else

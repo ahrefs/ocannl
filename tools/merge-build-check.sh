@@ -100,9 +100,14 @@
 # about the same change and narrows to the same paths, the reach read from the base's text. A
 # reach the two trees answer differently prints lines the base's log lacks, which ship-pr reads
 # as the merge's own failure: a refusal, never a red waved through as shared. So what this
-# script prints of a run is the same for the same failure: tier lines omit elapsed time
-# (gh-ocannl-1950), and the tests tier prints neither its list nor a count (a PR that adds a
-# test lists one alias more than the base alone does); `--plan` shows the command that lists it.
+# script prints of a failed ship-pr run is the same for the same failure: the timing summary
+# is emitted at exit only on success or on a standalone run (gh-ocannl-1950, gh-ocannl-2433).
+# The summary reports whole seconds for each completed tier and each finished harness member.
+# It covers the tests tier's alias and record reads and the harness tier's scoped attempt and
+# fallback. Initial git and harness selection, toolchain setup and timeout kills are outside it.
+# Use ordinary successful runs to re-measure the tiers when the harness set or per-alias cost
+# grows. The tests tier prints neither its list nor a count (a PR that adds a test lists one
+# alias more than the base alone does); `--plan` shows the command that lists it.
 # The coverage is read the same way: from the tree's own ask, and the alias it names is printed (a
 # dune file the PR changed can name a script the base's does not, a difference that refuses). --all
 # runs the whole harness tier whatever HEAD is. --plan alone prints the tier selection for HEAD
@@ -129,7 +134,7 @@
 # contributes nothing. The trailers, exit statuses and existing list protocol still govern.
 # --compile-only runs the existing Dune setup and the compile tier alone (`dune build --root .
 # @check @test/operations/scans` at the root of the merged tree), with the same command contract,
-# timing-free output and exit statuses as the full run, skipping format, tests, owed-run record
+# timing summary policy and exit statuses as the full run, skipping format, tests, owed-run record
 # reads and harnesses. Configured as `.github/ship-pr-merge-build`'s `recheck` for a moved-base
 # refresh (ship-pr re-runs `plan` before `recheck`, advisory on no-verdict fallback). Cannot be
 # combined with `--plan`, `--plan-merge`, `--base` or `--all` (exit 2).
@@ -559,14 +564,41 @@ find_dune() {
   fi
 }
 
-run_compile_tier() {
-  local rc
-  dune build --root . @check @test/operations/scans || {
-    rc=$?
-    echo "$me: compile tier FAILED (dune exit $rc)" >&2
+# Keep the live verdict lines stable and hold timings until the run's outcome is known.
+finish_tier() { # TIER STARTED [FAILURE]
+  local tier=$1 started=$2
+  local elapsed=$((SECONDS - started))
+  if [ "$#" = 3 ]; then
+    timing_rows+=("$me: $tier tier FAILED in ${elapsed}s ($3)")
+    echo "$me: $tier tier FAILED ($3)" >&2
     exit 1
-  }
-  echo "$me: compile tier passed"
+  fi
+  timing_rows+=("$me: $tier tier passed in ${elapsed}s")
+  echo "$me: $tier tier passed"
+}
+
+finish_run() {
+  local row
+  if [ "$build_passed" = 1 ] || [ -z "${SHIP_PR_MERGE_BASE_SHA:-}" ] || [ -z "${SHIP_PR_MERGE_HEAD_SHA:-}" ]; then
+    for row in ${timing_rows[@]+"${timing_rows[@]}"}; do printf '%s\n' "$row"; done
+    if [ -n "$tests_dir" ] && [ -s "$tests_dir/harness-timings" ]; then
+      cat "$tests_dir/harness-timings"
+    fi
+  fi
+  [ -z "$tests_dir" ] || rm -rf "$tests_dir"
+}
+
+# A signal can enter EXIT with the previous command's zero status.
+pass_build() {
+  echo "$me: passed" || exit $?
+  build_passed=1
+  exit 0
+}
+
+run_compile_tier() {
+  local started=$SECONDS
+  dune build --root . @check @test/operations/scans || finish_tier compile "$started" "dune exit $?"
+  finish_tier compile "$started"
 }
 
 read_tests() {
@@ -700,20 +732,19 @@ if [ "$plan_merge" = 1 ]; then
   merged_plan
   exit $?
 fi
+tests_dir= timing_rows=() build_passed=0
+trap finish_run EXIT
 if [ "$compile_only" = 1 ]; then
   read_parents
   echo "$me: compile tier: dune build @check @test/operations/scans (--compile-only)"
   find_dune
   cd "$root" || exit 1
   run_compile_tier
-  echo "$me: passed"
-  exit 0
+  pass_build
 fi
-tests_dir=$(mktemp -d "${TMPDIR:-/tmp}/merge-build-check.XXXXXX") || {
-  echo "$me: tests tier FAILED (cannot make a scratch directory)" >&2
-  exit 1
-}
-trap 'rm -rf "$tests_dir"' EXIT
+started=$SECONDS
+tests_dir=$(mktemp -d "${TMPDIR:-/tmp}/merge-build-check.XXXXXX") ||
+  finish_tier tests "$started" 'cannot make a scratch directory'
 read_parents
 select_tiers
 show_tiers
@@ -721,17 +752,13 @@ show_tiers
 
 find_dune
 cd "$root" || exit 1
-OCANNL_TOOL_FMT_CHECK_SCANS=0 tools/fmt-check.sh </dev/null || {
-  rc=$?
-  echo "$me: format tier FAILED (tools/fmt-check.sh exit $rc)" >&2
-  exit 1
-}
-echo "$me: format tier passed"
+started=$SECONDS
+OCANNL_TOOL_FMT_CHECK_SCANS=0 tools/fmt-check.sh </dev/null ||
+  finish_tier format "$started" "tools/fmt-check.sh exit $?"
+finish_tier format "$started"
 run_compile_tier
-if ! read_tests; then
-  echo "$me: tests tier FAILED ($tests_why)" >&2
-  exit 1
-fi
+started=$SECONDS
+read_tests || finish_tier tests "$started" "$tests_why"
 if [ ${#needs[@]} -gt 0 ]; then
   [ -z "$tests_owed" ] || echo "$me: tests tier: OWED -- $tests_owed did not run here"
   [ "$train_why" = '' ] || echo "$me: tests tier: OWED -- $train_why"
@@ -742,40 +769,37 @@ if [ ${#needs[@]} -gt 0 ]; then
     show_cross_reason
     # The merged tree, which ship-pr's build of the base alone (the base's tree) never prints: a
     # missing record is the merge's own failure, never a shared red `--override` would pass.
-    echo "$me: tests tier FAILED (no owed-run record for ${head:0:8} admits the merged tree $(git -C "$root" rev-parse 'HEAD^{tree}'): record the run with tools/owed-run.sh record, or waive it with tools/owed-run.sh waive; tools/owed-run.sh exit $rc)" >&2
-    exit 1
+    finish_tier tests "$started" "no owed-run record for ${head:0:8} admits the merged tree $(git -C "$root" rev-parse 'HEAD^{tree}'): record the run with tools/owed-run.sh record, or waive it with tools/owed-run.sh waive; tools/owed-run.sh exit $rc"
   fi
 fi
 if [ "$tests" = list ] && [ -s "$tests_dir/list" ]; then
   targets=()
   while IFS= read -r line; do [ -z "$line" ] || targets+=("$line"); done <"$tests_dir/list"
-  dune build --root . -j "$TEST_JOBS" "${targets[@]}" || {
-    rc=$?
-    echo "$me: tests tier FAILED (dune exit $rc)" >&2
-    exit 1
-  }
+  dune build --root . -j "$TEST_JOBS" "${targets[@]}" ||
+    finish_tier tests "$started" "dune exit $?"
 elif [ "$tests" = list ]; then
   echo "$me: tests tier: the change reaches no per-test alias"
 fi
-echo "$me: tests tier passed"
+finish_tier tests "$started"
 was_pending=$pending
 cover_tier
 show_cover "$was_pending"
 if [ "$harness" = 1 ]; then
+  started=$SECONDS
+  timing_file=$tests_dir/harness-timings
   rc=0
   if [ "$scoped" = 1 ]; then
-    tools/test-harnesses.sh --jobs "$SHELL_JOBS" --affected --files "${asked[@]}" </dev/null || rc=$?
+    OCANNL_TOOL_HARNESS_TIMINGS_FILE=$timing_file \
+      tools/test-harnesses.sh --jobs "$SHELL_JOBS" --affected --files "${asked[@]}" </dev/null || rc=$?
     if [ "$rc" = 2 ]; then
       # Every refusal comes before a member starts, so the whole tier still fits the bound.
       echo "$me: harness tier: the scoped run was refused (exit 2), no member run; running the whole tier"
       scoped=0 rc=0
     fi
   fi
-  [ "$scoped" = 1 ] || tools/test-harnesses.sh --jobs "$SHELL_JOBS" </dev/null || rc=$?
-  if [ "$rc" != 0 ]; then
-    echo "$me: harness tier FAILED (tools/test-harnesses.sh exit $rc)" >&2
-    exit 1
-  fi
-  echo "$me: harness tier passed"
+  [ "$scoped" = 1 ] || OCANNL_TOOL_HARNESS_TIMINGS_FILE=$timing_file \
+    tools/test-harnesses.sh --jobs "$SHELL_JOBS" </dev/null || rc=$?
+  [ "$rc" = 0 ] || finish_tier harness "$started" "tools/test-harnesses.sh exit $rc"
+  finish_tier harness "$started"
 fi
-echo "$me: passed"
+pass_build
