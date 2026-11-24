@@ -1160,8 +1160,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   working directory. Its manifest is the membership CI uses: the toolchain-free job runs
   `--shell`, the formatting job runs `--toolchain` and `--promotion` after installation, and the
   `promotion-floor` job runs `--promotion` again under the Dune that `dune-project`'s
-  `(lang dune X.Y)` declares (gh-ocannl-1215); omitting the group runs all three. Both
-  toolchain-installing jobs set `OCANNL_TOOL_HARNESS_STRICT=1`, under which `harness-support.sh`
+  `(lang dune X.Y)` declares (gh-ocannl-1215); omitting the group runs all three.
+  The floor job has a 20-minute ceiling (staging#2320). Two 15-minute attempts stopped
+  during `test-affected-tests.sh`, after the same isolated fixture controls took about
+  1.4 and 1.6 times as long as on staging#2318. The harness still runs all of its
+  controls at the floor. The refusal-format controls run through `@test/operations/scans`.
+  Both toolchain-installing jobs set `OCANNL_TOOL_HARNESS_STRICT=1`, under which `harness-support.sh`
   reports a skip as a FAIL: a counted skip is right where a host lacks a capability, and a vacuous
   green where the step installed it. setup-ocaml's switch is not on a CI step's PATH, so a harness
   needing `dune` falls back to sourcing `tools/opam-env.sh` before `harness_require dune`; one that

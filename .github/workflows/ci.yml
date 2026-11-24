@@ -1228,7 +1228,8 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'
     name: Promotion harnesses (Dune floor)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Leave room for the complete affected-test harness on slower hosted runners.
+    timeout-minutes: 20
     steps:
     - uses: actions/checkout@v7
       with:
