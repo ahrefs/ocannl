@@ -10,7 +10,9 @@
    stale-anchor class (out-of-range base loop, ambiguous/shadowed base loop, missing static index,
    unminted / out-of-rank / forward minted axis, out-of-range tensor node, mismatched segmentation
    unit count, mismatched [Zeros] segment kind, consumed loop, and failing structural precondition),
-   plus hermeticity of [opt] on refusal. *)
+   plus hermeticity of [opt] on refusal. 5. Single-source minted-role agreement across
+   [Schedule_cache.minted_roles_of_op], [Schedule_cache.of_saved], [Schedule_cache.to_saved], and
+   [Winner_fixture.validate] for every [saved_optop] constructor (gh-ocannl-2454). *)
 
 open Base
 open Stdio
@@ -646,3 +648,251 @@ let () =
     "refused replay after a mutating Split_reduce prelude leaves the caller's traced_store \
      untouched"
     (Result.is_error replay_refused_sr && traced_after_sr = traced_before_sr)
+
+(* --- 5. Single-source minted-role agreement across Schedule_cache and Winner_fixture
+   (gh-ocannl-2454) --- *)
+
+let () =
+  let module SO = Ir.Schedule_outcome in
+  let tn0 = (Ll_test.node_factory ~first_id:9500 ~dims:[||] ()) "mr_r0" in
+  let tn1 = (Ll_test.node_factory ~first_id:9501 ~dims:[| 4 |] ()) "mr_r1" in
+  let tn2 = (Ll_test.node_factory ~first_id:9502 ~dims:[| 4; 8 |] ()) "mr_r2" in
+  let i0 = Idx.get_symbol () and i1 = Idx.get_symbol () and i2 = Idx.get_symbol () in
+  let body =
+    Ll_test.seq
+      (Ll_test.set tn0 [||] (LL.Constant 1.))
+      (Ll_test.seq
+         (Ll_test.set tn1 [| Ll_test.iter i0 |] (LL.Constant 2.))
+         (Ll_test.set tn2 [| Ll_test.iter i0; Ll_test.iter i1 |] (LL.Constant 3.)))
+  in
+  let nest = Ll_test.loop_n i0 4 (Ll_test.loop_n i1 8 (Ll_test.loop_n i2 4 body)) in
+  let synth_opt =
+    Ll_test.optimize_scoped ~materialized:[ tn0; tn1; tn2 ] ~name:"wf_minted_roles" ~raw:nest nest
+  in
+  let canon = SC.canonicalize ~with_placements:false synth_opt in
+  let base_reg = SC.base_registry canon in
+  let ref0 = Option.value_exn (SC.resolve_tn base_reg tn0) in
+  let ref1 = Option.value_exn (SC.resolve_tn base_reg tn1) in
+  let ref2 = Option.value_exn (SC.resolve_tn base_reg tn2) in
+  let minted_syms_of_live : Sched.optop -> Idx.symbol list = function
+    | Sched.Split { outer_index; inner_index; _ } -> [ outer_index; inner_index ]
+    | Sched.Partition { segment_indices; _ } -> segment_indices
+    | Sched.Coalesce { merged; _ } -> [ merged ]
+    | Sched.Expand_zero { indices; _ } -> indices
+    | Sched.Tensorize { lane; _ } -> [ lane ]
+    | Sched.Fold_mma { lane; block; _ } -> [ lane; block ]
+    | Sched.Split_reduce { block_index; inner_index; combine_indices; _ } ->
+        block_index :: inner_index :: combine_indices
+    | Sched.Swap _ | Sched.Retype _ | Sched.Unroll _ | Sched.Pad _ | Sched.Stage _
+    | Sched.Privatize _ | Sched.Fuse_epilogue _ ->
+        []
+  in
+  let all_ops =
+    [
+      SC.Split { axis = SC.Base 0; factor = 2; outer = LL.Serial; inner = LL.Serial };
+      SC.Swap { outer = SC.Base 0; inner = SC.Base 1 };
+      SC.Retype { axis = SC.Base 0; ty = LL.Unrolled };
+      SC.Unroll { axis = SC.Base 0; materialize = false };
+      SC.Partition { axis = SC.Base 0; breakpoints = [] };
+      SC.Partition { axis = SC.Base 0; breakpoints = [ 1; 2 ] };
+      SC.Pad { axis = SC.Base 0; to_multiple_of = 4 };
+      SC.Coalesce { outer = SC.Base 0; inner = SC.Base 1 };
+      SC.Stage
+        {
+          source = ref2;
+          tile_loops = [ SC.Base 0; SC.Base 1 ];
+          shared = true;
+          cooperative = None;
+          hoisted = false;
+          swizzle = None;
+          pad_stride = None;
+          pipeline_depth = None;
+          tile_prec = None;
+        };
+      SC.Privatize { target = ref2; over = SC.Base 0; acc_prec = prec };
+      SC.Expand_zero { tn = ref0 };
+      SC.Expand_zero { tn = ref1 };
+      SC.Expand_zero { tn = ref2 };
+      SC.Tensorize { i = SC.Base 0; j = SC.Base 1; k = SC.Base 2; simd_width = 8; tile = None };
+      SC.Fuse_epilogue { target = ref2; shared = false };
+      SC.Split_reduce { axis = SC.Base 2; target = ref1; num_blocks = 2 };
+      SC.Split_reduce { axis = SC.Base 2; target = ref2; num_blocks = 2 };
+      SC.Fold_mma { query = SC.Base 0; width = 8 };
+    ]
+  in
+  p_all "Schedule_cache.minted_roles_of_op matches of_saved and to_saved for every saved_optop"
+    all_ops ~f:(fun saved_op ->
+      let roles = SC.minted_roles_of_op canon saved_op in
+      let expected_refs = List.map roles ~f:(fun role -> Some (SC.Minted (0, role))) in
+      let live_ops, reg_of = SC.of_saved canon [ saved_op ] in
+      match live_ops with
+      | [ live_op ] ->
+          let syms = minted_syms_of_live live_op in
+          let of_fwd_ok =
+            List.equal (Option.equal SC.equal_sym_ref)
+              (List.map syms ~f:(SC.resolve reg_of))
+              expected_refs
+          in
+          let of_bwd_ok =
+            List.for_all roles ~f:(fun role ->
+                match
+                  SC.of_saved canon
+                    [ saved_op; SC.Retype { axis = SC.Minted (0, role); ty = LL.Serial } ]
+                with
+                | [ _; _ ], _ -> true
+                | _ -> false
+                | exception _ -> false)
+          in
+          let saved_rt, reg_to = SC.to_saved base_reg [ live_op ] in
+          let to_rt_ok = List.equal SC.equal_saved_optop saved_rt [ saved_op ] in
+          let to_fwd_ok =
+            List.equal (Option.equal SC.equal_sym_ref)
+              (List.map syms ~f:(SC.resolve reg_to))
+              expected_refs
+          in
+          of_fwd_ok && of_bwd_ok && to_rt_ok && to_fwd_ok
+      | _ -> false);
+  let boundary_cases =
+    [
+      ( SC.Split { axis = SC.Base 0; factor = 2; outer = LL.Serial; inner = LL.Serial },
+        SC.Coalesce_merged );
+      (SC.Swap { outer = SC.Base 0; inner = SC.Base 1 }, SC.Split_outer);
+      (SC.Partition { axis = SC.Base 0; breakpoints = [] }, SC.Partition_seg 1);
+      (SC.Partition { axis = SC.Base 0; breakpoints = [ 1; 2 ] }, SC.Partition_seg 3);
+      (SC.Coalesce { outer = SC.Base 0; inner = SC.Base 1 }, SC.Split_outer);
+      (SC.Expand_zero { tn = ref0 }, SC.Expand_axis 0);
+      (SC.Expand_zero { tn = ref2 }, SC.Expand_axis 2);
+      ( SC.Tensorize { i = SC.Base 0; j = SC.Base 1; k = SC.Base 2; simd_width = 8; tile = None },
+        SC.Split_outer );
+      (SC.Fold_mma { query = SC.Base 0; width = 8 }, SC.Split_outer);
+      ( SC.Split_reduce { axis = SC.Base 2; target = ref2; num_blocks = 2 },
+        SC.Split_reduce_combine 2 );
+    ]
+  in
+  p_all "unminted role boundary is refused identically by of_saved and Winner_fixture.validate"
+    boundary_cases ~f:(fun (saved_op, bad_role) ->
+      let pair = [ saved_op; SC.Retype { axis = SC.Minted (0, bad_role); ty = LL.Serial } ] in
+      let of_saved_refused =
+        match SC.of_saved canon pair with
+        | _ -> false
+        | exception SO.Cause_at (SO.Transform, SO.Illegal_schedule { check; _ }) ->
+            String.equal check "Schedule_cache.of_saved"
+      in
+      let roles = SC.minted_roles_of_op canon saved_op in
+      let expected_needles =
+        Sexp.to_string (SC.sexp_of_mint_role bad_role)
+        ::
+        (if List.is_empty roles then [ "mints no symbols" ]
+         else List.map roles ~f:(fun r -> Sexp.to_string (SC.sexp_of_mint_role r)))
+      in
+      let wf_refused =
+        match
+          WF.validate ~is_gpu:false ~limits:Ir.Backend_intf.no_hardware_limits
+            { WF.prelude = pair; segments = None }
+            synth_opt
+        with
+        | Error err ->
+            WF.equal_anchor_location err.location WF.Prelude
+            && Option.equal Int.equal err.op_index (Some 1)
+            && List.for_all expected_needles ~f:(fun needle ->
+                String.is_substring (WF.error_to_string err) ~substring:needle)
+        | Ok () -> false
+      in
+      of_saved_refused && wf_refused);
+  let oob_tn_ops =
+    [
+      SC.Expand_zero { tn = -1 };
+      SC.Expand_zero { tn = 99 };
+      SC.Split_reduce { axis = SC.Base 0; target = -1; num_blocks = 2 };
+      SC.Split_reduce { axis = SC.Base 0; target = 99; num_blocks = 2 };
+    ]
+  in
+  p_all "Schedule_cache.minted_roles_of_op raises typed tn_of_ref refusal on out-of-range nodes"
+    oob_tn_ops ~f:(fun op ->
+      match SC.minted_roles_of_op canon op with
+      | _ -> false
+      | exception SO.Cause_at (SO.Transform, SO.Illegal_schedule { check; _ }) ->
+          String.equal check "Schedule_cache.tn_of_ref");
+  p_all "Winner_fixture.validate still refuses out-of-range tn anchors by name before role lookup"
+    [
+      SC.Expand_zero { tn = 99 }; SC.Split_reduce { axis = SC.Base 0; target = 99; num_blocks = 2 };
+    ]
+    ~f:(fun op ->
+      refused_naming ~loc:WF.Prelude ~needles:[ "tn 99"; "does not exist" ]
+        (WF.validate ~is_gpu:false ~limits:Ir.Backend_intf.no_hardware_limits
+           { WF.prelude = [ op ]; segments = None }
+           synth_opt));
+  p
+    "Schedule_cache.to_saved rejects a hand-built op whose minted symbol count disagrees with its \
+     roles"
+    (match SC.to_saved base_reg [ Sched.Expand_zero { tn = tn2; indices = [] } ] with
+    | _ -> false
+    | exception Invalid_argument msg -> String.is_substring msg ~substring:"minted 0 symbol(s)");
+  (* Pin persisted role-to-field bindings independently of [minted_roles_of_op] so swapping two
+     roles in the shared helper cannot silently redirect cached references to the wrong live
+     loop. *)
+  let resolves_to saved_op role expected_sym =
+    match
+      SC.of_saved canon [ saved_op; SC.Retype { axis = SC.Minted (0, role); ty = LL.Serial } ]
+    with
+    | [ live_op; Sched.Retype { axis; _ } ], _ -> Idx.equal_symbol axis (expected_sym live_op)
+    | _ -> false
+  in
+  let role_binding_cases =
+    [
+      ( SC.Split { axis = SC.Base 0; factor = 2; outer = LL.Serial; inner = LL.Serial },
+        SC.Split_outer,
+        function Sched.Split { outer_index; _ } -> outer_index | _ -> assert false );
+      ( SC.Split { axis = SC.Base 0; factor = 2; outer = LL.Serial; inner = LL.Serial },
+        SC.Split_inner,
+        function Sched.Split { inner_index; _ } -> inner_index | _ -> assert false );
+      ( SC.Partition { axis = SC.Base 0; breakpoints = [ 1; 2 ] },
+        SC.Partition_seg 0,
+        function
+        | Sched.Partition { segment_indices; _ } -> List.nth_exn segment_indices 0
+        | _ -> assert false );
+      ( SC.Partition { axis = SC.Base 0; breakpoints = [ 1; 2 ] },
+        SC.Partition_seg 2,
+        function
+        | Sched.Partition { segment_indices; _ } -> List.nth_exn segment_indices 2
+        | _ -> assert false );
+      ( SC.Coalesce { outer = SC.Base 0; inner = SC.Base 1 },
+        SC.Coalesce_merged,
+        function Sched.Coalesce { merged; _ } -> merged | _ -> assert false );
+      ( SC.Expand_zero { tn = ref2 },
+        SC.Expand_axis 0,
+        function Sched.Expand_zero { indices; _ } -> List.nth_exn indices 0 | _ -> assert false );
+      ( SC.Expand_zero { tn = ref2 },
+        SC.Expand_axis 1,
+        function Sched.Expand_zero { indices; _ } -> List.nth_exn indices 1 | _ -> assert false );
+      ( SC.Tensorize { i = SC.Base 0; j = SC.Base 1; k = SC.Base 2; simd_width = 8; tile = None },
+        SC.Tensorize_lane,
+        function Sched.Tensorize { lane; _ } -> lane | _ -> assert false );
+      ( SC.Fold_mma { query = SC.Base 0; width = 8 },
+        SC.Fold_mma_lane,
+        function Sched.Fold_mma { lane; _ } -> lane | _ -> assert false );
+      ( SC.Fold_mma { query = SC.Base 0; width = 8 },
+        SC.Fold_mma_block,
+        function Sched.Fold_mma { block; _ } -> block | _ -> assert false );
+      ( SC.Split_reduce { axis = SC.Base 2; target = ref2; num_blocks = 2 },
+        SC.Split_reduce_block,
+        function Sched.Split_reduce { block_index; _ } -> block_index | _ -> assert false );
+      ( SC.Split_reduce { axis = SC.Base 2; target = ref2; num_blocks = 2 },
+        SC.Split_reduce_inner,
+        function Sched.Split_reduce { inner_index; _ } -> inner_index | _ -> assert false );
+      ( SC.Split_reduce { axis = SC.Base 2; target = ref2; num_blocks = 2 },
+        SC.Split_reduce_combine 0,
+        function
+        | Sched.Split_reduce { combine_indices; _ } -> List.nth_exn combine_indices 0
+        | _ -> assert false );
+      ( SC.Split_reduce { axis = SC.Base 2; target = ref2; num_blocks = 2 },
+        SC.Split_reduce_combine 1,
+        function
+        | Sched.Split_reduce { combine_indices; _ } -> List.nth_exn combine_indices 1
+        | _ -> assert false );
+    ]
+  in
+  p_all
+    "persisted mint_role values resolve to their named live op fields independently of role order"
+    role_binding_cases ~f:(fun (saved_op, role, expected_sym) ->
+      resolves_to saved_op role expected_sym)

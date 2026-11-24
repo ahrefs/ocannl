@@ -409,34 +409,65 @@ let unresolve_exn r sref =
         (Printf.sprintf "Schedule_cache.of_saved: dangling reference %s"
            (Sexp.to_string (sexp_of_sym_ref sref)))
 
+let minted_roles_of_op canonical (saved_op : saved_optop) : mint_role list =
+  match saved_op with
+  | Split _ -> [ Split_outer; Split_inner ]
+  | Partition { breakpoints; _ } ->
+      List.init (List.length breakpoints + 1) ~f:(fun j -> Partition_seg j)
+  | Coalesce _ -> [ Coalesce_merged ]
+  | Expand_zero { tn } ->
+      let rank = Array.length (Lazy.force (tn_of_ref canonical tn).Tn.dims) in
+      List.init rank ~f:(fun j -> Expand_axis j)
+  | Tensorize _ -> [ Tensorize_lane ]
+  | Fold_mma _ -> [ Fold_mma_lane; Fold_mma_block ]
+  | Split_reduce { target; _ } ->
+      let rank = Array.length (Lazy.force (tn_of_ref canonical target).Tn.dims) in
+      Split_reduce_block :: Split_reduce_inner
+      :: List.init rank ~f:(fun j -> Split_reduce_combine j)
+  | Swap _ | Retype _ | Unroll _ | Pad _ | Stage _ | Privatize _ | Fuse_epilogue _ -> []
+
+let minted_syms_of_op : Schedule.optop -> Idx.symbol list = function
+  | Schedule.Split { outer_index; inner_index; _ } -> [ outer_index; inner_index ]
+  | Schedule.Partition { segment_indices; _ } -> segment_indices
+  | Schedule.Coalesce { merged; _ } -> [ merged ]
+  | Schedule.Expand_zero { indices; _ } -> indices
+  | Schedule.Tensorize { lane; _ } -> [ lane ]
+  | Schedule.Fold_mma { lane; block; _ } -> [ lane; block ]
+  | Schedule.Split_reduce { block_index; inner_index; combine_indices; _ } ->
+      block_index :: inner_index :: combine_indices
+  | Schedule.Swap _ | Schedule.Retype _ | Schedule.Unroll _ | Schedule.Pad _ | Schedule.Stage _
+  | Schedule.Privatize _ | Schedule.Fuse_epilogue _ ->
+      []
+
+let record_minted ~where ~op_idx r roles syms =
+  match
+    List.fold2 roles syms ~init:r ~f:(fun r role sym -> record r sym (Minted (op_idx, role)))
+  with
+  | Ok r -> r
+  | Unequal_lengths ->
+      invalid_arg
+        (Printf.sprintf "Schedule_cache.%s: op #%d minted %d symbol(s), expected %d role(s)" where
+           op_idx (List.length syms) (List.length roles))
+
 let to_saved r (sched : Schedule.schedule) : saved_schedule * registry =
   let r, rev_saved =
     List.fold sched ~init:(r, []) ~f:(fun (r, acc) op ->
         let idx = r.n_ops in
-        let r, saved =
+        let saved =
           match op with
-          | Schedule.Split { axis; factor; outer; inner; outer_index; inner_index } ->
-              let saved = Split { axis = resolve_exn r axis; factor; outer; inner } in
-              let r = record r outer_index (Minted (idx, Split_outer)) in
-              let r = record r inner_index (Minted (idx, Split_inner)) in
-              (r, saved)
+          | Schedule.Split { axis; factor; outer; inner; outer_index = _; inner_index = _ } ->
+              Split { axis = resolve_exn r axis; factor; outer; inner }
           | Schedule.Swap { outer; inner } ->
-              (r, Swap { outer = resolve_exn r outer; inner = resolve_exn r inner })
-          | Schedule.Retype { axis; ty } -> (r, Retype { axis = resolve_exn r axis; ty })
+              Swap { outer = resolve_exn r outer; inner = resolve_exn r inner }
+          | Schedule.Retype { axis; ty } -> Retype { axis = resolve_exn r axis; ty }
           | Schedule.Unroll { axis; materialize } ->
-              (r, Unroll { axis = resolve_exn r axis; materialize })
-          | Schedule.Partition { axis; breakpoints; segment_indices } ->
-              let saved = Partition { axis = resolve_exn r axis; breakpoints } in
-              let r =
-                List.foldi segment_indices ~init:r ~f:(fun j r s ->
-                    record r s (Minted (idx, Partition_seg j)))
-              in
-              (r, saved)
+              Unroll { axis = resolve_exn r axis; materialize }
+          | Schedule.Partition { axis; breakpoints; segment_indices = _ } ->
+              Partition { axis = resolve_exn r axis; breakpoints }
           | Schedule.Pad { axis; to_multiple_of } ->
-              (r, Pad { axis = resolve_exn r axis; to_multiple_of })
-          | Schedule.Coalesce { outer; inner; merged } ->
-              let saved = Coalesce { outer = resolve_exn r outer; inner = resolve_exn r inner } in
-              (record r merged (Minted (idx, Coalesce_merged)), saved)
+              Pad { axis = resolve_exn r axis; to_multiple_of }
+          | Schedule.Coalesce { outer; inner; merged = _ } ->
+              Coalesce { outer = resolve_exn r outer; inner = resolve_exn r inner }
           | Schedule.Stage
               {
                 source;
@@ -449,61 +480,36 @@ let to_saved r (sched : Schedule.schedule) : saved_schedule * registry =
                 pipeline_depth;
                 tile_prec;
               } ->
-              ( r,
-                Stage
-                  {
-                    source = resolve_tn_exn r source;
-                    tile_loops = List.map tile_loops ~f:(resolve_exn r);
-                    shared;
-                    cooperative;
-                    hoisted;
-                    swizzle;
-                    pad_stride;
-                    pipeline_depth = (if pipeline_depth = 1 then None else Some pipeline_depth);
-                    tile_prec;
-                  } )
+              Stage
+                {
+                  source = resolve_tn_exn r source;
+                  tile_loops = List.map tile_loops ~f:(resolve_exn r);
+                  shared;
+                  cooperative;
+                  hoisted;
+                  swizzle;
+                  pad_stride;
+                  pipeline_depth = (if pipeline_depth = 1 then None else Some pipeline_depth);
+                  tile_prec;
+                }
           | Schedule.Privatize { target; over; acc_prec } ->
-              ( r,
-                Privatize { target = resolve_tn_exn r target; over = resolve_exn r over; acc_prec }
-              )
-          | Schedule.Expand_zero { tn; indices } ->
-              let r =
-                List.foldi indices ~init:r ~f:(fun j r s ->
-                    record r s (Minted (idx, Expand_axis j)))
-              in
-              (r, Expand_zero { tn = resolve_tn_exn r tn })
-          | Schedule.Tensorize { i; j; k; lane; simd_width; tile } ->
-              let saved =
-                Tensorize
-                  {
-                    i = resolve_exn r i;
-                    j = resolve_exn r j;
-                    k = resolve_exn r k;
-                    simd_width;
-                    tile;
-                  }
-              in
-              (record r lane (Minted (idx, Tensorize_lane)), saved)
+              Privatize { target = resolve_tn_exn r target; over = resolve_exn r over; acc_prec }
+          | Schedule.Expand_zero { tn; indices = _ } -> Expand_zero { tn = resolve_tn_exn r tn }
+          | Schedule.Tensorize { i; j; k; lane = _; simd_width; tile } ->
+              Tensorize
+                { i = resolve_exn r i; j = resolve_exn r j; k = resolve_exn r k; simd_width; tile }
           | Schedule.Fuse_epilogue { target; shared } ->
-              (r, Fuse_epilogue { target = resolve_tn_exn r target; shared })
-          | Schedule.Fold_mma { query; lane; block; width } ->
-              let saved = Fold_mma { query = resolve_exn r query; width } in
-              let r = record r lane (Minted (idx, Fold_mma_lane)) in
-              (record r block (Minted (idx, Fold_mma_block)), saved)
+              Fuse_epilogue { target = resolve_tn_exn r target; shared }
+          | Schedule.Fold_mma { query; lane = _; block = _; width } ->
+              Fold_mma { query = resolve_exn r query; width }
           | Schedule.Split_reduce
-              { axis; target; num_blocks; block_index; inner_index; combine_indices } ->
-              let saved =
-                Split_reduce
-                  { axis = resolve_exn r axis; target = resolve_tn_exn r target; num_blocks }
-              in
-              let r = record r block_index (Minted (idx, Split_reduce_block)) in
-              let r = record r inner_index (Minted (idx, Split_reduce_inner)) in
-              let r =
-                List.foldi combine_indices ~init:r ~f:(fun j r s ->
-                    record r s (Minted (idx, Split_reduce_combine j)))
-              in
-              (r, saved)
+              { axis; target; num_blocks; block_index = _; inner_index = _; combine_indices = _ } ->
+              Split_reduce
+                { axis = resolve_exn r axis; target = resolve_tn_exn r target; num_blocks }
         in
+        let roles = minted_roles_of_op r.canonical saved in
+        let syms = minted_syms_of_op op in
+        let r = record_minted ~where:"to_saved" ~op_idx:idx r roles syms in
         ({ r with n_ops = idx + 1 }, saved :: acc))
   in
   (List.rev rev_saved, r)
@@ -514,36 +520,26 @@ let of_saved canonical (saved : saved_schedule) : Schedule.schedule * registry =
       ~init:(base_registry canonical, [])
       ~f:(fun (r, acc) saved_op ->
         let idx = r.n_ops in
-        let r, op =
+        let op =
           match saved_op with
           | Split { axis; factor; outer; inner } ->
-              let op, outer_index, inner_index =
-                Schedule.split ~axis:(unresolve_exn r axis) ~factor ~outer ~inner
-              in
-              let r = record r outer_index (Minted (idx, Split_outer)) in
-              let r = record r inner_index (Minted (idx, Split_inner)) in
-              (r, op)
+              let op, _, _ = Schedule.split ~axis:(unresolve_exn r axis) ~factor ~outer ~inner in
+              op
           | Swap { outer; inner } ->
-              (r, Schedule.Swap { outer = unresolve_exn r outer; inner = unresolve_exn r inner })
-          | Retype { axis; ty } -> (r, Schedule.Retype { axis = unresolve_exn r axis; ty })
+              Schedule.Swap { outer = unresolve_exn r outer; inner = unresolve_exn r inner }
+          | Retype { axis; ty } -> Schedule.Retype { axis = unresolve_exn r axis; ty }
           | Unroll { axis; materialize } ->
-              (r, Schedule.Unroll { axis = unresolve_exn r axis; materialize })
+              Schedule.Unroll { axis = unresolve_exn r axis; materialize }
           | Partition { axis; breakpoints } ->
-              let op, segment_indices =
-                Schedule.partition ~axis:(unresolve_exn r axis) ~breakpoints
-              in
-              let r =
-                List.foldi segment_indices ~init:r ~f:(fun j r s ->
-                    record r s (Minted (idx, Partition_seg j)))
-              in
-              (r, op)
+              let op, _ = Schedule.partition ~axis:(unresolve_exn r axis) ~breakpoints in
+              op
           | Pad { axis; to_multiple_of } ->
-              (r, Schedule.Pad { axis = unresolve_exn r axis; to_multiple_of })
+              Schedule.Pad { axis = unresolve_exn r axis; to_multiple_of }
           | Coalesce { outer; inner } ->
-              let op, merged =
+              let op, _ =
                 Schedule.coalesce ~outer:(unresolve_exn r outer) ~inner:(unresolve_exn r inner)
               in
-              (record r merged (Minted (idx, Coalesce_merged)), op)
+              op
           | Stage
               {
                 source;
@@ -556,55 +552,45 @@ let of_saved canonical (saved : saved_schedule) : Schedule.schedule * registry =
                 pipeline_depth;
                 tile_prec;
               } ->
-              ( r,
-                Schedule.Stage
-                  {
-                    source = tn_of_ref canonical source;
-                    tile_loops = List.map tile_loops ~f:(unresolve_exn r);
-                    shared;
-                    cooperative;
-                    hoisted;
-                    swizzle;
-                    pad_stride;
-                    pipeline_depth = Option.value pipeline_depth ~default:1;
-                    tile_prec;
-                  } )
+              Schedule.Stage
+                {
+                  source = tn_of_ref canonical source;
+                  tile_loops = List.map tile_loops ~f:(unresolve_exn r);
+                  shared;
+                  cooperative;
+                  hoisted;
+                  swizzle;
+                  pad_stride;
+                  pipeline_depth = Option.value pipeline_depth ~default:1;
+                  tile_prec;
+                }
           | Privatize { target; over; acc_prec } ->
-              ( r,
-                Schedule.Privatize
-                  { target = tn_of_ref canonical target; over = unresolve_exn r over; acc_prec } )
+              Schedule.Privatize
+                { target = tn_of_ref canonical target; over = unresolve_exn r over; acc_prec }
           | Expand_zero { tn } ->
-              let op, indices = Schedule.expand_zero ~tn:(tn_of_ref canonical tn) in
-              let r =
-                List.foldi indices ~init:r ~f:(fun j r s ->
-                    record r s (Minted (idx, Expand_axis j)))
-              in
-              (r, op)
+              let op, _ = Schedule.expand_zero ~tn:(tn_of_ref canonical tn) in
+              op
           | Tensorize { i; j; k; simd_width; tile } ->
-              let op, lane =
+              let op, _ =
                 Schedule.tensorize ?tile ~i:(unresolve_exn r i) ~j:(unresolve_exn r j)
                   ~k:(unresolve_exn r k) ~simd_width ()
               in
-              (record r lane (Minted (idx, Tensorize_lane)), op)
+              op
           | Fuse_epilogue { target; shared } ->
-              (r, Schedule.Fuse_epilogue { target = tn_of_ref canonical target; shared })
+              Schedule.Fuse_epilogue { target = tn_of_ref canonical target; shared }
           | Fold_mma { query; width } ->
-              let op, lane, block = Schedule.fold_mma ~query:(unresolve_exn r query) ~width in
-              let r = record r lane (Minted (idx, Fold_mma_lane)) in
-              (record r block (Minted (idx, Fold_mma_block)), op)
+              let op, _, _ = Schedule.fold_mma ~query:(unresolve_exn r query) ~width in
+              op
           | Split_reduce { axis; target; num_blocks } ->
-              let op, block_index, inner_index, combine_indices =
+              let op, _, _, _ =
                 Schedule.split_reduce ~axis:(unresolve_exn r axis)
                   ~target:(tn_of_ref canonical target) ~num_blocks
               in
-              let r = record r block_index (Minted (idx, Split_reduce_block)) in
-              let r = record r inner_index (Minted (idx, Split_reduce_inner)) in
-              let r =
-                List.foldi combine_indices ~init:r ~f:(fun j r s ->
-                    record r s (Minted (idx, Split_reduce_combine j)))
-              in
-              (r, op)
+              op
         in
+        let roles = minted_roles_of_op canonical saved_op in
+        let syms = minted_syms_of_op op in
+        let r = record_minted ~where:"of_saved" ~op_idx:idx r roles syms in
         ({ r with n_ops = idx + 1 }, op :: acc))
   in
   (List.rev rev_sched, r)

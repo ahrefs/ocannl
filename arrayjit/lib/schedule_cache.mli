@@ -223,6 +223,14 @@ val of_saved : canonical -> saved_schedule -> Schedule.schedule * registry
     refusal, so a cache replay declines into a re-search instead of ending [Autotune.tune] under
     strict failure classification (gh-ocannl-1242). *)
 
+val minted_roles_of_op : canonical -> saved_optop -> mint_role list
+(** The {!mint_role}s minted by a single saved op against [canonical], in the order {!of_saved} and
+    {!to_saved} record them (empty for ops that mint no symbols). Shared with {!of_saved} and
+    {!to_saved} so pre-replay validators read one source of truth rather than mirroring the table.
+    For tensor-node-indexed ops ([Expand_zero], [Split_reduce]), resolves the node through
+    {!tn_of_ref} to read its rank, raising the same typed [Illegal_schedule] refusal on an
+    out-of-range index. *)
+
 (** {2 The disk cache} *)
 
 val numerics_tag : unit -> string
