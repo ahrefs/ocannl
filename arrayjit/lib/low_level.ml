@@ -6556,6 +6556,19 @@ let rec mentions_rng_conversion (llsc : scalar_t) =
   | Constant_bits _ | Embed_index _ ->
       false
 
+let rec rendered_store_prec ~comp_prec ~store_prec (llsc : scalar_t) =
+  match llsc with
+  | Get _ | Get_dynamic _ | Get_merge_buffer _ | Get_local _ | Local_scope _ | Constant _
+  | Constant_bits _ | Embed_index _ ->
+      store_prec
+  (* Check before peeling a projection to preserve the pin for the whole expression. *)
+  | _ when mentions_rng_conversion llsc -> store_prec
+  | Unop (Ops.Identity, (v, _)) | Binop (Ops.Arg1, (v, _), _) | Binop (Ops.Arg2, _, (v, _)) ->
+      rendered_store_prec ~comp_prec ~store_prec v
+  (* The explicit conversion is followed only by a copy, as in the scope it replaces. *)
+  | Unop (Ops.Round_prec, _) -> store_prec
+  | Unop _ | Binop _ | Ternop _ -> comp_prec store_prec
+
 (* C [int] ([bool] on Metal) whatever the precision it renders at: a truth, and arithmetic over
    nothing else. Exact in every float, so rounding it is the identity, but C divides two of them as
    integers. *)
@@ -13643,18 +13656,18 @@ let lane_bounds_violation ?(comp_prec = Fn.id) (llc : t) : string option =
             scalar ~tn:(Some cr.prev.tn) ~scope:None ~prec:(tn_prec cr.prev.tn) cr.init);
         stmt ~within body
     | Set { tn; llsc; _ } ->
-        let store_prec = tn_prec tn in
-        let prec = if mentions_rng_conversion llsc then store_prec else comp_prec store_prec in
+        let prec = rendered_store_prec ~comp_prec ~store_prec:(tn_prec tn) llsc in
         scalar ~tn:(Some tn) ~scope:None ~prec llsc
     | Set_dynamic { tn; dyn_value = v, vp; llsc; _ } ->
         scalar ~tn:(Some tn) ~scope:None ~prec:vp v;
-        let store_prec = tn_prec tn in
-        let prec = if mentions_rng_conversion llsc then store_prec else comp_prec store_prec in
+        let prec = rendered_store_prec ~comp_prec ~store_prec:(tn_prec tn) llsc in
         scalar ~tn:(Some tn) ~scope:None ~prec llsc
     | Set_from_vec { tn; vec_unop; arg = a, ap; _ } ->
         let prec = if Ops.is_homogeneous_prec_vec_unop vec_unop then tn_prec tn else ap in
         scalar ~tn:(Some tn) ~scope:None ~prec a
     | Set_local (id, v) ->
+        (* The renderer's scope census pins the declaration and assignments to storage wherever an
+           RHS mentions a draw. Nested scopes and heterogeneous operands have their own rules. *)
         let prec = tn_prec id.tn in
         let tn, scope =
           match within with Some outer -> (outer, Some id.tn) | None -> (Some id.tn, None)

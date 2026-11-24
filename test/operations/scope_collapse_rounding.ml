@@ -603,6 +603,77 @@ let wide_draw ~name ~scope =
   let inputs = if on_cpu then Array.create ~len:n 0. else bf_inputs n in
   (o, [ (x_tn, inputs) ], out)
 
+(* A [Where] condition evaluates in single at either destination precision. Inlining its draw leaves
+   the condition's generator alone but makes the draw visible to the store's RNG test. When half
+   arithmetic would widen, pinning the selected subtraction to half rounds off the residual before
+   it can be measured. The comparison checks the draw itself and selects a distinct sentinel for a
+   lane mismatch. *)
+let packed_draw_at_store ~policy =
+  List.iter [ f32; half ] ~f:(fun store ->
+      let same_store = Ops.equal_prec store f32 in
+      let format = Ops.prec_string store in
+      let name = routine_name "packed_draw" format policy in
+      let s, i, tns = statement_nodes ~name [ f32; store; store; store ] in
+      let packed, scoped, materialized, unscoped =
+        match tns with [ a; b; c; d ] -> (a, b, c, d) | _ -> assert false
+      in
+      let u4 = Ops.uint4x32 in
+      let block =
+        LL.Binop
+          (Ops.Threefry4x32_light, (LL.Constant_bits 7L, u4), (LL.Embed_index (Ll_test.fixed 3), u4))
+      in
+      let draw =
+        LL.Binop
+          (Ops.Uint4x32_to_prec_uniform_lane, (block, u4), (Ll_test.embed s, Ops.index_prec ()))
+      in
+      let ref_draw = Ll_test.get packed i in
+      let mid = plain_scope ~orig_indices:i (fnode (name ^ "_mid")) draw in
+      let write out value =
+        let cond = LL.Binop (Ops.Cmpeq, (value, f32), (ref_draw, f32)) in
+        let half_draw = LL.Unop (Ops.Round_prec, (ref_draw, half)) in
+        let residual = LL.Binop (Ops.Sub, (ref_draw, f32), (half_draw, store)) in
+        Ll_test.set out i
+          (LL.Ternop (Ops.Where, (cond, f32), (residual, store), (Ll_test.c (-1.), store)))
+      in
+      let simplified = LL.simplify_llc [] (write scoped mid) in
+      let scopes =
+        Ll_test.count_scalar simplified ~f:(function LL.Local_scope _ -> true | _ -> false)
+      in
+      let program candidate =
+        LL.unflat_lines
+          [
+            Ll_test.set_from_vec ~length:n ~vec_unop:Ops.Uint4x32_to_prec_uniform packed
+              [| Ll_test.fixed 0 |]
+              (block, u4);
+            Ll_test.loop_n s n
+              (LL.unflat_lines [ candidate; write materialized ref_draw; write unscoped draw ]);
+          ]
+      in
+      let optimized =
+        Ll_test.optimize_scoped ~name ~raw:(program (write scoped ref_draw)) (program simplified)
+      in
+      match
+        Ll_test.execute ~name optimized ~seed:[] ~read:[ packed; scoped; materialized; unscoped ]
+      with
+      | [ draws; actual; reference; inlined ] ->
+          let no_residual = Array.create ~len:n 0. in
+          let widened = (not same_store) && Ops.equal_prec (compute store) f32 in
+          (* Single equality is bitwise for these positive, finite values. *)
+          p_all ~min:n (format ^ ": the reference lanes are positive finite draws")
+            (Array.to_list draws) ~f:(fun x -> Float.(0. < x && x < 1.));
+          p
+            (format ^ ": the scoped packed draw matches the materialized draw bitwise")
+            (Array.length reference = n && same_bits actual reference);
+          p
+            (format ^ ": the packed draw scope stays exactly when the store precision differs")
+            (scopes = if same_store then 0 else 1);
+          p
+            (format ^ ": the residual distinguishes early half rounding exactly when expected")
+            (Bool.equal (same_bits reference no_residual) (not (same_store || widened))
+            && Bool.equal (same_bits reference inlined) (not widened)
+            && Bool.equal (same_bits inlined no_residual) (not same_store))
+      | _ -> assert false)
+
 (* A scope in a [Where] condition: the condition has a precision of its own, so the walk does not
    follow it, and the scope stays whatever the arms do. *)
 let where_condition ~name ~scope =
@@ -863,6 +934,7 @@ let () =
           must_agree "recip" ~policy ~collapses:(collapses narrow_product) reciprocal;
           must_agree "exposed_update" ~policy exposed_update;
           must_agree "draw" ~policy wide_draw;
+          packed_draw_at_store ~policy;
           must_agree "where" ~policy where_condition;
           must_agree "nested" ~policy ~collapses:(collapses narrow_product) nested;
           must_agree "root_product" ~policy ~collapses:(collapses wide_product)

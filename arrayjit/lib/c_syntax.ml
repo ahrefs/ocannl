@@ -4257,10 +4257,6 @@ module C_syntax (B : C_syntax_config) = struct
                (Ops.prec_string (comp_prec p))
                (Ops.prec_string p)))
 
-  (* An RNG conversion anywhere in an expression pins its rendering to the target's storage
-     precision: the generator is selected by the precision the conversion renders at, which
-     [pp_scalar] inherits from its enclosing operator ({!Low_level.mentions_rng_conversion}, shared
-     with [Schedule.Privatize]'s tile precision). *)
   let mentions_rng_conversion = Low_level.mentions_rng_conversion
 
   (* gh-ocannl-682's storage pin — an RNG-bearing update keeps a storage-width accumulator in every
@@ -4274,29 +4270,10 @@ module C_syntax (B : C_syntax_config) = struct
      is wider than storage. Where the two coincide (f32/f64 storage, and every backend that does not
      widen) there is no divergence to guard against. *)
 
-  (* Whether the value of a [Set] renders directly at the target's storage precision, bypassing
-     [comp_prec]. True when the rendering contains no operator, so there is no intermediate to keep
-     wide -- a copy, a constant, a scope-local read -- and whenever an RNG conversion appears
-     anywhere in it. Rendering [x = <narrow y read at f32>] through the store's narrowing conversion
-     would be bitwise the same (widening is exact and narrowing an exactly-representable value is
-     the identity), but it spells a copy loop -- the very shape narrow storage exists to speed up --
-     as a round-trip through f32 that no C compiler folds away. *)
-  let rec renders_at_store_prec (llsc : Low_level.scalar_t) =
-    match llsc with
-    | Low_level.Get _ | Get_dynamic _ | Get_merge_buffer _ | Get_local _ | Local_scope _
-    | Constant _ | Constant_bits _ | Embed_index _ ->
-        true
-    | _ when mentions_rng_conversion llsc -> true
-    | Unop (Ops.Identity, (v, _)) -> renders_at_store_prec v
-    (* Its one step is to [t], and from there a copy, as the scope it replaces was. *)
-    | Unop (Ops.Round_prec, _) -> true
-    | Binop (Ops.Arg1, (v, _), _) | Binop (Ops.Arg2, _, (v, _)) -> renders_at_store_prec v
-    | Unop _ | Binop _ | Ternop _ -> false
-
   (* The precision a [Set]/[Set_dynamic] value expression renders at, and the conversion wrapping it
      back to the target's storage precision (empty when they coincide). *)
   let store_precs ~store_prec llsc =
-    let prec = if renders_at_store_prec llsc then store_prec else comp_prec store_prec in
+    let prec = Low_level.rendered_store_prec ~comp_prec ~store_prec llsc in
     (prec, B.convert_precision ~from:prec ~to_:store_prec)
 
   (* gh-ocannl-696: the two assignments a [Scan_loop] renders for one carried scalar besides the
@@ -4703,7 +4680,7 @@ module C_syntax (B : C_syntax_config) = struct
      identity there, so render time knows nothing [Low_level.integer_scope_exact] did not.
 
      This is a pass, not an arm of [pp_scalar], because everything that pattern-matches a statement
-     has to read the same tree: [scalar_mentions], [no_written_reads], [renders_at_store_prec],
+     has to read the same tree: [scalar_mentions], [no_written_reads], [store_precs],
      [has_accumulation], [decide_accum_width], [blend_for]. Nothing else may be read off it: the
      caller's [Low_level.optimized] and the [.ll] output keep the scope. Exact means bitwise under
      the compile's contraction licence, as every same-precision collapse in [simplify_llc] is: an
@@ -4717,8 +4694,8 @@ module C_syntax (B : C_syntax_config) = struct
      [integer_op].
 
      Why each refusal: a draw renders at the store holding it, and [mentions_rng_conversion] stops
-     at a scope, so a collapsed one would flip the statement's [renders_at_store_prec]. A scope with
-     a [Get_local] reader is shared, a scan's carried state among them ({!get_local_read_ids}). *)
+     at a scope, so a collapsed one can change the statement's [store_precs]. A scope with a
+     [Get_local] reader is shared, a scan's carried state among them ({!get_local_read_ids}). *)
   let exact_scope_collapse ~slot (id : Low_level.scope_id) value =
     let scope_prec = scope_prec_in ~accum_scope_ids id in
     Ops.is_float scope_prec && Ops.equal_prec scope_prec slot
@@ -7466,21 +7443,21 @@ module C_syntax (B : C_syntax_config) = struct
            A [Set_local] that does NOT read its own local is an INIT — the inlined image of a
            separate source assignment — and renders as that assignment's store would: at [comp_prec]
            (the rng carve-out rides [scope_prec_of]'s storage pin), converted once into the scope's
-           residency. A cast is a copy, so its store renders at storage precision
-           ([renders_at_store_prec]), and so does its init (gh-ocannl-1956): through [comp_prec], an
-           f64 source would round to f32 and then to fp8, where the store's [double_to_fp8] is one
-           step. The same holds for a narrowing init of a scope that also updates itself
-           (gh-ocannl-2076): an accumulator opened by [s =: src] over a wider [src] keeps its wide
-           residency, and its init renders at storage precision, rounding as the materialized store
-           does, then widens exactly into the residency. Where scope and compute precision coincide
-           (the CPU backends, non-accumulator scopes) this is the identity, and the store's
-           narrowing is the part the init does not repeat (gh-ocannl-517), except for a cast, whose
-           residency is its storage precision (gh-ocannl-1866); where an accumulator resides wider
-           than the arithmetic (gh-ocannl-663), it preserves the initializer's own per-assignment
-           rounding — e.g. a virtual bf16 node initialized by [a + b] and then reduced narrows the
-           init to bf16 exactly as its materialized twin's store does, instead of leaking f32
-           residency into a different source assignment's semantics (Codex P2 round 3 on PR #396;
-           the provenance boundary of gh-ocannl-639's adjacent-accumulations rule). *)
+           residency. A cast is a copy, so its store renders at storage precision ([store_precs]),
+           and so does its init (gh-ocannl-1956): through [comp_prec], an f64 source would round to
+           f32 and then to fp8, where the store's [double_to_fp8] is one step. The same holds for a
+           narrowing init of a scope that also updates itself (gh-ocannl-2076): an accumulator
+           opened by [s =: src] over a wider [src] keeps its wide residency, and its init renders at
+           storage precision, rounding as the materialized store does, then widens exactly into the
+           residency. Where scope and compute precision coincide (the CPU backends, non-accumulator
+           scopes) this is the identity, and the store's narrowing is the part the init does not
+           repeat (gh-ocannl-517), except for a cast, whose residency is its storage precision
+           (gh-ocannl-1866); where an accumulator resides wider than the arithmetic (gh-ocannl-663),
+           it preserves the initializer's own per-assignment rounding — e.g. a virtual bf16 node
+           initialized by [a + b] and then reduced narrows the init to bf16 exactly as its
+           materialized twin's store does, instead of leaking f32 residency into a different source
+           assignment's semantics (Codex P2 round 3 on PR #396; the provenance boundary of
+           gh-ocannl-639's adjacent-accumulations rule). *)
         let prec = (scope_prec_of ctx) id in
         let value_prec = set_local_value_prec ~scope_prec:prec id value in
         let volatile_reads =
@@ -8783,11 +8760,10 @@ module C_syntax (B : C_syntax_config) = struct
               let store_prec = Lazy.force tn.Tn.storage_prec in
               if not (Ops.equal_prec (comp_prec store_prec) prec) then raise Vectorization_declined;
               (* gh-ocannl-2412: an RNG conversion picks both its generator and its lane count from
-                 the precision it renders at ([renders_at_store_prec]), so splatting a
-                 loop-invariant RNG subexpression at a widened compute precision [prec] would run
-                 the wrong generator and read past its lanes. Decline to vectorize so the serial
-                 path renders at storage precision, matching [try_vectorize_reduce]'s
-                 [Skip_accum_pinned] decline. *)
+                 the precision it renders at ([store_precs]), so splatting a loop-invariant RNG
+                 subexpression at a widened compute precision [prec] would run the wrong generator
+                 and read past its lanes. Decline to vectorize so the serial path renders at storage
+                 precision, matching [try_vectorize_reduce]'s [Skip_accum_pinned] decline. *)
               if mentions_rng_conversion llsc && not (Ops.equal_prec store_prec prec) then
                 raise Vectorization_declined;
               match Hashtbl.add written ~key:tn.Tn.uid ~data:idcs with
@@ -9824,8 +9800,8 @@ module C_syntax (B : C_syntax_config) = struct
      numerically from plain runs (every tensorized rendering declines under logging). And an update
      mentioning an RNG conversion is never localized: the conversion picks its result type AND which
      random bits it consumes from the precision it renders at (gh-ocannl-517's carve-out,
-     [renders_at_store_prec]), so rendering it inside a scope's precision would change the draw, not
-     just move it.
+     [store_precs]), so rendering it inside a scope's precision would change the draw, not just move
+     it.
 
      Interaction with [volatile_serial_accumulation] (Metal) has two forms. Localization lifts the
      node [Set] out of exactly the invariant-address loops, so the device-memory RMW predicate is

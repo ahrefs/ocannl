@@ -233,7 +233,7 @@ files.
   precision (`scope_prec_of`), `V` the value's and `S` the slot's. `C_syntax.collapse_exact_scopes`
   takes it out when all three agree: the same text, less a C local. It runs in
   `compile_proc` past the exit gates and ahead of the render context, so `scalar_mentions`,
-  `renders_at_store_prec`, `has_accumulation`, `decide_accum_width` and `blend_for` all read the
+  `store_precs`, `has_accumulation`, `decide_accum_width` and `blend_for` all read the
   collapsed tree, while `Low_level.optimized` and the `.ll` output keep the scope: numerics stay out
   of lowered code (gh-ocannl-568), so a kernel and its `.ll` can differ here. The walk follows only
   slots it is sure of, so an unfollowed position just keeps its scope. Agreement is not enough in
