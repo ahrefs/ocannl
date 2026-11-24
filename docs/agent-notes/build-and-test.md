@@ -1342,8 +1342,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `tools/merge-build-check.sh`) triggers the same `dispose_temporary_env` -> `libintl_setlocale`
   SIGSEGV even on a single invocation under Homebrew bash 5.3.9 when neither `LANG` nor `LC_ALL`
   is set (e.g. macOS Terminal/SSH with only `LC_CTYPE=UTF-8`, gh-ocannl-2462); standalone
-  scripts that do not source `harness-support.sh` therefore export `LANG=C` before forking and
-  pass `env LC_ALL=C` instead of a shell-prefix assignment.
+  scripts that do not source `harness-support.sh` therefore export `LANG=C` before forking
+  (which alone stops the lookup, with `env LC_ALL=C` as a defensive guard in subshells).
 - `tools/test-ci-durations.sh` prints each failed subject's exit status, stderr,
   API-call diff and stdout (a golden diff for selector checks), before scratch cleanup
   (gh-ocannl-1993). Read these before guessing API ordering: the fetch loop is sequential.
