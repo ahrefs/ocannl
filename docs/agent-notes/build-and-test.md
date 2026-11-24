@@ -5935,8 +5935,10 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `--plan-merge` (which `--plan --base` invokes and `.github/ship-pr-merge-build` configures as
   ship-pr's `plan`, gh-ocannl-2358) also prints one `ship-pr-merge-plan:` verdict line
   (`nothing-owed`, `admitted <needs>`, or `unadmitted <needs>` from `owed-run.sh check`'s exit
-  0/1; any other status fails the plan with no verdict line) so `pr-review.sh merge` refuses an
-  unrecorded owed run before taking a build slot.
+  0/1; exit 3 for transport-unreadable and any other status fail the plan with no verdict line,
+  gh-ocannl-2436) so `pr-review.sh merge` refuses an unrecorded owed run before taking a build slot
+  without mistaking a transient GitHub outage for a missing record. The main merge build remains
+  fail-closed on any nonzero `owed-run.sh` status.
   Scratch Dune queries are advisory. The real merge build still owns readiness. A CROSS-CUTTING
   banner comes first in `affected` diagnostics, with the widest observed contributors, and
   the merge build carries those contributors into its missing-record refusal.
@@ -5996,11 +5998,14 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   itself (`plan` prints `run cap: 7200s (the training default`); an explicit `--cap` still
   wins, and splitting the combined run into a `build @runtest` and a `build @train` record is
   an equivalent way through (gh-ocannl-2290).
-- **Recovery.** After a local run or if the hook did not publish, use
-  `tools/owed-run.sh record <run dir>` from the run's worktree (`writer=record`). If that box
-  cannot push, use `record <run dir> --print` there and `tools/owed-run.sh add '<the line>'`
-  from a checkout that can (`writer=relay`). Use the directory of the actual successful run
-  and check readiness again from the PR checkout.
+- **Recovery.** Publishing (`record`, `leg-record`, `add`, `waive`) retries non-auth transport,
+  remote-rejection and lease-contention failures up to `OCANNL_TOOL_OWED_RUN_PUSH_RETRIES` times
+  (default 3, exponential backoff from `OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF`, default 2 s) and stops
+  immediately on authentication/authorization errors (gh-ocannl-2436). After a local run or if the
+  hook did not publish, use `tools/owed-run.sh record <run dir>` from the run's worktree
+  (`writer=record`). If that box cannot push, use `record <run dir> --print` there and
+  `tools/owed-run.sh add '<the line>'` from a checkout that can (`writer=relay`). Use the directory
+  of the actual successful run and check readiness again from the PR checkout.
 - **The way through.** A head no record can certify (a run whose record cannot be reached, a
   release hotfix) takes `tools/owed-run.sh waive --head <sha> --reason '<the run it cites, or the
   decision and who made it>'`: it admits exactly that head and is printed into the merge log.

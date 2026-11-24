@@ -29,7 +29,10 @@
 # The branch plan and --plan-merge use the candidate merge and the real record check,
 # distinguishing conflict, narrow reach, and wide reach with or without a record, and emit
 # ship-pr's single `ship-pr-merge-plan:` verdict line (`nothing-owed`, `admitted <needs>`, or
-# `unadmitted <needs>`, and none on error or `--plan` alone).
+# `unadmitted <needs>` on definitive exit 1, and none on transport-unreadable exit 3, other error
+# or `--plan` alone). Push retries in `tools/owed-run.sh` (gh-ocannl-2436) are pinned for transient
+# remote rejections, concurrent `--force-with-lease` contention, exhaustion, exponential backoff,
+# immediate stop on auth/authorization errors, and fleet hook retry recovery.
 # The #compile-output leg alone uses real
 # dune and Python in a minimal isolated project: the repository's actual capped-fixture rule
 # runs twice, then with a planted failing case. It compares bytes and rejects the exact unittest
@@ -52,7 +55,8 @@ harness_scratch test-merge-build-check
 HERE=$(cd "$(dirname "$0")" && pwd)
 # The fixtures' own git: no ambient configuration, identity or repository selection.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
-  GIT_COMMON_DIR GIT_CEILING_DIRECTORIES SHIP_PR_MERGE_BASE_SHA SHIP_PR_MERGE_HEAD_SHA
+  GIT_COMMON_DIR GIT_CEILING_DIRECTORIES SHIP_PR_MERGE_BASE_SHA SHIP_PR_MERGE_HEAD_SHA \
+  OCANNL_TOOL_OWED_RUN_FETCH_CAP OCANNL_TOOL_OWED_RUN_PUSH_RETRIES OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
   GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
   GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
@@ -446,7 +450,37 @@ if harness_leg 'merged_plan prints ship-pr-merge-plan verdicts and omits them on
     'ship-pr-merge-plan: admitted runtest train'
   OCANNL_TOOL_OWED_RUN_URL=$TMP/nowhere.git FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting \
     R=$APART run "$TMP/dunebin" --plan-merge
-  plan_verdict_ok '--plan-merge on an unreadable record repository prints unadmitted' \
+  if [ "$rc" = 1 ] && [ "$(grep -c '^ship-pr-merge-plan:' "$TMP/out")" = 0 ] &&
+     has 'owed-run needs: runtest (record unreadable; owed-run.sh exit 3)' &&
+     has 'plan: owed-run.sh check could not read the record repository (exit 3)'; then
+    report 0 '--plan-merge on an unreadable record repository exits 1 with no verdict line'
+  else report 1 '--plan-merge on an unreadable record repository exits 1 with no verdict line' "exit $rc; $(cat "$TMP/out")"; fi
+  mkdir -p "$TMP/fetchfailbin"
+  ln -sf "$TMP/dunebin/dune" "$TMP/fetchfailbin/dune"
+  cat >"$TMP/fetchfailbin/git" <<FAKEGIT
+#!/bin/sh
+for a do
+  case \$a in
+    fetch) echo 'fatal: unable to access remote: Connection reset by peer' >&2; exit 128 ;;
+  esac
+done
+exec "$GIT" "\$@"
+FAKEGIT
+  chmod +x "$TMP/fetchfailbin/git"
+  OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting \
+    R=$APART run "$TMP/fetchfailbin" --plan-merge
+  if [ "$rc" = 1 ] && [ "$(grep -c '^ship-pr-merge-plan:' "$TMP/out")" = 0 ] &&
+     has 'could not be fetched within 60s: unreadable' &&
+     has 'plan: owed-run.sh check could not read the record repository (exit 3)'; then
+    report 0 '--plan-merge on a fetch-phase transport failure exits 1 with no verdict line'
+  else report 1 '--plan-merge on a fetch-phase transport failure exits 1 with no verdict line' "exit $rc; $(cat "$TMP/out")"; fi
+  noncommit_repo=$TMP/plan-noncommit.git
+  git init -q --bare "$noncommit_repo"
+  blob_sha=$(printf 'not a commit\n' | git -C "$APART" hash-object -w --stdin)
+  git -C "$APART" push -q -f "$noncommit_repo" "$blob_sha:refs/owed-runs/$APART_HEAD"
+  OCANNL_TOOL_OWED_RUN_URL=$noncommit_repo FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting \
+    R=$APART run "$TMP/dunebin" --plan-merge
+  plan_verdict_ok '--plan-merge on a non-commit ref prints unadmitted (definitive foreign refusal)' \
     'ship-pr-merge-plan: unadmitted runtest'
   OCANNL_TOOL_OWED_RUN_FETCH_CAP=0 OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting \
     R=$APART run "$TMP/dunebin" --plan-merge
@@ -655,9 +689,38 @@ if harness_leg 'what is OWED is read from the head'"'"'s record, and every other
   OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
   refused 'a cross-cutting change with no record is refused, its first tier unbuilt (missing)' \
     "REFUSED -- no refs/owed-runs/$APART_HEAD: the head has no record (missing) (records on $OWED_EMPTY)"
+  if has 'tools/owed-run.sh exit 1'; then
+    report 0 'the merge build records exit 1 on a definitive missing-record refusal'
+  else report 1 'the merge build records exit 1 on a definitive missing-record refusal' "$(grep 'tests tier' "$TMP/out")"; fi
   OCANNL_TOOL_OWED_RUN_URL=$TMP/nowhere.git FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting FAKE_TIER_LIST=$TMP/owed-tier run "$TMP/dunebin"
   refused 'a record repository that cannot be read refuses (unreadable)' \
     "REFUSED -- refs/owed-runs/$APART_HEAD could not be read within 60s: unreadable (records on $TMP/nowhere.git)"
+  if has 'tools/owed-run.sh exit 3'; then
+    report 0 'the main merge build stays fail-closed on exit 3 (unreadable)'
+  else report 1 'the main merge build stays fail-closed on exit 3 (unreadable)' "$(grep 'tests tier' "$TMP/out")"; fi
+  # Direct owed-run.sh check exit-status distinction: 1 for definitive refusals, 3 for transport unreadable.
+  owed "$OWED_EMPTY" check "$APART_HEAD" runtest
+  miss_rc=$orc
+  owed "$TMP/nowhere.git" check "$APART_HEAD" runtest
+  unr_rc=$orc
+  mkdir -p "$TMP/owed-fetchfailbin"
+  cat >"$TMP/owed-fetchfailbin/git" <<FAKEGIT
+#!/bin/sh
+for a do
+  case \$a in
+    fetch) echo 'fatal: unable to access remote: Connection reset by peer' >&2; exit 128 ;;
+  esac
+done
+exec "$GIT" "\$@"
+FAKEGIT
+  chmod +x "$TMP/owed-fetchfailbin/git"
+  fetch_rc=0
+  (cd "$R" && PATH=$TMP/owed-fetchfailbin:$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL \
+    "$BASH" tools/owed-run.sh check "$APART_HEAD" runtest) >"$TMP/owed-out" 2>&1 || fetch_rc=$?
+  if [ "$miss_rc" = 1 ] && [ "$unr_rc" = 3 ] && [ "$fetch_rc" = 3 ]; then
+    report 0 'owed-run.sh check exits 1 on missing and 3 on ls-remote or fetch transport failures'
+  else report 1 'owed-run.sh check exits 1 on missing and 3 on ls-remote or fetch transport failures' \
+    "missing=$miss_rc unreadable=$unr_rc fetch=$fetch_rc; $(cat "$TMP/owed-out")"; fi
   bad=$TMP/owed-bad.git
   git init -q --bare "$bad"
   good=$(run_line "$APART_HEAD" 'runtest -j 4')
@@ -781,6 +844,9 @@ $(run_line "$APART_HEAD" 'build @test/training/train-a -j 1')"
   if [ "$took" -lt 20 ]; then
     refused "a record repository that hangs is cut off at its bound and refuses (unreadable, ${took}s < 20s)" \
       "REFUSED -- refs/owed-runs/$APART_HEAD could not be read within 2s: unreadable (records on ext::sleep 30)"
+    if has 'tools/owed-run.sh exit 3'; then
+      report 0 'a hanging record repository fails the merge build with owed-run.sh exit 3'
+    else report 1 'a hanging record repository fails the merge build with owed-run.sh exit 3' "$(grep 'tests tier' "$TMP/out")"; fi
   else report 1 'a record repository that hangs is cut off at its bound' "took ${took}s: $(cat "$TMP/out")"; fi
   OCANNL_TOOL_OWED_RUN_URL=$TMP/nowhere.git FAKE_LIST=$TMP/owed-list FAKE_TRAIN_N=none run "$TMP/dunebin"
   if [ "$rc" = 0 ] && tiers | grep -qx "affected $(range_of)" && ! has owed-run; then
@@ -895,6 +961,231 @@ EOF
   if [ "$orc" = 0 ] && [ "$left" = "refs/owed-runs/$open_head" ] && grep -qF 'pruned 1 record(s) of merged heads' "$TMP/owed-out"; then
     report 0 'prune deletes the merged head'"'"'s record and keeps the open one'"'"'s'
   else report 1 'prune deletes the merged head'"'"'s record and keeps the open one'"'"'s' "exit $orc: $(cat "$TMP/owed-out"); left: $left"; fi
+  # Publish retries (gh-ocannl-2436): transient non-auth rejections and lease contention retry
+  # with backoff; auth/authorization failures stop immediately on attempt 1.
+  flaky=$TMP/owed-flaky.git
+  git init -q --bare "$flaky"
+  : >"$TMP/flaky-count"
+  cat >"$flaky/hooks/pre-receive" <<HOOK
+#!/bin/sh
+n=\$(cat "$TMP/flaky-count" 2>/dev/null || echo 0)
+n=\$((n + 1))
+printf '%s\n' "\$n" >"$TMP/flaky-count"
+if [ "\$n" -le 2 ]; then
+  echo 'failed' >&2
+  exit 1
+fi
+exit 0
+HOOK
+  chmod +x "$flaky/hooks/pre-receive"
+  OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF=0 owed "$flaky" add "$(run_line "$APART_HEAD" 'runtest -j 4')"
+  attempts=$(cat "$TMP/flaky-count" 2>/dev/null || echo 0)
+  add_rc=$orc
+  add_out=$(cat "$TMP/owed-out")
+  owed "$flaky" check "$APART_HEAD" runtest
+  if [ "$add_rc" = 0 ] && [ "$attempts" = 3 ] && [ "$orc" = 0 ] &&
+     printf '%s\n' "$add_out" | grep -qF 'attempt 1/4' &&
+     printf '%s\n' "$add_out" | grep -qF 'attempt 2/4'; then
+    report 0 'publish retries transient non-auth remote rejections and admits the published record'
+  else report 1 'publish retries transient non-auth remote rejections and admits the published record' \
+    "add=$add_rc attempts=$attempts check=$orc; $add_out; $(cat "$TMP/owed-out")"; fi
+  # Concurrent lease contention: another writer publishes a sibling record right before attempt 1's
+  # push, triggering git's real --force-with-lease `(stale info)` rejection; attempt 2 re-reads the
+  # ref and merges both lines.
+  raced=$TMP/owed-raced.git
+  git init -q --bare "$raced"
+  sibling_line=$(run_line "$APART_HEAD" 'build @test/training/train-a -j 1')
+  sibling_commit=$(printf 'owed-run record\n\n%s\n' "$sibling_line" | git -C "$R" commit-tree "$APART_HEAD^{tree}" -p "$APART_HEAD")
+  : >"$TMP/raced-count"
+  mkdir -p "$TMP/racegitbin"
+  cat >"$TMP/racegitbin/git" <<FAKEGIT
+#!/bin/sh
+for a do
+  case \$a in
+    push)
+      n=\$(cat "$TMP/raced-count" 2>/dev/null || echo 0)
+      n=\$((n + 1))
+      printf '%s\n' "\$n" >"$TMP/raced-count"
+      if [ "\$n" -eq 1 ]; then
+        "$GIT" -C "$R" push -q "$raced" "$sibling_commit:refs/owed-runs/$APART_HEAD"
+      fi
+      exec "$GIT" "\$@" ;;
+  esac
+done
+exec "$GIT" "\$@"
+FAKEGIT
+  chmod +x "$TMP/racegitbin/git"
+  raced_rc=0
+  (cd "$R" && PATH=$TMP/racegitbin:$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$raced \
+    OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF=0 "$BASH" tools/owed-run.sh add "$(run_line "$APART_HEAD" 'runtest -j 4')") \
+    >"$TMP/owed-out" 2>&1 || raced_rc=$?
+  raced_out=$(cat "$TMP/owed-out")
+  raced_attempts=$(cat "$TMP/raced-count" 2>/dev/null || echo 0)
+  owed "$raced" check "$APART_HEAD" runtest @test/training/train-a
+  if [ "$raced_rc" = 0 ] && [ "$raced_attempts" = 2 ] && [ "$orc" = 0 ] &&
+     printf '%s\n' "$raced_out" | grep -qF 'stale info' &&
+     [ "$(grep -c 'owed-run: admitted run' "$TMP/owed-out")" = 2 ]; then
+    report 0 'publish retries lease contention by re-reading the ref and merging both records'
+  else report 1 'publish retries lease contention by re-reading the ref and merging both records' \
+    "add=$raced_rc attempts=$raced_attempts check=$orc; $raced_out; $(cat "$TMP/owed-out")"; fi
+  # Exhaustion + exponential backoff: 2 retries with 1s initial backoff sleep 1s then 2s (3 attempts).
+  always_fail=$TMP/owed-always-fail.git
+  git init -q --bare "$always_fail"
+  : >"$TMP/backoff-count"
+  cat >"$always_fail/hooks/pre-receive" <<HOOK
+#!/bin/sh
+n=\$(cat "$TMP/backoff-count" 2>/dev/null || echo 0)
+n=\$((n + 1))
+printf '%s\n' "\$n" >"$TMP/backoff-count"
+echo 'failed' >&2
+exit 1
+HOOK
+  chmod +x "$always_fail/hooks/pre-receive"
+  started=$SECONDS
+  OCANNL_TOOL_OWED_RUN_PUSH_RETRIES=2 OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF=1 \
+    owed "$always_fail" add "$(run_line "$APART_HEAD" 'runtest -j 4')"
+  took=$((SECONDS - started))
+  bf_attempts=$(cat "$TMP/backoff-count" 2>/dev/null || echo 0)
+  if [ "$orc" = 2 ] && [ "$bf_attempts" = 3 ] && [ "$took" -ge 2 ] &&
+     grep -qF 'retrying in 1s' "$TMP/owed-out" &&
+     grep -qF 'retrying in 2s' "$TMP/owed-out" &&
+     grep -qF 'after 3 attempt(s)' "$TMP/owed-out"; then
+    report 0 'publish bounds retries with exponential backoff and exits 2 when exhausted'
+  else report 1 'publish bounds retries with exponential backoff and exits 2 when exhausted' \
+    "exit=$orc attempts=$bf_attempts took=${took}s; $(cat "$TMP/owed-out")"; fi
+  # Auth/authorization failures stop immediately on attempt 1 (zero retries).
+  mkdir -p "$TMP/authgitbin"
+  cat >"$TMP/authgitbin/git" <<FAKEGIT
+#!/bin/sh
+for a do
+  case \$a in
+    push)
+      n=\$(cat "\$FAKE_PUSH_COUNT_FILE" 2>/dev/null || echo 0)
+      n=\$((n + 1))
+      printf '%s\n' "\$n" >"\$FAKE_PUSH_COUNT_FILE"
+      if [ -n "\${FAKE_PUSH_FAIL_ONCE:-}" ] && [ "\$n" -gt 1 ]; then
+        exec "$GIT" "\$@"
+      fi
+      printf '%s\n' "\$FAKE_PUSH_ERR" >&2
+      exit 1 ;;
+  esac
+done
+exec "$GIT" "\$@"
+FAKEGIT
+  chmod +x "$TMP/authgitbin/git"
+  auth_bad=
+  for auth_err in \
+    "fatal: Authentication failed for 'https://github.com/lukstafi/ocannl-staging.git/'" \
+    "git@github.com: Permission denied (publickey)." \
+    "fatal: could not read Username for 'https://github.com': terminal prompts disabled" \
+    "error: The requested URL returned error: 401" \
+    "error: The requested URL returned error: 403" \
+    "remote: Permission to lukstafi/ocannl-staging.git denied to bot."; do
+    : >"$TMP/auth-count"
+    arc=0
+    (cd "$R" && PATH=$TMP/authgitbin:$TMP/gitbin:$SYS_PATH \
+      FAKE_PUSH_COUNT_FILE=$TMP/auth-count FAKE_PUSH_ERR=$auth_err \
+      OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF=0 \
+      "$BASH" tools/owed-run.sh add "$(run_line "$APART_HEAD" 'runtest -j 4')") \
+      >"$TMP/owed-out" 2>&1 || arc=$?
+    ac=$(cat "$TMP/auth-count" 2>/dev/null || echo 0)
+    if [ "$arc" != 2 ] || [ "$ac" != 1 ] || ! grep -qF 'authentication/authorization failed (not retried)' "$TMP/owed-out"; then
+      auth_bad+=" [$auth_err: exit=$arc attempts=$ac out=$(cat "$TMP/owed-out")]"
+    fi
+  done
+  if [ -z "$auth_bad" ]; then
+    report 0 'auth and authorization push failures stop immediately without retrying'
+  else report 1 'auth and authorization push failures stop immediately without retrying' "$auth_bad"; fi
+  # Negative control: a non-auth rejection whose SHA contains 401/403 still retries and succeeds.
+  sha_repo=$TMP/owed-sha403.git
+  git init -q --bare "$sha_repo"
+  : >"$TMP/sha403-count"
+  src=0
+  (cd "$R" && PATH=$TMP/authgitbin:$TMP/gitbin:$SYS_PATH \
+    FAKE_PUSH_COUNT_FILE=$TMP/sha403-count FAKE_PUSH_FAIL_ONCE=1 \
+    FAKE_PUSH_ERR=" ! [remote rejected] 4030000000000000000000000000000000000401 -> refs/owed-runs/$APART_HEAD (failed)" \
+    OCANNL_TOOL_OWED_RUN_URL=$sha_repo OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF=0 \
+    "$BASH" tools/owed-run.sh add "$(run_line "$APART_HEAD" 'runtest -j 4')") \
+    >"$TMP/owed-out" 2>&1 || src=$?
+  sc=$(cat "$TMP/sha403-count" 2>/dev/null || echo 0)
+  if [ "$src" = 0 ] && [ "$sc" = 2 ]; then
+    report 0 'a non-auth rejection containing 401/403 digits in a SHA still retries and succeeds'
+  else report 1 'a non-auth rejection containing 401/403 digits in a SHA still retries and succeeds' \
+    "exit=$src attempts=$sc; $(cat "$TMP/owed-out")"; fi
+  # Invalid retry/backoff settings exit 2.
+  cfg_bad=
+  for cfg in 'RETRIES=-1' 'RETRIES=abc' 'RETRIES=08' 'BACKOFF=-1' 'BACKOFF=abc' 'BACKOFF=08'; do
+    k=${cfg%%=*} v=${cfg#*=}
+    crc=0
+    (cd "$R" && PATH=$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$OWED_EMPTY \
+      env "OCANNL_TOOL_OWED_RUN_PUSH_$k=$v" "$BASH" tools/owed-run.sh url) \
+      >"$TMP/owed-out" 2>&1 || crc=$?
+    [ "$crc" = 2 ] || cfg_bad+=" [$cfg: exit=$crc]"
+  done
+  if [ -z "$cfg_bad" ]; then
+    report 0 'invalid push retry or backoff settings exit 2'
+  else report 1 'invalid push retry or backoff settings exit 2' "$cfg_bad"; fi
+  # Replacing a non-commit ref (blob): publish repairs it under the existing lease so waive/add can recover.
+  repair_repo=$TMP/owed-repair-noncommit.git
+  git init -q --bare "$repair_repo"
+  repair_blob=$(printf 'corrupt non-commit ref\n' | git -C "$R" hash-object -w --stdin)
+  git -C "$R" push -q -f "$repair_repo" "$repair_blob:refs/owed-runs/$APART_HEAD"
+  owed "$repair_repo" check "$APART_HEAD" runtest
+  bad_rc=$orc
+  OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF=0 owed "$repair_repo" waive --head "$APART_HEAD" --reason 'repair non-commit ref'
+  waive_rc=$orc
+  owed "$repair_repo" check "$APART_HEAD" runtest
+  if [ "$bad_rc" = 1 ] && [ "$waive_rc" = 0 ] && [ "$orc" = 0 ] &&
+     grep -qF 'admitted waiver' "$TMP/owed-out"; then
+    report 0 'publish replaces a non-commit record ref under the existing lease'
+  else report 1 'publish replaces a non-commit record ref under the existing lease' \
+    "bad=$bad_rc waive=$waive_rc check=$orc; $(cat "$TMP/owed-out")"; fi
+  # Hanging ls-remote and fetch with a lingering child holding stdout/stderr open: must still time
+  # out within FETCH_CAP (on base, remote_ref's $(rgit ls-remote ...) pipe hung for the full 6s).
+  mkdir -p "$TMP/hanglsbin" "$TMP/hangfetchbin"
+  cat >"$TMP/hanglsbin/git" <<FAKEGIT
+#!/bin/sh
+for a do
+  case \$a in
+    ls-remote)
+      sleep 6 &
+      exec sleep 6 ;;
+  esac
+done
+exec "$GIT" "\$@"
+FAKEGIT
+  cat >"$TMP/hangfetchbin/git" <<FAKEGIT
+#!/bin/sh
+for a do
+  case \$a in
+    fetch)
+      sleep 6 &
+      exec sleep 6 ;;
+  esac
+done
+exec "$GIT" "\$@"
+FAKEGIT
+  chmod +x "$TMP/hanglsbin/git" "$TMP/hangfetchbin/git"
+  started=$SECONDS
+  hang_ls_rc=0
+  (cd "$R" && PATH=$TMP/hanglsbin:$TMP/gitbin:$SYS_PATH \
+    OCANNL_TOOL_OWED_RUN_FETCH_CAP=1 OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL \
+    "$BASH" tools/owed-run.sh check "$APART_HEAD" runtest) >"$TMP/owed-out" 2>&1 || hang_ls_rc=$?
+  ls_took=$((SECONDS - started))
+  if [ "$hang_ls_rc" = 3 ] && [ "$ls_took" -lt 5 ] && grep -qF 'could not be read within 1s: unreadable' "$TMP/owed-out"; then
+    report 0 "a hanging ls-remote with a child holding stdout/stderr open still returns exit 3 at FETCH_CAP (${ls_took}s < 5s)"
+  else report 1 'a hanging ls-remote with a child holding stdout/stderr open still returns exit 3 at FETCH_CAP' \
+    "exit=$hang_ls_rc took=${ls_took}s; $(cat "$TMP/owed-out")"; fi
+  started=$SECONDS
+  hang_rc=0
+  (cd "$R" && PATH=$TMP/hangfetchbin:$TMP/gitbin:$SYS_PATH \
+    OCANNL_TOOL_OWED_RUN_FETCH_CAP=1 OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL \
+    "$BASH" tools/owed-run.sh check "$APART_HEAD" runtest) >"$TMP/owed-out" 2>&1 || hang_rc=$?
+  took=$((SECONDS - started))
+  if [ "$hang_rc" = 3 ] && [ "$took" -lt 5 ] && grep -qF 'could not be fetched within 1s: unreadable' "$TMP/owed-out"; then
+    report 0 "a hanging fetch with a child holding stderr open still returns exit 3 at FETCH_CAP (${took}s < 5s)"
+  else report 1 'a hanging fetch with a child holding stderr open still returns exit 3 at FETCH_CAP' \
+    "exit=$hang_rc took=${took}s; $(cat "$TMP/owed-out")"; fi
 fi
 
 owed_record_leg() {
@@ -971,17 +1262,33 @@ owed_record_leg() {
     harness_abandon 'could not put the control head ahead of the record repository master'
     return
   fi
-  leg_record "$last_run" "$leg_path" "$hook_head"
+  # Simulate t1854: one transient `[remote rejected] ... (failed)` rejection on the fleet hook's push.
+  : >"$TMP/hook-push-count"
+  cat >"$hook_url/hooks/pre-receive" <<HOOK
+#!/bin/sh
+n=\$(cat "$TMP/hook-push-count" 2>/dev/null || echo 0)
+n=\$((n + 1))
+printf '%s\n' "\$n" >"$TMP/hook-push-count"
+if [ "\$n" -eq 1 ]; then
+  echo 'failed' >&2
+  exit 1
+fi
+exit 0
+HOOK
+  chmod +x "$hook_url/hooks/pre-receive"
+  OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF=0 leg_record "$last_run" "$leg_path" "$hook_head"
+  rm -f "$hook_url/hooks/pre-receive"
+  hook_attempts=$(cat "$TMP/hook-push-count" 2>/dev/null || echo 0)
   merge_side || { harness_abandon 'could not merge the published head into the fixture base'; return; }
   printf '%s\n' "$alias" >"$TMP/hook-train-name"
   OCANNL_TOOL_OWED_RUN_URL=$hook_url FAKE_TRAIN_N=1 FAKE_TRAIN_NAMES=$TMP/hook-train-name run "$TMP/dunebin"
   leg_host=$(hostname -s 2>/dev/null || hostname)
   admission="merge-build-check:   owed-run: admitted run of '$leg_cmd' for ${hook_head:0:8}"
-  if [ "$hrc" = 0 ] && [ "$rc" = 0 ] &&
+  if [ "$hrc" = 0 ] && [ "$hook_attempts" = 2 ] && [ "$rc" = 0 ] &&
      grep -qxF "$admission ($leg_host:$last_run, writer=leg:$leg_host)" "$TMP/out"; then
-    report 0 'the merge gate admits the published training record with its fleet writer'
-  else report 1 'the merge gate admits the published training record with its fleet writer' \
-    "hook exit $hrc: $(cat "$TMP/hook-out"); merge gate exit $rc: $(cat "$TMP/out")"; fi
+    report 0 'the fleet hook retries a transient remote rejection and the merge gate admits its record'
+  else report 1 'the fleet hook retries a transient remote rejection and the merge gate admits its record' \
+    "hook exit $hrc attempts=$hook_attempts: $(cat "$TMP/hook-out"); merge gate exit $rc: $(cat "$TMP/out")"; fi
 }
 harness_leg_run 'the fleet hook publishes only eligible receipts from its own leg #owed-record' owed_record_leg
 

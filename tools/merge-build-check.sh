@@ -123,10 +123,11 @@
 # called by `--plan --base REV`) prints exactly one `ship-pr-merge-plan:` line beside its
 # `owed-run needs:` line: `nothing-owed` when nothing is owed, `admitted <needs>` when
 # `tools/owed-run.sh check` exits 0, or `unadmitted <needs>` when it exits 1 with output
-# (missing, foreign, invalid, uncovered or unreadable within the fetch cap). A diagnostics-file
-# setup/read error, an empty-output exit 1, any other `owed-run.sh` status (usage or execution
-# failure), or an unreadable tests tier fails the plan query (exit 1) with no verdict line, so
-# ship-pr treats it as no verdict and falls back to the build. `--plan` alone does not
+# (definitive record refusal: missing, foreign, invalid or uncovered). Transport-unreadable (exit 3
+# from `tools/owed-run.sh check`), a diagnostics-file setup/read error, an empty-output exit 1, any
+# other `owed-run.sh` status (usage or execution failure), or an unreadable tests tier fails the
+# plan query (exit 1) with no verdict line, so ship-pr treats it as no verdict and falls back to the
+# build (which remains fail-closed on any nonzero `owed-run.sh` status). `--plan` alone does not
 # ask Dune or read records and prints no verdict line. A plan makes no build or readiness verdict
 # and writes no record. A conflict or an unreadable plan fails the query.
 # The only extra affected text read is one anchored, printable `affected: CROSS-CUTTING reason:`
@@ -711,6 +712,7 @@ merged_plan() (
     case $rc in
       0) echo "$me: owed-run needs: $needs_text (record admits)" ;;
       1) echo "$me: owed-run needs: $needs_text (record does not admit; owed-run.sh exit $rc)" ;;
+      3) echo "$me: owed-run needs: $needs_text (record unreadable; owed-run.sh exit $rc)" ;;
       *) echo "$me: owed-run needs: $needs_text (record check failed; owed-run.sh exit $rc)" ;;
     esac
     cat "$tests_dir/owed" || die_plan 'cannot read record-check output'
@@ -719,6 +721,7 @@ merged_plan() (
       1)
         [ -s "$tests_dir/owed" ] || die_plan 'owed-run.sh check exited 1 with no output'
         echo "ship-pr-merge-plan: unadmitted $needs_text" ;;
+      3) die_plan "owed-run.sh check could not read the record repository (exit $rc)" ;;
       *) die_plan "owed-run.sh check failed (exit $rc)" ;;
     esac
   fi
