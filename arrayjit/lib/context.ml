@@ -916,7 +916,9 @@ let frontend_gate ?prelowered comp =
         ~f:check;
       (* A prelowered program replaces the comp's lowering: its nodes are the ones that run. *)
       Option.iter prelowered ~f:(fun (p : Ir.Low_level.optimized) ->
-          Hashtbl.iter_keys p.traced_store ~f:check))
+          Hashtbl.keys p.traced_store
+          |> List.sort ~compare:(Ir.Low_level.layout_order p)
+          |> List.iter ~f:check))
 
 (* gh-ocannl-2027: a computation that re-establishes, without reading it, a node it means a write to
    last ({!Asgns.persists_undone}) undoes that write on every run -- its own forward recomputing the

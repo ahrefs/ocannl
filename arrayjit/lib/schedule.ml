@@ -5929,6 +5929,19 @@ let apply_classified = apply_typed
 type op_verdict = Op_legal | Op_illegal of string | Op_unknown of string
 [@@deriving sexp_of, equal]
 
+(* Order node groups by their first access so a witness names the same node across builds. Preserve
+   each group's reverse traversal order for the callers that already reverse it. *)
+let accesses_by_node accesses ~node =
+  let by_tn = Hashtbl.create (module Int) in
+  let keys =
+    List.filter_map accesses ~f:(fun access ->
+        let uid = (node access).Tn.uid in
+        let first = not (Hashtbl.mem by_tn uid) in
+        Hashtbl.add_multi by_tn ~key:uid ~data:access;
+        Option.some_if first uid)
+  in
+  List.map keys ~f:(Hashtbl.find_exn by_tn)
+
 (* Worst-of combination: Illegal > Unknown > Legal. *)
 let combine_verdicts v1 v2 =
   match (v1, v2) with
@@ -6189,10 +6202,12 @@ let loops_independent (opt : Low_level.optimized) ~(syms : Indexing.symbol list)
     let outside =
       if cross_nest then accesses_outside opt.llc ~skip:loop else Hashtbl.create (module Int)
     in
-    let by_tn = Hashtbl.create (module Int) in
-    List.iter accs ~f:(fun a -> Hashtbl.add_multi by_tn ~key:a.Affine.a_tn.Tn.uid ~data:a);
-    Hashtbl.fold by_tn ~init:Op_legal ~f:(fun ~key:uid ~data:accs v ->
+    List.fold
+      (accesses_by_node accs ~node:(fun a -> a.Affine.a_tn))
+      ~init:Op_legal
+      ~f:(fun v accs ->
         let tn = (List.hd_exn accs).Affine.a_tn in
+        let uid = tn.Tn.uid in
         let writes = List.filter accs ~f:(fun a -> a.Affine.a_write) in
         let written_outside = Option.value (Hashtbl.find outside uid) ~default:false in
         if List.is_empty writes then
@@ -6295,10 +6310,12 @@ let stage_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
       if hoisted then
         Op_unknown "hoisted packing's link-time host-side program is not modeled by the queries"
       else
-        (* The fresh tile is the node apply added to the (copied) traced store. *)
+        (* Stage mints its tile during apply. Prefer the newest new node if a probe registers other
+           nodes as well, so hash traversal cannot choose the proof target. *)
         let tile =
           Hashtbl.keys staged.Low_level.traced_store
-          |> List.find ~f:(fun tn -> not (Hashtbl.mem opt.Low_level.traced_store tn))
+          |> List.filter ~f:(fun tn -> not (Hashtbl.mem opt.Low_level.traced_store tn))
+          |> List.max_elt ~compare:Tn.compare
         in
         match tile with
         | None -> Op_unknown "staged tile not found in the probe (oracle limitation)"
@@ -7132,9 +7149,10 @@ let nest_hazards ~plc (n : nest_info) (syms : Indexing.symbol list) : unit =
     done;
     !ok
   in
-  let by_tn = Hashtbl.create (module Int) in
-  List.iter n.n_accesses ~f:(fun a -> Hashtbl.add_multi by_tn ~key:a.a_tn.Tn.uid ~data:a);
-  Hashtbl.iter by_tn ~f:(fun accs ->
+  List.iter
+    (accesses_by_node (List.rev n.n_accesses) ~node:(fun a -> a.a_tn))
+    ~f:(fun reversed ->
+      let accs = List.rev reversed in
       let written = List.exists accs ~f:(fun a -> a.a_write) in
       if written then
         let is_mat = Tn.Placements.is_materialized_peek plc (List.hd_exn accs).a_tn in
@@ -7475,9 +7493,9 @@ let crosscheck_scratch_containment (opt : Low_level.optimized) (chains : Low_lev
     let thread s =
       Array.exists canon ~f:(function Some c -> Indexing.equal_symbol c s | None -> false)
     in
-    let by_tn = Hashtbl.create (module Int) in
-    List.iter accs ~f:(fun a -> Hashtbl.add_multi by_tn ~key:a.Affine.a_tn.Tn.uid ~data:a);
-    Hashtbl.iter by_tn ~f:(fun accs ->
+    List.iter
+      (accesses_by_node accs ~node:(fun a -> a.Affine.a_tn))
+      ~f:(fun accs ->
         let accs = List.rev accs in
         let tn = (List.hd_exn accs).Affine.a_tn in
         if

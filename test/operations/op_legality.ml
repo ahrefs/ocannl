@@ -312,3 +312,22 @@ let () =
         | _ -> "  <op>"
       in
       p label v)
+
+let () =
+  let first_write_is_named reverse =
+    let a = fresh_tn "write_a" [| 1 |] in
+    let b = fresh_tn "write_b" [| 1 |] in
+    let first, second = if reverse then (b, a) else (a, b) in
+    let i = Idx.get_symbol () in
+    let write tn = Ll_test.set tn [| Idx.Fixed_idx 0 |] (LL.Constant 7.) in
+    let body = for_over i (LL.Seq (write first, write second)) in
+    let opt = hand_built ~stmts:[ body ] ~tns_on_device:[ a; b ] ~tns_local:[] in
+    match Sched.op_legality opt (Sched.Retype { axis = i; ty = LL.Grid }) with
+    | Sched.Op_illegal witness ->
+        let name = (Tn.debug_name first [@message_only "the diagnostic text this case checks"]) in
+        String.is_prefix witness ~prefix:(name ^ ":")
+    | Sched.Op_legal | Sched.Op_unknown _ -> false
+  in
+  Verdict.Claims.p_all "parallel-write refusal names the first write in program order"
+    (List.init 16 ~f:(fun i -> i % 2 = 0))
+    ~f:first_write_is_named
