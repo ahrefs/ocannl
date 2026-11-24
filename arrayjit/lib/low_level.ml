@@ -13739,8 +13739,10 @@ let validate_lane_bounds ?(site = "Low_level.validate_lane_bounds") ?comp_prec (
    each moves to just inside the innermost (new order) chain loop it mentions, or above the chain if
    it mentions none -- a pure guard filters tuples, so where it sits below its own loops changes
    neither which tuples run nor their order. [Set_dynamic] scatters, [Tile_mma], scans, sibling
-   statements and every other leaf are left alone. Runs after [rewrite_one_hot_reductions], whose
-   scatter match wants the vocabulary loop innermost as lowered (gh-ocannl-466). *)
+   statements and every other leaf are left alone (narrow-float [Set_dynamic] add-scatters are
+   widened by {!widen_narrow_scatters} in {!specialize_proc}). Runs after
+   [rewrite_one_hot_reductions], whose scatter match wants the vocabulary loop innermost as lowered
+   (gh-ocannl-466). *)
 let sink_narrow_reduction_loops (llc : t) : t =
   let only_self_reads d di =
     let rec go (s : scalar_t) =
@@ -14153,6 +14155,206 @@ let sink_narrow_reduction_loops (llc : t) : t =
   in
   walk llc
 
+let loop_over_dims dims ~body =
+  let rec for_loop rev_idcs : _ -> t = function
+    | [] -> body @@ Array.of_list_rev rev_idcs
+    | d :: product when not @@ Indexing.iterated d ->
+        for_loop (Indexing.Fixed_idx 0 :: rev_idcs) product
+    | d :: product ->
+        let index = Indexing.get_symbol () in
+        For_loop
+          {
+            index;
+            from_ = 0;
+            to_ = d - 1;
+            body = for_loop (Indexing.Iterator index :: rev_idcs) product;
+            axis = Serial;
+          }
+  in
+  for_loop [] (Array.to_list dims)
+
+(* gh-ocannl-2444: widened accumulator nodes for narrow-float [Set_dynamic] add-scatters live in
+   their own namespace (mirroring [footprint_namespace]), memoized weakly per [(target, acc_prec)]
+   so sibling specializations and [Lowering_reuse] copies name one stable node without retaining
+   dropped graphs (gh-ocannl-1859). *)
+let scatter_accum_namespace = "scatter_acc"
+
+let fresh_scatter_accum_id =
+  let c = Stdlib.Atomic.make (-1) in
+  fun () -> Stdlib.Atomic.fetch_and_add c 1 + 1
+
+let scatter_accum_memo : (string, Tn.t) Hashtbl.t Tn.Weak_table.t = Tn.Weak_table.create 16
+let clear_scatter_accum_memo () = Tn.Weak_table.reset scatter_accum_memo
+
+let () =
+  Tn.before_accessibility_snapshot := clear_scatter_accum_memo :: !Tn.before_accessibility_snapshot
+
+let scatter_accum_node ~(target : Tn.t) (acc_prec : Ops.prec) : Tn.t =
+  let bucket =
+    Tn.memo_bucket scatter_accum_memo target ~create:(fun () -> Hashtbl.create (module String))
+  in
+  Hashtbl.find_or_add bucket (Ops.prec_string acc_prec) ~default:(fun () ->
+      let tn =
+        Tn.create ~namespace:scatter_accum_namespace (Tn.Specified acc_prec)
+          ~id:(fresh_scatter_accum_id ())
+          ~label:("scatter_acc" :: target.Tn.label)
+          ~unpadded_dims:(lazy (Lazy.force target.Tn.dims))
+          ~padding:(lazy None)
+          ()
+      in
+      (* Declared intent on the node rather than a lineage-table entry (gh-ocannl-1481), so
+         [Lowering_reuse] rebases keep it. [On_device] (like [Schedule.Split_reduce]'s partials)
+         keeps vocab-sized tables off C stacks and per-thread GPU local memory while remaining
+         [alias_eligible] in the working arena. *)
+      Tn.update_memory_mode tn On_device (Site "2444:scatter-accum");
+      tn)
+
+(* gh-ocannl-2444: accumulate each allowlisted narrow-float [Set_dynamic] add-scatter into a
+   temporary [accum_prec]-precision buffer [W], bracketed by an exact widening load [W = T] and a
+   single narrowing store-back [T = W]. Because a scatter's target cell is data-dependent,
+   {!sink_narrow_reduction_loops} and {!peel_accum_nest} cannot localize it in a register; without
+   [W], repeated token hits round to [T]'s narrow storage on every hit.
+
+   Fail-closed allowlist per top-level statement in [flat_lines [ llc ]]: -
+   [Utils.debug_log_from_routines ()] is off (matches {!accum_update_widens} / gh-ocannl-2111); -
+   the statement holds exactly one [Set_dynamic] in statement position (not inside a [Local_scope]),
+   with no enclosing dead loop ([to_ < from_]), no non-[Serial] loop, and no [Staged_compilation],
+   [Workgroup_barrier], [Scan_loop], or [Tile_mma]; - the target [tn] is non-virtual, not a
+   slice-alias view, has positive dims, and its storage precision is a narrow float strictly and
+   exactly widened by [accum_prec]; - [llsc] is a self-accumulating [Add] or [FMA] reading
+   [Get_dynamic] of [tn]'s own dynamic cell, contains no RNG conversion, and neither [dyn_value],
+   the contribution, nor any other sub-part of the statement touches [tn]. *)
+let widen_narrow_scatters ~(accum_prec : Ops.prec -> Ops.prec) (plc : Tn.Placements.t)
+    (traced_store : traced_store) (llc : t) : t =
+  if Utils.debug_log_from_routines () then llc
+  else
+    let exception Decline in
+    let widen_stmt (stmt : t) : t list option =
+      let found = ref None in
+      let rec scan (c : t) =
+        match c with
+        | Noop | Comment _ | Declare_local _ | Zero_out _ | Set _ | Set_from_vec _ | Set_local _ ->
+            ()
+        | Staged_compilation _ | Workgroup_barrier | Scan_loop _ | Tile_mma _ -> raise Decline
+        | Seq (a, b) ->
+            scan a;
+            scan b
+        | For_loop { from_; to_; axis; body; _ } ->
+            if to_ < from_ || not (equal_axis_type axis Serial) then raise Decline;
+            scan body
+        | If { body; _ } -> scan body
+        | Set_dynamic { tn; idcs; dyn_axis; dyn_value; llsc; debug } as node ->
+            if Option.is_some !found then raise Decline;
+            found := Some (node, tn, idcs, dyn_axis, dyn_value, llsc, debug)
+      in
+      let rec touches_other ~site tn (c : t) =
+        if phys_equal c site then false
+        else
+          match c with
+          | Noop | Comment _ | Declare_local _ | Staged_compilation _ | Workgroup_barrier -> false
+          | Seq (a, b) -> touches_other ~site tn a || touches_other ~site tn b
+          | For_loop { body; _ } -> touches_other ~site tn body
+          | Scan_loop { carried; body; _ } ->
+              List.exists carried ~f:(fun cr -> scalar_touches_tn tn cr.init)
+              || touches_other ~site tn body
+          | If { cond = cond_sc, _; body } ->
+              scalar_touches_tn tn cond_sc || touches_other ~site tn body
+          | Zero_out tn2 -> Tn.equal tn tn2
+          | Set { tn = tn2; llsc; _ } -> Tn.equal tn tn2 || scalar_touches_tn tn llsc
+          | Set_dynamic { tn = tn2; dyn_value = v, _; llsc; _ } ->
+              Tn.equal tn tn2 || scalar_touches_tn tn v || scalar_touches_tn tn llsc
+          | Set_from_vec { tn = tn2; arg = a, _; _ } -> Tn.equal tn tn2 || scalar_touches_tn tn a
+          | Set_local (_, llsc) -> scalar_touches_tn tn llsc
+          | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; fallback; _ } ->
+              Tn.equal tn d_tn || Tn.equal tn a_tn || Tn.equal tn b_tn
+              || touches_other ~site tn fallback
+      in
+      let rec replace_site ~site ~replacement (c : t) =
+        if phys_equal c site then replacement
+        else
+          match c with
+          | Seq (a, b) -> Seq (replace_site ~site ~replacement a, replace_site ~site ~replacement b)
+          | For_loop ({ body; _ } as r) ->
+              For_loop { r with body = replace_site ~site ~replacement body }
+          | If ({ body; _ } as r) -> If { r with body = replace_site ~site ~replacement body }
+          | other -> other
+      in
+      try
+        scan stmt;
+        match !found with
+        | None -> None
+        | Some (site, tn, idcs, dyn_axis, ((iv, iprec) as dyn_value), llsc, debug) ->
+            if Option.is_some (Tn.alias_of tn) || Tn.Placements.known_virtual plc tn then
+              raise Decline;
+            let store_prec = Lazy.force tn.Tn.storage_prec in
+            if not (Ops.is_narrow_float store_prec) then raise Decline;
+            let acc_prec = accum_prec store_prec in
+            if
+              Ops.equal_prec acc_prec store_prec
+              || not (Ops.widens_exactly ~from:store_prec ~to_:acc_prec)
+            then raise Decline;
+            let dims = Lazy.force tn.Tn.dims in
+            if
+              Array.is_empty dims
+              || Array.exists dims ~f:(fun d -> d <= 0)
+              || dyn_axis < 0
+              || dyn_axis >= Array.length dims
+            then raise Decline;
+            if mentions_rng_conversion llsc || scalar_touches_tn tn iv then raise Decline;
+            let is_self = function
+              | Get_dynamic { tn = g; idcs = gi; dyn_axis = ga; dyn_value = gv, _ } ->
+                  Tn.equal g tn && ga = dyn_axis
+                  && Array.equal Indexing.equal_axis_index gi idcs
+                  && equal_scalar_t gv iv
+              | _ -> false
+            in
+            let retarget_llsc =
+              match llsc with
+              | Binop (Ops.Add, (a, _), (b, _)) when is_self a && not (scalar_touches_tn tn b) ->
+                  fun get_acc -> Binop (Ops.Add, get_acc, (b, acc_prec))
+              | Binop (Ops.Add, (a, _), (b, _)) when is_self b && not (scalar_touches_tn tn a) ->
+                  fun get_acc -> Binop (Ops.Add, (a, acc_prec), get_acc)
+              | Ternop (Ops.FMA, (a, pa), (b, pb), (c, _))
+                when is_self c && (not (scalar_touches_tn tn a)) && not (scalar_touches_tn tn b) ->
+                  fun get_acc -> Ternop (Ops.FMA, (a, pa), (b, pb), get_acc)
+              | _ -> raise Decline
+            in
+            if touches_other ~site tn stmt then raise Decline;
+            let acc = scatter_accum_node ~target:tn acc_prec in
+            let get_acc =
+              (Get_dynamic { tn = acc; idcs; dyn_axis; dyn_value = (iv, iprec) }, acc_prec)
+            in
+            let replacement =
+              Set_dynamic
+                { tn = acc; idcs; dyn_axis; dyn_value; llsc = retarget_llsc get_acc; debug }
+            in
+            let st = get_node traced_store acc in
+            st.has_assignment <- true;
+            st.read_by_other <- true;
+            st.is_accessing <- true;
+            let load_stmt =
+              loop_over_dims dims ~body:(fun c ->
+                  Set { tn = acc; idcs = c; llsc = Get (tn, c); debug = "" })
+            in
+            let scatter_stmt = describe_operand_precisions (replace_site ~site ~replacement stmt) in
+            let store_stmt =
+              loop_over_dims dims ~body:(fun c ->
+                  Set { tn; idcs = c; llsc = Get (acc, c); debug = "" })
+            in
+            Some [ load_stmt; scatter_stmt; store_stmt ]
+      with Decline -> None
+    in
+    let changed = ref false in
+    let stmts =
+      List.concat_map (flat_lines [ llc ]) ~f:(fun stmt ->
+          match widen_stmt stmt with
+          | Some widened ->
+              changed := true;
+              widened
+          | None -> [ stmt ])
+    in
+    if !changed then unflat_lines stmts else llc
+
 (* gh-ocannl-1011: the passes virtualized code receives on its way to being the routine's schedule —
    cleanup's commitments and retractions, simplification under the routine's interval environment,
    the hosted-constant link-time conversion, the one-hot reduction rewrite, the scalar and the
@@ -14410,8 +14612,8 @@ let memoized_recompute_price an ~pricer ~static_indices ~world tn =
           an.an_price_cache := List.take ((key, price) :: !(an.an_price_cache)) 128;
           price)
 
-let%diagn2_sexp specialize_proc ?(blends_value_selects = false) (input_ctx : optimize_ctx)
-    (an : analysis) : optimized =
+let%diagn2_sexp specialize_proc ?(blends_value_selects = false) ?(accum_prec = Fn.id)
+    (input_ctx : optimize_ctx) (an : analysis) : optimized =
   let static_indices = an.an_static_indices in
   let llc = an.an_llc in
   let traced_store = copy_traced_store an.an_traced_store in
@@ -14474,6 +14676,7 @@ let%diagn2_sexp specialize_proc ?(blends_value_selects = false) (input_ctx : opt
     post_virtualization_pipeline input_ctx.placements traced_store ~input_scopes ~static_indices
       virtual_llc_result
   in
+  let llc = widen_narrow_scatters ~accum_prec input_ctx.placements traced_store llc in
   refuse_uncovered_local_reads input_ctx.placements ~static_indices llc;
   let uses_merge, spliced_rbw =
     reconcile_traced_store input_ctx.placements traced_store ~spliced_reads ~static_indices
@@ -15201,7 +15404,7 @@ let slice_alias_violation (root : t) : string option =
 let validate_no_slice_aliases ?(site = "Low_level.validate_no_slice_aliases") (llc : t) : unit =
   Option.iter (slice_alias_violation llc) ~f:(fun msg -> invalid_arg (site ^ ": " ^ msg))
 
-let optimize_proc ~blends_value_selects (input_ctx : optimize_ctx) static_indices llc =
+let optimize_proc ~blends_value_selects ~accum_prec (input_ctx : optimize_ctx) static_indices llc =
   (* gh-ocannl-584: the pipeline's entry gate for scope purity, ahead of the analysis cache so a
      digest hit cannot skip it. Codegen's gate alone would not do: [hoist_cross_statement_cse] lifts
      a body shared by sibling statements to a top-level [Declare_local] + body, which moves an
@@ -15223,7 +15426,8 @@ let optimize_proc ~blends_value_selects (input_ctx : optimize_ctx) static_indice
   (* gh-ocannl-1709: an operand annotation a homogeneous operator would ignore is a request, not a
      description, refused while it is still the builder's shape. *)
   validate_operand_precisions ~site:"Low_level.optimize_proc" llc;
-  specialize_proc ~blends_value_selects input_ctx (cached_analyze_proc static_indices llc)
+  specialize_proc ~blends_value_selects ~accum_prec input_ctx
+    (cached_analyze_proc static_indices llc)
 
 let code_hum_margin = ref 100
 
@@ -15660,31 +15864,13 @@ let to_doc ?name ?static_indices () llc =
 
   hardline ^^ nest 2 (function_header_doc ?name ?static_indices () ^^ doc_of_code llc)
 
-let%diagn2_sexp optimize ?(blends_value_selects = false) (input_ctx : optimize_ctx)
-    ~unoptim_ll_source ~ll_source ~(name : string) (static_indices : Indexing.static_symbol list)
-    (llc : t) : optimized =
+let%diagn2_sexp optimize ?(blends_value_selects = false) ?(accum_prec = Fn.id)
+    (input_ctx : optimize_ctx) ~unoptim_ll_source ~ll_source ~(name : string)
+    (static_indices : Indexing.static_symbol list) (llc : t) : optimized =
   Option.iter unoptim_ll_source ~f:(fun callback -> callback (to_doc ~name ~static_indices () llc));
-  let result = optimize_proc ~blends_value_selects input_ctx static_indices llc in
+  let result = optimize_proc ~blends_value_selects ~accum_prec input_ctx static_indices llc in
   Option.iter ll_source ~f:(fun callback -> callback (to_doc ~name ~static_indices () result.llc));
   result
-
-let loop_over_dims dims ~body =
-  let rec for_loop rev_idcs : _ -> t = function
-    | [] -> body @@ Array.of_list_rev rev_idcs
-    | d :: product when not @@ Indexing.iterated d ->
-        for_loop (Indexing.Fixed_idx 0 :: rev_idcs) product
-    | d :: product ->
-        let index = Indexing.get_symbol () in
-        For_loop
-          {
-            index;
-            from_ = 0;
-            to_ = d - 1;
-            body = for_loop (Indexing.Iterator index :: rev_idcs) product;
-            axis = Serial;
-          }
-  in
-  for_loop [] (Array.to_list dims)
 
 let unroll_dims dims ~body =
   if Array.is_empty dims then body [||] ~offset:0

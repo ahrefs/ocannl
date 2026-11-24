@@ -1998,7 +1998,7 @@ let get_name_exn asgns =
           The code:\n" ^ nameless_code_excerpt asgns)
 
 let%track6_sexp lower ?(rewrite_target = Rewrites.conservative_target) ?blends_value_selects
-    optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices (proc : t) :
+    ?accum_prec optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices (proc : t) :
     Low_level.optimized =
   (match cd_source with
   | None -> ()
@@ -2007,5 +2007,5 @@ let%track6_sexp lower ?(rewrite_target = Rewrites.conservative_target) ?blends_v
   (* The algebraic-rewrite tier over raw lowered code (gh-ocannl-483): ahead of the analyses, so the
      traced store and the placements see the rewritten routine. *)
   let llc = Rewrites.apply ~target:rewrite_target llc in
-  Low_level.optimize ?blends_value_selects optim_ctx ~unoptim_ll_source ~ll_source ~name
+  Low_level.optimize ?blends_value_selects ?accum_prec optim_ctx ~unoptim_ll_source ~ll_source ~name
     static_indices llc

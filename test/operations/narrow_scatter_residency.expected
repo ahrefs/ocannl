@@ -1,0 +1,28 @@
+f32 baseline wte.grad equals exact host sums bitwise: true
+per-hit bf16 rounding differs from one final rounding (non-vacuity): true
+virtual twin: every Set_dynamic targets an f32 scatter_acc buffer: true
+virtual twin: bf16 wte.grad equals f32 reference narrowed once, cell for cell: true
+materialized twin: every Set_dynamic targets an f32 scatter_acc buffer: true
+materialized twin: bf16 wte.grad equals f32 reference narrowed once, cell for cell: true
+tied two-consumer: f32 wte.grad equals exact host sum: true
+tied two-consumer: per-hit bf16 differs from once-rounded f32 (non-vacuity): true
+tied two-consumer: bf16 wte.grad equals f32 narrowed once, cell for cell: true
+accum_steps:1 f32 gradient equals exact host sum onto incoming: true
+accum_steps:1 per-hit bf16 differs from once-rounded f32 (non-vacuity): true
+accum_steps:1 bf16 gradient equals f32 narrowed once, untouched rows preserved: true
+Split_reduce over widened scatter mints f32 partials: true
+Split_reduce over widened scatter matches default bf16 output bitwise: true
+fp16 Fp16_wide: f32 baseline equals exact host sums: true
+fp16 Fp16_wide: per-hit fp16 differs from one final rounding (non-vacuity): true
+fp16 Fp16_wide: Set_dynamic targets an f32 scatter_acc buffer: true
+fp16 Fp16_wide: wte.grad equals f32 reference narrowed once, cell for cell: true
+Bf16_narrow: scatter target precision matches backend accum_prec: true
+Bf16_narrow: executed bf16 gradient matches backend accum_prec reference: true
+identity accum_prec leaves scatter IR physically unchanged: true
+f32 scatter target is left physically unchanged: true
+debug_log_from_routines declines widening: true
+non-add Set_dynamic overwrite declines widening: true
+scatter reading target T elsewhere declines widening: true
+dead enclosing loop declines widening: true
+RNG-bearing scatter declines widening: true
+valid bf16 scatter (including CSE-hoisted local) rewrites to 3 statements with memoized f32 node: true

@@ -254,8 +254,8 @@ let () =
             (rows_have_opposite_sign r256 r257 && rows_have_opposite_sign r512 r513
             && Verdict.within "row 257" r257 (f32_row_at 4) ~tol:bf16_emb_tol
             && Verdict.within "row 513" r513 (f32_row_at 8) ~tol:bf16_emb_tol);
-          (* Scatter accumulation into bf16 rounds per hit (at most ~3 hits/row here), so bf16
-             relative tolerance 2e-2 covers accumulated rounding while catching any
+          (* Scatter accumulation into bf16 widens to f32 and rounds once per cell (gh-ocannl-2444);
+             bf16 relative tolerance 2e-2 covers the single narrowing while catching any
              dropped/misrouted scatter. *)
           pf_close "bf16 %s: backward wte.grad matches f32 within bf16 tolerance" label bf_grad
             f32_grad ~tol:bf16_grad_tol;

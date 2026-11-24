@@ -774,14 +774,27 @@ files.
   dominates the whole reduction can bound its transfers on a padded tail. After one residue is
   privatized, an untouched sibling write still identifies its entry width by statement identity.
   If the surviving entry width is ambiguous, the candidate declines. Coupled affine pairs sharing
-  an iterator across axes, other affine forms, any axis whose shorter-scan frame exceeds 64
-  residues or residue-tuple products above 64, and dynamic scatters keep per-step rounding. The
-  affine path is pinned by `narrow_conv_grad_residency` (1-D including a split tail, a disjoint
-  window with gaps, FP16, and the shorter-scan-over-64 decline; 2-D overlapping, mixed, and
-  all-injective bf16 parity against the once-rounded f32 twin, privatized f32 tiles, a hand-built
-  mixed-frame 2-D order witness, and coupled-pair / residue-budget boundary controls). The 1-D overlapping FP16 fixture selects `Fp16_wide`
-  explicitly and starts at 2048 to match the BF16 fixture's spacing of two at 256, so the same
-  window contributions expose per-window rounding in both formats. The plain path is pinned by
+  an iterator across axes, other affine forms, and any axis whose shorter-scan frame exceeds 64
+  residues or residue-tuple products above 64 keep per-step rounding. Allowlisted multi-hit
+  `Half_prec`/`Bfloat16_prec` `Set_dynamic` add-scatters (gh-ocannl-2444) are widened after
+  `post_virtualization_pipeline` in `Low_level.specialize_proc` by
+  `Low_level.widen_narrow_scatters`: because a scatter's destination cell is data-dependent and
+  cannot reside in a scalar local, the stage threads the backend's `accum_prec` beside
+  `blends_value_selects` (through `Backends.lower_assignments` / `Assignments.lower` /
+  `Low_level.optimize` / `Context.lowered_for_decisions`) and brackets each eligible statement in a
+  weakly-memoized `On_device` buffer in `scatter_accum_namespace` (`W = T; scatter(W); T = W`),
+  rounding once at the store-back and leaving narrow policies, FP8, provably single-hit scatters,
+  partially-initialized routine `Local` targets, routine logging, RNG updates, dead loops, and
+  multi-scatter / other-read statements untouched. `narrow_scatter_residency` pins repeated-token
+  parity across cast twins (including tied two-consumer twins and `accum_steps:1`), `Split_reduce`
+  composition, `Fp16_wide`, `Bf16_narrow`, decision-only target `accum_prec`, and hand-built
+  allowlist declines. The affine path is pinned by `narrow_conv_grad_residency` (1-D including a
+  split tail, a disjoint window with gaps, FP16, and the shorter-scan-over-64 decline; 2-D
+  overlapping, mixed, and all-injective bf16 parity against the once-rounded f32 twin, privatized
+  f32 tiles, a hand-built mixed-frame 2-D order witness, and coupled-pair / residue-budget boundary
+  controls). The 1-D overlapping FP16 fixture selects `Fp16_wide` explicitly and starts at 2048 to
+  match the BF16 fixture's spacing of two at 256, so the same window contributions expose
+  per-window rounding in both formats. The plain path is pinned by
   `lowered_nest_order`'s narrow legs and `narrow_grad_residency` (a bf16 dense layer's three
   gradients onto nonzero incoming values equal an f32 twin's exact sums narrowed once on the default,
   the privatized preset and the seeded CUDA/HIP default, whose shipped `acc` tiles are f32).

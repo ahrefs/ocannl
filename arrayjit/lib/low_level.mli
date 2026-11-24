@@ -1474,6 +1474,10 @@ val footprint_namespace : string
 (** gh-ocannl-616: the namespace of the scratch nodes footprint-scoped materialization mints — how a
     test tells them from the program's own nodes in an [optimized] record's traced store. *)
 
+val scatter_accum_namespace : string
+(** gh-ocannl-2444: the namespace of the widened accumulator buffers {!widen_narrow_scatters} mints
+    for narrow-float [Set_dynamic] add-scatters. *)
+
 type traced_array = {
   tn : Tnode.t;
   mutable has_assignment : bool;
@@ -1917,6 +1921,7 @@ val layout_order : optimized -> Tnode.t -> Tnode.t -> int
 
 val optimize :
   ?blends_value_selects:bool ->
+  ?accum_prec:(Ops.prec -> Ops.prec) ->
   optimize_ctx ->
   unoptim_ll_source:(PPrint.document -> unit) option ->
   ll_source:(PPrint.document -> unit) option ->
@@ -1928,7 +1933,13 @@ val optimize :
     ({!Backend_intf.backend_facts}; [Backends.lower_assignments] passes it): where true, the inline
     fan-in guard charges a select {!speculable_select} admits by the union of its arms, which the
     backend's blend evaluates (gh-ocannl-1775). Default [false], the short-circuiting reading:
-    hand-built IR optimized without a backend in mind. *)
+    hand-built IR optimized without a backend in mind.
+
+    [accum_prec] is the backend's accumulator-residency resolver
+    ({!Backend_intf.codegen_capabilities.accum_prec}; [Backends.lower_assignments] passes it):
+    consumed by {!widen_narrow_scatters} (gh-ocannl-2444) to bracket narrow-float [Set_dynamic]
+    add-scatters in an [accum_prec] accumulator buffer when it strictly widens the destination's
+    storage. Default [Fn.id] (no widening). *)
 
 type analysis
 (** Decision-independent analysis of a lowered routine (gh-555 step 1): the structural per-node
@@ -1940,7 +1951,12 @@ val analyze_proc : Indexing.static_symbol list -> t -> analysis
 (** Compute the analysis once for a routine. [optimize] is [analyze_proc] followed by
     [specialize_proc] (plus the pretty-printing callbacks). *)
 
-val specialize_proc : ?blends_value_selects:bool -> optimize_ctx -> analysis -> optimized
+val specialize_proc :
+  ?blends_value_selects:bool ->
+  ?accum_prec:(Ops.prec -> Ops.prec) ->
+  optimize_ctx ->
+  analysis ->
+  optimized
 (** The decision-dependent tail of the pipeline: placement decisions ([decide_placements] under the
     given lineage's placements and inline preferences, and the backend's select rendering as in
     {!optimize}: the analysis keeps both charges, so one analysis serves either), virtualization,
@@ -2217,6 +2233,18 @@ val sink_narrow_reduction_loops : t -> t
     affine pairs, one per axis (gh-ocannl-2423, gh-ocannl-2464), cell loops own every overlapping
     window that reaches the cell. Both preserve each cell's contribution order. Part of
     {!post_virtualization_pipeline}, after {!rewrite_one_hot_reductions}. *)
+
+val widen_narrow_scatters :
+  accum_prec:(Ops.prec -> Ops.prec) -> Tnode.Placements.t -> traced_store -> t -> t
+(** gh-ocannl-2444: for each allowlisted top-level statement holding a single narrow-float
+    [Set_dynamic] add-accumulation whose target [T] is strictly and exactly widened by [accum_prec],
+    mint an [accum_prec] buffer [W] (memoized weakly per [(T, acc_prec)] in
+    {!scatter_accum_namespace}, declared [On_device]), register it in [traced_store], and bracket
+    the redirected scatter with an exact widening load [W = T] and a single narrowing store-back
+    [T = W]. Declines under routine logging, RNG-bearing updates, dead or non-serial loops,
+    slice-alias or virtual targets, multi-scatter statements, or statements touching [T] elsewhere.
+    Called by {!specialize_proc} directly after {!post_virtualization_pipeline}; exposed for direct
+    testing. *)
 
 val rewrite_one_hot_reductions : ?static_indices:Indexing.static_symbol list -> t -> t
 (** gh-343: rewrites the narrow one-hot embedding pattern -- an [Add] reduction over a loop variable

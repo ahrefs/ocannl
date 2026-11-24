@@ -502,18 +502,18 @@ let cuda_arm_leg leg arm =
     [output_debug_files_in_build_directory] on (for one run,
     [OCANNL_OUTPUT_DEBUG_FILES_IN_BUILD_DIRECTORY=true dune build @test/operations/runtest-<name>])
     [build_files/<exe>/] gets [<name>-unoptimized.ll] and [<name>.ll]. *)
-let optimize_in ?(materialized = []) ?(static_indices = []) ?blends_value_selects
+let optimize_in ?(materialized = []) ?(static_indices = []) ?blends_value_selects ?accum_prec
     (ctx : LL.optimize_ctx) ~name llc : LL.optimized =
   LL.decide_materialized ~provenance:(Tn.Site "589:test-ll-materialize") ctx materialized;
-  LL.optimize ?blends_value_selects ctx
+  LL.optimize ?blends_value_selects ?accum_prec ctx
     ~unoptim_ll_source:(Utils.output_to_build_file ~fname:(name ^ "-unoptimized.ll"))
     ~ll_source:(Utils.output_to_build_file ~fname:(name ^ ".ll"))
     ~name static_indices llc
 
 (** [optimize ~name llc] is {!optimize_in} in a fresh lineage. *)
-let optimize ?materialized ?static_indices ?blends_value_selects ~name llc =
-  optimize_in ?materialized ?static_indices ?blends_value_selects (LL.empty_optimize_ctx ()) ~name
-    llc
+let optimize ?materialized ?static_indices ?blends_value_selects ?accum_prec ~name llc =
+  optimize_in ?materialized ?static_indices ?blends_value_selects ?accum_prec
+    (LL.empty_optimize_ctx ()) ~name llc
 
 (** [optimize_scoped ~name ~raw scoped] is the supported route for hand-built IR in the
     POST-optimize [Local_scope] form — a scope over a MATERIALIZED node, which
