@@ -1,0 +1,6 @@
+fixture/member.sh	fixture/*.txt	declares	--only '^example$'
+fixture/member.sh	fixture/helper.sh
+fixture/member.sh	fixture/input.py	tie
+fixture/member.sh	fixture/member.sh
+malformed row exit 2
+stderr: harness census: unexpected record schema at row 1

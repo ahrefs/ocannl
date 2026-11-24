@@ -8,13 +8,7 @@
 set -euo pipefail
 export LC_ALL=C
 
-root=$(cd -P -- "${DUNE_SOURCEROOT:?DUNE_SOURCEROOT is unset}" && pwd -P)
-# An unpacked source tree nested in a checkout owns its own file inventory.
-ceiling=$(dirname -- "$root")
-case $OSTYPE in msys*) ceiling=$(cygpath -am -- "$ceiling") ;; esac
-export GIT_CEILING_DIRECTORIES="$ceiling"
-
-"$BASH" "$root/tools/test-run.sh" affected --harness-census |
+project() {
   awk '
     BEGIN { FS = OFS = "\t" }
     NF == 6 && $1 != "" && $2 != "" {
@@ -36,4 +30,19 @@ export GIT_CEILING_DIRECTORIES="$ceiling"
       printf "harness census: unexpected record schema at row %d\n", NR > "/dev/stderr"
       exit 2
     }
-  ' | sort -u >harness_census.expected.corrected
+  ' | sort -u
+}
+
+if [ "${1-}" = --project ]; then
+  project
+  exit
+fi
+
+root=$(cd -P -- "${DUNE_SOURCEROOT:?DUNE_SOURCEROOT is unset}" && pwd -P)
+# An unpacked source tree nested in a checkout owns its own file inventory.
+ceiling=$(dirname -- "$root")
+case $OSTYPE in msys*) ceiling=$(cygpath -am -- "$ceiling") ;; esac
+export GIT_CEILING_DIRECTORIES="$ceiling"
+
+"$BASH" "$root/tools/test-run.sh" affected --harness-census |
+  project >harness_census.expected.corrected

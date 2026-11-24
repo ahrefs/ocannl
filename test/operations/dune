@@ -179,6 +179,7 @@
   (alias runtest-generated_lock_scan)
   (alias runtest-generated_lock_scan_control)
   (alias runtest-harness_census)
+  (alias runtest-harness_census_control)
   (alias runtest-label_dispatch_scan)
   (alias runtest-label_dispatch_scan_control)
   (alias runtest-label_dispatch_scan_refusal_control)
@@ -468,6 +469,7 @@
   (alias runtest-gpu_cotenants)
   (alias runtest-half_unary_math-reproducible)
   (alias runtest-harness_census)
+  (alias runtest-harness_census_control)
   (alias runtest-heap_local_arrays-outlined)
   (alias runtest-kernel_attribution)
   (alias runtest-label_dispatch_scan)
@@ -9744,6 +9746,22 @@
   (progn
    (run %{dep:sweep_harness_driver.exe} %{dep:harness_census.sh})
    (diff? harness_census.expected harness_census.expected.corrected))))
+
+(rule
+ ; ocannl-backend: none -- synthetic records exercise the census projection.
+ (alias runtest-harness_census_control)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  harness_census.sh
+  (sandbox always))
+ (action
+  (progn
+   (run %{dep:sweep_harness_driver.exe} %{dep:harness_census_control.sh})
+   (diff?
+    harness_census_control.expected
+    harness_census_control.expected.corrected))))
 
 ; gh-ocannl-1669: cc declares Local arrays past the stack budget on the heap, function scope and
 ; pool-chunk privatized tiles alike, each budget pinned on both sides and executed.
