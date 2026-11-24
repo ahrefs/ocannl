@@ -32,16 +32,16 @@ let missing_mawk_message =
 let mawk_candidates ~path_env ~fallbacks ~getcwd =
   let from_path =
     match path_env with
-    | None | Some "" -> []
+    | None -> []
     | Some path ->
         String.split_on_char ':' path
-        |> List.filter_map (fun dir ->
-            if String.equal dir "" then None
-            else
-              let abs_dir =
-                if Filename.is_relative dir then Filename.concat (getcwd ()) dir else dir
-              in
-              Some (Filename.concat abs_dir "mawk"))
+        |> List.map (fun dir ->
+            let abs_dir =
+              if String.equal dir "" then getcwd ()
+              else if Filename.is_relative dir then Filename.concat (getcwd ()) dir
+              else dir
+            in
+            Filename.concat abs_dir "mawk")
   in
   from_path @ fallbacks
 
@@ -134,10 +134,19 @@ let check_resolution () =
        ~available:(fun _ -> false))
     `Not_needed;
   expect_mawk "Darwin selects PATH mawk ahead of fallbacks and absolutizes relative dirs"
-    (resolve_darwin_mawk ~darwin:true ~path_env:(Some ":rel/bin:/usr/bin") ~fallbacks ~getcwd
+    (resolve_darwin_mawk ~darwin:true ~path_env:(Some "rel/bin:/usr/bin") ~fallbacks ~getcwd
        ~available:(fun p ->
          String.equal p "/fixture/cwd/rel/bin/mawk" || String.equal p "/opt/homebrew/bin/mawk"))
     (`Pinned "/fixture/cwd/rel/bin/mawk");
+  expect_mawk "Darwin treats empty PATH component as current working directory"
+    (resolve_darwin_mawk ~darwin:true ~path_env:(Some ":/usr/bin:/bin") ~fallbacks ~getcwd
+       ~available:(fun p ->
+         String.equal p "/fixture/cwd/mawk" || String.equal p "/opt/homebrew/bin/mawk"))
+    (`Pinned "/fixture/cwd/mawk");
+  expect_mawk "Darwin treats empty PATH string as current working directory"
+    (resolve_darwin_mawk ~darwin:true ~path_env:(Some "") ~fallbacks ~getcwd ~available:(fun p ->
+         String.equal p "/fixture/cwd/mawk" || String.equal p "/opt/homebrew/bin/mawk"))
+    (`Pinned "/fixture/cwd/mawk");
   expect_mawk "Darwin falls back to Homebrew mawk when PATH lacks mawk"
     (resolve_darwin_mawk ~darwin:true ~path_env:(Some "/usr/bin:/bin") ~fallbacks ~getcwd
        ~available:(fun p -> String.equal p "/opt/homebrew/bin/mawk"))
@@ -191,11 +200,36 @@ let executable path =
   with Unix.Unix_error _ -> false
 
 let () =
-  if Array.length Sys.argv <> 2 && Array.length Sys.argv <> 5 then (
-    prerr_endline "usage: sweep_harness_driver HARNESS [SWEEP AGGREGATE_SKIPS VERDICT_PROBE]";
+  let check_mawk_only = Array.length Sys.argv = 2 && String.equal Sys.argv.(1) "--check-mawk" in
+  if (not check_mawk_only) && Array.length Sys.argv <> 2 && Array.length Sys.argv <> 5 then (
+    prerr_endline
+      "usage: sweep_harness_driver (--check-mawk | HARNESS [SWEEP AGGREGATE_SKIPS VERDICT_PROBE])";
     exit 2);
   check_resolution ();
   let stat_kind path = try Some (Unix.stat path).st_kind with Unix.Unix_error _ -> None in
+  let awk_pin =
+    resolve_darwin_mawk ~darwin:Utils.host_is_darwin ~path_env:(Sys.getenv_opt "PATH")
+      ~fallbacks:darwin_mawk_fallbacks ~getcwd:Sys.getcwd
+      ~available:(path_available ~win32:false ~stat_kind ~x_ok:executable)
+  in
+  (if check_mawk_only then
+     match awk_pin with
+     | `Not_needed ->
+         print_endline "non-darwin";
+         exit 0
+     | `Missing ->
+         prerr_endline missing_mawk_message;
+         exit 2
+     | `Pinned mawk ->
+         let resolved = try Unix.realpath mawk with Unix.Unix_error _ -> mawk in
+         let digest =
+           try Digest.to_hex (Digest.file resolved)
+           with Sys_error msg ->
+             prerr_endline ("sweep_harness_driver: cannot fingerprint mawk: " ^ msg);
+             exit 2
+         in
+         Printf.printf "%s\t%s\t%s\n" mawk resolved digest;
+         exit 0);
   let bash =
     resolve_bash ~win32:Sys.win32
       ~git_bashes:(git_bash_candidates Sys.getenv_opt)
@@ -208,11 +242,6 @@ let () =
         Verdict.skipped ~aggregation:`Environment ~backend:"Git Bash unavailable"
           "sweep harness requires Git Bash on Windows";
         exit 0
-  in
-  let awk_pin =
-    resolve_darwin_mawk ~darwin:Utils.host_is_darwin ~path_env:(Sys.getenv_opt "PATH")
-      ~fallbacks:darwin_mawk_fallbacks ~getcwd:Sys.getcwd
-      ~available:(path_available ~win32:false ~stat_kind ~x_ok:executable)
   in
   let metal_options =
     Ir.Compiler_options.metal ~routine_logging:false ~math_api:Modern_split

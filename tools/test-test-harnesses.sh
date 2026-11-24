@@ -46,7 +46,19 @@ expected_member_version=$("$expected_member_bash" -c 'printf "%s.%s" "${BASH_VER
 expected_member_awk=
 if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
   expected_member_awk=$(type -P mawk 2>/dev/null || :)
-  if [ -z "$expected_member_awk" ] || [ ! -f "$expected_member_awk" ] || [ ! -x "$expected_member_awk" ]; then
+  if [ -n "$expected_member_awk" ] && [ -f "$expected_member_awk" ] && [ -x "$expected_member_awk" ]; then
+    case $expected_member_awk in
+      /*) ;;
+      *)
+        # Keep a relative-PATH mawk reachable after `run()` changes cwd to `$TMP`.
+        rel_mawk=$(CDPATH= cd -- "$(dirname -- "$expected_member_awk")" && pwd)/${expected_member_awk##*/}
+        mkdir -p "$TMP/host-mawk-bin"
+        host_mawk_bin=$(CDPATH= cd -- "$TMP/host-mawk-bin" && pwd)
+        ln -s "$rel_mawk" "$host_mawk_bin/mawk"
+        export PATH="$host_mawk_bin:$PATH"
+        expected_member_awk=$host_mawk_bin/mawk ;;
+    esac
+  else
     expected_member_awk=
     for cand in /opt/homebrew/bin/mawk /usr/local/bin/mawk; do
       if [ -f "$cand" ] && [ -x "$cand" ]; then expected_member_awk=$cand; break; fi
@@ -1586,10 +1598,13 @@ cp "$fixture/$mawk_member" "$TMP/member-before-mawk"
 # (even on Debian/Ubuntu where /usr/bin/mawk lives beside /usr/bin/awk).
 mawk_clean_bin=$TMP/mawk-clean-bin
 mkdir -p "$mawk_clean_bin"
-for tool in bash sh env uname mktemp ln rm cat sed grep tr wc sort head tail cut dirname basename chmod perl awk sleep; do
-  tool_path=$(type -P "$tool" 2>/dev/null || :)
-  [ -n "$tool_path" ] && ln -s "$tool_path" "$mawk_clean_bin/$tool"
-done
+(
+  export MSYS=winsymlinks:sys
+  for tool in bash sh env uname mktemp ln rm cat sed grep tr wc sort head tail cut dirname basename chmod perl awk sleep; do
+    tool_path=$(type -P "$tool" 2>/dev/null || :)
+    [ -n "$tool_path" ] && ln -s "$tool_path" "$mawk_clean_bin/$tool"
+  done
+)
 mawk_darwin_bin=$TMP/mawk-darwin-bin
 mawk_linux_bin=$TMP/mawk-linux-bin
 mkdir -p "$mawk_darwin_bin" "$mawk_linux_bin"
