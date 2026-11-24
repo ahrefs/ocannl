@@ -81,6 +81,11 @@ if [ $# -ge 2 ] && own_trace "$2"; then
   shift 2
   set -- "$sub" "$@"
 fi
+if [ $# -ge 2 ] && [ "$2" = --always-show-command-line ]; then
+  sub=$1
+  shift 2
+  set -- "$sub" "$@"
+fi
 case "$*" in
   'build -j 4 @runtest-probe') name=probe ;;
   'build -j 4 @runtest-manifest') name=manifest ;;

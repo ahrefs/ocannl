@@ -31,20 +31,31 @@
 # `bg-run.sh wait` form. `wait last` is only for a run launched without --bg;
 # the wave brief supplies the run record and readiness boundary for --bg runs.
 #
-# Failure digest boundary (gh-ocannl-2345): the last 10 MB of the run log,
-# with Dune's color and CRLF stripped. Reads column-one Dune File locations
-# and their excerpts, the location's opening compiler error (including
+# Failure digest boundary (gh-ocannl-2345, gh-ocannl-2442): the last 10 MB of
+# the run log, with Dune's color and CRLF stripped. Reads column-one Dune File
+# locations and their excerpts, the location's opening compiler error (including
 # promoted warnings and alerts), and action output delimited by Dune's short,
-# verbose or (cd ... && ...) reports (also with redirections). A dependency
-# chain can identify a locationless Dune
-# error as batch context. Only a chain joins wrapped error lines. Ordinary
-# multiline errors contribute their diagnostic head.
-# Quiet output without a command marker, locationless errors without a failed
-# command report, and text before the first recognized block have no action
-# owner. Diagnostic-looking lines there or in passing blocks are batch
-# context. Each section displays up to 40 lines. The raw log holds the rest.
-# A child replaying complete Dune report syntax is indistinguishable from
-# Dune in a flat log.
+# verbose or (cd ... && ...) reports (single-line with optional redirections, or
+# multiline single-quoted shell commands). A dependency chain can identify a
+# locationless Dune error as batch context. Only a chain joins wrapped error
+# lines. Ordinary multiline errors contribute their diagnostic head.
+# For managed quiet runs via `_resolve` (`run`, `start`, `prepush`, `fresh`,
+# `bisect` on `build`, `runtest`, `test`, `exec`), `_resolve` injects
+# `--always-show-command-line` after recording `cmd`, so Dune emits a
+# `(cd ... && ...)` boundary above every failing or output-producing action
+# while leaving silent passing actions quiet. It does not inject when the Dune
+# argv before `--` already asks for a bounded display (`--display=short|verbose`
+# or `--verbose` and their Cmdliner prefixes) or carries/implies
+# `--always-show-command-line` (`--always-show-command-line`, `--release`,
+# `-p`/`--for-release-of-packages`, and their prefixes), nor for unknown
+# subcommands, leading global options, or `repeat` (which compares raw
+# per-iteration stderr streams where Dune's pipe temp paths would add drift).
+# Quiet output without a command marker (such as pre-existing logs),
+# locationless errors without a failed command report, and text before the first
+# recognized block have no action owner. Diagnostic-looking lines there or in
+# passing blocks are batch context. Each section displays up to 40 lines. The
+# raw log holds the rest. A child replaying complete Dune report syntax is
+# indistinguishable from Dune in a flat log.
 #
 # Usage:
 #   tools/test-run.sh run   [--cap N] [--test-cap N] [--expect-backend B]... [--targets-file FILE]...
@@ -1424,7 +1435,7 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
         value=1; continue ;;
       -j[0-9]* | --cache=* | --display=* | --diff-command=* | --trace-file=* | --error-reporting=* | \
         --sandbox=* | --force | -f | --auto-promote | --no-buffer | --stop-on-first-error | \
-        --action-stdout-on-success=* | --action-stderr-on-success=*)
+        --always-show-command-line | --action-stdout-on-success=* | --action-stderr-on-success=*)
         continue ;;
       -*) return 0 ;;
       @*) ;;
@@ -2798,6 +2809,47 @@ explicit_trace_file() { # dune argv; 0 iff it names a trace file before dune's `
   return 1
 }
 
+# 0 iff the dune argv before `--` already asks for a non-quiet display or
+# carries/implies `--always-show-command-line` (gh-ocannl-2442). Dune rejects
+# duplicate `--always-show-command-line`, including alongside `--release` or
+# `-p`/`--for-release-of-packages` (which expand to include it).
+explicit_action_boundaries() { # dune argv
+  local arg display_next=0 skip_next=0
+  for arg do
+    if [ "$display_next" = 1 ]; then
+      display_next=0
+      case $arg in
+        s | sh | sho | shor | short | v | ve | ver | verb | verbo | verbos | verbose) return 0 ;;
+      esac
+      continue
+    fi
+    if [ "$skip_next" = 1 ]; then
+      skip_next=0
+      continue
+    fi
+    case $arg in
+      --) return 1 ;;
+      --display) display_next=1 ;;
+      --display=*)
+        case ${arg#*=} in
+          s | sh | sho | shor | short | v | ve | ver | verb | verbo | verbos | verbose) return 0 ;;
+        esac ;;
+      --alw* | --rel* | --for-* | --verb*) return 0 ;;
+      -p | -p?*) return 0 ;;
+      -[fw]*)
+        if [[ $arg =~ ^-[fw]*p ]]; then return 0; fi
+        if [[ $arg =~ ^-[fw]*[jx]$ ]]; then skip_next=1; fi ;;
+      -j | -x | --alias | --alias-rec | --action-stdout-on-success | --action-stderr-on-success | \
+        --build-dir | --cache | --cache-check-probability | --cache-storage-mode | --config-file | \
+        --default-target | --diff-command | --dump-gc-stats | --error-reporting | --file-watcher | \
+        --instrument-with | --only-packages | --pkg | --profile | --root | --sandbox | \
+        --target-exec | --terminal-persistence | --trace-file | --watch-exclusions | --workspace)
+        skip_next=1 ;;
+    esac
+  done
+  return 1
+}
+
 # `fresh`'s operands (see the header): per-test aliases, each once, and `-j N`,
 # into dune's argv `build --force --cache=disabled ALIAS... [-j N]` (fresh_args)
 # and the alias list (fresh_aliases). The run's build directory goes in at
@@ -4112,11 +4164,16 @@ failure_diagnostics() {
   LC_ALL=C awk '
     BEGIN {
       sgr = sprintf("%c", 27) "\\[[0-9;]*m"
+      sq = sprintf("%c", 39)
       location = "^File \"[^\"]+\", lines? [0-9]+(-[0-9]+)?"
       error_head = "^Error( \\((warning|alert) [^)]*\\))?:"
       short_target = "(alias )?[^[:space:]]+"
       short_status = " \\((exit -?[0-9]+|got signal [[:alnum:]]+|had unexpected output on [^)]+)\\)$"
       line_limit = 40
+    }
+    function single_quotes(s,   tmp) {
+      tmp = s
+      return gsub(sq, "&", tmp)
     }
     function add(line,   owner) {
       owner = active ? block : 0
@@ -4133,6 +4190,14 @@ failure_diagnostics() {
     {
       gsub(sgr, "")
       sub(/\r$/, "")
+      if (in_cmd_quote) {
+        if (cmd_quote_lines < 64 && !/^(exit: |=== |test-run: |(Entering|Leaving) directory )/) {
+          cmd_quote_lines++
+          if (single_quotes($0) % 2 == 1) in_cmd_quote = 0
+          next
+        }
+        in_cmd_quote = 0
+      }
       located = $0 ~ (location "(, characters [0-9]+-[0-9]+)?:$")
 
       # Dune pads the short display program to at least twelve columns.
@@ -4140,7 +4205,9 @@ failure_diagnostics() {
               substr($0, RLENGTH + 1) ~ ("^" short_target "( \\[[^]]+\\])?(" short_status "|$)")
       verbose_fail = /^Command \[[0-9]+\] (exited with code -?[0-9]+|got signal [[:alnum:]]+):$/
       short_fail = short && $0 ~ short_status
-      command = /^\(cd .+ && .+\)( (<|>|2>|&>) .+)?$/
+      command_single = /^\(cd .+ && .+\)( (<|>|2>|&>) .+)?$/
+      command_multi = !command_single && /^\(cd .+ && / && (single_quotes($0) % 2 == 1)
+      command = command_single || command_multi
       chained = /^-> required by /
       boundary = short || command || chained ||
                  /^(Output\[[0-9]+\]:|Running\[[0-9]+\]:|exit: |=== |test-run: |(Entering|Leaving) directory )/
@@ -4190,7 +4257,10 @@ failure_diagnostics() {
           }
         }
         site = ""
-        if (active) next
+        if (active) {
+          if (command_multi) { in_cmd_quote = 1; cmd_quote_lines = 0 }
+          next
+        }
       }
       if (verbose_fail || short_fail) {
         start_failure($0)
@@ -4198,10 +4268,15 @@ failure_diagnostics() {
         short_command = short_fail
         next
       }
-      if (command && short_command) { short_command = 0; next }
+      if (command && short_command) {
+        short_command = 0
+        if (command_multi) { in_cmd_quote = 1; cmd_quote_lines = 0 }
+        next
+      }
       short_command = 0
       if (boundary) {
         active = 0
+        if (command_multi) { in_cmd_quote = 1; cmd_quote_lines = 0 }
         next
       }
       if (active && error) {
@@ -6025,6 +6100,18 @@ case $sub in
       [[ ! $arg =~ $per_test_alias_re ]] ||
         named_tests+=("$arg")
     done
+    # Managed quiet runs record action command boundaries so failing actions
+    # stay separated from passing actions that print to stderr (gh-ocannl-2442).
+    # Injected after `cmd` was recorded, before `--trace-file`, so `--trace-file`
+    # stays at position 2 and `command:` stays the caller's.
+    if ! explicit_action_boundaries "$@"; then
+      case $1 in
+        build | runtest | test | exec)
+          boundary_sub=$1
+          shift
+          set -- "$boundary_sub" --always-show-command-line "$@" ;;
+      esac
+    fi
     # The batch's dune writes its trace into the run directory, for the run's
     # slowest actions (see explicit_trace_file) -- after `cmd` was recorded,
     # so the command the digest prints is still the caller's. Not where the

@@ -714,6 +714,9 @@ for arg in "$@"; do
     --trace-file | --trace-file=*)
       [ -z "${REPEAT_TEST_TRACE_ARGS:-}" ] ||
         printf '%s %s %s\n' "$pos" "$side" "${arg#--trace-file=}" >>"$REPEAT_TEST_TRACE_ARGS" ;;
+    --always-show-command-line)
+      [ -z "${REPEAT_TEST_BOUNDARY_ARGS:-}" ] ||
+        printf '%s %s\n' "$pos" "$side" >>"$REPEAT_TEST_BOUNDARY_ARGS" ;;
   esac
 done
 # The runner's own is told by where it points: the trace of a directory holding
@@ -732,6 +735,18 @@ if [ $# -ge 2 ] && own_trace "$2"; then
   shift 2
   set -- "$trace_sub" "$@"
   [ -z "${REPEAT_TEST_TRACE:-}" ] || cp "$REPEAT_TEST_TRACE" "$trace_to"
+fi
+# The runner's injected `--always-show-command-line` sits immediately after the
+# subcommand (and `own_trace` above). Strip at most one there unless a leg asks
+# to observe the raw boundary flag (`REPEAT_TEST_KEEP_BOUNDARY=1`), so a doubled
+# or misplaced flag still surfaces in `REPEAT_TEST_CALLS`.
+if [ -z "${REPEAT_TEST_KEEP_BOUNDARY:-}" ] && [ $# -ge 2 ] && [ "$2" = --always-show-command-line ]; then
+  case $1 in
+    build | runtest | test | exec)
+      boundary_sub=$1
+      shift 2
+      set -- "$boundary_sub" "$@" ;;
+  esac
 fi
 # A build directory the argv names is made, as dune would (leg 81: a `fresh`
 # run's own goes with the run).
@@ -1343,10 +1358,13 @@ own_trace() { # <word>; 0 iff it is --trace-file=<a run directory>/trace.csexp
   d=${d%/trace.csexp}
   [ -f "$d/wt" ] && [ -f "$d/cap" ] && [ -f "$d/log" ]
 }
-shown=() prev2= prev1= dropped=
+shown=() prev2= prev1= dropped= dropped_boundary=
 for arg in "$@"; do
   if [ -z "$dropped" ] && own_trace "$arg" && [ "${prev2##*/}" = dune ]; then
-    case $prev1 in build | runtest | test | exec) dropped=1; prev2=$prev1 prev1=$arg; continue ;; esac
+    case $prev1 in build | runtest | test | exec) dropped=1; continue ;; esac
+  fi
+  if [ -z "$dropped_boundary" ] && [ "$arg" = --always-show-command-line ] && [ "${prev2##*/}" = dune ]; then
+    case $prev1 in build | runtest | test | exec) dropped_boundary=1; continue ;; esac
   fi
   shown+=("$arg")
   prev2=$prev1 prev1=$arg

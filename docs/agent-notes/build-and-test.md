@@ -1655,11 +1655,19 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   against a fixture dune that emits dune's exact refusal stderr, with the red-run and guard controls.
   The digest groups diagnostic lines under the failed Dune action that reported them
   (gh-ocannl-2345). The short and verbose displays and the command lines Dune shows in CI
-  supply action boundaries. A quiet run can give a failure location and then print several
-  actions' output with no boundary. In cc-36, `where_scope_generator` failed its wall-time
-  claim and a passing archive-refusal control printed its child tool's fatal error
-  (gh-ocannl-2299). Quiet diagnostics without a recognized owner appear in batch context.
-  Leg 36b of `tools/test-test-run-digest.sh` pins both the marked and the quiet forms.
+  supply action boundaries. For managed quiet runs (`run`, `start`, `prepush`, `fresh`, `bisect`
+  on `build`, `runtest`, `test`, `exec`), `_resolve` injects `--always-show-command-line` after
+  recording `cmd` (gh-ocannl-2442), so Dune emits `(cd ... && ...)` boundaries above failing and
+  output-producing actions while silent passing actions stay quiet; it skips injection when the
+  argv before `--` already asks for `--display=short|verbose` or `--verbose` or carries/implies
+  `--always-show-command-line` (`--always-show-command-line`, `--release`,
+  `-p`/`--for-release-of-packages`, and their Cmdliner prefixes), and leaves `repeat` untouched
+  so Dune's pipe temp paths do not introduce stderr drift across iterations. Pre-existing or
+  unmarked quiet diagnostics without a recognized owner still appear in batch context (as in
+  cc-36, where `where_scope_generator` failed its wall-time claim beside a passing
+  archive-refusal control's fatal error, gh-ocannl-2299). Legs 36b, 36c and 36d of
+  `tools/test-test-run-digest.sh` pin the parser forms, option injection/suppression and real
+  quiet Dune runs.
   One refusal is asked of dune BEFORE the batch (gh-ocannl-1448): a `dune build` alias operand dune
   does not know (`@test/operations/runtest-misspelt`) used to surface only after the launch had
   resolved the backends, waited for and taken the fleet slot and probed the device. `_resolve`
