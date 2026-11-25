@@ -16,9 +16,18 @@
 # On hosts where /bin/bash reports exactly 3.2, selected members run under
 # /bin/bash instead of the PATH interpreter, including --affected and merge
 # builds. Else they run under this dispatcher's Bash; no 3.2 leg is claimed.
-# HARNESS opening lines name that interpreter. A private PATH entry carries it
-# to nested `bash` calls and `#!/usr/bin/env bash` subjects; ${BASH} also names
-# it in each member. Absolute interpreter paths intentionally remain explicit.
+# On macOS (uname -s = Darwin), `awk` is also pinned to `mawk` inside that same
+# private PATH entry (searched on PATH via `type -P mawk`, then standard
+# Homebrew paths `/opt/homebrew/bin/mawk` and `/usr/local/bin/mawk`), so macOS
+# runs exercise Linux mawk semantics rather than macOS's BWK `/usr/bin/awk`
+# (gh-ocannl-2414). Where `mawk` is missing on macOS, the run refuses (exit 2)
+# before taking a fleet slot or starting any member, naming `brew install mawk`,
+# and never falls back to BWK awk. Non-Darwin hosts are unaffected.
+# HARNESS opening lines name that interpreter (and the pinned `awk` on macOS).
+# A private PATH entry carries both to nested `bash`/`awk` calls and
+# `#!/usr/bin/env bash` or `#!/usr/bin/env awk` subjects; ${BASH} also names
+# the Bash interpreter in each member. Absolute interpreter paths intentionally
+# remain explicit.
 # A check needing newer Bash syntax gates on its running BASH_VERSINFO and
 # declares itself not applicable; the dispatcher has no member skip list.
 # --list remains interpreter-independent and runs no members.
@@ -521,6 +530,34 @@ if [ "$affected" = 1 ] && [ ! -s "$affected_table" ]; then
   fi
   exit_with 0
 fi
+# On macOS, pin `awk` to `mawk` (gh-ocannl-2414) so harnesses exercise Linux
+# mawk semantics instead of macOS's BWK `/usr/bin/awk`. Checked before taking a
+# fleet slot so a missing `mawk` refuses immediately without waiting on a slot.
+darwin_mawk_fallbacks=(/opt/homebrew/bin/mawk /usr/local/bin/mawk)
+member_awk=
+resolve_darwin_awk() {
+  local cand dir
+  [ "$(uname -s 2>/dev/null)" = Darwin ] || return 0
+  cand=$(type -P mawk 2>/dev/null || :)
+  if [ -n "$cand" ] && [ -f "$cand" ] && [ -x "$cand" ]; then
+    case $cand in
+      /*) member_awk=$cand ;;
+      *)
+        dir=$(CDPATH= cd -- "$(dirname -- "$cand")" && pwd) || exit_with 2
+        member_awk=$dir/${cand##*/} ;;
+    esac
+    return 0
+  fi
+  for cand in ${darwin_mawk_fallbacks[@]+"${darwin_mawk_fallbacks[@]}"}; do
+    if [ -f "$cand" ] && [ -x "$cand" ]; then
+      member_awk=$cand
+      return 0
+    fi
+  done
+  echo "test-harnesses.sh: macOS requires mawk to pin awk for shell harnesses (macOS /usr/bin/awk is BWK awk and hides Linux mawk defects; no fallback). Install it with: brew install mawk" >&2
+  exit_with 2
+}
+[ "$list" = 1 ] || resolve_darwin_awk
 # The fleet's run-time correctness slot (see the header): the whole run, this
 # script again, inside one `execution slot --cpu`. Taken here, after every
 # refusal above and before anything below is exported -- the fleet-worker.sh
@@ -600,9 +637,13 @@ if /bin/bash -c '[ "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}" = 3.2 ]' 2>/dev/nul
   member_bash=/bin/bash
 fi
 member_version=$("$member_bash" -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"') || exit_with 2
+member_banner="$member_version $member_bash${member_awk:+; awk $member_awk}"
 interpreter_dir=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-bash.XXXXXX") || exit_with 2
 scratch+=("$interpreter_dir")
 ln -s "$member_bash" "$interpreter_dir/bash" || exit_with 2
+if [ -n "$member_awk" ]; then
+  ln -s "$member_awk" "$interpreter_dir/awk" || exit_with 2
+fi
 export PATH="$interpreter_dir:$PATH"
 outputs=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-output.XXXXXX") ||
   { echo "test-harnesses.sh: cannot create the member output directory" >&2; exit_with 2; }
@@ -791,7 +832,7 @@ if [ "$jobs" = 1 ]; then
   for ((i = 0; i < total; i++)); do
     script=${run_scripts[i]}
     member_argv "$i"
-    printf '\nHARNESS %s (%s; bash %s %s)\n' "${run_commands[i]}" "${run_tiers[i]}" "$member_version" "$member_bash"
+    printf '\nHARNESS %s (%s; bash %s)\n' "${run_commands[i]}" "${run_tiers[i]}" "$member_banner"
     member_output "$script"
     rc=0
     if [ "$ci_real_dune" = 1 ]; then
@@ -837,7 +878,7 @@ else
     while [ "$printed" -lt "$started" ] && [ -n "${ended[printed]-}" ]; do
       script=${run_scripts[printed]}
       member_output "$script"
-      printf '\nHARNESS %s (%s; bash %s %s)\n' "${run_commands[printed]}" "${run_tiers[printed]}" "$member_version" "$member_bash"
+      printf '\nHARNESS %s (%s; bash %s)\n' "${run_commands[printed]}" "${run_tiers[printed]}" "$member_banner"
       cat "$output" "$output.err"
       member_ended "$printed" "${ended[printed]}" "$output.err" "${member_times[printed]}"
       printed=$((printed + 1)) progressed=1
@@ -854,7 +895,7 @@ else
     for ((i = printed; i < started; i++)); do
       script=${run_scripts[i]}
       member_output "$script"
-      printf '\nHARNESS %s (%s; bash %s %s)\n' "${run_commands[i]}" "${run_tiers[i]}" "$member_version" "$member_bash"
+      printf '\nHARNESS %s (%s; bash %s)\n' "${run_commands[i]}" "${run_tiers[i]}" "$member_banner"
       cat "$output" "$output.err"
       printf 'HARNESS %s exit: %s\n' "$script" "${ended[i]}"
     done

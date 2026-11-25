@@ -6088,6 +6088,14 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   publishes as `owed-run: v2 linux-shell ... os=Linux ... targets=...`. A `v2 run` record carries
   no OS attestation and never satisfies `linux:*` needs, and a `linux-shell` record never
   satisfies `runtest` or `train`.
+- **macOS `mawk` pin for shell tests (gh-ocannl-2414).** Beside the scoped owed Linux shell leg,
+  both `tools/test-harnesses.sh` (next to its Bash 3.2 interpreter pin) and
+  `test/operations/sweep_harness_driver.ml` (for the Dune-run shell tests) pin `awk` to `mawk` on
+  macOS via a private `PATH` entry, searching `PATH` and then `/opt/homebrew/bin/mawk` and
+  `/usr/local/bin/mawk`. Missing `mawk` on macOS refuses (exit 2) with `brew install mawk` before
+  taking a fleet slot or running any member, and never falls back to macOS's BWK `/usr/bin/awk`
+  (which hides Linux mawk constructs such as `in`-inside-assignment). Non-Darwin hosts are
+  unaffected.
 - The gate is witnessed only locally: the nightly `ci` run reads master, where there is no PR head.
 
 ## The cross-machine sweep

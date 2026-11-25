@@ -745,6 +745,12 @@ jobs:
       run: |
         gcc=$(tools/ci-aarch64-cross.sh "$RUNNER_TEMP/aarch64-cross")
         echo "AARCH64_CROSS_GCC=$gcc" >> "$GITHUB_ENV"
+    # On macOS, test/operations/sweep_harness_driver.ml pins `awk` to `mawk`
+    # so Dune-run shell tests exercise Linux mawk semantics rather than macOS's
+    # BWK `/usr/bin/awk` (gh-ocannl-2414).
+    - name: Install mawk for Dune shell tests (macOS)
+      if: runner.os == 'macOS' && matrix.suite == 'main'
+      run: command -v mawk >/dev/null 2>&1 || brew install mawk
     # cc_march_census's listing cache, kept between runs (gh-ocannl-1502). The
     # census compiles every emitted kernel under every -march column at -O2
     # and -O3, about 700 compiles, and with the cache under the runner's home
