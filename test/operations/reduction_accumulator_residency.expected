@@ -64,6 +64,31 @@ conditional reduction matches the selected-term reference: true
 conditional reduction contributes exactly one census site: true
 conditional reduction census follows the controlling read: true
 conditional reduction casts its controlling device read: true
+guarded Set_dynamic RMW matches host reference: true
+guarded Set_dynamic RMW reports one volatile RMW site iff requested: true
+guarded Set_dynamic RMW emits a bounds-guard if statement: true
+guarded Set_dynamic RMW casts its If-guard device read iff requested: true
+guarded Set_dynamic RMW emits one scatter assignment statement: true
+guarded Set_dynamic RMW casts its dynamic index and RHS device reads iff requested: true
+lowered embedding backward scatter matches host oracle: true
+lowered embedding backward scatter reports one volatile RMW site iff requested: true
+lowered embedding backward scatter emits a bounds guard on ids: true
+lowered embedding backward scatter casts its If-guard ids read iff requested: true
+lowered embedding backward scatter casts its table-grad RMW read iff requested: true
+guarded Set RMW matches host reference: true
+guarded Set RMW reports one volatile RMW site iff requested: true
+guarded Set RMW emits its controlling if statement: true
+guarded Set RMW casts its If-guard device read iff requested: true
+guarded Set RMW casts its RMW reads iff requested: true
+non-RMW Set_dynamic overwrite matches host reference: true
+non-RMW Set_dynamic overwrite stays unqualified and unrecorded: true
+static-axis-varying Set_dynamic RMW matches host reference: true
+static-axis-varying Set_dynamic RMW stays unqualified and unrecorded: true
+outer-guarded Set_dynamic RMW matches host reference: true
+outer guard above repeating serial loop stays unqualified: true
+inner Set_dynamic RMW still qualifies and records iff requested: true
+routine-local Set_dynamic RMW matches host reference: true
+routine-local Set_dynamic RMW stays unqualified and unrecorded: true
 an inner bracket summarizes only its own sites: true
 the enclosing bracket sees both, in emission order: true
 an inner bracket reports the capability of the compile it bracketed: true

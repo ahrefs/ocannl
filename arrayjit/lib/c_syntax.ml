@@ -648,8 +648,9 @@ type volatility_site =
           request the workaround, or no materialized device read was emitted in its accumulating
           loop. The accumulator itself stays register-resident in both cases. *)
   | Volatile_rmw_reads of string
-      (** A device-memory read-modify-write at an address invariant across an enclosing serial loop,
-          whose device reads use expression-level [volatile] pointer casts. *)
+      (** A device-memory read-modify-write ([Set] at an address invariant across an enclosing
+          serial loop, or [Set_dynamic] whose static axes are invariant across an enclosing serial
+          loop), whose device reads use expression-level [volatile] pointer casts. *)
 [@@deriving sexp_of, equal]
 
 type volatility_summary = {
@@ -1334,13 +1335,14 @@ module type C_syntax_config = sig
       identically, and so does moving the preceding store to an unrelated cell. What does remove it,
       besides the qualifier, is having the accumulating loop read no device pointer at all.
 
-      When [true]: device reads in reduction-shaped scope-local updates and their controlling
-      guards, and in [Set] statements that read the written node at an index invariant across at
-      least one enclosing serial [for] loop, use expression-level [volatile] pointer casts. The cast
-      exists only while rendering the accumulating expression: accumulator declarations, opening
-      reads, vectorized/packed paths and MMA reads stay plain. Pointwise updates and non-accumulator
-      locals stay untouched. Both decisions are reported per routine by the volatility census
-      ({!volatility_summary}).
+      When [true]: device reads in reduction-shaped scope-local updates, in [Set] statements that
+      read the written node at an index invariant across at least one enclosing serial [for] loop,
+      in [Set_dynamic] statements that read the written node with static axes invariant across at
+      least one enclosing serial [for] loop, and in [If] guards inside that serial loop controlling
+      any of those updates, use expression-level [volatile] pointer casts. The cast exists only
+      while rendering those expressions: accumulator declarations, opening reads, vectorized/packed
+      paths and MMA reads stay plain. Pointwise updates and non-accumulator locals stay untouched.
+      Both decisions are reported per routine by the volatility census ({!volatility_summary}).
 
       The form matters: qualifying the accumulator itself cost 1.06x on a memory-bound per-thread
       reduction, 2.15x on an accumulator-bound dependency chain and 4.1x on a long single-threaded
@@ -4924,13 +4926,59 @@ module C_syntax (B : C_syntax_config) = struct
       !(ctx.volatile_accumulation_scope_stack)
       ~f:(Hash_set.add ctx.volatile_accumulation_scopes)
 
-  (* Accumulator locals whose updates are controlled by a statement subtree. A materialized read in
-     an [If] condition around [Set_local (id, id + constant)] is the accumulating loop's ONLY device
-     read, so it needs the same expression-level cast as a read in the update itself. Walk nested
-     scalar scopes too: an [If] can control a statement whose value owns the accumulator. *)
-  let controlled_accumulation_scope_ids ctx body =
+  (* See {!C_syntax_config.volatile_serial_accumulation}: identify a per-iteration device-memory
+     read-modify-write whose target address can repeat across an enclosing serial loop — for [Set],
+     all indices free of some enclosing serial loop; for [Set_dynamic], all static axes (axes other
+     than [dyn_axis]) free of some enclosing serial loop, since the runtime dynamic index can repeat
+     across iterations. *)
+  let rmw_volatile_reads ctx ?dyn_axis ~tn ~idcs exprs =
+    B.volatile_serial_accumulation
+    && List.exists !(ctx.serial_loop_stack) ~f:(fun s ->
+        not
+          (Array.existsi idcs ~f:(fun ax idx ->
+               (match dyn_axis with Some d -> ax <> d | None -> true)
+               && Indexing.axis_index_mentions_symbol s idx)))
+    (* Only kernel-parameter-derived device pointers: routine-local scratch is declared as a plain
+       local array (not address-castable, and compiler-visible anyway). *)
+    && Tn.Placements.is_materialized_force ctx.current_placements tn
+         (Site "433:rmw-volatile-pointer")
+    &&
+    let rec reads_tn (llsc : Low_level.scalar_t) =
+      match llsc with
+      | Low_level.Get (tn2, _) -> Tn.equal tn tn2
+      | Get_dynamic { tn = tn2; dyn_value = v, _; _ } -> Tn.equal tn tn2 || reads_tn v
+      | Local_scope { body; _ } -> body_reads_tn body
+      | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
+      | Ternop (_, (a, _), (b, _), (c, _)) -> reads_tn a || reads_tn b || reads_tn c
+      | Binop (_, (a, _), (b, _)) -> reads_tn a || reads_tn b
+      | Unop (_, (a, _)) -> reads_tn a
+    and body_reads_tn (body : Low_level.t) =
+      match body with
+      | Low_level.Seq (a, b) -> body_reads_tn a || body_reads_tn b
+      | For_loop { body; _ } -> body_reads_tn body
+      | Scan_loop { carried; body; _ } ->
+          List.exists carried ~f:(fun c -> reads_tn c.Low_level.init) || body_reads_tn body
+      | If { cond = c, _; body } -> reads_tn c || body_reads_tn body
+      | Set { llsc; _ } | Set_local (_, llsc) -> reads_tn llsc
+      | Set_dynamic { dyn_value = v, _; llsc; _ } -> reads_tn v || reads_tn llsc
+      | Set_from_vec { arg = a, _; _ } -> reads_tn a
+      | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier
+      | Tile_mma _ ->
+          false
+    in
+    List.exists exprs ~f:reads_tn
+
+  (* Accumulator locals and device-memory RMWs whose updates are controlled by a statement subtree.
+     A materialized read in an [If] condition around [Set_local (id, id + constant)] or a serial
+     [Set]/[Set_dynamic] RMW is part of the accumulating loop, so it needs the same expression-level
+     cast as reads in the update itself. Walk nested scalar scopes too: an [If] can control a
+     statement whose value owns the accumulator. For RMWs, [rmw_volatile_reads] tests against
+     [ctx.serial_loop_stack] at the [If] itself, so a guard outside the repeating serial loop stays
+     plain. *)
+  let controlled_accumulation_targets ctx body =
     let seen = Hash_set.create (module Int) in
     let ids = ref [] in
+    let has_rmw = ref false in
     let add (id : Low_level.scope_id) value =
       if
         Hash_set.mem ctx.accum_scope_ids id.scope_id
@@ -4958,15 +5006,21 @@ module C_syntax (B : C_syntax_config) = struct
       | Low_level.Seq (a, b) ->
           stmt a;
           stmt b
-      | For_loop { body; _ } | If { body; _ } -> stmt body
+      | For_loop { body; _ } -> stmt body
+      | If { cond = c, _; body } ->
+          scalar c;
+          stmt body
       | Scan_loop { carried; body; _ } ->
           List.iter carried ~f:(fun c -> List.iter (scan_implicit_set_locals c) ~f:stmt);
           stmt body
       | Set_local (id, value) ->
           add id value;
           scalar value
-      | Set { llsc; _ } -> scalar llsc
-      | Set_dynamic { dyn_value = value, _; llsc; _ } ->
+      | Set { tn; idcs; llsc; _ } ->
+          if rmw_volatile_reads ctx ~tn ~idcs [ llsc ] then has_rmw := true;
+          scalar llsc
+      | Set_dynamic { tn; idcs; dyn_axis; dyn_value = value, _; llsc; _ } ->
+          if rmw_volatile_reads ctx ~dyn_axis ~tn ~idcs [ value; llsc ] then has_rmw := true;
           scalar value;
           scalar llsc
       | Set_from_vec { arg = value, _; _ } -> scalar value
@@ -4976,7 +5030,7 @@ module C_syntax (B : C_syntax_config) = struct
           ()
     in
     stmt body;
-    List.rev !ids
+    (List.rev !ids, !has_rmw)
 
   let pp_device_read_ptr ctx tn ident_doc =
     let open PPrint in
@@ -7214,46 +7268,9 @@ module C_syntax (B : C_syntax_config) = struct
         let ident_doc = string (get_ident tn) in
         let dims = Lazy.force tn.dims in
         let store_prec = Lazy.force tn.storage_prec in
-        (* See {!C_syntax_config.volatile_serial_accumulation}: identify a per-iteration
-           read-modify-write whose target address is invariant across an enclosing serial loop. The
-           old workaround shadowed the target pointer for the whole statement; gh-ocannl-820 instead
-           brackets [pp_scalar] so only device reads in the accumulating expression acquire an
-           expression-level volatile pointer cast. *)
-        let rmw_volatile_reads =
-          B.volatile_serial_accumulation
-          && List.exists !(ctx.serial_loop_stack) ~f:(fun s ->
-              not (Array.exists idcs ~f:(Indexing.axis_index_mentions_symbol s)))
-          (* Only kernel-parameter-derived device pointers: routine-local scratch is declared as a
-             plain local array (not address-castable, and compiler-visible anyway). *)
-          && Tn.Placements.is_materialized_force ctx.current_placements tn
-               (Site "433:rmw-volatile-pointer")
-          &&
-          let rec reads_tn (llsc : Low_level.scalar_t) =
-            match llsc with
-            | Low_level.Get (tn2, _) -> Tn.equal tn tn2
-            | Get_dynamic { tn = tn2; dyn_value = v, _; _ } -> Tn.equal tn tn2 || reads_tn v
-            | Local_scope { body; _ } -> body_reads_tn body
-            | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
-                false
-            | Ternop (_, (a, _), (b, _), (c, _)) -> reads_tn a || reads_tn b || reads_tn c
-            | Binop (_, (a, _), (b, _)) -> reads_tn a || reads_tn b
-            | Unop (_, (a, _)) -> reads_tn a
-          and body_reads_tn (body : Low_level.t) =
-            match body with
-            | Low_level.Seq (a, b) -> body_reads_tn a || body_reads_tn b
-            | For_loop { body; _ } -> body_reads_tn body
-            | Scan_loop { carried; body; _ } ->
-                List.exists carried ~f:(fun c -> reads_tn c.Low_level.init) || body_reads_tn body
-            | If { cond = c, _; body } -> reads_tn c || body_reads_tn body
-            | Set { llsc; _ } | Set_local (_, llsc) -> reads_tn llsc
-            | Set_dynamic { dyn_value = v, _; llsc; _ } -> reads_tn v || reads_tn llsc
-            | Set_from_vec { arg = a, _; _ } -> reads_tn a
-            | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _
-            | Workgroup_barrier | Tile_mma _ ->
-                false
-          in
-          reads_tn llsc
-        in
+        (* See {!C_syntax_config.volatile_serial_accumulation}: bracket [pp_scalar] so device reads
+           in a serial device-memory RMW acquire expression-level volatile pointer casts. *)
+        let rmw_volatile = rmw_volatile_reads ctx ~tn ~idcs [ llsc ] in
         (* gh-487 phase 2: a staging copy into an async-eligible pipelined tile renders as the
            backend's asynchronous copy — the same address arithmetic on both sides (the write-side
            buffer rotation included), byte-for-byte, so the bitwise-identity invariant is untouched;
@@ -7290,7 +7307,7 @@ module C_syntax (B : C_syntax_config) = struct
             let (local_defs, val_doc, volatile_read_emitted), emitted_reads =
               capture_stmt_reads ctx (fun () ->
                   let (local_defs, val_doc), volatile_read_emitted =
-                    (with_volatile_accumulation_reads ctx) rmw_volatile_reads (fun () ->
+                    (with_volatile_accumulation_reads ctx) rmw_volatile (fun () ->
                         (pp_scalar ctx) prec llsc)
                   in
                   let val_doc = wrap_conversion narrowing val_doc in
@@ -7378,23 +7395,31 @@ module C_syntax (B : C_syntax_config) = struct
         let ident_doc = string (get_ident tn) in
         let dims = Lazy.force tn.dims in
         let store_prec = Lazy.force tn.storage_prec in
+        let rmw_volatile = rmw_volatile_reads ctx ~dyn_axis ~tn ~idcs [ iv; llsc ] in
         let prec, narrowing = store_precs ~store_prec llsc in
-        let (offset_doc, local_defs, val_doc), emitted_reads =
+        let (offset_doc, local_defs, val_doc, volatile_read_emitted), emitted_reads =
           capture_stmt_reads ctx (fun () ->
-              let dyn_defs, dyn_expr = (pp_scalar ctx) iprec iv in
-              let idx_typ = B.typ_of_prec (Ops.index_prec ()) in
-              let dyn_idx_doc = string ("((" ^ idx_typ ^ ")(") ^^ dyn_expr ^^ string "))" in
-              let offset_doc = pp_array_offset_dyn (idcs, dims) ~dyn_axis ~dyn_idx_doc in
-              let val_defs, val_doc = (pp_scalar ctx) prec llsc in
+              let (offset_doc, dyn_defs, val_defs, val_doc), volatile_read_emitted =
+                (with_volatile_accumulation_reads ctx) rmw_volatile (fun () ->
+                    let dyn_defs, dyn_expr = (pp_scalar ctx) iprec iv in
+                    let idx_typ = B.typ_of_prec (Ops.index_prec ()) in
+                    let dyn_idx_doc = string ("((" ^ idx_typ ^ ")(") ^^ dyn_expr ^^ string "))" in
+                    let offset_doc = pp_array_offset_dyn (idcs, dims) ~dyn_axis ~dyn_idx_doc in
+                    let val_defs, val_doc = (pp_scalar ctx) prec llsc in
+                    (offset_doc, dyn_defs, val_defs, val_doc))
+              in
               let val_doc = wrap_conversion narrowing val_doc in
               let local_defs =
                 pp_local_defs ctx
                   ~check:(Some c, [ (iprec, iv); (prec, llsc) ])
                   (dyn_defs @ val_defs)
               in
-              (offset_doc, local_defs, val_doc))
+              (offset_doc, local_defs, val_doc, volatile_read_emitted))
         in
         record_classified_store ctx ~tn ~reads:(reads_of_uids emitted_reads) llsc;
+        if volatile_read_emitted && !(ctx.volatility_census_enabled) then
+          ctx.volatility_events :=
+            Site (Volatile_rmw_reads (get_ident tn)) :: !(ctx.volatility_events);
         let assignment =
           let stored_doc = store_cell ctx tn val_doc in
           group
@@ -8303,19 +8328,19 @@ module C_syntax (B : C_syntax_config) = struct
                     fallback_or_tiled ())))
     | If { cond = c, cprec; body } ->
         (* Guarded statement (axis-types proposal §2): [body] executes iff [cond] is nonzero -- C's
-           [if] tests exactly that. A guard controlling a recognized scope-local accumulation is
-           part of its accumulating loop: when the guard is its only materialized read, excluding it
-           would remove the Metal workaround altogether (gh-ocannl-820, Codex P1 round 3 on #553).
-           Keep the context expression-local, and only while already inside a serial loop. *)
-        let controlled_scopes =
+           [if] tests exactly that. A guard controlling a recognized scope-local accumulation or a
+           serial device-memory RMW ([Set] or [Set_dynamic]) is part of its accumulating loop
+           (gh-ocannl-820, gh-ocannl-2474). Keep the context expression-local, and only while
+           already inside a serial loop. *)
+        let controlled_scopes, controls_rmw =
           if B.volatile_serial_accumulation && not (List.is_empty !(ctx.serial_loop_stack)) then
-            (controlled_accumulation_scope_ids ctx) body
-          else []
+            (controlled_accumulation_targets ctx) body
+          else ([], false)
         in
         let (local_defs, cond_doc), _ =
           (with_volatile_accumulation_reads ctx)
             ~scope_ids:controlled_scopes
-            (not (List.is_empty controlled_scopes))
+            ((not (List.is_empty controlled_scopes)) || controls_rmw)
             (fun () -> (pp_scalar ctx) (comp_prec cprec) c)
         in
         let local_defs =

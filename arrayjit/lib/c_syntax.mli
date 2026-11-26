@@ -373,8 +373,9 @@ type volatility_site =
           request the workaround, or no materialized device read was emitted in its accumulating
           loop. The accumulator itself stays register-resident in both cases. *)
   | Volatile_rmw_reads of string
-      (** A device-memory read-modify-write at an address invariant across an enclosing serial loop,
-          whose device reads use expression-level [volatile] pointer casts. *)
+      (** A device-memory read-modify-write ([Set] at an address invariant across an enclosing
+          serial loop, or [Set_dynamic] whose static axes are invariant across an enclosing serial
+          loop), whose device reads use expression-level [volatile] pointer casts. *)
 [@@deriving sexp_of, equal]
 
 type volatility_summary = {
@@ -823,13 +824,14 @@ module type C_syntax_config = sig
       identically, and so does moving the preceding store to an unrelated cell. What does remove it,
       besides the qualifier, is having the accumulating loop read no device pointer at all.
 
-      When [true]: device reads in reduction-shaped scope-local updates and their controlling
-      guards, and in [Set] statements that read the written node at an index invariant across at
-      least one enclosing serial [for] loop, use expression-level [volatile] pointer casts. The cast
-      exists only while rendering the accumulating expression: accumulator declarations, opening
-      reads, vectorized/packed paths and MMA reads stay plain. Pointwise updates and non-accumulator
-      locals stay untouched. Both decisions are reported per routine by the volatility census
-      ({!volatility_summary}).
+      When [true]: device reads in reduction-shaped scope-local updates, in [Set] statements that
+      read the written node at an index invariant across at least one enclosing serial [for] loop,
+      in [Set_dynamic] statements that read the written node with static axes invariant across at
+      least one enclosing serial [for] loop, and in [If] guards inside that serial loop controlling
+      any of those updates, use expression-level [volatile] pointer casts. The cast exists only
+      while rendering those expressions: accumulator declarations, opening reads, vectorized/packed
+      paths and MMA reads stay plain. Pointwise updates and non-accumulator locals stay untouched.
+      Both decisions are reported per routine by the volatility census ({!volatility_summary}).
 
       The form matters: qualifying the accumulator itself cost 1.06x on a memory-bound per-thread
       reduction, 2.15x on an accumulator-bound dependency chain and 4.1x on a long single-threaded

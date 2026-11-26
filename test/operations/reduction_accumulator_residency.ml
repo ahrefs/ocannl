@@ -587,6 +587,447 @@ let () =
           ~substring:("volatile float*)" ^ Test_utils.Generated.node_ident ~facts "res_guard_mask"))
        volatility.requested)
 
+(* {1 Serial device-memory RMWs: Set_dynamic scatters and guarded RMWs (gh-ocannl-2474)}
+
+   Metal's [volatile_serial_accumulation] workaround also covers [Set_dynamic] device-memory RMWs
+   whose static axes are invariant across an enclosing serial loop, plus any [If] guard inside that
+   serial loop controlling a device-memory RMW ([Set] or [Set_dynamic]). Each leg executes against a
+   host reference with nonzero prefill and discriminating inputs, checks the volatility census, and
+   pins the emitted text via [Test_utils.Generated]. *)
+let () =
+  let module Cs = Ir.C_syntax in
+  let module Ops = Ir.Ops in
+  let prefill_ctx = prefill in
+  let open Ll_test in
+  let normalize st = String.concat ~sep:" " (String.split_on_chars st ~on:[ '\n'; '\t' ]) in
+  let read_routine (routine : Context.routine) name =
+    let artifact = if List.length routine.Context.segments > 1 then name ^ "__seg" else name in
+    Test_utils.Generated.read artifact
+  in
+  let has_volatile_float source label =
+    String.is_substring source
+      ~substring:("volatile float*)" ^ Test_utils.Generated.node_ident ~facts label)
+  in
+  let has_volatile_uint source label =
+    String.is_substring source
+      ~substring:("volatile uint*)" ^ Test_utils.Generated.node_ident ~facts label)
+  in
+  let rmw_idents (v : Cs.volatility_summary) =
+    List.filter_map v.Cs.entries ~f:(fun (_, site) ->
+        match site with Cs.Volatile_rmw_reads name -> Some name | _ -> None)
+  in
+  let if_lines source =
+    List.filter_map (String.split_lines source) ~f:(fun line ->
+        let trimmed = String.strip line in
+        if String.is_prefix trimmed ~prefix:"if (" then Some trimmed else None)
+  in
+  (* Leg 1: hand-built guarded [Set_dynamic] scatter RMW over a serial position loop. Repeated token
+     2 accumulates 3 hits, token 0 accumulates 1 hit, token 4 is OOB and skipped, and untouched rows
+     keep their nonzero prefill. *)
+  let () =
+    let vocab = 4 and d_model = 2 and positions = 5 in
+    let ids =
+      node_factory ~prec:Ops.uint32 ~first_id:9910 ~dims:[| positions |] () "res_scat_ids"
+    in
+    let src = node_factory ~first_id:9911 ~dims:[| positions; d_model |] () "res_scat_src" in
+    let acc = node_factory ~first_id:9912 ~dims:[| d_model; vocab |] () "res_scat_acc" in
+    List.iter [ ids; src; acc ] ~f:materialize;
+    let pos = sym () and d = sym () in
+    let id_read = get ids [| iter pos |] in
+    let guard = cmp_at Ops.uint32 Ops.Cmplt id_read (ic vocab) in
+    let acc_idcs = [| iter d; fixed 0 |] in
+    let scatter =
+      scatter_add ~tn:acc ~idcs:acc_idcs ~dyn_axis:1 ~dyn_value:(id_read, Ops.uint32)
+        (get src [| iter pos; iter d |], Ops.single)
+    in
+    let program = loop_n pos positions (if_at Ops.uint32 guard (loop_n d d_model scatter)) in
+    (* [optimize] refuses [Set_dynamic]; supply a plain raw twin with the same nodes. *)
+    let raw =
+      loop_n pos positions
+        (loop_n d d_model
+           (set acc
+              [| iter d; fixed 0 |]
+              (add
+                 (get acc [| iter d; fixed 0 |])
+                 (add (get src [| iter pos; iter d |]) (get ids [| iter pos |])))))
+    in
+    let opt = optimize_scoped ~materialized:[ ids; src; acc ] ~name:"res_scat_rmw" ~raw program in
+    let ctx, routine = link ~name:"res_scat_rmw" opt in
+    let ids_vals = [| 2.; 0.; 2.; 4.; 2. |] in
+    let src_vals =
+      Array.init (positions * d_model) ~f:(fun k ->
+          let p = k / d_model and ch = k % d_model in
+          1.0 +. (4.0 *. Float.of_int p) +. (0.5 *. Float.of_int ch))
+    in
+    let acc_init = Array.init (d_model * vocab) ~f:(fun k -> 10.0 +. (0.25 *. Float.of_int k)) in
+    let ctx =
+      run_linked (ctx, routine) ~seed:[ (ids, ids_vals); (src, src_vals); (acc, acc_init) ]
+    in
+    let expected = Array.copy acc_init in
+    for p = 0 to positions - 1 do
+      let v = Int.of_float ids_vals.(p) in
+      if v >= 0 && v < vocab then
+        for ch = 0 to d_model - 1 do
+          let idx = (ch * vocab) + v in
+          expected.(idx) <- expected.(idx) +. src_vals.((p * d_model) + ch)
+        done
+    done;
+    Verdict.p_all2 "guarded Set_dynamic RMW matches host reference" (Context.get_values ctx acc)
+      expected ~f:Float.equal;
+    let v = routine.Context.volatility in
+    let acc_ident = Test_utils.Generated.node_ident ~facts "res_scat_acc" in
+    Verdict.p "guarded Set_dynamic RMW reports one volatile RMW site iff requested"
+      ((v.Cs.volatile_rmw_reads = if v.Cs.requested then 1 else 0)
+      && v.Cs.volatile_accumulations = 0 && v.Cs.plain_accumulations = 0
+      && List.equal String.equal (rmw_idents v) (if v.Cs.requested then [ acc_ident ] else []));
+    let source = read_routine routine "res_scat_rmw" in
+    let guard_lines = if_lines source in
+    Verdict.p_exists "guarded Set_dynamic RMW emits a bounds-guard if statement" guard_lines
+      ~f:(fun line ->
+        String.is_substring line ~substring:(Test_utils.Generated.node_ident ~facts "res_scat_ids"));
+    Verdict.p_all "guarded Set_dynamic RMW casts its If-guard device read iff requested" guard_lines
+      ~f:(fun line -> Bool.equal (has_volatile_uint line "res_scat_ids") v.Cs.requested);
+    let statements = List.map (String.split source ~on:';') ~f:normalize in
+    let scatter_stmts =
+      List.filter statements ~f:(fun st ->
+          match String.substr_index st ~pattern:" = " with
+          | None -> false
+          | Some at ->
+              let lhs = String.strip (String.prefix st at) in
+              String.is_substring lhs ~substring:(acc_ident ^ "["))
+    in
+    Verdict.p "guarded Set_dynamic RMW emits one scatter assignment statement"
+      (List.length scatter_stmts = 1);
+    Verdict.p_all
+      "guarded Set_dynamic RMW casts its dynamic index and RHS device reads iff requested"
+      scatter_stmts ~f:(fun st ->
+        match String.substr_index st ~pattern:" = " with
+        | None -> false
+        | Some at ->
+            let lhs = String.strip (String.prefix st at) in
+            let rhs = String.drop_prefix st (at + 3) in
+            (not (has_volatile_float lhs "res_scat_acc"))
+            && Bool.equal (has_volatile_uint lhs "res_scat_ids") v.Cs.requested
+            && Bool.equal (has_volatile_float rhs "res_scat_acc") v.Cs.requested
+            && Bool.equal (has_volatile_uint rhs "res_scat_ids") v.Cs.requested
+            && Bool.equal (has_volatile_float rhs "res_scat_src") v.Cs.requested)
+  in
+
+  (* Leg 2: end-to-end lowered embedding backward scatter through [rewrite_one_hot_reductions]. *)
+  let () =
+    Tensor.unsafe_reinitialize ();
+    let vocab = 6 and embed = 4 and positions = 5 in
+    let id_ints = [ 2; 0; 2; vocab; 2 ] in
+    let ids = Nn_blocks.class_ids_of_int_list ~label:"res_emb_ids" id_ints in
+    let one_hot = Nn_blocks.one_hot_of_ids ~num_classes:vocab ids in
+    let table =
+      TDSL.param
+        ~values:(Array.init (embed * vocab) ~f:(fun k -> 0.5 *. Float.of_int (k + 1)))
+        "res_emb_tbl" ~input_dims:[ vocab ] ~output_dims:[ embed ] ()
+    in
+    let coeff_vals =
+      Array.init (positions * embed) ~f:(fun k ->
+          let p = k / embed and d = k % embed in
+          1.0 +. (2.0 *. Float.of_int p) +. (0.25 *. Float.of_int d))
+    in
+    let coeff =
+      TDSL.ndarray coeff_vals ~label:[ "res_emb_coeff" ] ~batch_dims:[ positions ]
+        ~output_dims:[ embed ] ()
+    in
+    let%op embedded = table * one_hot in
+    let%op loss = (embedded *. coeff) ++ "...|... => |->0" in
+    let update = Train.grad_update loss in
+    let ctx = Context.auto () in
+    let ctx = Train.init_params ctx Train.IDX.empty loss in
+    let ctx, routine = Context.compile ~name:"res_emb_bwd" ctx update Ir.Indexing.Empty in
+    let table_grad = (Option.value_exn ~here:[%here] table.Tensor.diff).Tensor.grad in
+    let ctx = Context.run (prefill_ctx ctx table_grad) routine in
+    let expected = Array.create ~len:(embed * vocab) 0.0 in
+    List.iteri id_ints ~f:(fun p v ->
+        if v >= 0 && v < vocab then
+          for d = 0 to embed - 1 do
+            let idx = (d * vocab) + v in
+            expected.(idx) <- expected.(idx) +. coeff_vals.((p * embed) + d)
+          done);
+    Verdict.p_all2 "lowered embedding backward scatter matches host oracle"
+      (Context.get_values ctx table_grad)
+      expected ~f:Float.equal;
+    let v = routine.Context.volatility in
+    let grad_ident = Test_utils.Generated.node_ident ~facts "res_emb_tbl_grad" in
+    Verdict.p "lowered embedding backward scatter reports one volatile RMW site iff requested"
+      ((v.Cs.volatile_rmw_reads = if v.Cs.requested then 1 else 0)
+      && List.equal String.equal (rmw_idents v) (if v.Cs.requested then [ grad_ident ] else []));
+    let source = read_routine routine "res_emb_bwd" in
+    let guard_lines =
+      List.filter (if_lines source) ~f:(fun line ->
+          String.is_substring line ~substring:(Test_utils.Generated.node_ident ~facts "res_emb_ids"))
+    in
+    Verdict.p_exists "lowered embedding backward scatter emits a bounds guard on ids" guard_lines
+      ~f:(Fn.const true);
+    Verdict.p_all "lowered embedding backward scatter casts its If-guard ids read iff requested"
+      guard_lines ~f:(fun line -> Bool.equal (has_volatile_uint line "res_emb_ids") v.Cs.requested);
+    Verdict.p "lowered embedding backward scatter casts its table-grad RMW read iff requested"
+      (Bool.equal (has_volatile_float source "res_emb_tbl_grad") v.Cs.requested)
+  in
+
+  (* Leg 3: guarded unlocalized [Set] device-memory RMW inside a serial loop. The sibling store
+     [sink[i] = out[0]] prevents [try_localize_serial_reduce] from lifting [out[0]], leaving a
+     genuine guarded device-memory [Set] RMW whose [If] condition must also cast its device read
+     without double-counting the RMW in the volatility census. *)
+  let () =
+    let n = 6 in
+    let mask = node_factory ~first_id:9920 ~dims:[| n |] () "res_gset_mask" in
+    let src = node_factory ~first_id:9921 ~dims:[| n |] () "res_gset_src" in
+    let out = node_factory ~first_id:9922 ~dims:[| 1 |] () "res_gset_out" in
+    let sink = node_factory ~first_id:9923 ~dims:[| n |] () "res_gset_sink" in
+    List.iter [ mask; src; out; sink ] ~f:materialize;
+    let i = sym () in
+    let program =
+      loop_n i n
+        (if_
+           (get mask [| iter i |])
+           (seq
+              (set out [| fixed 0 |] (add (get out [| fixed 0 |]) (get src [| iter i |])))
+              (set sink [| iter i |] (get out [| fixed 0 |]))))
+    in
+    let opt = optimize ~materialized:[ mask; src; out; sink ] ~name:"res_gset_rmw" program in
+    let ctx, routine = link ~name:"res_gset_rmw" opt in
+    let mask_vals = [| 1.; 0.; 1.; 1.; 0.; 1. |] in
+    let src_vals = Array.init n ~f:(fun k -> 1.0 +. (2.0 *. Float.of_int k)) in
+    let sink_init = Array.init n ~f:(fun k -> -.(10.0 +. Float.of_int k)) in
+    let ctx =
+      run_linked (ctx, routine)
+        ~seed:[ (mask, mask_vals); (src, src_vals); (out, [| 5.0 |]); (sink, sink_init) ]
+    in
+    let expected_sink = Array.copy sink_init in
+    let acc = ref 5.0 in
+    for k = 0 to n - 1 do
+      if Float.(mask_vals.(k) <> 0.) then begin
+        acc := !acc +. src_vals.(k);
+        expected_sink.(k) <- !acc
+      end
+    done;
+    Verdict.p "guarded Set RMW matches host reference"
+      (Float.equal (Context.get_values ctx out).(0) !acc
+      && Array.equal Float.equal (Context.get_values ctx sink) expected_sink);
+    let v = routine.Context.volatility in
+    let out_ident = Test_utils.Generated.node_ident ~facts "res_gset_out" in
+    Verdict.p "guarded Set RMW reports one volatile RMW site iff requested"
+      ((v.Cs.volatile_rmw_reads = if v.Cs.requested then 1 else 0)
+      && List.equal String.equal (rmw_idents v) (if v.Cs.requested then [ out_ident ] else []));
+    let source = read_routine routine "res_gset_rmw" in
+    let guard_lines = if_lines source in
+    Verdict.p_exists "guarded Set RMW emits its controlling if statement" guard_lines
+      ~f:(fun line ->
+        String.is_substring line ~substring:(Test_utils.Generated.node_ident ~facts "res_gset_mask"));
+    Verdict.p_all "guarded Set RMW casts its If-guard device read iff requested" guard_lines
+      ~f:(fun line -> Bool.equal (has_volatile_float line "res_gset_mask") v.Cs.requested);
+    Verdict.p "guarded Set RMW casts its RMW reads iff requested"
+      (Bool.equal (has_volatile_float source "res_gset_out") v.Cs.requested
+      && Bool.equal (has_volatile_float source "res_gset_src") v.Cs.requested)
+  in
+
+  (* Negative controls: none of these is a serial device-memory RMW across the enclosing guard's
+     serial loop, so none may acquire spurious volatile casts even on Metal. *)
+  (* Negative control 1: non-RMW guarded [Set_dynamic] overwrite (does not read its target). *)
+  let () =
+    let vocab = 4 and positions = 4 in
+    let ids = node_factory ~prec:Ops.uint32 ~first_id:9930 ~dims:[| positions |] () "res_ow_ids" in
+    let src = node_factory ~first_id:9931 ~dims:[| positions |] () "res_ow_src" in
+    let out = node_factory ~first_id:9932 ~dims:[| vocab |] () "res_ow_out" in
+    List.iter [ ids; src; out ] ~f:materialize;
+    let pos = sym () in
+    let id_read = get ids [| iter pos |] in
+    let guard = cmp_at Ops.uint32 Ops.Cmplt id_read (ic vocab) in
+    let program =
+      loop_n pos positions
+        (if_at Ops.uint32 guard
+           (scatter ~tn:out
+              ~idcs:[| fixed 0 |]
+              ~dyn_axis:0 ~dyn_value:(id_read, Ops.uint32)
+              (get src [| iter pos |])))
+    in
+    let raw =
+      loop_n pos positions
+        (set out [| iter pos |] (add (get src [| iter pos |]) (get ids [| iter pos |])))
+    in
+    let opt = optimize_scoped ~materialized:[ ids; src; out ] ~name:"res_scat_ow" ~raw program in
+    let ctx, routine = link ~name:"res_scat_ow" opt in
+    let ids_vals = [| 3.; 1.; 4.; 1. |] in
+    let src_vals = [| 2.0; 4.0; 8.0; 16.0 |] in
+    let out_init = [| -1.; -2.; -3.; -4. |] in
+    let ctx =
+      run_linked (ctx, routine) ~seed:[ (ids, ids_vals); (src, src_vals); (out, out_init) ]
+    in
+    Verdict.p_all2 "non-RMW Set_dynamic overwrite matches host reference"
+      (Context.get_values ctx out) [| -1.; 16.0; -3.; 2.0 |] ~f:Float.equal;
+    let source = read_routine routine "res_scat_ow" in
+    Verdict.p "non-RMW Set_dynamic overwrite stays unqualified and unrecorded"
+      (routine.Context.volatility.Cs.volatile_rmw_reads = 0
+      && not (String.is_substring source ~substring:"volatile"))
+  in
+
+  (* Negative control 2: static-axis-varying [Set_dynamic] RMW — the sole serial loop [d] indexes
+     the static axis [0], so distinct iterations write disjoint rows. *)
+  let () =
+    let vocab = 4 and d_model = 3 in
+    let ids = node_factory ~prec:Ops.uint32 ~first_id:9940 ~dims:[| 1 |] () "res_st_ids" in
+    let src = node_factory ~first_id:9941 ~dims:[| d_model |] () "res_st_src" in
+    let acc = node_factory ~first_id:9942 ~dims:[| d_model; vocab |] () "res_st_acc" in
+    List.iter [ ids; src; acc ] ~f:materialize;
+    let d = sym () in
+    let id_read = get ids [| fixed 0 |] in
+    let guard = cmp_at Ops.uint32 Ops.Cmplt id_read (ic vocab) in
+    let program =
+      loop_n d d_model
+        (if_at Ops.uint32 guard
+           (scatter_add ~tn:acc
+              ~idcs:[| iter d; fixed 0 |]
+              ~dyn_axis:1 ~dyn_value:(id_read, Ops.uint32)
+              (get src [| iter d |], Ops.single)))
+    in
+    let raw =
+      loop_n d d_model
+        (set acc
+           [| iter d; fixed 0 |]
+           (add
+              (get acc [| iter d; fixed 0 |])
+              (add (get src [| iter d |]) (get ids [| fixed 0 |]))))
+    in
+    let opt =
+      optimize_scoped ~materialized:[ ids; src; acc ] ~name:"res_scat_static" ~raw program
+    in
+    let ctx, routine = link ~name:"res_scat_static" opt in
+    let src_vals = [| 1.5; 2.5; 3.5 |] in
+    let acc_init = Array.init (d_model * vocab) ~f:(fun k -> Float.of_int (k + 1)) in
+    let ctx =
+      run_linked (ctx, routine) ~seed:[ (ids, [| 2. |]); (src, src_vals); (acc, acc_init) ]
+    in
+    let expected = Array.copy acc_init in
+    for ch = 0 to d_model - 1 do
+      expected.((ch * vocab) + 2) <- expected.((ch * vocab) + 2) +. src_vals.(ch)
+    done;
+    Verdict.p_all2 "static-axis-varying Set_dynamic RMW matches host reference"
+      (Context.get_values ctx acc) expected ~f:Float.equal;
+    let source = read_routine routine "res_scat_static" in
+    Verdict.p "static-axis-varying Set_dynamic RMW stays unqualified and unrecorded"
+      (routine.Context.volatility.Cs.volatile_rmw_reads = 0
+      && not (String.is_substring source ~substring:"volatile"))
+  in
+
+  (* Negative control 3: an outer [If] above the repeating serial loop [pos] (varying only along
+     static axis [d]) stays plain while the inner [Set_dynamic] inside [pos] still qualifies. *)
+  let () =
+    let vocab = 4 and d_model = 2 and positions = 3 in
+    let flag = node_factory ~first_id:9950 ~dims:[| d_model |] () "res_og_flag" in
+    let ids = node_factory ~prec:Ops.uint32 ~first_id:9951 ~dims:[| positions |] () "res_og_ids" in
+    let src = node_factory ~first_id:9952 ~dims:[| positions; d_model |] () "res_og_src" in
+    let acc = node_factory ~first_id:9953 ~dims:[| d_model; vocab |] () "res_og_acc" in
+    List.iter [ flag; ids; src; acc ] ~f:materialize;
+    let d = sym () and pos = sym () in
+    let id_read = get ids [| iter pos |] in
+    let program =
+      loop_n d d_model
+        (if_
+           (get flag [| iter d |])
+           (loop_n pos positions
+              (scatter_add ~tn:acc
+                 ~idcs:[| iter d; fixed 0 |]
+                 ~dyn_axis:1 ~dyn_value:(id_read, Ops.uint32)
+                 (get src [| iter pos; iter d |], Ops.single))))
+    in
+    let raw =
+      loop_n d d_model
+        (loop_n pos positions
+           (set acc
+              [| iter d; fixed 0 |]
+              (add
+                 (get acc [| iter d; fixed 0 |])
+                 (add
+                    (get flag [| iter d |])
+                    (add (get src [| iter pos; iter d |]) (get ids [| iter pos |]))))))
+    in
+    let opt =
+      optimize_scoped ~materialized:[ flag; ids; src; acc ] ~name:"res_scat_outer" ~raw program
+    in
+    let ctx, routine = link ~name:"res_scat_outer" opt in
+    let flag_vals = [| 1.; 0. |] in
+    let ids_vals = [| 1.; 1.; 3. |] in
+    let src_vals = [| 1.; 2.; 4.; 8.; 16.; 32. |] in
+    let acc_init = Array.init (d_model * vocab) ~f:(fun k -> 0.5 *. Float.of_int k) in
+    let ctx =
+      run_linked (ctx, routine)
+        ~seed:[ (flag, flag_vals); (ids, ids_vals); (src, src_vals); (acc, acc_init) ]
+    in
+    let expected = Array.copy acc_init in
+    for ch = 0 to d_model - 1 do
+      if Float.(flag_vals.(ch) <> 0.) then
+        for p = 0 to positions - 1 do
+          let v = Int.of_float ids_vals.(p) in
+          expected.((ch * vocab) + v) <-
+            expected.((ch * vocab) + v) +. src_vals.((p * d_model) + ch)
+        done
+    done;
+    Verdict.p_all2 "outer-guarded Set_dynamic RMW matches host reference"
+      (Context.get_values ctx acc) expected ~f:Float.equal;
+    let v = routine.Context.volatility in
+    let source = read_routine routine "res_scat_outer" in
+    Verdict.p "outer guard above repeating serial loop stays unqualified"
+      (not (has_volatile_float source "res_og_flag"));
+    Verdict.p "inner Set_dynamic RMW still qualifies and records iff requested"
+      ((v.Cs.volatile_rmw_reads = if v.Cs.requested then 1 else 0)
+      && Bool.equal (has_volatile_float source "res_og_acc") v.Cs.requested)
+  in
+
+  (* Negative control 4: routine-local ([Local]) [Set_dynamic] RMW is not a device-memory pointer
+     and stays unqualified even inside a serial loop. *)
+  let () =
+    let vocab = 4 and positions = 4 in
+    let ids = node_factory ~prec:Ops.uint32 ~first_id:9960 ~dims:[| positions |] () "res_loc_ids" in
+    let src = node_factory ~first_id:9961 ~dims:[| positions |] () "res_loc_src" in
+    let tmp = node_factory ~first_id:9962 ~dims:[| vocab |] () "res_loc_tmp" in
+    let out = node_factory ~first_id:9963 ~dims:[| vocab |] () "res_loc_out" in
+    List.iter [ ids; src; out ] ~f:materialize;
+    Tn.update_memory_mode tmp Tn.Local (Site "99:test-setup");
+    let pos = sym () and v = sym () in
+    let id_read = get ids [| iter pos |] in
+    let guard = cmp_at Ops.uint32 Ops.Cmplt id_read (ic vocab) in
+    let program =
+      seq (zero tmp)
+        (seq
+           (loop_n pos positions
+              (if_at Ops.uint32 guard
+                 (scatter_add ~tn:tmp
+                    ~idcs:[| fixed 0 |]
+                    ~dyn_axis:0 ~dyn_value:(id_read, Ops.uint32)
+                    (get src [| iter pos |], Ops.single))))
+           (loop_n v vocab (set out [| iter v |] (get tmp [| iter v |]))))
+    in
+    let raw =
+      seq (zero tmp)
+        (seq
+           (loop_n pos positions
+              (set tmp
+                 [| fixed 0 |]
+                 (add
+                    (get tmp [| fixed 0 |])
+                    (add (get src [| iter pos |]) (get ids [| iter pos |])))))
+           (loop_n v vocab (set out [| iter v |] (get tmp [| iter v |]))))
+    in
+    let opt = optimize_scoped ~materialized:[ ids; src; out ] ~name:"res_scat_local" ~raw program in
+    let ctx, routine = link ~name:"res_scat_local" opt in
+    let ids_vals = [| 1.; 3.; 1.; 4. |] in
+    let src_vals = [| 2.0; 5.0; 7.0; 11.0 |] in
+    let ctx = run_linked (ctx, routine) ~seed:[ (ids, ids_vals); (src, src_vals) ] in
+    Verdict.p_all2 "routine-local Set_dynamic RMW matches host reference"
+      (Context.get_values ctx out) [| 0.; 9.0; 0.; 5.0 |] ~f:Float.equal;
+    let source = read_routine routine "res_scat_local" in
+    Verdict.p "routine-local Set_dynamic RMW stays unqualified and unrecorded"
+      (routine.Context.volatility.Cs.volatile_rmw_reads = 0
+      && not (String.is_substring source ~substring:"volatile"))
+  in
+  ()
+
 (* {1 The volatility census's own bracket}
 
    [with_volatility_census] is what makes the census a property of the compiled routine rather than
