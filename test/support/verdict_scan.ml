@@ -8209,12 +8209,19 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
       (* Resolve a record expression through local [let]s, [lazy], [Lazy.force] and trailing
          [let]/[sequence] wrappers to a record literal, preserving the evaluation scope of any
          eagerly evaluated record binding so projecting [.field] inspects only that field's
-         expression at the scope where it actually ran. *)
+         expression at the scope where it actually ran. Expressions that execute inside an
+         immediately applied anonymous function body before returning the record (sequence prefixes,
+         local [let] RHSs, and sibling fields of inline record literals) are collected in
+         [executed_exprs] so the caller inspects them alongside the projected field. *)
       method resolve_record_field ~eval_kind env record field_name =
         let seen = Hash_set.create (module Int) in
         let active_fns = Hash_set.create (module Int) in
+        let executed_exprs = ref [] in
         let eager_inline_args = ref [] in
-        let rec find ~ek env expr =
+        let record_exec ~in_inline_fn ~ek env e =
+          if in_inline_fn then executed_exprs := (ek, env, e) :: !executed_exprs
+        in
+        let rec find ~in_inline_fn ~ek env expr =
           let expr = strip expr in
           match expr.pexp_desc with
           | Pexp_record (fields, base) -> (
@@ -8224,10 +8231,21 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                       Some (value, env, ek)
                     else None)
               with
-              | Some hit -> Some hit
-              | None -> Option.bind base ~f:(find ~ek env))
-          | Pexp_lazy inner -> find ~ek env inner
-          | Pexp_sequence (_, b) -> find ~ek env b
+              | Some hit ->
+                  if in_inline_fn then (
+                    List.iter fields ~f:(fun ({ txt; _ }, value) ->
+                        if not (String.equal (Ppxlib.Longident.last_exn txt) field_name) then
+                          record_exec ~in_inline_fn ~ek env value);
+                    Option.iter base ~f:(record_exec ~in_inline_fn ~ek env));
+                  Some hit
+              | None ->
+                  if in_inline_fn then
+                    List.iter fields ~f:(fun (_, value) -> record_exec ~in_inline_fn ~ek env value);
+                  Option.bind base ~f:(find ~in_inline_fn ~ek env))
+          | Pexp_lazy inner -> find ~in_inline_fn:false ~ek env inner
+          | Pexp_sequence (a, b) ->
+              record_exec ~in_inline_fn ~ek env a;
+              find ~in_inline_fn ~ek env b
           | Pexp_let (rec_flag, bindings, b) ->
               let saved = current_eval_kind in
               current_eval_kind <- Some ek;
@@ -8238,7 +8256,10 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                     let denotes = self#denotations env rec_flag bindings in
                     self#bind_group env bindings denotes)
               in
-              find ~ek scope b
+              let rhs_env = match rec_flag with Recursive -> scope | Nonrecursive -> env in
+              List.iter bindings ~f:(fun binding ->
+                  record_exec ~in_inline_fn ~ek rhs_env binding.pvb_expr);
+              find ~in_inline_fn ~ek scope b
           | Pexp_ident { txt; _ } -> (
               match lookup_local_val env txt with
               | Some v when (not (Hash_set.mem seen v.lg_id)) && List.is_empty v.lg_proj ->
@@ -8251,14 +8272,14 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                           | Pexp_function _ | Pexp_lazy _ | Pexp_ident _ -> ek
                           | _ -> v.lg_eval_kind
                       in
-                      find ~ek:next_ek rhs_env rhs)
+                      find ~in_inline_fn:(in_inline_fn && v.lg_is_call_arg) ~ek:next_ek rhs_env rhs)
               | _ -> None)
           | Pexp_apply _ -> (
               match resolve_external_chain env expr with
               | Some
                   ( ([ "Lazy"; "force" ] | [ "Base"; "Lazy"; "force" ]),
                     [ (Ppxlib.Asttypes.Nolabel, arg, arg_env, _) ] ) ->
-                  find ~ek arg_env arg
+                  find ~in_inline_fn ~ek arg_env arg
               | _ -> (
                   match
                     Option.bind (resolve_local_fn_chain env expr) ~f:(fun (fn_id, all_args) ->
@@ -8272,7 +8293,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                         ~finally:(fun () -> Hash_set.remove active_fns fn_id)
                         ~f:(fun () ->
                           let call_env, _ = self#bind_local_call fn_env params all_args in
-                          find ~ek call_env body)
+                          find ~in_inline_fn:false ~ek call_env body)
                   | _ -> (
                       match resolve_inline_fn_apply env expr with
                       | Some (params, body, all_args) -> (
@@ -8286,19 +8307,25 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                           | [ (call_env, None, rhs) ], [] ->
                               eager_inline_args :=
                                 (ek, eager_args, !whole_ids, scrut_opt) :: !eager_inline_args;
-                              find ~ek call_env rhs
+                              find ~in_inline_fn:true ~ek call_env rhs
                           | _ -> None)
                       | None -> (
                           match expr.pexp_desc with
                           | Pexp_apply (callee, [ (Nolabel, arg) ]) -> (
                               match (strip callee).pexp_desc with
-                              | Pexp_ident { txt = Lident "force"; _ } -> find ~ek env arg
+                              | Pexp_ident { txt = Lident "force"; _ } ->
+                                  find ~in_inline_fn ~ek env arg
                               | _ -> None)
                           | _ -> None))))
           | _ -> None
         in
-        Option.map (find ~ek:eval_kind env record) ~f:(fun (field_expr, field_env, field_eval) ->
-            (field_expr, field_env, field_eval, List.rev !eager_inline_args))
+        Option.map (find ~in_inline_fn:false ~ek:eval_kind env record)
+          ~f:(fun (field_expr, field_env, field_eval) ->
+            ( field_expr,
+              field_env,
+              field_eval,
+              List.rev !executed_exprs,
+              List.rev !eager_inline_args ))
 
       method resolve_option_arg env expr =
         let seen = Hash_set.create (module Int) in
@@ -8624,7 +8651,9 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
          site). *)
       method inspect_gate ~is_sub_leg ~leg_scopes env expr =
         let seen_val_projs = Hash_set.create (module String) in
-        let visited_whole_vals = Hash_set.create (module Int) in
+        let visited_whole_ambient = Hash_set.create (module Int) in
+        let visited_whole_wrapped = Hash_set.create (module Int) in
+        let in_policy_wrapper = ref false in
         let seen_param_calls = Hash_set.create (module String) in
         let active_fn_calls = Hash_set.create (module Int) in
         let found_disallowed = ref [] in
@@ -8660,11 +8689,20 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
           current_eval_kind <- Some ek;
           Exn.protect ~finally:(fun () -> current_eval_kind <- saved) ~f
         in
+        let with_policy_wrapper f =
+          let saved = !in_policy_wrapper in
+          in_policy_wrapper := true;
+          Exn.protect ~finally:(fun () -> in_policy_wrapper := saved) ~f
+        in
         let rec scan_unused_inline_args ~eval_kind ~in_explicit_policy all_args extra_args
             whole_arg_ids scrut_opt =
+          let was_visited_whole id =
+            Hash_set.mem visited_whole_ambient id
+            || ((!in_policy_wrapper || in_explicit_policy) && Hash_set.mem visited_whole_wrapped id)
+          in
           (match scrut_opt with
           | Some (scrut, scrut_env, scrut_eval, scrut_whole_ids)
-            when not (List.exists scrut_whole_ids ~f:(Hash_set.mem visited_whole_vals)) ->
+            when not (List.exists scrut_whole_ids ~f:was_visited_whole) ->
               walk
                 ~eval_kind:(Option.value scrut_eval ~default:eval_kind)
                 ~in_explicit_policy scrut_env scrut
@@ -8674,7 +8712,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
               let is_scrut = Option.exists scrut_opt ~f:(fun (e, _, _, _) -> phys_equal e aexpr) in
               let visited_whole =
                 List.exists whole_arg_ids ~f:(fun (e, id) ->
-                    phys_equal e aexpr && Hash_set.mem visited_whole_vals id)
+                    phys_equal e aexpr && was_visited_whole id)
               in
               if (not in_extra) && (not is_scrut) && not visited_whole then
                 walk
@@ -8683,7 +8721,10 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
         and walk ~eval_kind ~in_explicit_policy env expr =
           let line = expr.pexp_loc.loc_start.pos_lnum in
           let visit_val v =
-            if List.is_empty v.lg_proj then Hash_set.add visited_whole_vals v.lg_id;
+            if List.is_empty v.lg_proj then
+              Hash_set.add
+                (if !in_policy_wrapper then visited_whole_wrapped else visited_whole_ambient)
+                v.lg_id;
             let vkey =
               Printf.sprintf "%d:%b:%s:" v.lg_id in_explicit_policy (eval_kind_key eval_kind)
             in
@@ -8724,8 +8765,10 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
               let field_name = Ppxlib.Longident.last_exn txt in
               let resolved_field = self#resolve_record_field ~eval_kind env record field_name in
               (match resolved_field with
-              | Some (field_expr, field_env, field_eval, eager_inline_args) ->
+              | Some (field_expr, field_env, field_eval, executed_exprs, eager_inline_args) ->
                   walk ~eval_kind:field_eval ~in_explicit_policy field_env field_expr;
+                  List.iter executed_exprs ~f:(fun (ek, e_env, e) ->
+                      walk ~eval_kind:ek ~in_explicit_policy e_env e);
                   List.iter eager_inline_args ~f:(fun (ek, all_args, whole_arg_ids, scrut_opt) ->
                       scan_unused_inline_args ~eval_kind:ek ~in_explicit_policy all_args []
                         whole_arg_ids scrut_opt)
@@ -8743,7 +8786,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
               match split_policy_wrapper_call env expr with
               | Some (_, non_cb, cb) ->
                   List.iter non_cb ~f:(walk ~eval_kind ~in_explicit_policy env);
-                  walk ~eval_kind ~in_explicit_policy:true env cb
+                  with_policy_wrapper (fun () -> walk ~eval_kind ~in_explicit_policy:true env cb)
               | None -> (
                   (* Classify [Ll_test.advertised], [Ll_test.tensorized_capability], and
                      [Ll_test.tensorized_matmul_capability] across local value aliases and
@@ -9349,7 +9392,8 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                   Option.iter c.pc_guard ~f:(walk ~eval_kind ~in_explicit_policy c_env);
                   walk_ctx_handle ~eval_kind ~in_explicit_policy c_env c.pc_rhs)
           | _ -> walk ~eval_kind ~in_explicit_policy env expr
-        and walk_projected ~eval_kind ~in_explicit_policy env proj expr =
+        and walk_projected ?(walk_eager_siblings = false) ~eval_kind ~in_explicit_policy env proj
+            expr =
           match proj with
           | [] | P_opaque :: _ -> walk ~eval_kind ~in_explicit_policy env expr
           | step :: rest -> (
@@ -9362,11 +9406,13 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                       if scrut_cap then check_cap_pat env c.pc_lhs;
                       let c_env = self#bind_match_pattern ~eval_kind env scrut c.pc_lhs in
                       Option.iter c.pc_guard ~f:(walk ~eval_kind ~in_explicit_policy c_env);
-                      walk_projected ~eval_kind ~in_explicit_policy c_env proj c.pc_rhs)
+                      walk_projected ~walk_eager_siblings ~eval_kind ~in_explicit_policy c_env proj
+                        c.pc_rhs)
               | Pexp_ifthenelse (c, t, f) ->
                   walk ~eval_kind ~in_explicit_policy env c;
-                  walk_projected ~eval_kind ~in_explicit_policy env proj t;
-                  Option.iter f ~f:(walk_projected ~eval_kind ~in_explicit_policy env proj)
+                  walk_projected ~walk_eager_siblings ~eval_kind ~in_explicit_policy env proj t;
+                  Option.iter f
+                    ~f:(walk_projected ~walk_eager_siblings ~eval_kind ~in_explicit_policy env proj)
               | Pexp_let (rec_flag, bindings, body) ->
                   let scope =
                     with_eval_kind eval_kind (fun () ->
@@ -9375,13 +9421,21 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                   in
                   let rhs_env = match rec_flag with Recursive -> scope | Nonrecursive -> env in
                   List.iter bindings ~f:(fun b ->
-                      if expr_is_cap_record rhs_env b.pvb_expr then check_cap_pat rhs_env b.pvb_pat);
-                  walk_projected ~eval_kind ~in_explicit_policy scope proj body
-              | Pexp_sequence (_, b) -> walk_projected ~eval_kind ~in_explicit_policy env proj b
+                      if expr_is_cap_record rhs_env b.pvb_expr then check_cap_pat rhs_env b.pvb_pat;
+                      if walk_eager_siblings then
+                        walk ~eval_kind ~in_explicit_policy rhs_env b.pvb_expr);
+                  walk_projected ~walk_eager_siblings ~eval_kind ~in_explicit_policy scope proj body
+              | Pexp_sequence (a, b) ->
+                  if walk_eager_siblings then walk ~eval_kind ~in_explicit_policy env a;
+                  walk_projected ~walk_eager_siblings ~eval_kind ~in_explicit_policy env proj b
               | Pexp_tuple es -> (
                   match step with
                   | P_tuple i when i < List.length es ->
-                      walk_projected ~eval_kind ~in_explicit_policy env rest (List.nth_exn es i)
+                      if walk_eager_siblings then
+                        List.iteri es ~f:(fun j e ->
+                            if j <> i then walk ~eval_kind ~in_explicit_policy env e);
+                      walk_projected ~walk_eager_siblings ~eval_kind ~in_explicit_policy env rest
+                        (List.nth_exn es i)
                   | _ -> walk ~eval_kind ~in_explicit_policy env expr)
               | Pexp_record (fields, base) -> (
                   match step with
@@ -9391,21 +9445,35 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                             if String.equal (Ppxlib.Longident.last_exn txt) fname then Some v
                             else None)
                       with
-                      | Some f_expr -> walk_projected ~eval_kind ~in_explicit_policy env rest f_expr
+                      | Some f_expr ->
+                          if walk_eager_siblings then (
+                            List.iter fields ~f:(fun ({ txt; _ }, v) ->
+                                if not (String.equal (Ppxlib.Longident.last_exn txt) fname) then
+                                  walk ~eval_kind ~in_explicit_policy env v);
+                            Option.iter base ~f:(walk ~eval_kind ~in_explicit_policy env));
+                          walk_projected ~walk_eager_siblings ~eval_kind ~in_explicit_policy env
+                            rest f_expr
                       | None -> (
+                          if walk_eager_siblings then
+                            List.iter fields ~f:(fun (_, v) ->
+                                walk ~eval_kind ~in_explicit_policy env v);
                           match base with
-                          | Some b -> walk_projected ~eval_kind ~in_explicit_policy env proj b
+                          | Some b ->
+                              walk_projected ~walk_eager_siblings ~eval_kind ~in_explicit_policy env
+                                proj b
                           | None -> walk ~eval_kind ~in_explicit_policy env expr))
                   | _ -> walk ~eval_kind ~in_explicit_policy env expr)
               | Pexp_construct ({ txt; _ }, Some payload) -> (
                   match step with
                   | P_ctor cname when String.equal (Ppxlib.Longident.last_exn txt) cname ->
-                      walk_projected ~eval_kind ~in_explicit_policy env rest payload
+                      walk_projected ~walk_eager_siblings ~eval_kind ~in_explicit_policy env rest
+                        payload
                   | _ -> walk ~eval_kind ~in_explicit_policy env expr)
               | Pexp_variant (lbl, Some payload) -> (
                   match step with
                   | P_ctor cname when String.equal ("`" ^ lbl) cname ->
-                      walk_projected ~eval_kind ~in_explicit_policy env rest payload
+                      walk_projected ~walk_eager_siblings ~eval_kind ~in_explicit_policy env rest
+                        payload
                   | _ -> walk ~eval_kind ~in_explicit_policy env expr)
               | Pexp_ident { txt; _ } -> (
                   (match step with
@@ -9435,7 +9503,9 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                                 | Pexp_function _ | Pexp_lazy _ | Pexp_ident _ -> eval_kind
                                 | _ -> v.lg_eval_kind
                             in
-                            walk_projected ~eval_kind:rhs_eval_kind ~in_explicit_policy rhs_env
+                            let next_siblings = walk_eager_siblings && v.lg_is_call_arg in
+                            walk_projected ~walk_eager_siblings:next_siblings
+                              ~eval_kind:rhs_eval_kind ~in_explicit_policy rhs_env
                               (v.lg_proj @ proj) rhs
                         | None -> ())
                   | None -> walk ~eval_kind ~in_explicit_policy env expr)
@@ -9452,7 +9522,8 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                           ~finally:(fun () -> Hash_set.remove active_fn_calls fn_id)
                           ~f:(fun () ->
                             let call_env, _ = self#bind_local_call fn_env params all_args in
-                            walk_projected ~eval_kind ~in_explicit_policy call_env proj body))
+                            walk_projected ~walk_eager_siblings:false ~eval_kind ~in_explicit_policy
+                              call_env proj body))
                   | None -> (
                       match resolve_inline_fn_apply env expr with
                       | Some (params, body, all_args) ->
@@ -9465,7 +9536,8 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                           in
                           List.iter arms ~f:(fun (c_env, guard, rhs) ->
                               Option.iter guard ~f:(walk ~eval_kind ~in_explicit_policy c_env);
-                              walk_projected ~eval_kind ~in_explicit_policy c_env proj rhs);
+                              walk_projected ~walk_eager_siblings:true ~eval_kind
+                                ~in_explicit_policy c_env proj rhs);
                           List.iter extra_args ~f:(fun (aexpr, aenv, aeval) ->
                               walk
                                 ~eval_kind:(Option.value aeval ~default:eval_kind)
@@ -9476,7 +9548,8 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                           let base, app_args = flatten_apply expr in
                           match (tuple_selector env base, app_args) with
                           | Some sel, [ (Ppxlib.Asttypes.Nolabel, arg) ] ->
-                              walk_projected ~eval_kind ~in_explicit_policy env (sel :: proj) arg
+                              walk_projected ~walk_eager_siblings ~eval_kind ~in_explicit_policy env
+                                (sel :: proj) arg
                           | _ ->
                               (match step with
                               | P_field fname when expr_is_cap_record env expr ->

@@ -7309,6 +7309,35 @@ let () =
   in_leg ~leg:sub "outside" (fun label -> p label true);
   Lazy.force run|ocaml},
       [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses an eager ambient read passed to an immediately applied anonymous function that \
+       consumes it inside Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:
+      ((fun x -> Test_utils.with_policy (fun p -> p) (fun () -> x))
+         (Ir.Numerics.get ()).tf32_matmuls)
+    ()
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg "wrapped inline arg" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses a disallowed call in a sequence prefix inside an immediately applied anonymous \
+       function whose record field is projected",
+      {ocaml|open Verdict.Claims
+type box = { ok : bool }
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:
+      (((fun () ->
+           ignore (Autotune.detect_conv llc);
+           { ok = true })
+          ())
+         .ok)
+    ()
+let () = in_leg ~leg "projected inline body" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
   ]
 
 let run_leg_gate_controls () =

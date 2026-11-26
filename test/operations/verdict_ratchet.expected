@@ -891,6 +891,8 @@ refuses a lazy policy-wrapper force after an uncalled optional default force and
 refuses a disallowed call in an unused optional default of an immediately applied anonymous function: true
 refuses a disallowed call in an eager argument when a destructured result projects only part of an immediately applied anonymous function: true
 refuses a lazy policy-wrapper force after a stored anonymous closure force and an unwrapped claim: true
+refuses an eager ambient read passed to an immediately applied anonymous function that consumes it inside Test_utils.with_policy: true
+refuses a disallowed call in a sequence prefix inside an immediately applied anonymous function whose record field is projected: true
 refuses a non-allowlisted leg-gate call, an ambient-policy mismatch, a stale leg-gate exemption, and a leg-gate reader that raised: true
 a claim reader's exception on a source that parses reaches the scanner-defect refusal, not the parse one: true
 a syntax matrix cell whose reader raises reads as a reader defect, not a parse failure: true
