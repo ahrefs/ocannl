@@ -993,6 +993,24 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   instance alongside the default entry points (gh-ocannl-2405). Its control checks the same
   search with and without a marker, and checks that an initialization pin precedes the search.
   The scanner's width-rule header gives the source forms it reads.
+- **Backend-default dependency markers** (`; ocannl-backend-default:`, gh-ocannl-2382) declare that
+  a test's result flips with a backend default whose governing definitions link reach cannot see.
+  Two forms share `Dune_stanza_scan.contained_marker_contract` and the `marker_backends` vocabulary
+  without `none`: a definition form inside a `(library)` stanza
+  (`; ocannl-backend-default: <name> = <backend>[,...] <Module.def>[,...] -- <reason>`, with no
+  spaces inside either comma list, `<name>` matching `[a-z][a-z0-9-]*`, and each `<Module.def>` a
+  top-level definition in `<dir>/<module>.ml` or a `(select)` arm for it), and a reader form inside
+  a `(test)`, `(tests)`, `(executable)`, `(executables)`, or inline-test `(library)` stanza
+  (`; ocannl-backend-default: <name> -- <reason>`). `env_var_deps` holds both forms: single
+  definition per name, every reader resolves to a defined name, every defined default has at least
+  one reader, every `Module.def` resolves to a real top-level definition, and every reader stanza
+  (or an executable's runner rule) must be able to run on at least one backend named by that
+  default (refusing e.g. a `cuda,hip` default on a `; ocannl-backend: cc` stanza).
+  `tools/affected-tests.sh` enforces the same closed syntax fail-closed (exit 2), promotes reached
+  readers from LINK-ONLY to first-tier REFERENCED when a diff touches a listed `Module.def` (or
+  changes `Module` as a whole; never comment-only or sibling-definition edits), and selects
+  matching GPU-backend defaults under `--gpu-gated` (while respecting a variant `(rule)`'s own
+  `; ocannl-backend:` override).
 - A ratchet whose corpus is the repository's own test sources will scan its OWN fixture, and a
   fixture that pins a shape has to spell that shape out to pin it — so the fixture matches, every
   time, by construction (gh-ocannl-668). Exempt the FILE rather than its matches one at a time: the
@@ -4550,10 +4568,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     gh-ocannl-1765), 6 named a changed definition with the module (4 listed with `Tn` beside a
     re-exporter such as `Context` or `Tensor`, but each also names `Tnode`, so the stricter
     re-export reading keeps them), 4 of them through a `test/support` helper definition.
-  - `affected --gpu-gated` (gh-ocannl-2074) filters that same ranked reach by declarations
-    in an alias's owner sources (`binds_hardware_grid`, `on_gpu`, or `leg`/`in_leg`/`skipped`
-    beside `on_cuda`, `on_hip`, `on_metal` or a literal GPU backend) or a GPU `ocannl-backend` marker inside its
-    owner or own rule.
+  - `affected --gpu-gated` (gh-ocannl-2074, gh-ocannl-2382) filters that same ranked reach by
+    declarations in an alias's owner sources (`binds_hardware_grid`, `on_gpu`, or
+    `leg`/`in_leg`/`skipped` beside `on_cuda`, `on_hip`, `on_metal` or a literal GPU backend), a
+    GPU `ocannl-backend` marker inside its owner or own rule, or a matching GPU
+    `; ocannl-backend-default:` marker whose listed `Module.def` targets overlap the current diff
+    (which also promotes the reached alias from LINK-ONLY to first-tier REFERENCED, so
+    `--gpu-gated --referenced-only` selects it directly).
     Use `--referenced-only` with it for direct mentions; omit that option to retain GPU-gated
     link-only consumers too. Stdout is aliases ready for a backend run; stderr names the gate
     evidence for exactly those aliases. This is the GPU-specific minimum: ungated every-backend

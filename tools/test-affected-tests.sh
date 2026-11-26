@@ -3345,6 +3345,137 @@ ML
   repo=$saved_repo
 fi
 
+if harness_leg 'backend-default markers'; then
+  saved_repo=$repo
+  repo=$TMP/backend-default-project
+  mkdir -p "$repo/tools" "$repo/lib" "$repo/other_lib" "$repo/tests" || exit 2
+  cp "$HERE/affected-tests.sh" "$repo/tools/" || exit 2
+  printf '(lang dune 3.20)\n' >"$repo/dune-project"
+  cat >"$repo/lib/dune" <<'DUNE'
+(library
+ ; ocannl-backend-default: plan = cuda,hip Gpu_core.gate -- GPU default seeding gate
+ ; ocannl-backend-default: cpu-plan = cc Gpu_core.gate -- CPU default plan
+ ; ocannl-backend-default: mixed-plan = cc,cuda Gpu_core.gate -- mixed CPU/CUDA default plan
+ (name gpu_core)
+ (modules gpu_core))
+DUNE
+  printf 'let gate = 1\nlet used = 2\n' >"$repo/lib/gpu_core.ml"
+  cat >"$repo/other_lib/dune" <<'DUNE'
+(library
+ (name other_core)
+ (modules gpu_core))
+DUNE
+  printf 'let gate = 100\nlet other_used = 200\n' >"$repo/other_lib/gpu_core.ml"
+  cat >"$repo/tests/dune" <<'DUNE'
+(
+ ; ocannl-backend-default: plan -- marker immediately after opening paren, before head atom
+ test
+ (name declared)
+ (modules declared)
+ (libraries gpu_core other_core))
+(test
+ (name undeclared)
+ (modules undeclared)
+ (libraries gpu_core))
+(test
+ ; ocannl-backend-default: cpu-plan -- reads CPU default plan
+ (name declared_cc)
+ (modules declared_cc)
+ (libraries gpu_core))
+(test
+ ; ocannl-backend: cc -- CPU-pinned reader of a cc,cuda default stays out of --gpu-gated
+ ; ocannl-backend-default: mixed-plan -- reads mixed plan on cc only
+ (name cc_mixed)
+ (modules cc_mixed)
+ (libraries gpu_core))
+(executable
+ ; ocannl-backend-default: plan -- slow runner inherits from executable owner
+ (name exec_reader)
+ (modules exec_reader)
+ (libraries gpu_core))
+(rule
+ (alias slow-exec_reader)
+ (action (run %{exe:exec_reader.exe})))
+(test
+ ; ocannl-backend-default: plan -- default test reads GPU plan
+ (name variant_owner)
+ (modules variant_owner)
+ (libraries gpu_core))
+(rule
+ ; CPU variant: ocannl-backend: cc -- prose-prefixed CPU-only override does not inherit GPU default marker
+ (target variant_owner-cc.actual)
+ (action (with-stdout-to %{target} (run %{exe:variant_owner.exe}))))
+(rule
+ (alias runtest-variant_owner-cc)
+ (action (diff variant_owner-cc.expected variant_owner-cc.actual)))
+DUNE
+  for f in declared undeclared declared_cc cc_mixed exec_reader variant_owner; do
+    printf 'let () = ignore Gpu_core.used\n' >"$repo/tests/$f.ml"
+  done
+  : >"$repo/tests/variant_owner-cc.expected"
+  git_q init -q && mutant_ignored "$repo" && git_q add -A && git_q commit -qm fixture || exit 2
+  # 1. Diff inside `gate`: declared GPU readers route under --gpu-gated --referenced-only;
+  # undeclared, CPU-only default, and CPU-pinned variant rule stay out.
+  printf 'let gate = 10\nlet used = 2\n' >"$repo/lib/gpu_core.ml"
+  affected --gpu-gated --referenced-only HEAD
+  sed -n 's/^affected: gpu-gated: \([^:]*\):.*/\1/p' "$err" | sort >"$TMP/bd-evidence"
+  sort "$out" >"$TMP/bd-selected"
+  if cmp -s "$TMP/bd-evidence" "$TMP/bd-selected"; then
+    report 0 'backend-default GPU evidence names exactly the selected aliases'
+  else report 1 'backend-default GPU evidence names exactly the selected aliases' "$(cat "$TMP/bd-evidence")"; fi
+  expect 'a diff inside a declared gate routes declared GPU readers (not undeclared, cc-default, or cc-pinned variant)' 0 \
+    @tests/runtest-declared @tests/runtest-variant_owner @tests/slow-exec_reader
+  # 2. --why explains the backend-default promotion.
+  affected --why @tests/runtest-declared HEAD
+  if [ "$rc" = 0 ] && grep -q '^affected: why @tests/runtest-declared: REFERENCED:' "$err" &&
+     grep -q 'backend-default marker `plan` (cuda,hip) matches changed definition(s) Gpu_core\.gate' "$err"; then
+    report 0 '--why explains a backend-default promotion with the default name and matched definition'
+  else report 1 '--why explains a backend-default promotion with the default name and matched definition' "$(cat "$err")"; fi
+  # 3. Plain --referenced-only promotes both GPU and CPU default readers (including cc-pinned reader of cc,cuda), keeping undeclared link-only.
+  affected --referenced-only HEAD
+  expect 'a CPU-only backend-default and cc-pinned mixed-default reader promote to first tier without entering --gpu-gated' 0 \
+    @tests/runtest-cc_mixed @tests/runtest-declared @tests/runtest-declared_cc @tests/runtest-variant_owner @tests/slow-exec_reader
+  # 4. Unfiltered --gpu-gated still omits undeclared, declared_cc, and the cc-pinned variant.
+  affected --gpu-gated HEAD
+  expect 'unfiltered --gpu-gated omits undeclared, CPU-only default, and cc-pinned variant' 0 \
+    @tests/runtest-declared @tests/runtest-variant_owner @tests/slow-exec_reader
+  # 5. Mutant negative control: neutralizing declared_touch drops the routed readers.
+  bd_label='negative control: disabling declared_touch drops the backend-default GPU readers'
+  if run_affected_mutant "$bd_label" \
+      'sub declared_touch {   # reached owner index -> arrayref of matched default records' \
+      'sub declared_touch { return [];' \
+      --gpu-gated --referenced-only HEAD; then
+    expect_mutant "$bd_label" 0
+  fi
+  # 6. Diff inside sibling definition `used` only: plan only lists `gate`, so no GPU routing.
+  printf 'let gate = 1\nlet used = 20\n' >"$repo/lib/gpu_core.ml"
+  affected --gpu-gated --referenced-only HEAD
+  expect 'a diff in an undeclared sibling definition routes no backend-default reader under --gpu-gated' 0
+  # 7. Comment-only diff in gpu_core.ml: touches no definition, so no routing.
+  printf '(* harmless comment *)\nlet gate = 1\nlet used = 2\n' >"$repo/lib/gpu_core.ml"
+  affected --gpu-gated --referenced-only HEAD
+  expect 'a comment-only diff routes no backend-default reader' 0
+  git_q checkout -q -- lib/gpu_core.ml || exit 2
+  # 7b. Same-named module in another library (`other_lib/gpu_core.ml`): must NOT route `lib`'s default.
+  printf 'let gate = 999\nlet other_used = 200\n' >"$repo/other_lib/gpu_core.ml"
+  affected --gpu-gated --referenced-only HEAD
+  expect 'a same-named module edit in another library routes no reader of the declaring library default' 0
+  git_q checkout -q -- other_lib/gpu_core.ml || exit 2
+  # 8. Whole-module --files: conservatively covers every definition of Gpu_core.
+  affected --gpu-gated --referenced-only --files lib/gpu_core.ml
+  expect 'a whole-module --files change routes declared GPU readers and still excludes undeclared and cc-only' 0 \
+    @tests/runtest-declared @tests/runtest-variant_owner @tests/slow-exec_reader
+  # 9. Malformed or undefined backend-default marker refuses fail-closed (exit 2).
+  printf '(test\n ; ocannl-backend-default: unknown-plan -- reads undefined default\n (name bad)\n (modules bad))\n' >>"$repo/tests/dune"
+  printf 'let () = ()\n' >"$repo/tests/bad.ml"
+  affected --files lib/gpu_core.ml
+  if [ "$rc" = 2 ] && [ ! -s "$out" ] && grep -q 'names `unknown-plan`, which no `(library)` stanza defines' "$err"; then
+    report 0 'an undefined backend-default reader name fails closed (exit 2)'
+  else report 1 'an undefined backend-default reader name fails closed (exit 2)' "exit $rc; $(cat "$err")"; fi
+  git_q checkout -q -- tests/dune && rm -f "$repo/tests/bad.ml" || exit 2
+  repo=$saved_repo
+fi
+
 if harness_leg 'sweep-driver rules emit reached-by-sweep-driver lines for literal .sh deps alone #sweep-driver'; then
   saved_repo=$repo
   repo=$TMP/sweep-driver-repo

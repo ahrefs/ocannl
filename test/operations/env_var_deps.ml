@@ -1882,6 +1882,10 @@ let main () =
      resolves it to, and where it was written -- compared across directories once every dune file is
      read. *)
   let relative_lock_sites = ref [] in
+  (* gh-ocannl-2382: backend-default definitions (on library stanzas) and readers (on program
+     stanzas), cross-checked after every dune file is read. *)
+  let backend_default_defs = ref [] in
+  let backend_default_readers = ref [] in
   (* Every `(env_var ...)` under a sexp, at any depth. *)
   let rec env_vars_in = function
     | Sexp.List [ Sexp.Atom "env_var"; Sexp.Atom name ] -> [ name ]
@@ -2293,6 +2297,114 @@ let main () =
          `(subdir b (rule … probe.exe))` name different programs and only the pair says which
          (gh-ocannl-747, Codex P2 round 3). *)
       let all_group_runners = file_stanzas in
+      (* gh-ocannl-2382: backend-default dependency markers, checked through the shared
+         contained-marker contract and cross-checked across files after the walk. *)
+      let default_contract = Scan.default_marker_contract content in
+      List.iter default_contract.Scan.contract_issues ~f:(function
+        | Scan.Malformed_marker { issue_line; issue_text; issue_malformed } ->
+            fail
+              (Printf.sprintf
+                 "%s:%d has a `%s` comment that does not parse as a marker: %s. The line reads \
+                  `;%s`"
+                 dune_file issue_line Scan.default_marker_sentinel
+                 (Scan.default_marker_malformed_reason issue_malformed)
+                 issue_text)
+        | Scan.Marker_in_wrong_stanza { issue_line; issue_why; _ } ->
+            fail
+              (Printf.sprintf "%s:%d carries a backend-default marker on the wrong stanza: %s"
+                 dune_file issue_line issue_why)
+        | Scan.Marker_outside_stanza { issue_line; _ } ->
+            fail
+              (Printf.sprintf
+                 "%s:%d has a backend-default marker that sits inside no stanza -- move it inside \
+                  the parentheses of the stanza it is about"
+                 dune_file issue_line)
+        | Scan.Marker_outside_comment
+            { issue_text_occurrences = in_text; issue_comment_occurrences = in_comments } ->
+            fail
+              (Printf.sprintf
+                 "%s spells `%s` %d times and only %d of them are in a comment -- a \
+                  backend-default marker outside a comment declares nothing"
+                 dune_file Scan.default_marker_sentinel in_text in_comments));
+      let backend_reach_of_marked_contract m =
+        match Scan.backend_rule_of m with
+        | Scan.Declares_variable -> `Any
+        | Scan.Names_backend (_, body) | Scan.Declares_and_names (_, body) ->
+            `Fixed (String.split body.Scan.backend ~on:',')
+        | Scan.Runs_nothing | Scan.Names_twice _ | Scan.Names_neither -> `Fixed []
+      in
+      let backend_reach_of_location ~subdir ~line =
+        match
+          List.find marker_contract.Scan.contract_stanzas ~f:(fun m ->
+              String.equal m.Scan.marker_stanza.Scan.marked_subdir subdir
+              && Int.equal m.Scan.marker_stanza.Scan.marked_line line)
+        with
+        | None -> `Fixed []
+        | Some m -> backend_reach_of_marked_contract m
+      in
+      let backend_reach_of_runner runner =
+        match
+          List.find marker_contract.Scan.contract_stanzas ~f:(fun m ->
+              phys_equal m.Scan.marker_stanza.Scan.marked_sexp runner)
+        with
+        | None -> `Fixed []
+        | Some m -> backend_reach_of_marked_contract m
+      in
+      let merge_reach a b =
+        match (a, b) with
+        | `Any, _ | _, `Any -> `Any
+        | `Fixed xs, `Fixed ys -> `Fixed (List.dedup_and_sort (xs @ ys) ~compare:String.compare)
+      in
+      List.iter default_contract.Scan.contract_stanzas ~f:(fun m ->
+          let stanza = m.Scan.marker_stanza in
+          let seen_reader_names = ref (Set.empty (module String)) in
+          List.iter m.Scan.stanza_markers ~f:(fun marker ->
+              match marker.Scan.contained_value with
+              | Scan.Default_definition
+                  { default_name; default_backends; default_targets; default_reason = _ } ->
+                  let def_dir = Scan.in_subdir dir stanza.Scan.marked_subdir in
+                  let select_arms = Scan.select_arms stanza.Scan.marked_sexp in
+                  backend_default_defs :=
+                    ( default_name,
+                      default_backends,
+                      default_targets,
+                      dune_file,
+                      marker.Scan.contained_line,
+                      def_dir,
+                      select_arms )
+                    :: !backend_default_defs
+              | Scan.Default_reader { default_name; default_reason = _ } ->
+                  if Set.mem !seen_reader_names default_name then
+                    fail
+                      (Printf.sprintf
+                         "%s:%d names the backend default `%s` more than once on the same stanza \
+                          -- drop the duplicate reader marker"
+                         dune_file marker.Scan.contained_line default_name)
+                  else (
+                    seen_reader_names := Set.add !seen_reader_names default_name;
+                    let reach =
+                      match stanza.Scan.marked_head with
+                      | "executable" | "executables" ->
+                          let runners =
+                            Scan.program_runners ~subdir:stanza.Scan.marked_subdir
+                              ~runner_stanzas:all_group_runners stanzas stanza.Scan.marked_sexp
+                            |> List.concat_map ~f:snd |> List.map ~f:fst
+                          in
+                          List.fold runners ~init:(`Fixed []) ~f:(fun acc runner ->
+                              merge_reach acc (backend_reach_of_runner runner))
+                      | _ ->
+                          backend_reach_of_location ~subdir:stanza.Scan.marked_subdir
+                            ~line:stanza.Scan.marked_line
+                    in
+                    backend_default_readers :=
+                      ( default_name,
+                        dune_file,
+                        marker.Scan.contained_line,
+                        Printf.sprintf "%s %s" stanza.Scan.marked_head
+                          (if String.is_empty stanza.Scan.marked_name then "<unnamed>"
+                           else stanza.Scan.marked_name),
+                        reach )
+                      :: !backend_default_readers)));
       (* gh-ocannl-800: collect the executable each repository-wide scan rule runs. Dune's main
          module contract makes [foo.exe] come from [foo.ml]; the source lookup below holds that
          relationship against the files this run was actually handed. This is deliberately a
@@ -3635,6 +3747,112 @@ let main () =
                       a run that can select cc -- drop the marker"
                      (width_marker_where marker.Scan.contained_line))));
       check_family_members ());
+  (* gh-ocannl-2382: cross-file validation of backend-default definitions and readers. *)
+  (let defs = List.rev !backend_default_defs in
+   let readers = List.rev !backend_default_readers in
+   let defs_by_name = Hashtbl.create (module String) in
+   List.iter defs ~f:(fun ((name, _, _, _, _, _, _) as def) ->
+       Hashtbl.add_multi defs_by_name ~key:name ~data:def);
+   let def_map = Hashtbl.create (module String) in
+   Hashtbl.to_alist defs_by_name
+   |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+   |> List.iter ~f:(fun (name, entries) ->
+       let entries = List.rev entries in
+       if List.length entries > 1 then
+         let places =
+           List.map entries ~f:(fun (_, _, _, file, line, _, _) -> Printf.sprintf "%s:%d" file line)
+           |> String.concat ~sep:", "
+         in
+         fail
+           (Printf.sprintf
+              "the backend default `%s` is defined more than once (%s) -- each default name must \
+               have one library definition"
+              name places)
+       else Hashtbl.set def_map ~key:name ~data:(List.hd_exn entries));
+   let parsed_defs_cache = Hashtbl.create (module String) in
+   let defs_of_source path on_disk =
+     Hashtbl.find_or_add parsed_defs_cache path ~default:(fun () ->
+         Test_scan.Scan_attempt.run (fun () ->
+             Sources.top_level_definition_names (In_channel.read_all on_disk)))
+   in
+   let reader_names =
+     List.map readers ~f:(fun (name, _, _, _, _) -> name) |> Set.of_list (module String)
+   in
+   List.iter defs ~f:(fun (name, _backends, targets, file, line, def_dir, select_arms) ->
+       if not (Set.mem reader_names name) then
+         fail
+           (Printf.sprintf
+              "the backend default `%s` defined at %s:%d has no reader stanza -- add a reader \
+               marker or drop the unused definition"
+              name file line);
+       List.iter targets ~f:(fun (mod_name, def_name) ->
+           let stem = String.uncapitalize mod_name ^ ".ml" in
+           let direct_path = Scan.in_subdir def_dir stem in
+           let candidate_paths =
+             match List.Assoc.find source_files ~equal:String.equal direct_path with
+             | Some on_disk -> [ (direct_path, on_disk) ]
+             | None ->
+                 List.filter_map select_arms ~f:(fun (target, arm) ->
+                     if String.equal (String.lowercase target) (String.lowercase stem) then
+                       let arm_path = Scan.in_subdir def_dir arm in
+                       Option.map (List.Assoc.find source_files ~equal:String.equal arm_path)
+                         ~f:(fun on_disk -> (arm_path, on_disk))
+                     else None)
+           in
+           match candidate_paths with
+           | [] ->
+               fail
+                 (Printf.sprintf
+                    "the backend default `%s` at %s:%d names `%s.%s`, but `%s` is not in the \
+                     scanned sources"
+                    name file line mod_name def_name direct_path)
+           | candidates ->
+               let found = ref false in
+               let had_error = ref false in
+               List.iter candidates ~f:(fun (path, on_disk) ->
+                   match defs_of_source path on_disk with
+                   | Test_scan.Scan_attempt.Scanned names ->
+                       if Set.mem names def_name then found := true
+                   | (Test_scan.Scan_attempt.Unparsed _ | Test_scan.Scan_attempt.Raised _) as err ->
+                       let detail =
+                         match err with
+                         | Test_scan.Scan_attempt.Unparsed where -> where
+                         | Test_scan.Scan_attempt.Raised msg -> msg
+                         | Test_scan.Scan_attempt.Scanned _ -> assert false
+                       in
+                       had_error := true;
+                       fail
+                         (Printf.sprintf
+                            "the backend default `%s` at %s:%d could not parse `%s`: %s" name file
+                            line path detail));
+               if (not !found) && not !had_error then
+                 fail
+                   (Printf.sprintf
+                      "the backend default `%s` at %s:%d names `%s.%s`, which is not a top-level \
+                       definition in `%s`"
+                      name file line mod_name def_name direct_path)));
+   List.iter readers ~f:(fun (name, file, line, stanza_desc, reach) ->
+       match Hashtbl.find def_map name with
+       | None ->
+           fail
+             (Printf.sprintf
+                "the backend-default reader at %s:%d names `%s`, which no `(library)` stanza \
+                 defines"
+                file line name)
+       | Some (_, def_backends, _, _, _, _, _) -> (
+           match reach with
+           | `Any -> ()
+           | `Fixed allowed ->
+               if
+                 not (List.exists def_backends ~f:(fun b -> List.mem allowed b ~equal:String.equal))
+               then
+                 fail
+                   (Printf.sprintf
+                      "the backend-default reader at %s:%d (%s) reads `%s` (%s), which does not \
+                       overlap the backends it can run on (%s)"
+                      file line stanza_desc name
+                      (String.concat ~sep:", " def_backends)
+                      (match allowed with [] -> "none" | xs -> String.concat ~sep:", " xs)))));
   (* One relative lock spelling, many locks (staging#1593): dune keys a relative name by the
      directory it resolves in, so the same spelling written in two directories serializes each
      directory's actions and nothing across them -- the training lock's failure, for any lock.
@@ -7126,6 +7344,354 @@ let select_arm_control () =
          initialization pin"
         sibling_reset_ok)
 
+(* gh-ocannl-2382: synthetic controls for `; ocannl-backend-default:` validation. Exercises every
+   grammar, placement, cross-file, target-resolution, and backend-reachability refusal plus their
+   nearest valid declarations. *)
+let backend_default_marker_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_backend_default" "" in
+  Exn.protect
+    ~finally:(fun () -> try remove_tree root with Unix.Unix_error _ -> ())
+    ~f:(fun () ->
+      let context = control_context () in
+      List.iter context ~f:(fun (file, content) ->
+          write_file (Stdlib.Filename.concat root file) content);
+      let context_paths = List.map context ~f:fst in
+      let ambient =
+        {dune|(rule
+ ; ocannl-backend: none -- synthetic ambient-gate control fixture.
+ (alias runtest-gate)
+ (deps ocannl_config (universe))
+ (action (run %{dep:gate.exe})))
+
+(executable
+ (name gate)
+ (modules gate)
+ (link_flags -linkall)
+ (libraries arrayjit.utils))
+
+(alias
+ (name runtest)
+ (deps (alias runtest-gate)))
+|dune}
+      in
+      let run ~lib_dune ~lib_ml ~test_dune ?(extra_files = []) () =
+        write_file (Stdlib.Filename.concat root "lib/dune") lib_dune;
+        write_file (Stdlib.Filename.concat root "lib/gate_mod.ml") lib_ml;
+        write_file (Stdlib.Filename.concat root "t/dune") (ambient ^ "\n" ^ test_dune);
+        write_file (Stdlib.Filename.concat root "t/gate.ml") "let () = ()\n";
+        write_file (Stdlib.Filename.concat root "t/probe.ml") "let () = ()\n";
+        List.iter extra_files ~f:(fun (file, content) ->
+            write_file (Stdlib.Filename.concat root file) content);
+        let paths =
+          "lib/dune" :: "lib/gate_mod.ml" :: "t/dune" :: "t/gate.ml" :: "t/probe.ml"
+          :: List.map extra_files ~f:fst
+          @ context_paths
+        in
+        let res = run_checker ~root ~exe ("." :: paths) in
+        List.iter extra_files ~f:(fun (file, _) ->
+            try Stdlib.Sys.remove (Stdlib.Filename.concat root file) with Sys_error _ -> ());
+        res
+      in
+      let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
+      let says substring (_, text) = String.is_substring text ~substring in
+      let valid_lib_dune =
+        {dune|(library
+ ; ocannl-backend-default: seeded-plan = cuda,hip Gate_mod.seeded_ranker -- GPU seeding gate
+ (name gatelib)
+ (modules gate_mod))
+|dune}
+      in
+      let valid_lib_ml = "let seeded_ranker x = x\n" in
+      let valid_test =
+        run ~lib_dune:valid_lib_dune ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend-default: seeded-plan -- reads CUDA seeded plan
+ (name probe)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (modules probe))
+|dune}
+          ()
+      in
+      let valid_exec_runner =
+        run ~lib_dune:valid_lib_dune ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(executable
+ ; ocannl-backend-default: seeded-plan -- runner reads CUDA seeded plan
+ (name probe)
+ (modules probe))
+(rule
+ (alias runtest-probe)
+ (deps (alias runtest-gate) ocannl_config (env_var OCANNL_BACKEND))
+ (action (run %{dep:probe.exe})))
+(alias
+ (name runtest)
+ (deps (alias runtest-probe)))
+|dune}
+          ()
+      in
+      let valid_cc_default =
+        run
+          ~lib_dune:
+            {dune|(library
+ ; ocannl-backend-default: cpu-plan = cc Gate_mod.seeded_ranker -- CPU default plan
+ (name gatelib)
+ (modules gate_mod))
+|dune}
+          ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend: cc -- pins cc explicitly
+ ; ocannl-backend-default: cpu-plan -- reads CPU default plan
+ (name probe)
+ (deps ocannl_config)
+ (modules probe))
+|dune}
+          ()
+      in
+      let malformed =
+        run
+          ~lib_dune:
+            {dune|(library
+ ; ocannl-backend-default: seeded-plan = none Gate_mod.seeded_ranker -- none backend refused
+ (name gatelib)
+ (modules gate_mod))
+|dune}
+          ~lib_ml:valid_lib_ml ~test_dune:"" ()
+      in
+      let wrong_stanza =
+        run ~lib_dune:"(library (name gatelib) (modules gate_mod))\n" ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(rule
+ ; ocannl-backend-default: seeded-plan -- rule cannot carry reader marker
+ ; ocannl-backend: none -- no backend
+ (alias runtest-r)
+ (deps ocannl_config)
+ (action (progn)))
+|dune}
+          ()
+      in
+      let outside_stanza =
+        run
+          ~lib_dune:
+            {dune|; ocannl-backend-default: seeded-plan = cuda Gate_mod.seeded_ranker -- between stanzas
+(library (name gatelib) (modules gate_mod))
+|dune}
+          ~lib_ml:valid_lib_ml ~test_dune:"" ()
+      in
+      let outside_comment =
+        run ~lib_dune:"(library (name gatelib) (modules gate_mod))\n" ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(rule
+ (target x.actual)
+ (action (with-stdout-to %{target} (echo "ocannl-backend-default: seeded-plan"))))
+|dune}
+          ()
+      in
+      let dup_reader =
+        run ~lib_dune:valid_lib_dune ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend-default: seeded-plan -- first reader marker
+ ; ocannl-backend-default: seeded-plan -- duplicate reader marker
+ (name probe)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (modules probe))
+|dune}
+          ()
+      in
+      let dup_def =
+        run
+          ~lib_dune:
+            {dune|(library
+ ; ocannl-backend-default: seeded-plan = cuda Gate_mod.seeded_ranker -- first def
+ ; ocannl-backend-default: seeded-plan = hip Gate_mod.seeded_ranker -- duplicate def
+ (name gatelib)
+ (modules gate_mod))
+|dune}
+          ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend-default: seeded-plan -- reads plan
+ (name probe)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (modules probe))
+|dune}
+          ()
+      in
+      let orphan_def = run ~lib_dune:valid_lib_dune ~lib_ml:valid_lib_ml ~test_dune:"" () in
+      let missing_mod =
+        run
+          ~lib_dune:
+            {dune|(library
+ ; ocannl-backend-default: seeded-plan = cuda Missing_mod.fn -- missing module file
+ (name gatelib)
+ (modules gate_mod))
+|dune}
+          ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend-default: seeded-plan -- reads plan
+ (name probe)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (modules probe))
+|dune}
+          ()
+      in
+      let unparseable_mod =
+        run ~lib_dune:valid_lib_dune ~lib_ml:"let = broken\n"
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend-default: seeded-plan -- reads plan
+ (name probe)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (modules probe))
+|dune}
+          ()
+      in
+      let missing_def =
+        run
+          ~lib_dune:
+            {dune|(library
+ ; ocannl-backend-default: seeded-plan = cuda Gate_mod.renamed_fn -- missing top-level def
+ (name gatelib)
+ (modules gate_mod))
+|dune}
+          ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend-default: seeded-plan -- reads plan
+ (name probe)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (modules probe))
+|dune}
+          ()
+      in
+      let undef_reader =
+        run ~lib_dune:"(library (name gatelib) (modules gate_mod))\n" ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend-default: no-such-plan -- reads undefined default
+ (name probe)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (modules probe))
+|dune}
+          ()
+      in
+      let incompatible_backend =
+        run ~lib_dune:valid_lib_dune ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend: cc -- CPU-only test cannot read CUDA/HIP default
+ ; ocannl-backend-default: seeded-plan -- incompatible backend default
+ (name probe)
+ (deps ocannl_config)
+ (modules probe))
+|dune}
+          ()
+      in
+      let subdir_disambiguation =
+        run ~lib_dune:valid_lib_dune ~lib_ml:valid_lib_ml
+          ~extra_files:[ ("t/a/probe.ml", "let () = ()\n"); ("t/b/probe.ml", "let () = ()\n") ]
+          ~test_dune:
+            {dune|(subdir a
+ (rule
+  ; ocannl-backend: none -- subdir a gate.
+  (alias runtest-gate)
+  (deps ocannl_config (universe))
+  (action (run %{dep:../gate.exe})))
+ (alias (name runtest) (deps (alias runtest-gate)))
+ (test
+  ; ocannl-backend: cuda -- subdir a runs on CUDA
+  ; ocannl-backend-default: seeded-plan -- valid CUDA reader
+  (name probe)
+  (deps ocannl_config)
+  (modules probe)))
+(subdir b
+ (rule
+  ; ocannl-backend: none -- subdir b gate.
+  (alias runtest-gate)
+  (deps ocannl_config (universe))
+  (action (run %{dep:../gate.exe})))
+ (alias (name runtest) (deps (alias runtest-gate)))
+ (test
+  ; ocannl-backend: cc -- subdir b runs on CPU only
+  ; ocannl-backend-default: seeded-plan -- must be refused despite identical sexp in subdir a
+  (name probe)
+  (deps ocannl_config)
+  (modules probe)))
+|dune}
+          ()
+      in
+      let checks =
+        [
+          ("valid test reader with env_var OCANNL_BACKEND passes", exited 0 valid_test, valid_test);
+          ( "valid executable reader with env_var OCANNL_BACKEND runner passes",
+            exited 0 valid_exec_runner,
+            valid_exec_runner );
+          ( "valid cc-only default read by ocannl-backend: cc test passes",
+            exited 0 valid_cc_default,
+            valid_cc_default );
+          ( "malformed backend-default marker is refused",
+            exited 1 malformed && says "comment that does not parse as a marker" malformed,
+            malformed );
+          ( "backend-default marker on wrong stanza is refused",
+            exited 1 wrong_stanza
+            && says "carries a backend-default marker on the wrong stanza" wrong_stanza,
+            wrong_stanza );
+          ( "backend-default marker outside any stanza is refused",
+            exited 1 outside_stanza && says "sits inside no stanza" outside_stanza,
+            outside_stanza );
+          ( "backend-default sentinel outside a comment is refused",
+            exited 1 outside_comment
+            && says "a backend-default marker outside a comment declares nothing" outside_comment,
+            outside_comment );
+          ( "duplicate backend-default reader on one stanza is refused",
+            exited 1 dup_reader && says "more than once on the same stanza" dup_reader,
+            dup_reader );
+          ( "duplicate backend-default definition is refused",
+            exited 1 dup_def && says "is defined more than once" dup_def,
+            dup_def );
+          ( "backend-default definition with zero readers is refused",
+            exited 1 orphan_def && says "has no reader stanza" orphan_def,
+            orphan_def );
+          ( "backend-default definition naming a missing module is refused",
+            exited 1 missing_mod && says "is not in the scanned sources" missing_mod,
+            missing_mod );
+          ( "backend-default definition naming an unparseable module is refused",
+            exited 1 unparseable_mod && says "could not parse" unparseable_mod,
+            unparseable_mod );
+          ( "backend-default definition naming a missing top-level definition is refused",
+            exited 1 missing_def && says "is not a top-level definition in" missing_def,
+            missing_def );
+          ( "backend-default reader naming an undefined default is refused",
+            exited 1 undef_reader && says "which no `(library)` stanza defines" undef_reader,
+            undef_reader );
+          ( "backend-default reader whose backends do not overlap the default is refused",
+            exited 1 incompatible_backend
+            && says "does not overlap the backends it can run on" incompatible_backend,
+            incompatible_backend );
+          ( "identical stanza sexps in different subdirs check their own backend markers",
+            exited 1 subdir_disambiguation
+            && says "does not overlap the backends it can run on (cc)" subdir_disambiguation
+            && (not
+                  (says "does not overlap the backends it can run on (cuda)" subdir_disambiguation))
+            && says "FAILED: 1 check did not hold:" subdir_disambiguation,
+            subdir_disambiguation );
+        ]
+      in
+      printf "\nSynthetic controls: `; ocannl-backend-default:` markers.\n";
+      List.iter checks ~f:(fun (label, ok, ((status, text) as res)) ->
+          if not ok then
+            eprintf "backend-default control (%s) %s:\n%s\n" label (describe_status status) text;
+          attribute label [ res ];
+          Verdict.p label ok))
+
 let () =
   match Array.to_list argv with
   | _ :: [ "--control" ] ->
@@ -7146,6 +7712,7 @@ let () =
       malformed_tree_control ();
       verdict_capture_control ();
       select_arm_control ();
+      backend_default_marker_control ();
       (* Dune's repository-wide rule hands the same source to [main] as [./env_var_deps.ml] after a
          full build has materialized the local build-tree copy. Exercise that spelling here too: the
          manifest identity is repository-relative even when the file used to extract the diagnostics

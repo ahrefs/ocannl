@@ -6007,12 +6007,14 @@ let seeded_split ~facts ~min_serial ~static_indices (opt : LL.optimized) =
    schedule in all five cells. Sketch/preset timings for a 2x2 tile, a sub-warp launch, or a site
    where deduplication saves bytes are still open.
 
-   gh-ocannl-2306: what this gate seeds on CUDA decides which singles a search times there (the
-   seeded plan's [F_swap] singles, or the staffed [F_sketch] ones), and [affected] only ranks the
-   tests reading those labels as link-only. A change to what it seeds -- here, in
-   [seeded_default_gate], or in the [Cost_model] terms the score sums -- owes a CUDA run of the set
-   docs/agent-notes/scheduling-and-autotune.md derives ("A change to what the [auto] gate seeds"),
-   [model_seeded_anchor] included: its CUDA claim pins this gate's exact count on its chain. *)
+   gh-ocannl-2306 / gh-ocannl-2382: what this gate seeds on CUDA/HIP decides which singles a search
+   times there (the seeded plan's [F_swap] singles, or the staffed [F_sketch] ones). The
+   [seeded-plan] backend-default marker in [arrayjit/lib/dune] routes diffs touching
+   [seeded_ranker], [seeded_default_gate], or [seeded_segment_judgment] directly to its declared
+   every-backend readers via [affected --gpu-gated --referenced-only], [model_seeded_anchor]
+   included (its CUDA/HIP claim pins this gate's exact count on its chain). A change to the
+   [Cost_model] terms the score sums still owes the CUDA run described in
+   docs/agent-notes/scheduling-and-autotune.md ("A change to what the [auto] gate seeds"). *)
 let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~cache_bandwidth
     ~issue_rate ~dram_bandwidth ~mma_rate ~device_gather_rate ~fill_model ~transaction_rate
     ~workgroup_capacity ~staged_copy_rate p pre =

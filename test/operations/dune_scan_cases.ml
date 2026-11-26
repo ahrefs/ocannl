@@ -2323,6 +2323,152 @@ let () =
       List.map contract.Scan.contract_issues ~f:render_contained_issue
       |> List.iter ~f:(fun diagnostic -> printf "  %s -- %s\n" name diagnostic));
   printf "\n";
+  let render_default_contract source =
+    let contract = Scan.default_marker_contract source in
+    let parsed =
+      List.concat_map contract.Scan.contract_stanzas ~f:(fun m ->
+          List.map m.Scan.stanza_markers ~f:(fun marker ->
+              match marker.Scan.contained_value with
+              | Scan.Default_definition
+                  { default_name; default_backends; default_targets; default_reason = _ } ->
+                  Printf.sprintf "def %s = [%s] [%s] on %s" default_name
+                    (String.concat ~sep:"," default_backends)
+                    (String.concat ~sep:","
+                       (List.map default_targets ~f:(fun (m, d) -> m ^ "." ^ d)))
+                    m.Scan.marker_stanza.Scan.marked_head
+              | Scan.Default_reader { default_name; default_reason = _ } ->
+                  Printf.sprintf "read %s on %s" default_name m.Scan.marker_stanza.Scan.marked_head))
+    in
+    let issues =
+      List.map contract.Scan.contract_issues ~f:(function
+        | Scan.Malformed_marker { issue_malformed; _ } ->
+            "malformed: " ^ Scan.default_marker_malformed_reason issue_malformed
+        | Scan.Marker_outside_stanza _ -> "outside stanza"
+        | Scan.Marker_in_wrong_stanza { issue_why; _ } -> "wrong stanza: " ^ issue_why
+        | Scan.Marker_outside_comment _ -> "outside comment")
+    in
+    parsed @ issues
+  in
+  let default_marker_cases =
+    [
+      ( "valid definition on library",
+        {dune|(library
+ ; ocannl-backend-default: seeded-plan = cuda,hip Autotune.seeded_ranker,Autotune.seeded_default_gate -- GPU seeding gate
+ (name autotune))|dune},
+        [
+          "def seeded-plan = [cuda,hip] [Autotune.seeded_ranker,Autotune.seeded_default_gate] on \
+           library";
+        ] );
+      ( "valid reader on test, executable, and inline-test library",
+        {dune|(test
+ ; ocannl-backend-default: seeded-plan -- reads single labels on CUDA
+ (name t))
+(executable
+ ; ocannl-backend-default: seeded-plan -- slow runner reads single labels
+ (name s))
+(library
+ ; ocannl-backend-default: seeded-plan -- inline test reads single labels
+ (name il)
+ (inline_tests))|dune},
+        [
+          "read seeded-plan on test";
+          "read seeded-plan on executable";
+          "read seeded-plan on library";
+        ] );
+      ( "co-existence with ocannl-backend marker on one stanza (sentinels do not collide)",
+        {dune|(test
+ ; ocannl-backend: cuda -- pins cuda explicitly
+ ; ocannl-backend-default: seeded-plan -- reads CUDA seeded plan
+ (name both)
+ (deps ocannl_config))|dune},
+        [ "read seeded-plan on test" ] );
+      ( "definition rejected on test stanza",
+        {dune|(test
+ ; ocannl-backend-default: seeded-plan = cuda Autotune.seeded_ranker -- wrong stanza
+ (name t))|dune},
+        [
+          "wrong stanza: a `test` stanza cannot define a backend default -- place definition \
+           markers on a `(library)` stanza";
+        ] );
+      ( "reader rejected on plain library and rule",
+        {dune|(library
+ ; ocannl-backend-default: seeded-plan -- plain library cannot read
+ (name plain))
+(rule
+ ; ocannl-backend-default: seeded-plan -- rule cannot read
+ (alias runtest-r)
+ (action (progn)))|dune},
+        [
+          "wrong stanza: a `library` stanza cannot read a backend default -- place reader markers \
+           on a `(test)`, `(tests)`, `(executable)`, `(executables)`, or inline-test `(library)` \
+           stanza";
+          "wrong stanza: a `rule` stanza cannot read a backend default -- place reader markers on \
+           a `(test)`, `(tests)`, `(executable)`, `(executables)`, or inline-test `(library)` \
+           stanza";
+        ] );
+      ( "refuses none backend, unknown backend, duplicate backend, empty entry",
+        {dune|(library
+ ; ocannl-backend-default: p1 = none Autotune.a -- none has no default
+ ; ocannl-backend-default: p2 = vulkan Autotune.a -- unknown backend
+ ; ocannl-backend-default: p3 = cuda,cuda Autotune.a -- duplicate backend
+ ; ocannl-backend-default: p4 = cuda, Autotune.a -- trailing comma
+ (name l))|dune},
+        [
+          "malformed: `none` is not one of cc, multidev_cc, cuda, hip, metal";
+          "malformed: `vulkan` is not one of cc, multidev_cc, cuda, hip, metal";
+          "malformed: `cuda,cuda` names the same backend twice";
+          "malformed: `cuda,` has an empty entry between commas -- name each backend, or drop the \
+           comma";
+        ] );
+      ( "refuses malformed target, duplicate target, spaced comma list, bad name",
+        {dune|(library
+ ; ocannl-backend-default: p1 = cuda seeded_ranker -- unqualified target
+ ; ocannl-backend-default: p2 = cuda Autotune.a,Autotune.a -- duplicate target
+ ; ocannl-backend-default: p3 = cuda, hip Autotune.a -- space in comma list
+ ; ocannl-backend-default: Bad_Name = cuda Autotune.a -- uppercase name
+ (name l))|dune},
+        [
+          "malformed: `seeded_ranker` is not a valid `Module.def` target (use an OCaml module and \
+           top-level identifier)";
+          "malformed: `Autotune.a,Autotune.a` names the same target definition twice";
+          "malformed: expected `<backend>[,<backend>...] <Module.def>[,<Module.def>...]` after `=` \
+           (no spaces inside either comma list)";
+          "malformed: `Bad_Name` is not a valid backend-default name (use `[a-z][a-z0-9-]*`)";
+        ] );
+      ( "refuses outside stanza and outside comment",
+        {dune|; ocannl-backend-default: seeded-plan -- outside any stanza
+(rule
+ (target x)
+ (action (with-stdout-to %{target} (echo "ocannl-backend-default: seeded-plan"))))|dune},
+        [ "outside stanza"; "outside comment" ] );
+    ]
+  in
+  List.iter default_marker_cases ~f:(fun (name, source, expected) ->
+      check ("backend-default marker -- " ^ name) expected (render_default_contract source));
+  (* Verify ocannl-backend: sentinel accounting ignores ocannl-backend-default: on the same
+     stanza. *)
+  (let both_source =
+     {dune|(test
+ ; ocannl-backend: cuda -- pins cuda explicitly
+ ; ocannl-backend-default: seeded-plan -- reads CUDA seeded plan
+ (name both)
+ (deps ocannl_config))|dune}
+   in
+   let backend_contract = Scan.backend_marker_contract both_source in
+   let default_contract = Scan.default_marker_contract both_source in
+   check "backend-default marker -- sentinel counts do not collide with ocannl-backend"
+     [ "backend=1/1/1 issues=0; default=1/1/1 issues=0" ]
+     [
+       Printf.sprintf "backend=%d/%d/%d issues=%d; default=%d/%d/%d issues=%d"
+         backend_contract.Scan.contract_text_occurrences
+         backend_contract.Scan.contract_comment_occurrences
+         backend_contract.Scan.contract_stanza_occurrences
+         (List.length backend_contract.Scan.contract_issues)
+         default_contract.Scan.contract_text_occurrences
+         default_contract.Scan.contract_comment_occurrences
+         default_contract.Scan.contract_stanza_occurrences
+         (List.length default_contract.Scan.contract_issues);
+     ]);
   List.iter (nested_marker_case :: refused_cases) ~f:(fun (name, source) ->
       match Scan.sites source with
       | exception _ -> printf "ok: refused -- %s\n" name

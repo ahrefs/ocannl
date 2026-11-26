@@ -21,8 +21,11 @@
 # binds_hardware_grid or on_gpu, or name leg/in_leg/skipped alongside
 # on_cuda/on_hip/on_metal
 # or a literal GPU backend, or whose owner/rule has a stanza-local GPU
-# ocannl-backend marker.
-# Comments are ignored; this reads whole files, not scopes or gate expressions.
+# ocannl-backend marker, or whose owner reads a declared `; ocannl-backend-default:`
+# naming a GPU backend (cuda, hip, metal) whose listed `Module.def` targets match
+# the current diff (gh-ocannl-2382).
+# Comments are ignored for source tokens; this reads whole files, not scopes or
+# gate expressions.
 # It may overselect (an unused name, a CPU leg beside a GPU literal) and miss
 # computed gates, generated sources or gates hidden in helpers. It does not
 # prove backend coverage, and keeps the unfiltered verdict and diagnostics.
@@ -30,6 +33,26 @@
 # library consumers. This is the GPU-specific minimum: ungated every-backend
 # tests in the unfiltered list also exercise GPUs and are excluded here.
 # No backend-specific subdivision is inferred.
+#
+# Backend-default markers (gh-ocannl-2382; closed grammar, fail-closed exit 2):
+#   - Definition form inside a `(library)` stanza:
+#     `; ocannl-backend-default: <name> = <backend>[,...] <Module.def>[,...] -- <reason>`
+#   - Reader form inside a `(test)`, `(tests)`, `(executable)`, `(executables)`,
+#     or inline-test `(library)` stanza:
+#     `; ocannl-backend-default: <name> -- <reason>`
+#   `<name>` matches `[a-z][a-z0-9-]*`, `<backend>` is from `{cc,multidev_cc,cuda,hip,metal}`
+#   (no `none`, no empty/duplicate entries, no spaces inside either comma list),
+#   `<Module.def>` is `^[A-Z][A-Za-z0-9_']*\.[A-Za-z_][A-Za-z0-9_']*$` (def not `_`),
+#   `<reason>` has at least two words after `--` or `—`. Every raw-text occurrence
+#   of `ocannl-backend-default:` in a dune file must sit in a valid comment inside
+#   a permitted stanza; duplicate definitions and undefined reader names fail.
+#   When a reached alias's owner reads a default whose `Module.def` matches `%mod_defs`
+#   (that definition changed, or `Module` changed as a whole; never comment-only or
+#   sibling-definition edits) and no own rule of that alias pins `; ocannl-backend:`
+#   disjoint from the default's backends, the alias is promoted from LINK-ONLY to
+#   first-tier REFERENCED, and if the default names a GPU backend it is selected by
+#   `--gpu-gated`. Unreached aliases, transitive callees not listed in the definition,
+#   and off-build modules are outside this reading.
 #
 # `--why ALIAS` (gh-ocannl-1711; repeatable, the leading `@` optional) explains
 # that alias on stderr, in `affected: why @ALIAS: ...` lines, whether it is
@@ -635,20 +658,20 @@ sub parse_dune {
   my ($s, $what, $markers) = @_;
   my @stack = ([]);
   my $put = sub { push @{$stack[-1]}, $_[0] };
+  my $raw_default_occ = $markers ? (() = $s =~ /ocannl-backend-default:/g) : 0;
+  my $comment_default_occ = 0;
   pos($s) = 0;
   while (pos($s) < length $s) {
     next if $s =~ /\G\s+/gc;
     if ($s =~ /\G;([^\n]*)/gc) {
-      # A second reading retains only stanza-local GPU backend declarations.
-      if ($markers && $1 =~ /^\s*ocannl-backend:\s*([a-z_]+(?:[ \t]*,[ \t]*[a-z_]+)*)/
-          && grep { /^(?:cuda|hip|metal)$/ } split /[ \t]*,[ \t]*/, $1) {
-        # Containment, not adjacency: a marker inside a field still belongs
-        # to its enclosing stanza, including within a (subdir ...) wrapper.
-        for my $x (reverse @stack) {
-          next unless @$x && !ref $x->[0] && $x->[0] =~ /^(?:library|executables?|tests?|rule)$/;
-          push @$x, ["affected_gpu_backend"];
-          last;
-        }
+      my $comment = $1;
+      if ($markers && (index($comment, "ocannl-backend:") >= 0 || index($comment, "ocannl-backend-default:") >= 0)) {
+        my $cpos = pos($s) - length($comment) - 1;
+        my $line = 1 + (() = substr($s, 0, $cpos) =~ /\n/g);
+        $comment_default_occ += (() = $comment =~ /ocannl-backend-default:/g);
+        # Defer attribution until the enclosing stanza finishes parsing so comments
+        # placed immediately after `(` (before the head atom) are attributed cleanly.
+        $put->(["__affected_comment", $comment, $line]);
       }
       next;
     }
@@ -672,6 +695,141 @@ sub parse_dune {
     die "unreadable text in $what at byte " . pos($s) . "\n";
   }
   @stack == 1 or die "unbalanced parentheses in $what\n";
+  if ($markers) {
+    if ($raw_default_occ != $comment_default_occ) {
+      die "$what: `ocannl-backend-default:` appears outside a comment ($raw_default_occ in text, $comment_default_occ in comments)\n";
+    }
+    my $is_cm = sub { ref $_[0] && @{$_[0]} && !ref $_[0][0] && $_[0][0] eq "__affected_comment" };
+    my $split_reason = sub {
+      my ($rest) = @_;
+      my ($sep_idx, $sep_len);
+      for my $sep ("--", "\xe2\x80\x94") {
+        my $idx = index($rest, $sep);
+        if ($idx >= 0 && (!defined $sep_idx || $idx < $sep_idx)) {
+          $sep_idx = $idx; $sep_len = length($sep);
+        }
+      }
+      return undef unless defined $sep_idx;
+      my $decl = substr($rest, 0, $sep_idx) =~ s/^\s+|\s+$//gr;
+      my $reason = substr($rest, $sep_idx + $sep_len) =~ s/^\s+|\s+$//gr;
+      return ($decl, $reason);
+    };
+    my $strip_comments;
+    $strip_comments = sub {
+      my ($node, $acc) = @_;
+      return unless ref $node;
+      my @kept;
+      for my $el (@$node) {
+        if ($is_cm->($el)) { push @$acc, [$el->[1], $el->[2]] }
+        else { $strip_comments->($el, $acc) if ref $el; push @kept, $el }
+      }
+      @$node = @kept;
+    };
+    my $process_top;
+    $process_top = sub {
+      my ($items) = @_;
+      my @kept;
+      for my $el (@$items) {
+        if ($is_cm->($el)) {
+          my ($comment, $line) = ($el->[1], $el->[2]);
+          die "$what:$line: `ocannl-backend-default:` sits outside any stanza\n"
+            if index($comment, "ocannl-backend-default:") >= 0;
+          next;
+        }
+        if (ref $el) {
+          # Strip leading comments inside a form first so `(; comment\n subdir ...)` or
+          # `(; comment\n test ...)` reveals its true head atom.
+          my @direct_cm;
+          while (@$el && $is_cm->($el->[0])) {
+            my $c = shift @$el;
+            push @direct_cm, [$c->[1], $c->[2]];
+          }
+          if (@$el >= 2 && !ref $el->[0] && $el->[0] eq "subdir" && !ref $el->[1]) {
+            for my $c (@direct_cm) {
+              die "$what:$c->[1]: `ocannl-backend-default:` sits outside any stanza\n"
+                if index($c->[0], "ocannl-backend-default:") >= 0;
+            }
+            my @body = @$el[2 .. $#$el];
+            $process_top->(\@body);
+            @$el = ($el->[0], $el->[1], @body);
+            push @kept, $el;
+            next;
+          }
+          my @cm = @direct_cm;
+          $strip_comments->($el, \@cm);
+          my $head = (@$el && !ref $el->[0]) ? $el->[0] : "";
+          for my $c (@cm) {
+            my ($comment, $line) = @$c;
+            if (index($comment, "ocannl-backend:") >= 0 && $head =~ /^(?:library|executables?|tests?|rule)$/) {
+              my $at = index($comment, "ocannl-backend:");
+              my $rest = substr($comment, $at + length("ocannl-backend:")) =~ s/^\s+|\s+$//gr;
+              my ($decl, $reason) = $split_reason->($rest);
+              my $bstr = defined $decl ? $decl : ($rest =~ /^([a-z_]+(?:[ \t]*,[ \t]*[a-z_]+)*)/ ? $1 : "");
+              if ($bstr =~ /^[a-z_]+(?:[ \t]*,[ \t]*[a-z_]+)*$/) {
+                my @bks = split /[ \t]*,[ \t]*/, $bstr;
+                push @$el, ["affected_gpu_backend"] if grep { /^(?:cuda|hip|metal)$/ } @bks;
+                push @$el, ["affected_rule_backends", @bks] if $head eq "rule";
+                push @$el, ["affected_stanza_backends", @bks] if $head ne "rule";
+              }
+            }
+            if (index($comment, "ocannl-backend-default:") >= 0) {
+              my $occ = () = $comment =~ /ocannl-backend-default:/g;
+              die "$what:$line: two `ocannl-backend-default:` declarations in one comment\n" if $occ > 1;
+              die "$what:$line: `ocannl-backend-default:` sits outside any stanza\n" unless length $head;
+              my $trimmed = $comment =~ s/^\s+|\s+$//gr;
+              my $at = index($trimmed, "ocannl-backend-default:");
+              my $rest = substr($trimmed, $at + length("ocannl-backend-default:")) =~ s/^\s+|\s+$//gr;
+              my ($decl, $reason) = $split_reason->($rest);
+              die "$what:$line: `ocannl-backend-default:` is missing `--` separating declaration from reason\n"
+                unless defined $decl;
+              my @rwords = grep { length } split /[ \t]+/, $reason;
+              die "$what:$line: `ocannl-backend-default:` reason must be at least two words\n"
+                if @rwords < 2;
+              if (index($decl, "=") >= 0) {
+                die "$what:$line: `ocannl-backend-default:` expected a single `=` in definition\n"
+                  if (() = $decl =~ /=/g) > 1;
+                my ($lhs, $rhs) = split /=/, $decl, 2;
+                $lhs =~ s/^\s+|\s+$//g; $rhs =~ s/^\s+|\s+$//g;
+                die "$what:$line: `$lhs` is not a valid backend-default name\n"
+                  unless $lhs =~ /^[a-z][a-z0-9-]*$/;
+                my @toks = grep { length } split /[ \t]+/, $rhs;
+                die "$what:$line: `ocannl-backend-default:` expected `<backend>[,...] <Module.def>[,...]` after `=`\n"
+                  unless @toks == 2;
+                my @bks = split /,/, $toks[0], -1;
+                my %bseen;
+                for my $b (@bks) {
+                  die "$what:$line: invalid backend `$b` in `ocannl-backend-default:`\n"
+                    unless $b =~ /^(?:cc|multidev_cc|cuda|hip|metal)$/;
+                  die "$what:$line: duplicate backend `$b` in `ocannl-backend-default:`\n"
+                    if $bseen{$b}++;
+                }
+                my @tgs = split /,/, $toks[1], -1;
+                my %tseen;
+                for my $t (@tgs) {
+                  die "$what:$line: invalid target `$t` in `ocannl-backend-default:`\n"
+                    unless $t =~ /^([A-Z][A-Za-z0-9_']*)\.([A-Za-z_][A-Za-z0-9_']*)$/ && $2 ne "_";
+                  die "$what:$line: duplicate target `$t` in `ocannl-backend-default:`\n"
+                    if $tseen{$t}++;
+                }
+                die "$what:$line: `ocannl-backend-default:` definition belongs on a `(library)` stanza, not `($head)`\n"
+                  unless $head eq "library";
+                push @$el, ["affected_default_def", $lhs, join(",", @bks), join(",", @tgs), "$what:$line"];
+              } else {
+                die "$what:$line: `$decl` is not a valid backend-default name\n"
+                  unless $decl =~ /^[a-z][a-z0-9-]*$/;
+                die "$what:$line: `ocannl-backend-default:` reader belongs on a test, executable, or inline-test library stanza, not `($head)`\n"
+                  unless $head =~ /^(?:tests?|executables?|library)$/;
+                push @$el, ["affected_default_read", $decl, "$what:$line"];
+              }
+            }
+          }
+        }
+        push @kept, $el;
+      }
+      @$items = @kept;
+    };
+    $process_top->($stack[0]);
+  }
   return $stack[0];
 }
 1;
@@ -3880,6 +4038,10 @@ sub dfield {   # the arguments of a stanza's first (NAME ...) field
   for my $f (@$x[1 .. $#$x]) { return [@$f[1 .. $#$f]] if ref $f && @$f && !ref $f->[0] && $f->[0] eq $name }
   return undef;
 }
+sub dfields {   # all (NAME ...) fields of a stanza -> ([args], ...)
+  my ($x, $name) = @_;
+  return map { [@$_[1 .. $#$_]] } grep { ref $_ && @$_ && !ref $_->[0] && $_->[0] eq $name } @$x[1 .. $#$x];
+}
 # Stanzas of DIR, `(subdir ...)` flattened into the directory it names.
 sub dune_stanzas {
   my ($dir, $items) = @_;
@@ -3905,15 +4067,78 @@ sub rpath {   # BASE/P normalized, repository-relative; undef when it leaves the
   return @parts ? join("/", @parts) : ".";
 }
 my @gpu_stanzas; # stanza-local backend markers, kept out of the build reading
+my @rule_backend_stanzas; # rules with explicit ocannl-backend: markers
+my %default_defs; # default name -> { backends => [...], targets => [[Mod, def], ...], has_gpu => bool, where => str }
+my @default_readers; # stanzas with ocannl-backend-default: reader markers
 my @dstanzas;   # every stanza of every dune file, as read from the worktree
 my %dune_text;  # dune file -> its text
+my @backend_marker_files;
 for my $f (grep { $_ ne "" } split /\n/, slurp("$tmp/dune-files")) {
   next unless -f $f;
   $dune_text{$f} = slurp($f);
   my $items = eval { parse_dune($dune_text{$f}, $f) } or fail($@ =~ s/\n$//r);
   push @dstanzas, dune_stanzas((dir_of($f))[0], $items);
-  push @gpu_stanzas, grep { defined dfield($_->{x}, "affected_gpu_backend") }
-    dune_stanzas((dir_of($f))[0], parse_dune($dune_text{$f}, $f, 1)) if $gpu_gated;
+  my $has_default = index($dune_text{$f}, "ocannl-backend-default:") >= 0;
+  my $has_backend = index($dune_text{$f}, "ocannl-backend:") >= 0;
+  if ($has_default || ($gpu_gated && $has_backend)) {
+    my $mitems = eval { parse_dune($dune_text{$f}, $f, 1) } or fail($@ =~ s/\n$//r);
+    for my $ds (dune_stanzas((dir_of($f))[0], $mitems)) {
+      push @gpu_stanzas, $ds if $gpu_gated && defined dfield($ds->{x}, "affected_gpu_backend");
+      push @rule_backend_stanzas, $ds if $ds->{kind} eq "rule" && defined dfield($ds->{x}, "affected_rule_backends");
+      for my $def (dfields($ds->{x}, "affected_default_def")) {
+        my ($dname, $bstr, $tstr, $where) = @$def;
+        fail("$where: duplicate `ocannl-backend-default:` definition for `$dname` (already defined at $default_defs{$dname}{where})")
+          if exists $default_defs{$dname};
+        my @bks = split /,/, $bstr;
+        my @tgs = map { [ split /\./, $_, 2 ] } split /,/, $tstr;
+        $default_defs{$dname} = {
+          backends => \@bks,
+          targets  => \@tgs,
+          has_gpu  => (grep { /^(?:cuda|hip|metal)$/ } @bks) ? 1 : 0,
+          where    => $where,
+          dir      => $ds->{dir},
+          ds       => $ds,
+        };
+      }
+      my @reads = dfields($ds->{x}, "affected_default_read");
+      if (@reads) {
+        if ($ds->{kind} eq "library" && !defined dfield($ds->{x}, "inline_tests")) {
+          fail("$reads[0][1]: `ocannl-backend-default:` reader belongs on a test, executable, or inline-test library stanza, not a plain `(library)`");
+        }
+        my (%seen_r, @names_r);
+        for my $r (@reads) {
+          my ($dname, $where) = @$r;
+          fail("$where: duplicate `ocannl-backend-default:` reader `$dname` on the same stanza")
+            if $seen_r{$dname}++;
+          push @names_r, [$dname, $where];
+        }
+        my @sbks = map { @$_ } dfields($ds->{x}, "affected_stanza_backends");
+        push @default_readers, {
+          dir => $ds->{dir}, kind => $ds->{kind}, x => $ds->{x}, reads => \@names_r,
+          stanza_bks => @sbks ? { map { $_ => 1 } @sbks } : undef,
+        };
+      }
+    }
+  } elsif ($has_backend) {
+    push @backend_marker_files, $f;
+  }
+}
+# If any backend-default markers exist, also read explicit rule backend markers from other files so
+# variant rules pinned to a disjoint backend do not inherit an owner's default marker.
+if (%default_defs || @default_readers) {
+  for my $f (@backend_marker_files) {
+    my $mitems = eval { parse_dune($dune_text{$f}, $f, 1) } or fail($@ =~ s/\n$//r);
+    for my $ds (dune_stanzas((dir_of($f))[0], $mitems)) {
+      push @rule_backend_stanzas, $ds if $ds->{kind} eq "rule" && defined dfield($ds->{x}, "affected_rule_backends");
+    }
+  }
+  for my $dr (@default_readers) {
+    for my $r (@{$dr->{reads}}) {
+      my ($dname, $where) = @$r;
+      fail("$where: `ocannl-backend-default:` reader names `$dname`, which no `(library)` stanza defines")
+        unless exists $default_defs{$dname};
+    }
+  }
 }
 # An edit to a fragment a dune file `(include ...)`s (or `dynamic_include`s)
 # reaches like an edit to that dune file.
@@ -5369,6 +5594,106 @@ sub link_only {   # reached owners -> true when none of them names a changed mod
   return 1;
 }
 
+# Backend-default marker routing (gh-ocannl-2382): one shared reading feeds
+# tier promotion, `--why`, `cross_reason`, and `--gpu-gated` so all four agree.
+my %declared_touch_cache;
+sub declared_touch {   # reached owner index -> arrayref of matched default records
+  my ($o) = @_;
+  return $declared_touch_cache{$o} if exists $declared_touch_cache{$o};
+  return $declared_touch_cache{$o} = [] unless $rank_links && @default_readers;
+  my %names = map { $_ => 1 } @{$st[$o]{names}};
+  my %read_defaults; # dname -> undef (unpinned) or hashref of reader-pinned backends
+  for my $dr (@default_readers) {
+    next unless $dr->{dir} eq $st[$o]{dir} && $dr->{kind} =~ /^(?:library|executables?|tests?)$/;
+    next unless grep { $names{$_} } dnames($dr);
+    for my $r (@{$dr->{reads}}) {
+      my $dn = $r->[0];
+      if (!exists $read_defaults{$dn}) {
+        $read_defaults{$dn} = $dr->{stanza_bks} ? { %{$dr->{stanza_bks}} } : undef;
+      } elsif (defined $read_defaults{$dn}) {
+        if (!$dr->{stanza_bks}) { $read_defaults{$dn} = undef }
+        else { $read_defaults{$dn}{$_} = 1 for keys %{$dr->{stanza_bks}} }
+      }
+    }
+  }
+  my @hits;
+  for my $dname (sort keys %read_defaults) {
+    my $def = $default_defs{$dname} // next;
+    my $owner_bks = $read_defaults{$dname};
+    my @eff_bks = $owner_bks ? (grep { $owner_bks->{$_} } @{$def->{backends}}) : @{$def->{backends}};
+    next unless @eff_bks;
+    my (@matched_defs, @matched_whole, %witness_paths);
+    for my $tg (@{$def->{targets}}) {
+      my ($m, $d) = @$tg;
+      next unless exists $mod_defs{$m};
+      # Scope target matching to the declaring library's own directory (including
+      # any `(select ...)` arms), so a same-named module in another library cannot match.
+      my $stem = lcfirst $m;
+      my %allowed;
+      for my $ext ("ml", "mli") {
+        $allowed{in_dir($def->{dir}, "$stem.$ext")} = 1;
+        my $arms = select_arms($def->{ds}, "$stem.$ext");
+        $allowed{$_} = 1 for @{$arms // []};
+      }
+      my @paths = sort grep { $_ ne "\0membership" && $allowed{$_} } keys %{$mod_paths{$m}};
+      next unless @paths;
+      if (grep { !$path_defs{$_} } @paths) {
+        push @matched_whole, "$m.$d";
+        $witness_paths{$_} = 1 for grep { !$path_defs{$_} } @paths;
+      } elsif (grep { $path_defs{$_}{$d} } @paths) {
+        push @matched_defs, "$m.$d";
+        $witness_paths{$_} = 1 for grep { $path_defs{$_}{$d} } @paths;
+      }
+    }
+    next unless @matched_defs || @matched_whole;
+    my @parts;
+    push @parts, "changed definition(s) " . join(", ", @matched_defs) if @matched_defs;
+    push @parts, "whole-module change covering " . join(", ", @matched_whole) if @matched_whole;
+    push @hits, {
+      name     => $dname,
+      backends => \@eff_bks,
+      has_gpu  => (grep { /^(?:cuda|hip|metal)$/ } @eff_bks) ? 1 : 0,
+      paths    => [sort keys %witness_paths],
+      why      => join("; ", @parts),
+    };
+  }
+  return $declared_touch_cache{$o} = \@hits;
+}
+sub alias_rule_backends {   # alias -> hashref of backends explicitly pinned on its own rules, or undef
+  my ($a) = @_;
+  return undef unless @rule_backend_stanzas;
+  my %own = map { $_ => 1 } @{$a->{own}};
+  my (%bks, $any);
+  for my $ds (grep { $_->{dir} eq $a->{dir} } @rule_backend_stanzas) {
+    my @aliases = map { @{dfield($ds->{x}, $_) // []} } qw(alias aliases);
+    my @targets = map { @{dfield($ds->{x}, $_) // []} } qw(target targets);
+    next unless (grep { !ref && $_ eq $a->{alias} } @aliases)
+      || (grep { !ref && $own{rpath($ds->{dir}, $_) // ""} } @targets);
+    $any = 1;
+    for my $rb (dfields($ds->{x}, "affected_rule_backends")) { $bks{$_} = 1 for @$rb }
+  }
+  return $any ? \%bks : undef;
+}
+sub alias_default_touches {   # alias, reached owners -> matched default records consistent with its own rules
+  my ($a, @by_owner) = @_;
+  return () unless @by_owner && @default_readers;
+  my $rule_bks = alias_rule_backends($a);
+  my (%seen, @out);
+  for my $o (@by_owner) {
+    for my $hit (@{declared_touch($o)}) {
+      next if $seen{$hit->{name}}++;
+      my @eff_bks = $rule_bks ? (grep { $rule_bks->{$_} } @{$hit->{backends}}) : @{$hit->{backends}};
+      next unless @eff_bks;
+      push @out, {
+        %$hit,
+        backends => \@eff_bks,
+        has_gpu  => (grep { /^(?:cuda|hip|metal)$/ } @eff_bks) ? 1 : 0,
+      };
+    }
+  }
+  return @out;
+}
+
 # What an alias's own action reads, dune does not dump. A golden alias's
 # action is a diff of two of its own targets (`NAME.expected` and the output
 # beside it), whose rules are read above; any other alias's action is opaque
@@ -5404,10 +5729,11 @@ for my $a (@al) {
   # Uncertainty ranks first: an alias whose action is unknown and might read a
   # changed path is never link-only, whatever its owners name.
   my $blind = $unknown_touched || $opaque_listed;
-  @$a{qw(unknown_touched opaque_listed by_owner)} = ($unknown_touched, $opaque_listed, \@by_owner);
+  my @default_touches = alias_default_touches($a, @by_owner);
+  @$a{qw(unknown_touched opaque_listed by_owner default_touches)} = ($unknown_touched, $opaque_listed, \@by_owner, \@default_touches);
   if ($dune_dirs{$a->{dir}} || $read_any{$a->{name}} || $direct{$a->{name}}) { $tier{$a->{name}} = "main" }
   elsif ($blind) { $tier{$a->{name}} = @by_owner ? "main" : "guess" }
-  elsif (@by_owner) { $tier{$a->{name}} = link_only(@by_owner) ? "link" : "main" }
+  elsif (@by_owner) { $tier{$a->{name}} = (@default_touches || !link_only(@by_owner)) ? "main" : "link" }
   $a->{own_tier} = $tier{$a->{name}};
 }
 # An alias whose own rules need a listed alias (an ambient gate such as
@@ -5471,6 +5797,9 @@ sub explain {
     my ($names, $why) = owner_names($o);
     push @r, ($names ? "  referenced: " : "  link-only on its account: ") . $why;
   }
+  for my $dt (@{$a->{default_touches} // []}) {
+    push @r, "backend-default marker `$dt->{name}` (" . join(",", @{$dt->{backends}}) . ") matches $dt->{why}";
+  }
   my @idle = grep { !$reached{$_} } nsort(keys %owners);
   push @r, "no owner of it is reached: " . join(", ", map { label($_) } @idle) if @idle && !@{$a->{by_owner} // []};
   for my $t2 (@{$a->{own}}) {
@@ -5512,6 +5841,9 @@ sub gpu_source {
 if ($gpu_gated) {
   for my $a (grep { !$hidden{$_->{name}} && $tier{$_->{name}} } @al) {
     my $n = $a->{name};
+    for my $dt (grep { $_->{has_gpu} } @{$a->{default_touches} // []}) {
+      $gpu_reason{$n} //= "backend-default marker `$dt->{name}` (" . join(",", @{$dt->{backends}}) . ") matches $dt->{why}";
+    }
     for my $o (sort keys %{$a->{all_owners}}) {
       for my $f (sort @{stanza_sources($o) // []}) {
         my $why = gpu_source($f);
@@ -5641,6 +5973,7 @@ sub cross_reason {
       next if $first && !$named;
       push @owners, $first && $witnesses && @$witnesses ? @$witnesses : $owner_path{$o};
     }
+    push @owners, map { @{$_->{paths}} } @{$a->{default_touches} // []} if $first;
     my $paths = $by_alias_path{$n} //= {};
     my $data_path = $data_why{$d} // $any_data_why;
     $data_path = $delta_paths{$data_path} // $data_path if defined $data_path;
