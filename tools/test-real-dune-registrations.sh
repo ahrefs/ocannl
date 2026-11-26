@@ -1936,6 +1936,55 @@ PY_LIVE_RD
       "exit $check_rc: $(cat "$TMP/live-mut-rd.out")"
   fi
 
+  local live_leg_info live_leg_harness live_leg_token
+  live_leg_info=$(python3 - "$root/tools/test-harnesses.sh" "$TMP/live-mut-leg-th.sh" <<'PY_LIVE_LEG'
+from pathlib import Path
+import re, sys
+text = Path(sys.argv[1]).read_text()
+m = re.search(r"(?m)^(real_dune_legs\(\) \{\n)(.*?)(\n^\})", text, re.S)
+assert m, "real_dune_legs() not found"
+body_lines = m.group(2).splitlines()
+target_idx = None
+harness = None
+dropped_tok = None
+mutated_line = None
+for idx, line in enumerate(body_lines):
+    lm = re.search(r"([A-Za-z0-9_./-]+\.sh)\s+'([^']*\|[^']*)'", line)
+    if not lm:
+        continue
+    harness, sel = lm.group(1), lm.group(2)
+    gm = re.search(r"\(([^()|]+)\|([^()]+)\)", sel)
+    if gm:
+        dropped_tok = gm.group(1)
+        new_sel = sel[:gm.start()] + "(" + gm.group(2) + ")" + sel[gm.end():]
+    else:
+        parts = sel.split("|", 1)
+        dropped_tok = parts[0]
+        new_sel = parts[1]
+    target_idx = idx
+    mutated_line = line[:lm.start(2)] + new_sel + line[lm.end(2):]
+    break
+assert target_idx is not None, "no multi-leg selector found in real_dune_legs()"
+new_lines = list(body_lines)
+new_lines[target_idx] = mutated_line
+new_text = text[:m.start(2)] + "\n".join(new_lines) + text[m.end(2):]
+Path(sys.argv[2]).write_text(new_text)
+print(f"{harness}\t{dropped_tok}")
+PY_LIVE_LEG
+  ) || { harness_abandon 'could not drop one leg from a multi-leg real_dune_legs selector'; return; }
+  live_leg_harness=${live_leg_info%%$'\t'*}
+  live_leg_token=${live_leg_info#*$'\t'}
+  chmod +x "$TMP/live-mut-leg-th.sh"
+  run_checker "$TMP/live-mut-leg.out" --mode static --repo-root "$root" --test-harnesses "$TMP/live-mut-leg-th.sh"
+  if [ "$check_rc" = 1 ] && grep -qF "$live_leg_harness" "$TMP/live-mut-leg.out" &&
+     grep -qF "$live_leg_token" "$TMP/live-mut-leg.out" &&
+     grep -qF 'is not selected by real_dune_legs' "$TMP/live-mut-leg.out"; then
+    report 0 'live negative control: dropping one leg from a multi-leg real_dune_legs selector fails naming it'
+  else
+    report 1 'live negative control: dropping one leg from a multi-leg real_dune_legs selector fails naming it' \
+      "exit $check_rc: $(cat "$TMP/live-mut-leg.out")"
+  fi
+
   local live_dl_pair live_dl_harness live_dl_label
   live_dl_pair=$(awk -F '\t' '/^[^#]/ && NF == 2 { print $1 "\t" $2; exit }' \
     "$root/tools/harness-skips-ci-shell-dune.txt")
