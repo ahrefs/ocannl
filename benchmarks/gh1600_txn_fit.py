@@ -18,8 +18,7 @@ Usage: gh1600_txn_fit.py CELL [CELL ...] [--band B] [--sector 32|64|128] [--rate
             cannot enter a stock fit; pass `.tsv.stock` explicitly for older unmarked mixed TSVs.
   --census  stderr of a stock timing cell (repeatable): `CELL=TIMING_STDERR`, or bare
             `TIMING_STDERR` when a single CELL is given (refused with multiple cells; in single-
-            cell mode an existing bare path containing `=` is accepted unless its prefix matches
-            the cell name). Reads only
+            cell mode an argument without the `CELL=` prefix is treated as a bare path). Reads only
             `autotune-seeding: plan` and `autotune-seeding: preset-digest` records via
             `gh1442_agreement.stock_attribution`, requiring agreement within and across logs per
             cell; other stderr is ignored. Attributes `default` and a preset-plan `seeded`
@@ -90,14 +89,12 @@ cells read what model_default actually ships.
 
 import argparse
 import math
-import os
 import statistics
 import sys
 from typing import NamedTuple
 
 import bench_output
-from gh1253_gate_compare import CALIBRATION_COLUMNS
-from gh1442_agreement import (STOCK_SNAPSHOT_REQUIRED, stock_attribution, uses_preset,
+from gh1442_agreement import (calibration_rows, stock_attribution, uses_preset,
                               uses_seeded_plan)
 
 
@@ -125,37 +122,18 @@ def stock_replicates(path, census=()):
     preset_times = []
     preset_label = None
     preset_min = float("inf")
-    with open(path) as f:
-        for line in f:
-            line = line.rstrip("\n")
-            if line.startswith("#"):
-                if line == STOCK_SNAPSHOT_REQUIRED:
-                    raise ValueError(f"{path}: stock_snapshot_missing: pass the separate"
-                                     f" {path}.stock snapshot instead of a mixed TSV")
-                continue
-            cols = line.split("\t")
-            if len(cols) < 5:
-                continue
-            try:
-                ms = float(cols[4])
-            except ValueError:
-                continue
-            label = cols[3]
-            times.setdefault(label, []).append(ms)
-            # A label can cover several digests. Keep the attributed replicates independently
-            # so a faster namesake cannot enter the preset's median or spread.
-            if digest is not None and len(cols) == CALIBRATION_COLUMNS \
-                    and cols[1] == digest and math.isfinite(ms) and ms > 0:
-                preset_times.append(ms)
-                if ms < preset_min:
-                    preset_min = ms
-                    preset_label = label
+    hint = f"pass the separate {path}.stock snapshot instead of a mixed TSV"
+    for label, ms, attributed in calibration_rows(path, digest, missing_snapshot_hint=hint):
+        times.setdefault(label, []).append(ms)
+        # A label can cover several digests. Keep the attributed replicates independently
+        # so a faster namesake cannot enter the preset's median or spread.
+        if attributed:
+            preset_times.append(ms)
+            if ms < preset_min:
+                preset_min = ms
+                preset_label = label
     preset = PresetReplicates(preset_label, preset_times) if preset_times else None
     return StockReplicates(plan, digest, times, preset)
-
-
-def replicates(path):
-    return stock_replicates(path).times
 
 
 def row_replicates(label, stock, cell_name=None):
@@ -199,23 +177,28 @@ def parse_census_args(cell_specs, census_specs):
     if len(by_cell) != len(cell_names):
         raise ValueError("--census requires distinct cell names")
     for spec in census_specs:
-        if "=" in spec:
-            cname, cpath = spec.split("=", 1)
-            if cname in by_cell:
+        if len(cell_names) == 1:
+            cell = cell_names[0]
+            prefix = f"{cell}="
+            if spec.startswith(prefix):
+                cpath = spec[len(prefix):]
                 if not cpath:
-                    raise ValueError(f"--census for cell {cname!r} has an empty path")
-                by_cell[cname].append(cpath)
-            elif len(cell_names) == 1 and os.path.exists(spec):
-                by_cell[cell_names[0]].append(spec)
+                    raise ValueError(f"--census for cell {cell!r} has an empty path")
+                by_cell[cell].append(cpath)
             else:
-                raise ValueError(f"--census names unknown cell {cname!r}")
+                if not spec:
+                    raise ValueError("--census path must not be empty")
+                by_cell[cell].append(spec)
         else:
-            if len(cell_names) != 1:
+            if "=" not in spec:
                 raise ValueError(
                     "--census requires CELL=TIMING_STDERR when multiple cells are given")
-            if not spec:
-                raise ValueError("--census path must not be empty")
-            by_cell[cell_names[0]].append(spec)
+            cname, cpath = spec.split("=", 1)
+            if cname not in by_cell:
+                raise ValueError(f"--census names unknown cell {cname!r}")
+            if not cpath:
+                raise ValueError(f"--census for cell {cname!r} has an empty path")
+            by_cell[cname].append(cpath)
     return by_cell
 
 

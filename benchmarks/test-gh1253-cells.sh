@@ -530,6 +530,16 @@ if harness_leg '7: stock fits attribute F_preset and F_seeded incumbents via tim
     cmp "$pf_out/${site}_txn.txt" "$TMP/runs/preset-fits/txn-eqpath.out"
 
   got=0
+  python3 "$txn_fit" --rate 1e12 --census "$eq_dir/missing.err" \
+    "wgrad_1x32x32x32=$pf_out/$site.tsv.stock,$pf_out/${site}_notxn.out" \
+    >"$TMP/runs/preset-fits/txn-eqmissing.out" 2>"$TMP/runs/preset-fits/txn-eqmissing.err" || got=$?
+  check 'missing single-cell bare --census path with = fails with OSError' test "$got" = 2
+  check 'missing single-cell bare --census path with = names the missing file' \
+    grep -qF 'No such file or directory' "$TMP/runs/preset-fits/txn-eqmissing.err"
+  check 'missing single-cell bare --census path emits no stdout' \
+    test ! -s "$TMP/runs/preset-fits/txn-eqmissing.out"
+
+  got=0
   python3 "$txn_fit" --staged-rate 1e12 --listed-staged-rate 1e12 \
     --census "wgrad_1x32x32x32=$pf_out/${site}_time.err" \
     --census "wgrad_1x32x32x32=$pf_out/${site}_time_r2.err" \
@@ -621,8 +631,9 @@ PY
   got=0
   python3 "$txn_fit" --rate 1e12 --census "bogus=$pf_out/${site}_time.err" \
     "preset=$pf_out/$site.tsv.stock,$pf_out/${site}_notxn.out" \
+    "serial=$sa_out/$site.tsv,$sa_out/${site}_notxn.out" \
     >"$TMP/runs/preset-fits/unknown-cell.out" 2>"$TMP/runs/preset-fits/unknown-cell.err" || got=$?
-  check 'gh1600_txn_fit refuses --census naming an unknown cell' test "$got" = 2
+  check 'multi-cell gh1600_txn_fit refuses --census naming an unknown cell' test "$got" = 2
   check 'unknown-cell refusal names the unknown cell' \
     grep -qF "unknown cell 'bogus'" "$TMP/runs/preset-fits/unknown-cell.err"
   check 'unknown-cell refusal emits no stdout' test ! -s "$TMP/runs/preset-fits/unknown-cell.out"
