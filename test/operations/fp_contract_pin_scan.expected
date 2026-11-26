@@ -119,6 +119,7 @@ test/operations/gpu_packed_prec.ml -- no-contraction: each lane does one operati
 test/operations/grid_launch_floor.ml -- exact-operands: Bench_gebp products are multiples of an eighth and every sum stays exact in f32
 test/operations/half_float_power.ml -- pinned off
 test/operations/half_unary_math.ml -- pinned off
+test/operations/hip_extra_compile_options.ml -- not-cc: every device claim sits in the HIP leg; cc skips them all
 test/operations/init_prec_follows_param.ml -- same-shape: both sessions execute the same initializer graph at the same precisions; only how the parameter receives its half storage precision differs.
 test/operations/integer_power_domain.ml -- pinned off
 test/operations/issue_calibration.ml -- not-executed: the bitwise claim compares two fill fits computed in OCaml over synthetic sweeps

@@ -890,6 +890,7 @@ test/operations/half_index_bound_constant.ml [through Ll_test.execute; run by @t
 test/operations/half_unary_math.ml [through Ll_test.execute; run by @test/operations/runtest-half_unary_math, @test/operations/runtest-half_unary_math-reproducible]
 test/operations/hardware_warp_shuffle.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-hardware_warp_shuffle]
 test/operations/heap_local_arrays.ml [through Ll_test.execute; run by @test/operations/runtest-heap_local_arrays, @test/operations/runtest-heap_local_arrays-outlined]
+test/operations/hip_extra_compile_options.ml [through Ll_test.execute; run by @test/operations/runtest-hip_extra_compile_options]
 test/operations/hip_half_load.ml [through Ll_test.link; run by @test/operations/runtest-hip_half_load]
 test/operations/hip_half_masked_gradient.ml [through Ll_test.link; run by @test/operations/runtest-hip_half_masked_gradient]
 test/operations/hip_scratch_tune_survives.ml [prelowered compile; run by @test/operations/slow-hip_scratch_tune_survives]
@@ -1048,6 +1049,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-hardware_warp_shuffle
 @test/operations/runtest-heap_local_arrays
 @test/operations/runtest-heap_local_arrays-outlined
+@test/operations/runtest-hip_extra_compile_options
 @test/operations/runtest-hip_half_load
 @test/operations/runtest-hip_half_masked_gradient
 @test/operations/runtest-integer_bf16_narrowing

@@ -9861,6 +9861,26 @@
     -)
    (diff? hello_world_op.ml hello_world_op.ml.corrected))))
 
+; gh-ocannl-2344: diagnostic HIP extra compile options (hip_extra_compile_options): codegen_tag,
+; schedule-cache and kernel-cache separation, left-to-right contraction override, multi-token
+; execution, and loud rejection of unknown flags.
+
+(test
+ (name hip_extra_compile_options)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules hip_extra_compile_options)
+ (libraries
+  base
+  stdio
+  arrayjit.verdict
+  arrayjit.utils
+  arrayjit.ir
+  arrayjit.context
+  ll_test))
+
 (test
  (name hip_half_load)
  (package neural_nets_lib)

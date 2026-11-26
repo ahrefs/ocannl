@@ -82,15 +82,34 @@ let clang_contraction_off options =
       | _ -> off)
     false options
 
+let is_ascii_space = function ' ' | '\t' | '\n' | '\r' -> true | _ -> false
+
+(* gh-ocannl-2344: split a whitespace-separated extra-options string into individual hiprtc argv
+   tokens. Deliberately does not interpret shell quotes or escapes so token boundaries are identical
+   across command line, environment and resolved-configuration records. *)
+let parse_extra_options s =
+  let len = String.length s in
+  let rec skip_spaces i = if i < len && is_ascii_space s.[i] then skip_spaces (i + 1) else i in
+  let rec scan_token i = if i < len && not (is_ascii_space s.[i]) then scan_token (i + 1) else i in
+  let rec loop i acc =
+    let start = skip_spaces i in
+    if start >= len then List.rev acc
+    else
+      let stop = scan_token start in
+      loop stop (String.sub s start (stop - start) :: acc)
+  in
+  loop 0 []
+
 let hiprtc ~target_archs ~hip_include_options ~rocwmma_include_options ~uses_rocwmma ~fast_math
-    ~with_debug ?(with_line_info = false) () =
+    ~with_debug ?(with_line_info = false) ?(extra_options = []) () =
   hip_include_options
   @ (if uses_rocwmma then rocwmma_include_options @ [ "-std=c++17" ] else [])
   (* These are compiler options rather than kernel-body pragmas so they also govern the bf16 and f16
      operators while the HIP headers are parsed. *)
   @ hip_math_options ~fast_math
   @ hip_target_options ~target_archs
-  @ if with_debug then [ "-g" ] else if with_line_info then [ "-gline-tables-only" ] else []
+  @ (if with_debug then [ "-g" ] else if with_line_info then [ "-gline-tables-only" ] else [])
+  @ extra_options
 
 (* nvrtc's opt-IN for floating-point reassociation. nvrtc accepts it (13.3 answers a
    [--fassociative-math=false] with "does not accept any argument", so its parser knows the name and

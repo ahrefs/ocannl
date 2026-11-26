@@ -12,6 +12,13 @@ let cuda_fast_math () = Utils.get_global_flag ~default:true ~arg_name:"cuda_fast
     CUDA's, it changes no rendering: [Builtins_hip]'s wrappers are IEEE under either state. *)
 let hip_fast_math () = Utils.get_global_flag ~default:true ~arg_name:"hip_fast_math"
 
+(** Diagnostic extra hiprtc compiler options (gh-ocannl-2344): whitespace-separated flags appended
+    at the end of every hiprtc compile. Empty by default. The one reader of the key, so the compile,
+    [Hip.compiler_contraction_off] and the HIP schedule-cache regime cannot disagree. *)
+let hip_extra_compile_options () =
+  Compiler_options.parse_extra_options
+    (Utils.get_global_arg ~default:"" ~arg_name:"hip_extra_compile_options")
+
 module Cuda = struct
   let header_prelude =
     {|#include <cuda_fp16.h>
@@ -169,7 +176,8 @@ module Hip = struct
 
   let compiler_contraction_off () =
     Compiler_options.clang_contraction_off
-      (Compiler_options.hip_math_options ~fast_math:(hip_fast_math ()))
+      (Compiler_options.hip_math_options ~fast_math:(hip_fast_math ())
+      @ hip_extra_compile_options ())
 
   (* hip_fp16.h's half functions are ROCm's OCML f16 library functions ([__ocml_exp_f16], ...), and
      [htanh_approx] is [Builtins_hip]'s f32 route already. *)

@@ -1,0 +1,10 @@
+the host emulation separates one rounding per step from two on the chain: true
+compiler_contraction_off tracks left-to-right contraction overrides in hip_extra_compile_options: true
+HIP codegen_tag omits /hiprtc-extra: when empty or whitespace-only, appends canonical /hiprtc-extra: when set, and reflects /mma-fallback-unfused: true
+schedule cache key moves only codegen across distinct extra options and ignores whitespace normalization: true
+kernel code cache hits on matching or whitespace-equivalent extra options and misses on changes: true
+under hip_fast_math=true with hip_extra_compile_options=-ffp-contract=off, (a * b) + c rounds twice to +0.0 bitwise while default computes a legal rounding: true
+under hip_fast_math=true with hip_extra_compile_options=-ffp-contract=off, explicit fma(a, b, c) still computes the fused 2^-24 bitwise: true
+under hip_fast_math=true with hip_extra_compile_options=-ffp-contract=off, the FMA-sensitive chain computes the two-rounding f32 chain bitwise: true
+multi-token hip_extra_compile_options (-freciprocal-math -fapprox-func) compiles and executes cleanly on HIP: true
+an unrecognized flag in hip_extra_compile_options fails loudly and reports the flag in hiprtc options: true

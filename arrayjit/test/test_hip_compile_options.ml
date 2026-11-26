@@ -173,4 +173,60 @@ let () =
     [ true; false ] ~f:(fun fast_math ->
       List.mem
         (Ir.Compiler_options.hip_math_options ~fast_math)
-        "-fno-associative-math" ~equal:String.equal)
+        "-fno-associative-math" ~equal:String.equal);
+  (* gh-ocannl-2344: diagnostic extra hiprtc options split on ASCII whitespace, append at the very
+     end (after math, target and debug/line-info flags), and participate in left-to-right
+     contraction tracking. *)
+  Verdict.p_all "parse_extra_options splits on ASCII whitespace and drops empty tokens"
+    [
+      ("", []);
+      ("   \t\n\r  ", []);
+      ("-fapprox-func", [ "-fapprox-func" ]);
+      ( "  -freciprocal-math   -fapprox-func\t-ffp-contract=fast\n",
+        [ "-freciprocal-math"; "-fapprox-func"; "-ffp-contract=fast" ] );
+      ( "-Xclang -target-feature -Xclang +real-true16",
+        [ "-Xclang"; "-target-feature"; "-Xclang"; "+real-true16" ] );
+    ]
+    ~f:(fun (raw, want) ->
+      List.equal String.equal (Ir.Compiler_options.parse_extra_options raw) want);
+  let extra = [ "-freciprocal-math"; "-fapprox-func"; "-ffp-contract=fast" ] in
+  Verdict.p_all
+    "hiprtc appends extra_options after math, target and debug/line-info flags across all variants"
+    [ (false, false, false); (false, true, false); (true, false, true); (true, true, true) ]
+    ~f:(fun (uses_rocwmma, with_debug, with_line_info) ->
+      let base =
+        Ir.Compiler_options.hiprtc ~target_archs:[ "gfx1102" ] ~hip_include_options:[ "-Ihip" ]
+          ~rocwmma_include_options:[ "-Irocwmma" ] ~uses_rocwmma ~fast_math:true ~with_debug
+          ~with_line_info ()
+      in
+      let with_empty =
+        Ir.Compiler_options.hiprtc ~target_archs:[ "gfx1102" ] ~hip_include_options:[ "-Ihip" ]
+          ~rocwmma_include_options:[ "-Irocwmma" ] ~uses_rocwmma ~fast_math:true ~with_debug
+          ~with_line_info ~extra_options:[] ()
+      in
+      let with_extra =
+        Ir.Compiler_options.hiprtc ~target_archs:[ "gfx1102" ] ~hip_include_options:[ "-Ihip" ]
+          ~rocwmma_include_options:[ "-Irocwmma" ] ~uses_rocwmma ~fast_math:true ~with_debug
+          ~with_line_info ~extra_options:extra ()
+      in
+      List.equal String.equal base with_empty && List.equal String.equal with_extra (base @ extra));
+  Verdict.p_all
+    "HIP compiler_contraction_off tracks left-to-right overrides in hip_extra_compile_options"
+    [
+      ("true", "", false);
+      ("true", "   ", false);
+      ("true", "-ffp-contract=off", true);
+      ("true", "-fapprox-func -ffp-contract=off", true);
+      ("true", "-ffp-contract=off -ffp-contract=fast", false);
+      ("true", "-ffp-contract=fast -ffp-contract=off", true);
+      ("false", "", true);
+      ("false", "-fapprox-func", true);
+      ("false", "-ffp-contract=fast", false);
+      ("false", "-ffp-contract=on", false);
+      ("false", "-ffast-math", false);
+      ("false", "-ffast-math -ffp-contract=off", true);
+    ]
+    ~f:(fun (fast_math, extra, want) ->
+      Utils.with_stated_config
+        [ ("hip_fast_math", fast_math); ("hip_extra_compile_options", extra) ]
+        (fun () -> Bool.equal want (Ir.Cuda_like_config.Hip.compiler_contraction_off ())))

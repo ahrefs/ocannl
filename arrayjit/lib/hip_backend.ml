@@ -422,7 +422,9 @@ end = struct
       ~rocwmma_include_options:rocwmma_include_opt ~uses_rocwmma
       ~fast_math:(Cuda_like_config.hip_fast_math ())
       ~with_debug:(Utils.with_runtime_debug ())
-      ~with_line_info:Utils.settings.output_debug_files_in_build_directory ()
+      ~with_line_info:Utils.settings.output_debug_files_in_build_directory
+      ~extra_options:(Cuda_like_config.hip_extra_compile_options ())
+      ()
 
   let with_conditional_includes hip_src =
     C_syntax.prepend_conditional_includes
@@ -2024,7 +2026,14 @@ end = struct
       ^ Compiler_options.render (Compiler_options.hip_math_options ~fast_math)
       (* gh-ocannl-1457: a contraction-off compile renders a [Tile_mma] fallback unfused, so a crown
          timed with the fused one does not replay. Derived from the dialect's own pin. *)
-      ^ if Cuda_like_config.Hip.compiler_contraction_off () then "/mma-fallback-unfused" else ""
+      ^ (if Cuda_like_config.Hip.compiler_contraction_off () then "/mma-fallback-unfused" else "")
+      (* gh-ocannl-2344: diagnostic extra hiprtc options. Placed last so arbitrary flag spellings
+         (including paths with [/]) cannot collide with any fixed tag component above; omitted when
+         empty so default keys stay valid. *)
+      ^
+      match Cuda_like_config.hip_extra_compile_options () with
+      | [] -> ""
+      | options -> "/hiprtc-extra:" ^ Compiler_options.render options
       (* No [bf16_accum_wide] component (gh-ocannl-1117): gh-ocannl-1051 added one by hand when
          [Bf16_auto] went wide here with the configured mode unchanged, but what a mode resolves to
          is now cache identity by derivation — [Schedule_cache.codegen_tag] tabulates this backend's

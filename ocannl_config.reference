@@ -1608,6 +1608,21 @@
 # by their compiler switches in the HIP schedule cache. An explicit setting outranks the profile.
 #hip_fast_math=true
 
+# Diagnostic extra options appended to every hiprtc compile (gh-ocannl-2344), after the backend's
+# include paths, `hip_fast_math` switches, target workarounds, and debug/line-info flags. Because
+# clang processes floating-point and target switches left-to-right, appended flags override earlier
+# ones, letting compiler-vector A/B runs (for example `benchmarks/bin_cells.py` arms) differ only
+# on the command line without editing `compiler_options.ml`. Tokens are split on ASCII whitespace
+# (no shell quote or escape parsing); empty or whitespace-only appends nothing. Options containing
+# `=` (such as `-ffp-contract=fast`) are passed via the command line or environment (`ocannl_config`
+# lines allow a single `=`). `compiler_contraction_off` inspects `hip_math_options` followed by the
+# parsed extra options, so appending `-ffp-contract=off` (or `-ffp-contract=fast`/`-ffast-math`)
+# updates both `Tile_mma` scalar-fallback fusion and the `mma-fallback-unfused` cache tag. Non-empty
+# parsed options are part of the HIP schedule cache's identity (`/hiprtc-extra:...`) and the
+# process-local kernel code cache key; empty leaves default keys unchanged. Unrecognized options
+# fail compilation with the effective `hiprtc options:` vector included in the error message.
+#hip_extra_compile_options=
+
 # Floating-point contraction policy for the Metal backend (gh-ocannl-2406): `auto` (default) or
 # `off`. MTLCompileOptions exposes no contraction property, so under `auto` (the default, and under
 # the `performance` and `approximate` profiles) no contraction pragma is emitted and Metal keeps

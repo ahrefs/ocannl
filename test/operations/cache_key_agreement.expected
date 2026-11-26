@@ -74,6 +74,7 @@ Keyed keys hashed only on some backends:
   gpu_graph_capture -- CUDA and HIP
   cuda_fast_math -- CUDA
   hip_fast_math -- HIP
+  hip_extra_compile_options -- HIP
   metal_fp_contract -- Metal
   cuda_ptx_target -- CUDA
   gpu_elide_covered_zeros -- GPU backends

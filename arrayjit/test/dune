@@ -180,7 +180,7 @@
  (package arrayjit)
  (modules test_hip_compile_options)
  (deps ocannl_config ocannl_ambient)
- (libraries base stdio arrayjit.ir arrayjit.verdict))
+ (libraries base stdio arrayjit.ir arrayjit.utils arrayjit.verdict))
 
 ; gh-ocannl-849: exercise the production HIPRTC wrapper against both invalid and valid source.
 ; Like the backend-specific tests below, the select keeps hipjit optional; unlike their fixed
