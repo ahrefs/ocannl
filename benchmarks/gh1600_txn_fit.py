@@ -17,7 +17,9 @@ Usage: gh1600_txn_fit.py CELL [CELL ...] [--band B] [--sector 32|64|128] [--rate
             TSV is refused (exit 2, `stock_snapshot_missing` on stderr, no stdout) so profile rows
             cannot enter a stock fit; pass `.tsv.stock` explicitly for older unmarked mixed TSVs.
   --census  stderr of a stock timing cell (repeatable): `CELL=TIMING_STDERR`, or bare
-            `TIMING_STDERR` when a single CELL is given (refused with multiple cells). Reads only
+            `TIMING_STDERR` when a single CELL is given (refused with multiple cells; in single-
+            cell mode an existing bare path containing `=` is accepted unless its prefix matches
+            the cell name). Reads only
             `autotune-seeding: plan` and `autotune-seeding: preset-digest` records via
             `gh1442_agreement.stock_attribution`, requiring agreement within and across logs per
             cell; other stderr is ignored. Attributes `default` and a preset-plan `seeded`
@@ -88,6 +90,7 @@ cells read what model_default actually ships.
 
 import argparse
 import math
+import os
 import statistics
 import sys
 from typing import NamedTuple
@@ -198,11 +201,14 @@ def parse_census_args(cell_specs, census_specs):
     for spec in census_specs:
         if "=" in spec:
             cname, cpath = spec.split("=", 1)
-            if cname not in by_cell:
+            if cname in by_cell:
+                if not cpath:
+                    raise ValueError(f"--census for cell {cname!r} has an empty path")
+                by_cell[cname].append(cpath)
+            elif len(cell_names) == 1 and os.path.exists(spec):
+                by_cell[cell_names[0]].append(spec)
+            else:
                 raise ValueError(f"--census names unknown cell {cname!r}")
-            if not cpath:
-                raise ValueError(f"--census for cell {cname!r} has an empty path")
-            by_cell[cname].append(cpath)
         else:
             if len(cell_names) != 1:
                 raise ValueError(

@@ -517,6 +517,18 @@ if harness_leg '7: stock fits attribute F_preset and F_seeded incumbents via tim
   check 'direct gh1600_txn_fit matches driver output byte for byte' \
     cmp "$pf_out/${site}_txn.txt" "$TMP/runs/preset-fits/txn-bare.out"
 
+  eq_dir="$TMP/runs/preset-fits/device=hip"
+  mkdir -p "$eq_dir"
+  cp "$pf_out/${site}_time.err" "$eq_dir/"
+  got=0
+  python3 "$txn_fit" --rate 1e12 --show \
+    --census "$eq_dir/${site}_time.err" \
+    "wgrad_1x32x32x32=$pf_out/$site.tsv.stock,$pf_out/${site}_notxn.out" \
+    >"$TMP/runs/preset-fits/txn-eqpath.out" 2>"$TMP/runs/preset-fits/txn-eqpath.err" || got=$?
+  check 'single-cell bare --census accepts a path containing =' test "$got" = 0
+  check 'single-cell bare --census with = matches driver output byte for byte' \
+    cmp "$pf_out/${site}_txn.txt" "$TMP/runs/preset-fits/txn-eqpath.out"
+
   got=0
   python3 "$txn_fit" --staged-rate 1e12 --listed-staged-rate 1e12 \
     --census "wgrad_1x32x32x32=$pf_out/${site}_time.err" \
