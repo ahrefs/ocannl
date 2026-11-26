@@ -46,3 +46,4 @@ and its disposition: the inherited handler is the one that fires: true
 an inherited alarm due before the budget still fires, cutting the instrument at it: true
 under a budget nothing reaches, the instrument starts every kernel: true
 and names a dominant kernel (or says every reading was refused): true
+the per-kernel legend marks isolated Metal timings as screening-grade: true

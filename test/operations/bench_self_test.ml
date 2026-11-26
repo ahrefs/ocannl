@@ -522,3 +522,20 @@ let () =
        | `Int i -> i >= 0
        | _ -> false)
     || all_readings_refused dk)
+
+let () =
+  let cases =
+    [
+      ("metal", Autotune.Isolated, true);
+      ("metal", Autotune.Queued, false);
+      ("cc", Autotune.Isolated, false);
+      ("cuda", Autotune.Isolated, false);
+      ("hip", Autotune.Isolated, false);
+    ]
+  in
+  Verdict.p_all "the per-kernel legend marks isolated Metal timings as screening-grade" cases
+    ~f:(fun (backend, timing, screening_grade) ->
+      Bool.equal screening_grade
+        (String.is_substring
+           (H.kernel_timing_legend ~backend ~calls:4 timing)
+           ~substring:"screening-grade on Metal"))
