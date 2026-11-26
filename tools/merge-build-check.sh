@@ -1181,128 +1181,262 @@ reach_cache_key() {
     2>/dev/null
 }
 
+# reach_cache_io MODE ARGS... owns the single entry grammar, cache-directory check and atomic
+# read/write logic for both `load` and `store` so their validation rules cannot drift apart.
+reach_cache_io() {
+  perl -e '
+    use strict; use warnings;
+    use Fcntl qw(O_RDONLY O_WRONLY O_CREAT O_EXCL);
+    use File::Path qw(make_path);
+
+    my ($mode, $cache_dir, $implicit, $key, $tests_dir, @rest) = @ARGV;
+    my $fail_rc = ($mode eq "load") ? 1 : 0;
+    sub bail { exit $fail_rc; }
+
+    my %scalar_tags = map { $_ => 1 } qw(
+      tests tests_verdict tests_incomplete has_ask_first
+      tests_owed train_why linux_why linux_leg_args
+    );
+    my %valid_tests = map { $_ => 1 } qw(list owed);
+    my %valid_verdict = map { $_ => 1 } ("ok", "incomplete", "cross-cutting", "cross-cutting,incomplete");
+    my %valid_bit = map { $_ => 1 } qw(0 1);
+
+    sub valid_need {
+      my ($v) = @_;
+      return defined $v && (
+        $v eq "runtest" || $v eq "train" || $v eq "linux:harnesses"
+        || $v =~ m{\A@[^\s]+/train-[^\s]+\z}
+        || $v =~ m{\Alinux:member:[^\s]+\z}
+        || $v =~ m{\Alinux:@[^\s]+\z}
+      );
+    }
+    sub valid_list  { my ($v) = @_; return defined $v && $v =~ m{\A@[^\s]+\z}; }
+    sub valid_cross { my ($v) = @_; return defined $v && index($v, "affected: CROSS-CUTTING reason: ") == 0; }
+    sub valid_dep   { my ($v) = @_; return defined $v && $v =~ m{\Aaffected: .+: named as a dependency by the rule of @[^\s]+\z}; }
+    sub valid_dir {
+      my @dst = lstat($cache_dir);
+      return 0 unless @dst;
+      return $implicit
+        ? (-d _ && !-l _ && $dst[4] == $< && (($dst[2] & 0022) == 0))
+        : (-d $cache_dir);
+    }
+
+    bail() unless defined $key && $key =~ /\A[0-9a-f]{64}\z/;
+    my $entry = "$cache_dir/reach-$key.v1";
+
+    if ($mode eq "load") {
+      bail() unless valid_dir();
+      my @lst = lstat($entry);
+      bail() unless @lst && -f _ && !-l _ && $lst[4] == $< && (($lst[2] & 0022) == 0);
+
+      my $flags = O_RDONLY;
+      my $nofollow = eval { Fcntl::O_NOFOLLOW() };
+      $flags |= $nofollow if defined $nofollow;
+      sysopen(my $fh, $entry, $flags) or bail();
+      binmode $fh;
+      my @fst = stat($fh);
+      bail() unless @fst && -f _ && $fst[0] == $lst[0] && $fst[1] == $lst[1]
+                 && $fst[4] == $< && (($fst[2] & 0022) == 0);
+
+      local $/;
+      my $raw = <$fh>;
+      close $fh or bail();
+      bail() unless defined $raw && length($raw) > 0 && index($raw, "\0") < 0 && $raw =~ /\n\z/;
+
+      my @lines = split /\n/, $raw, -1;
+      pop @lines;
+      bail() unless @lines >= 3 && $lines[0] eq "schema\tv1" && $lines[1] eq "key\t$key"
+                 && $lines[-1] eq "end\tv1";
+
+      my (%scalars, @needs, @list, @cross, @deps);
+      for my $i (2 .. $#lines - 1) {
+        my $ln = $lines[$i];
+        my $tab = index($ln, "\t");
+        bail() if $tab < 1;
+        my $tag = substr($ln, 0, $tab);
+        my $val = substr($ln, $tab + 1);
+        if ($scalar_tags{$tag}) {
+          bail() if exists $scalars{$tag};
+          $scalars{$tag} = $val;
+        } elsif ($tag eq "need") {
+          bail() unless valid_need($val);
+          push @needs, $val;
+        } elsif ($tag eq "list") {
+          bail() unless valid_list($val);
+          push @list, $val;
+        } elsif ($tag eq "cross_line") {
+          bail() unless valid_cross($val);
+          push @cross, $val;
+        } elsif ($tag eq "dep") {
+          bail() unless valid_dep($val);
+          push @deps, $val;
+        } else {
+          bail();
+        }
+      }
+
+      for my $req (keys %scalar_tags) { bail() unless exists $scalars{$req}; }
+      bail() unless $valid_tests{$scalars{tests}} && $valid_verdict{$scalars{tests_verdict}}
+                 && $valid_bit{$scalars{tests_incomplete}} && $valid_bit{$scalars{has_ask_first}};
+
+      sub write_lines {
+        my ($path, $arr) = @_;
+        open my $oh, ">", $path or bail();
+        binmode $oh;
+        for my $x (@$arr) { print $oh $x, "\n" or bail(); }
+        close $oh or bail();
+      }
+
+      write_lines("$tests_dir/list", \@list);
+      if ($scalars{has_ask_first} eq "1") {
+        write_lines("$tests_dir/ask", \@cross);
+        write_lines("$tests_dir/ask-first", \@deps);
+      } else {
+        unlink "$tests_dir/ask-first";
+        write_lines("$tests_dir/ask", [@cross, @deps]);
+      }
+
+      open my $mh, ">", "$tests_dir/cache-meta" or bail();
+      binmode $mh;
+      for my $k (qw(tests tests_verdict tests_incomplete tests_owed train_why linux_why linux_leg_args)) {
+        print $mh "$k=$scalars{$k}\n" or bail();
+      }
+      for my $n (@needs) { print $mh "need=$n\n" or bail(); }
+      close $mh or bail();
+
+      # Best-effort LRU touch so actively reused entries stay fresh.
+      utime(undef, undef, $entry);
+      exit 0;
+    }
+
+    bail() unless $mode eq "store";
+    my ($has_ask_first, $tests, $tests_verdict, $tests_incomplete,
+        $tests_owed, $train_why, $linux_why, $linux_leg_args, @needs) = @rest;
+
+    bail() unless $valid_tests{$tests} && $valid_verdict{$tests_verdict}
+               && $valid_bit{$tests_incomplete} && $valid_bit{$has_ask_first};
+    for my $s ($tests_owed, $train_why, $linux_why, $linux_leg_args, @needs) {
+      bail() if !defined $s || index($s, "\n") >= 0 || index($s, "\0") >= 0;
+    }
+    for my $n (@needs) { bail() unless valid_need($n); }
+
+    my @list;
+    if (-f "$tests_dir/list") {
+      open my $lh, "<", "$tests_dir/list" or bail();
+      binmode $lh;
+      while (my $ln = <$lh>) {
+        $ln =~ s/\r?\n\z//;
+        next unless length($ln);
+        bail() if index($ln, "\0") >= 0 || !valid_list($ln);
+        push @list, $ln;
+      }
+      close $lh;
+    }
+
+    my @cross;
+    if (-f "$tests_dir/ask") {
+      open my $ah, "<", "$tests_dir/ask" or bail();
+      binmode $ah;
+      while (my $ln = <$ah>) {
+        $ln =~ s/\r?\n\z//;
+        next unless valid_cross($ln);
+        bail() if index($ln, "\0") >= 0;
+        push @cross, $ln;
+      }
+      close $ah;
+    }
+
+    my @deps;
+    my $dep_file = $has_ask_first eq "1" ? "$tests_dir/ask-first" : "$tests_dir/ask";
+    if (-f $dep_file) {
+      open my $dh, "<", $dep_file or bail();
+      binmode $dh;
+      while (my $ln = <$dh>) {
+        $ln =~ s/\r?\n\z//;
+        next unless valid_dep($ln);
+        bail() if index($ln, "\0") >= 0;
+        push @deps, $ln;
+      }
+      close $dh;
+    }
+
+    # Ensure cache_dir exists; newly created directories get 0700.
+    umask 0077;
+    if (!-e $cache_dir) {
+      eval { make_path($cache_dir, { mode => 0700 }) };
+      bail() if $@;
+    }
+    bail() unless valid_dir();
+
+    my ($fh, $tmp_path);
+    for my $try (1 .. 16) {
+      my $cand = sprintf("%s/.ocannl-reach-tmp.%s.%d.%06d", $cache_dir, $key, $$, int(rand(1000000)));
+      if (sysopen($fh, $cand, O_WRONLY | O_CREAT | O_EXCL, 0600)) {
+        $tmp_path = $cand;
+        last;
+      }
+    }
+    bail() unless defined $tmp_path;
+    binmode $fh;
+    my $ok = 1;
+    $ok &&= print $fh "schema\tv1\n";
+    $ok &&= print $fh "key\t$key\n";
+    $ok &&= print $fh "tests\t$tests\n";
+    $ok &&= print $fh "tests_verdict\t$tests_verdict\n";
+    $ok &&= print $fh "tests_incomplete\t$tests_incomplete\n";
+    $ok &&= print $fh "has_ask_first\t$has_ask_first\n";
+    $ok &&= print $fh "tests_owed\t$tests_owed\n";
+    $ok &&= print $fh "train_why\t$train_why\n";
+    $ok &&= print $fh "linux_why\t$linux_why\n";
+    $ok &&= print $fh "linux_leg_args\t$linux_leg_args\n";
+    for my $n (@needs) { $ok &&= print $fh "need\t$n\n"; }
+    for my $l (@list) { $ok &&= print $fh "list\t$l\n"; }
+    for my $c (@cross) { $ok &&= print $fh "cross_line\t$c\n"; }
+    for my $d (@deps) { $ok &&= print $fh "dep\t$d\n"; }
+    $ok &&= print $fh "end\tv1\n";
+    $ok &&= close $fh;
+    if (!$ok || !rename($tmp_path, $entry)) {
+      unlink $tmp_path;
+      bail();
+    }
+
+    # Best-effort retention: prune only owner-matching files in this tool'\''s exact staging and
+    # entry filename formats (stale staging >1h, entries >14d, cap at 256 entries).
+    if (opendir my $cdh, $cache_dir) {
+      my $now = time();
+      my @entries;
+      while (my $name = readdir($cdh)) {
+        if ($name =~ /\A\.ocannl-reach-tmp\.[0-9a-f]{64}\.[0-9]+\.[0-9]{6}\z/) {
+          my @st = lstat("$cache_dir/$name");
+          unlink "$cache_dir/$name" if @st && -f _ && !-l _ && $st[4] == $< && ($now - $st[9]) > 3600;
+        } elsif ($name =~ /\Areach-[0-9a-f]{64}\.v1\z/) {
+          my @st = lstat("$cache_dir/$name");
+          next unless @st && -f _ && !-l _ && $st[4] == $<;
+          if (($now - $st[9]) > 14 * 86400) {
+            unlink "$cache_dir/$name";
+          } else {
+            push @entries, [$st[9], $name];
+          }
+        }
+      }
+      closedir $cdh;
+      if (@entries > 256) {
+        @entries = sort { $b->[0] <=> $a->[0] } @entries;
+        for my $i (256 .. $#entries) {
+          unlink "$cache_dir/$entries[$i][1]";
+        }
+      }
+    }
+  ' "$@" 2>/dev/null
+}
+
 # reach_cache_load KEY restores a validated cached `read_tests` result into `$tests_dir` and the
 # shell state variables, returning 0 on a valid hit and 1 on any miss, permission/symlink refusal,
 # key mismatch or format violation.
 reach_cache_load() {
   local key=$1 line tag val
   [ -n "$reach_cache_dir" ] || return 1
-  perl -e '
-    use strict; use warnings;
-    use Fcntl qw(O_RDONLY);
-
-    my ($cache_dir, $implicit, $key, $tests_dir) = @ARGV;
-    exit 1 unless defined $key && $key =~ /\A[0-9a-f]{64}\z/;
-
-    my @dst = lstat($cache_dir);
-    exit 1 unless @dst;
-    if ($implicit) {
-      exit 1 unless -d _ && !-l _ && $dst[4] == $< && (($dst[2] & 0022) == 0);
-    } else {
-      exit 1 unless -d $cache_dir;
-    }
-
-    my $entry = "$cache_dir/reach-$key.v1";
-    my @lst = lstat($entry);
-    exit 1 unless @lst && -f _ && !-l _ && $lst[4] == $< && (($lst[2] & 0022) == 0);
-
-    my $flags = O_RDONLY;
-    my $nofollow = eval { Fcntl::O_NOFOLLOW() };
-    $flags |= $nofollow if defined $nofollow;
-    sysopen(my $fh, $entry, $flags) or exit 1;
-    binmode $fh;
-    my @fst = stat($fh);
-    exit 1 unless @fst && -f _ && $fst[0] == $lst[0] && $fst[1] == $lst[1]
-               && $fst[4] == $< && (($fst[2] & 0022) == 0);
-
-    local $/;
-    my $raw = <$fh>;
-    close $fh or exit 1;
-    exit 1 unless defined $raw && length($raw) > 0 && index($raw, "\0") < 0;
-    exit 1 unless $raw =~ /\n\z/;
-
-    my @lines = split /\n/, $raw, -1;
-    pop @lines;
-    exit 1 unless @lines >= 3 && $lines[0] eq "schema\tv1" && $lines[1] eq "key\t$key"
-               && $lines[-1] eq "end\tv1";
-
-    my %scalar_tags = map { $_ => 1 } qw(
-      tests tests_verdict tests_incomplete has_ask_first
-      tests_owed train_why linux_why linux_leg_args
-    );
-    my %scalars;
-    my (@needs, @list, @cross, @deps);
-
-    for my $i (2 .. $#lines - 1) {
-      my $ln = $lines[$i];
-      my $tab = index($ln, "\t");
-      exit 1 if $tab < 1;
-      my $tag = substr($ln, 0, $tab);
-      my $val = substr($ln, $tab + 1);
-      if ($scalar_tags{$tag}) {
-        exit 1 if exists $scalars{$tag};
-        $scalars{$tag} = $val;
-      } elsif ($tag eq "need") {
-        exit 1 unless $val eq "runtest" || $val eq "train" || $val eq "linux:harnesses"
-                   || $val =~ m{\A@[^\s]+/train-[^\s]+\z}
-                   || $val =~ m{\Alinux:member:[^\s]+\z}
-                   || $val =~ m{\Alinux:@[^\s]+\z};
-        push @needs, $val;
-      } elsif ($tag eq "list") {
-        exit 1 unless $val =~ m{\A@[^\s]+\z};
-        push @list, $val;
-      } elsif ($tag eq "cross_line") {
-        exit 1 unless index($val, "affected: CROSS-CUTTING reason: ") == 0;
-        push @cross, $val;
-      } elsif ($tag eq "dep") {
-        exit 1 unless $val =~ m{\Aaffected: .+: named as a dependency by the rule of @[^\s]+\z};
-        push @deps, $val;
-      } else {
-        exit 1;
-      }
-    }
-
-    for my $req (keys %scalar_tags) {
-      exit 1 unless exists $scalars{$req};
-    }
-    exit 1 unless $scalars{tests} eq "list" || $scalars{tests} eq "owed";
-    exit 1 unless $scalars{tests_verdict} eq "ok"
-               || $scalars{tests_verdict} eq "incomplete"
-               || $scalars{tests_verdict} eq "cross-cutting"
-               || $scalars{tests_verdict} eq "cross-cutting,incomplete";
-    exit 1 unless $scalars{tests_incomplete} eq "0" || $scalars{tests_incomplete} eq "1";
-    exit 1 unless $scalars{has_ask_first} eq "0" || $scalars{has_ask_first} eq "1";
-
-    sub write_lines {
-      my ($path, $arr) = @_;
-      open my $oh, ">", $path or exit 1;
-      binmode $oh;
-      for my $x (@$arr) { print $oh $x, "\n" or exit 1; }
-      close $oh or exit 1;
-    }
-
-    write_lines("$tests_dir/list", \@list);
-    if ($scalars{has_ask_first} eq "1") {
-      write_lines("$tests_dir/ask", \@cross);
-      write_lines("$tests_dir/ask-first", \@deps);
-    } else {
-      unlink "$tests_dir/ask-first";
-      write_lines("$tests_dir/ask", [@cross, @deps]);
-    }
-
-    open my $mh, ">", "$tests_dir/cache-meta" or exit 1;
-    binmode $mh;
-    for my $k (qw(tests tests_verdict tests_incomplete tests_owed train_why linux_why linux_leg_args)) {
-      print $mh "$k=$scalars{$k}\n" or exit 1;
-    }
-    for my $n (@needs) {
-      print $mh "need=$n\n" or exit 1;
-    }
-    close $mh or exit 1;
-
-    # Best-effort LRU touch so actively reused entries stay fresh.
-    utime(undef, undef, $entry);
-  ' "$reach_cache_dir" "$reach_cache_implicit" "$key" "$tests_dir" 2>/dev/null || {
+  reach_cache_io load "$reach_cache_dir" "$reach_cache_implicit" "$key" "$tests_dir" || {
     rm -f "$tests_dir/list" "$tests_dir/ask" "$tests_dir/ask-first" "$tests_dir/cache-meta"
     return 1
   }
@@ -1334,157 +1468,9 @@ reach_cache_store() {
   local key=$1 has_ask_first=0
   [ -n "$reach_cache_dir" ] || return 0
   [ ! -f "$tests_dir/ask-first" ] || has_ask_first=1
-  perl -e '
-    use strict; use warnings;
-    use Fcntl qw(O_WRONLY O_CREAT O_EXCL);
-
-    my ($cache_dir, $implicit, $key, $tests_dir, $has_ask_first,
-        $tests, $tests_verdict, $tests_incomplete, $tests_owed,
-        $train_why, $linux_why, $linux_leg_args, @needs) = @ARGV;
-
-    exit 0 unless defined $key && $key =~ /\A[0-9a-f]{64}\z/;
-    exit 0 unless $tests eq "list" || $tests eq "owed";
-    exit 0 unless $tests_verdict eq "ok"
-               || $tests_verdict eq "incomplete"
-               || $tests_verdict eq "cross-cutting"
-               || $tests_verdict eq "cross-cutting,incomplete";
-    exit 0 unless $tests_incomplete eq "0" || $tests_incomplete eq "1";
-    exit 0 unless $has_ask_first eq "0" || $has_ask_first eq "1";
-
-    for my $s ($tests_owed, $train_why, $linux_why, $linux_leg_args, @needs) {
-      exit 0 if !defined $s || index($s, "\n") >= 0 || index($s, "\0") >= 0;
-    }
-    for my $n (@needs) {
-      exit 0 unless $n eq "runtest" || $n eq "train" || $n eq "linux:harnesses"
-                 || $n =~ m{\A@[^\s]+/train-[^\s]+\z}
-                 || $n =~ m{\Alinux:member:[^\s]+\z}
-                 || $n =~ m{\Alinux:@[^\s]+\z};
-    }
-
-    my @list;
-    if (-f "$tests_dir/list") {
-      open my $lh, "<", "$tests_dir/list" or exit 0;
-      binmode $lh;
-      while (my $ln = <$lh>) {
-        $ln =~ s/\r?\n\z//;
-        next unless length($ln);
-        exit 0 if index($ln, "\0") >= 0 || $ln !~ m{\A@[^\s]+\z};
-        push @list, $ln;
-      }
-      close $lh;
-    }
-
-    my @cross;
-    if (-f "$tests_dir/ask") {
-      open my $ah, "<", "$tests_dir/ask" or exit 0;
-      binmode $ah;
-      while (my $ln = <$ah>) {
-        $ln =~ s/\r?\n\z//;
-        next unless index($ln, "affected: CROSS-CUTTING reason: ") == 0;
-        exit 0 if index($ln, "\0") >= 0;
-        push @cross, $ln;
-      }
-      close $ah;
-    }
-
-    my @deps;
-    my $dep_file = $has_ask_first eq "1" ? "$tests_dir/ask-first" : "$tests_dir/ask";
-    if (-f $dep_file) {
-      open my $dh, "<", $dep_file or exit 0;
-      binmode $dh;
-      while (my $ln = <$dh>) {
-        $ln =~ s/\r?\n\z//;
-        next unless $ln =~ m{\Aaffected: .+: named as a dependency by the rule of @[^\s]+\z};
-        exit 0 if index($ln, "\0") >= 0;
-        push @deps, $ln;
-      }
-      close $dh;
-    }
-
-    # Ensure cache_dir exists; newly created directories get 0700.
-    umask 0077;
-    if (!-e $cache_dir) {
-      my @parts = split m{/+}, $cache_dir;
-      my $cur = ($cache_dir =~ m{\A/}) ? "" : ".";
-      for my $p (@parts) {
-        next unless length($p);
-        $cur = ($cur eq "") ? "/$p" : "$cur/$p";
-        if (!-e $cur) {
-          mkdir($cur, 0700) or (-d $cur) or exit 0;
-        }
-      }
-    }
-    my @dst = lstat($cache_dir);
-    exit 0 unless @dst;
-    if ($implicit) {
-      exit 0 unless -d _ && !-l _ && $dst[4] == $< && (($dst[2] & 0022) == 0);
-    } else {
-      exit 0 unless -d $cache_dir;
-    }
-
-    my ($fh, $tmp_path);
-    for my $try (1 .. 16) {
-      my $cand = sprintf("%s/.ocannl-reach-tmp.%s.%d.%06d", $cache_dir, $key, $$, int(rand(1000000)));
-      if (sysopen($fh, $cand, O_WRONLY | O_CREAT | O_EXCL, 0600)) {
-        $tmp_path = $cand;
-        last;
-      }
-    }
-    exit 0 unless defined $tmp_path;
-    binmode $fh;
-    my $ok = 1;
-    $ok &&= print $fh "schema\tv1\n";
-    $ok &&= print $fh "key\t$key\n";
-    $ok &&= print $fh "tests\t$tests\n";
-    $ok &&= print $fh "tests_verdict\t$tests_verdict\n";
-    $ok &&= print $fh "tests_incomplete\t$tests_incomplete\n";
-    $ok &&= print $fh "has_ask_first\t$has_ask_first\n";
-    $ok &&= print $fh "tests_owed\t$tests_owed\n";
-    $ok &&= print $fh "train_why\t$train_why\n";
-    $ok &&= print $fh "linux_why\t$linux_why\n";
-    $ok &&= print $fh "linux_leg_args\t$linux_leg_args\n";
-    for my $n (@needs) { $ok &&= print $fh "need\t$n\n"; }
-    for my $l (@list) { $ok &&= print $fh "list\t$l\n"; }
-    for my $c (@cross) { $ok &&= print $fh "cross_line\t$c\n"; }
-    for my $d (@deps) { $ok &&= print $fh "dep\t$d\n"; }
-    $ok &&= print $fh "end\tv1\n";
-    $ok &&= close $fh;
-    if (!$ok || !rename($tmp_path, "$cache_dir/reach-$key.v1")) {
-      unlink $tmp_path;
-      exit 0;
-    }
-
-    # Best-effort retention: prune only owner-matching files in this tool'\''s exact staging and
-    # entry filename formats (stale staging >1h, entries >14d, cap at 256 entries).
-    if (opendir my $cdh, $cache_dir) {
-      my $now = time();
-      my @entries;
-      while (my $name = readdir($cdh)) {
-        if ($name =~ /\A\.ocannl-reach-tmp\.[0-9a-f]{64}\.[0-9]+\.[0-9]{6}\z/) {
-          my @st = lstat("$cache_dir/$name");
-          unlink "$cache_dir/$name" if @st && -f _ && !-l _ && $st[4] == $< && ($now - $st[9]) > 3600;
-        } elsif ($name =~ /\Areach-[0-9a-f]{64}\.v1\z/) {
-          my @st = lstat("$cache_dir/$name");
-          next unless @st && -f _ && !-l _ && $st[4] == $<;
-          if (($now - $st[9]) > 14 * 86400) {
-            unlink "$cache_dir/$name";
-          } else {
-            push @entries, [$st[9], $name];
-          }
-        }
-      }
-      closedir $cdh;
-      if (@entries > 256) {
-        @entries = sort { $b->[0] <=> $a->[0] } @entries;
-        for my $i (256 .. $#entries) {
-          unlink "$cache_dir/$entries[$i][1]";
-        }
-      }
-    }
-  ' "$reach_cache_dir" "$reach_cache_implicit" "$key" "$tests_dir" "$has_ask_first" \
+  reach_cache_io store "$reach_cache_dir" "$reach_cache_implicit" "$key" "$tests_dir" "$has_ask_first" \
     "$tests" "$tests_verdict" "$tests_incomplete" "$tests_owed" \
-    "$train_why" "$linux_why" "$linux_leg_args" ${needs[@]+"${needs[@]}"} \
-    2>/dev/null || true
+    "$train_why" "$linux_why" "$linux_leg_args" ${needs[@]+"${needs[@]}"} || true
 }
 
 read_tests() {

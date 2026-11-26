@@ -6041,27 +6041,15 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   banner comes first in `affected` diagnostics, with the widest observed contributors, and
   the merge build carries those contributors into its missing-record refusal.
 - **Test-reach cache across repeated plans and merge builds (gh-ocannl-2488).** Successful
-  `read_tests` answers (the test alias list, verdict, owed flags/reasons, training/Linux reach
-  needs, `CROSS-CUTTING reason:` lines, and literal-dependency coverage lines) are cached under
+  `read_tests` answers are cached under
   `${OCANNL_TOOL_MERGE_BUILD_REACH_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/ocannl/merge-build-reach}`
-  (`""`, `off` or `0` disables caching) so pre-push `--plan --base`, post-push `--plan --base`,
-  ship-pr's `--plan-merge`, and the full merge build reuse reach for the same clean merge candidate
-  and Dune inputs instead of recomputing `affected` from scratch. The published owed-run record
-  (`tools/owed-run.sh check`) is never cached and always checked afresh, and failures
-  (`tests=unread`) are never cached. The key is fail-closed over candidate identity (`HEAD^1`,
-  `HEAD^2`, `merge-base`, `HEAD^{tree}`, rejecting dirty checkouts, `assume-unchanged`/
-  `skip-worktree` index flags, and octopus merges so base-alone comparisons and moved bases/heads
-  always miss), hashes of gitignored non-directory probe files, host OS/architecture, resolved
-  `dune`/`ocamlc` executables, opam switch state and `lib` package metadata content hashes
-  (`dune-package`, `META`, flat `META.*`, `findlib.conf`), `OCAMLPATH`/`findlib.conf` `path`/
-  `OCAMLFIND_CONF`/`DUNE_WORKSPACE`/user Dune config, relevant `DUNE_*`/`OCANNL_*`/`OPAM_*`
-  environment variables, and `select_tiers`'s Linux-scope inputs. Keys are revalidated after
-  computing reach so mid-query mutations never publish under stale inputs. Entries are written
-  atomically (`0600`) as `reach-<key>.v1` (via `.ocannl-reach-tmp.*` staging files) with key and
-  trailer validation, and retention prunes only owner-matching files in those two exact shapes;
-  corrupt, symlinked, group/world-writable or unwritable cache entries fall back silently to a
-  fresh query. Full merge builds keep live output up to `passed` identical on cache hits (reporting
-  reuse only in the exit summary) so ship-pr's failed-build base-alone comparison stays unaffected.
+  (`""`, `off` or `0` disables caching) so repeated `--plan --base`, `--plan-merge`, and full merge
+  builds reuse reach when the clean merge candidate, ignored probe-file set, and Dune inputs match.
+  Plan-to-merge-build reuse applies across clean scratch checkouts that share the same ignored-file
+  set (such as ship-pr's merge checkout and `--plan --base`), and intentionally misses in a
+  worktree carrying an ignored `dune-workspace` or `/ocannl_config`. The published owed-run record
+  (`tools/owed-run.sh check`) and failures (`tests=unread`) are never cached. `tools/merge-build-check.sh`'s
+  header owns the fail-closed cache-key allowlist, post-query revalidation, and atomic storage boundary.
 - **Training reach.** `prepush` prints each omitted training alias on stderr as
   `test-run: prepush: train: ALIAS`, beside the `slow:` lines, including `--list`
   and before a CROSS-CUTTING refusal (first-tier names are the full list's). The merge build reads

@@ -810,6 +810,7 @@ if harness_leg 'test-reach cache reuses matching candidate reach and checks owed
   SHIP_PR_MERGE_BASE_SHA=$rc_base SHIP_PR_MERGE_HEAD_SHA=$rc_head FAKE_TESTS_RC=1 \
     rc_run "$TMP/linuxbin:$rc_bin"
   rc_fail_cached=$rc
+  rc_fail_cached_asked=0; rc_asked_prepush && rc_fail_cached_asked=1
   cp "$TMP/out" "$TMP/rc-fail-cached"
   SHIP_PR_MERGE_BASE_SHA=$rc_base SHIP_PR_MERGE_HEAD_SHA=$rc_head FAKE_TESTS_RC=1 \
     OCANNL_TOOL_MERGE_BUILD_REACH_CACHE=off \
@@ -820,11 +821,11 @@ if harness_leg 'test-reach cache reuses matching candidate reach and checks owed
     FAKE_TRAIN_N=1 FAKE_TRAIN_NAMES=$TMP/rc-train \
     FAKE_REASON='x.ml (6 aliases)' \
     run "$TMP/linuxbin:$rc_bin"
-  if [ "$rc_fail_cached" = 1 ] && [ "$rc" = 1 ] && cmp -s "$TMP/rc-fail-cached" "$TMP/out" &&
-     ! has 'reused cached'; then
+  if [ "$rc_fail_cached" = 1 ] && [ "$rc_fail_cached_asked" = 0 ] && [ "$rc" = 1 ] &&
+     rc_asked_prepush && cmp -s "$TMP/rc-fail-cached" "$TMP/out" && ! has 'reused cached'; then
     report 0 'failed ship-pr merge builds emit byte-identical logs on cached and uncached runs'
   else report 1 'failed ship-pr merge builds emit byte-identical logs on cached and uncached runs' \
-    "exits $rc_fail_cached/$rc; $(diff "$TMP/rc-fail-cached" "$TMP/out")"; fi
+    "exits $rc_fail_cached/$rc asked_cached=$rc_fail_cached_asked; $(diff "$TMP/rc-fail-cached" "$TMP/out")"; fi
 
   # 4. Invalidation on candidate/tree/worktree/ignored-file changes.
   rc_merge_sha=$(git -C "$R" rev-parse HEAD)
