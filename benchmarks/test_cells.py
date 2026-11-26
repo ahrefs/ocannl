@@ -10,6 +10,7 @@ reported time comes from that revision's own `arrayjit/lib/schedule.ml` -- so a 
 proves which tree it was built from. Run through test_orchestrate.py, which imports these classes.
 """
 
+import ast
 import contextlib
 import io
 import json
@@ -40,6 +41,60 @@ def shell_driver_path(name: str, *, root: Path = HERE) -> Path:
     if shell_driver_deps is not None and HERE / name not in shell_driver_deps:
         raise AssertionError(f"{name} must be named in benchmarks/dune's shell_drivers dependencies")
     return root / name
+
+
+class ShellDriverDeclarationTest(unittest.TestCase):
+    """Read literal list/tuple argv in test_cells.py and test_orchestrate.py headed by "bash" or
+    box_gate.BASH and immediately followed by a script operand. That operand must be
+    shell_driver_path(...), optionally wrapped in str(...), so the helper can check Dune's
+    declaration even for scratch copies. Skip launcher-only literals and literals whose second
+    item is a Bash option. Reading and copying scripts, computed launchers, assembling argv across
+    expressions, shell command strings, and launches in children are outside the scan.
+    """
+
+    @staticmethod
+    def unchecked_argv(source, filename):
+        def calls(expr, name):
+            return (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name)
+                    and expr.func.id == name)
+
+        unchecked = []
+        for node in ast.walk(ast.parse(source, filename=filename)):
+            if not isinstance(node, (ast.List, ast.Tuple)) or len(node.elts) < 2:
+                continue
+            launcher, script = node.elts[:2]
+            if not (
+                (isinstance(launcher, ast.Constant) and launcher.value == "bash")
+                or (isinstance(launcher, ast.Attribute) and launcher.attr == "BASH"
+                    and isinstance(launcher.value, ast.Name) and launcher.value.id == "box_gate")
+            ):
+                continue
+            if (isinstance(script, ast.Constant) and isinstance(script.value, str)
+                    and script.value.startswith("-")):
+                continue
+            if calls(script, "str") and len(script.args) == 1 and not script.keywords:
+                script = script.args[0]
+            if not calls(script, "shell_driver_path"):
+                unchecked.append(node.lineno)
+        return [f"{filename}:{line}" for line in sorted(unchecked)]
+
+    def test_bash_launches_use_the_declaration_check(self):
+        unchecked = []
+        for name in ("test_cells.py", "test_orchestrate.py"):
+            unchecked.extend(self.unchecked_argv((HERE / name).read_bytes(), name))
+        self.assertEqual(unchecked, [], "pass the Bash script through shell_driver_path")
+
+    def test_bash_launch_and_scan_only_controls(self):
+        source = """\
+text = (HERE / "gh728_cells.sh").read_text()
+subprocess.run([box_gate.BASH, str(HERE / "gh728_cells.sh")])
+argv = ("bash", HERE / "gh728_cells.sh")
+subprocess.run(["bash", shell_driver_path("gh612_cells.sh")])
+self.run_tool([box_gate.BASH, str(shell_driver_path(name, root=self.root / "benchmarks")), *args])
+argv = [box_gate.BASH] + [str(shell_driver_path(name))]
+subprocess.run(["bash", "-c", "true"])
+"""
+        self.assertEqual(self.unchecked_argv(source, "probe.py"), ["probe.py:2", "probe.py:3"])
 
 
 # The record `Utils.config_record_to_json` prints (config_records.py's schema) for every
@@ -799,8 +854,9 @@ class DriverTreeTest(StubRunTest):
         write_stub(self.root / "_build" / "default" / target, body)
 
     def driver(self, name, *args, env=None):
-        driver = shell_driver_path(name, root=self.root / "benchmarks")
-        return self.run_tool([box_gate.BASH, str(driver), *args], env)
+        return self.run_tool(
+            [box_gate.BASH, str(shell_driver_path(name, root=self.root / "benchmarks")), *args],
+            env)
 
 
 class Gh740DriverTest(DriverTreeTest):

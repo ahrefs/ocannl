@@ -41,7 +41,7 @@ from test.test_fixture_compare import FixtureCompareTest, write_safetensors  # n
 from test_cells import (  # noqa: F401  (likewise)
     AbDriverTest, CellCommandTest, ConfigRecordsExpectTest, Gh1051AbDriverTest, Gh1180DriverTest,
     Gh1253FlipDriverTest, Gh1279DriverTest, Gh1557DriverTest, Gh740DriverTest, ProgressCommandTest,
-    ProseTraceScanTest, shell_driver_path)
+    ProseTraceScanTest, ShellDriverDeclarationTest, shell_driver_path)
 from test.test_cell_group import (
     cap_counted_from, interrupt_once_published, kill_the_group_on_cleanup, publish_pid)
 

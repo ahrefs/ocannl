@@ -432,8 +432,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   covered too, so naming a `.sh` in a scan rule's deps takes that script out of the harness
   fallback. Name benchmark drivers that a test executes literally in its rule's `deps`
   (gh-ocannl-2439). The orchestrator alias passes its named dependency group to the tests,
-  which check that the drivers they launch are declared. Scan-only scripts stay glob inputs
-  and earn no coverage credit.
+  which check that the drivers they launch are declared. `ShellDriverDeclarationTest` checks
+  literal Bash argument lists and tuples in `test_cells.py` and `test_orchestrate.py` with a
+  script as the first operand, requiring `shell_driver_path` there (gh-ocannl-2485).
+  Direct paths to `gh612_cells.sh` with its named dependency removed passed the old alias through
+  the glob and fail the source check.
+  The control uses the same script path in a launch and a source read. Scan-only scripts stay
+  glob inputs and earn no coverage credit.
   The tests tier runs `runtest-sweep_leg_scripts` for an edit to
   `test/operations/sweep_leg_scripts.sh` alone. A header marker `# harness: none -- REASON`
   covers an unreached hand-run script (gh-ocannl-2413). The harness reader verifies it against
