@@ -4559,8 +4559,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     lines still reading the same. Snapshot bytes must match the patch's blob IDs. A CRLF worktree
     can match after conversion to LF. The other paths may be Markdown. The default `affected` report
     keeps its link-only list and explains why only the first tier counts toward CROSS-CUTTING.
-    `prepush` leaves off the link-only aliases, including link-only training aliases. The merge
-    build uses that plan with its compile and scans tier. First-tier readers keep their ordinary
+    `prepush` drops link-only `runtest-` aliases from its batch and link-only `train-` and
+    `slow-` aliases from its follow-up list. The merge build uses that plan with its compile
+    and scans tier. First-tier readers keep their ordinary
     verification requirements. Delimiter changes that hide or expose code and files with quoted
     forms outside the lexical reader's boundary keep the ordinary reach.
     The machine-readable form is the trailer (gh-ocannl-1921): whenever the list is printed, the

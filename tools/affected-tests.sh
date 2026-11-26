@@ -6138,6 +6138,7 @@ my $n_harness = 0;
   }
 }
 {
+  # Compile and scans cover link-only reach for comment edits, including slow aliases.
   my @slow = sort grep { m{(?:^\@|/)slow-[^/]*$} } keys %out, ($comment_only ? () : @link_only);
   my $slow = @slow ? sprintf(" but its %d slow- alias(es), which no CI job runs: run those locally too", scalar @slow) : "";
   if (!$verdict{"cross-cutting"}) {
