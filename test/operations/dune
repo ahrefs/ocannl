@@ -14443,6 +14443,53 @@
  (libraries base stdio unix arrayjit.utils arrayjit.verdict fresh_process)
  (deps ocannl_config))
 
+;; gh-ocannl-2472: narrow-float (half, bfloat16, fp8) routine logs compile, execute, and log numeric
+;; values across Set, bounds-guarded Where, Set_local, and Set_from_vec under both scaled-integer
+;; (prefer_backend_uniformity=true) and %g (prefer_backend_uniformity=false) formatting.
+
+(executable
+ (name routine_log_narrow_floats)
+ (modules routine_log_narrow_floats)
+ (libraries
+  base
+  stdio
+  arrayjit.verdict
+  ll_test
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.context))
+
+(rule
+ (target routine_log_narrow_floats.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:routine_log_narrow_floats.exe}
+    "--ocannl_debug_log_from_routines=true"
+    "--ocannl_log_level=2"
+    "--ocannl_debug_log_to_stream_files=true"
+    "--ocannl_log_main_domain_to_stdout=false"
+    "--ocannl_clean_up_log_files_on_startup=true"
+    "--ocannl_log_file_stem=routine_log_narrow_floats"
+    "--ocannl_build_files_prefix=routine_log_narrow_floats"))))
+
+(rule
+ (alias runtest-routine_log_narrow_floats)
+ (package neural_nets_lib)
+ (action
+  (diff routine_log_narrow_floats.expected routine_log_narrow_floats.actual)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-routine_log_narrow_floats)))
+
 ;; gh-ocannl-2111: routine logging traces a scope definition nested in a Set, Set_dynamic or
 ;; Set_from_vec value, a dynamic row and an If condition, once per execution and before the store
 ;; reading it; each case also executes against host values. A fresh log directory per run, so the

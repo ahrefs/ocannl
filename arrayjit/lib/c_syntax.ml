@@ -1097,7 +1097,10 @@ module type C_syntax_config = sig
   (** Format specifier for printing floating point numbers in debug logs. *)
 
   val styled_log_arg : PPrint.document -> PPrint.document
-  (** Function to convert potentially floating-point numeric values for logging. *)
+  (** Function to convert potentially floating-point numeric values for logging. [log_value_args]
+      widens narrow-float values ([Half_prec], [Bfloat16_prec], [Fp8_prec]) to [Ops.single] through
+      {!convert_precision} before guarding and calling this, so implementations only see wide
+      floating-point or integer expressions. *)
 
   val uint4x32_log_lane : PPrint.document -> int -> PPrint.document
   (** Lane [i] (0 to 3) of a [uint4x32] value, as a [%u] routine-log argument. A [uint4x32] value is
@@ -5067,7 +5070,12 @@ module C_syntax (B : C_syntax_config) = struct
   (* The conversion specification and the arguments for one value of precision [prec] in a log
      statement. A [uint4x32] value prints its four lanes as [%u], everything else as a number in the
      backend's [float_log_style]. [guard] (see {!debug_float}) wraps each argument that dereferences
-     memory -- per lane for [uint4x32], since [(g ? v : 0)] does not typecheck for a struct [v]. *)
+     memory -- per lane for [uint4x32], since [(g ? v : 0)] does not typecheck for a struct [v].
+     Narrow floats ([half], [bfloat16], [fp8]) widen to [float] through the backend's own conversion
+     before guarding and before {!C_syntax_config.styled_log_arg}: on CUDA/HIP their class types
+     make [(g ? v : 0)] and [(int)(v * 1000.0)] ambiguous under nvrtc/hiprtc and cannot cross
+     variadic [%g], while on C/Metal backends their software storage types would log raw bit
+     integers (gh-ocannl-2472). *)
   let log_value_spec (prec : Ops.prec) =
     match prec with Uint4x32_prec _ -> "<%u,%u,%u,%u>" | _ -> B.float_log_style
 
@@ -5078,6 +5086,9 @@ module C_syntax (B : C_syntax_config) = struct
     in
     match prec with
     | Uint4x32_prec _ -> List.init 4 ~f:(fun lane -> guarded (B.uint4x32_log_lane doc lane))
+    | Half_prec _ | Bfloat16_prec _ | Fp8_prec _ ->
+        let widened = wrap_conversion (B.convert_precision ~from:prec ~to_:Ops.single) doc in
+        [ B.styled_log_arg (guarded widened) ]
     | _ -> [ B.styled_log_arg (guarded doc) ]
 
   (* The definitions run by ascending [scope_id], except that a definition follows the sibling

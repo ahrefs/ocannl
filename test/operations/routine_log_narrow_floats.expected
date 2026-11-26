@@ -1,0 +1,8 @@
+uniform: narrow-float Set compiles, executes, and logs numeric values: true
+uniform: narrow-float bounds-guarded Where compiles, executes, and logs numeric values: true
+uniform: narrow-float Set_local compiles, executes, and logs numeric values: true
+uniform: narrow-float Set_from_vec compiles, executes, and logs numeric values: true
+printf: narrow-float Set compiles, executes, and logs numeric values: true
+printf: narrow-float bounds-guarded Where compiles, executes, and logs numeric values: true
+printf: narrow-float Set_local compiles, executes, and logs numeric values: true
+printf: narrow-float Set_from_vec compiles, executes, and logs numeric values: true

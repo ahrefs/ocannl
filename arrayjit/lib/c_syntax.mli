@@ -595,7 +595,10 @@ module type C_syntax_config = sig
   (** Format specifier for printing floating point numbers in debug logs. *)
 
   val styled_log_arg : PPrint.document -> PPrint.document
-  (** Function to convert potentially floating-point numeric values for logging. *)
+  (** Function to convert potentially floating-point numeric values for logging. [log_value_args]
+      widens narrow-float values ([Half_prec], [Bfloat16_prec], [Fp8_prec]) to [Ops.single] through
+      {!convert_precision} before guarding and calling this, so implementations only see wide
+      floating-point or integer expressions. *)
 
   val uint4x32_log_lane : PPrint.document -> int -> PPrint.document
   (** Lane [i] (0 to 3) of a [uint4x32] value, as a [%u] routine-log argument. A [uint4x32] value is

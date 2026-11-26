@@ -440,9 +440,14 @@ files.
   `(a % b)`, and printf reads `% 4)` as a conversion. `debug_float` interleaves text with its own
   conversions, so it spells those with `log_conversion_marker` and its callers splice the result
   through `log_format_of_debug`, never `doc_to_string`. Scalar integers still go through the float
-  style (a `%g` with an integer argument under `full_printf_support`). Guard:
-  `test/operations/routine_log_rng_init` runs a parameter init with logging at `log_level=2`, on cc
-  and Metal.
+  style (a `%g` with an integer argument under `full_printf_support`). Narrow floats (`half`,
+  `bfloat16`, `fp8`) widen to `float` through `B.convert_precision` inside `log_value_args` before
+  guarding (`(g ? d : 0)`) and before `styled_log_arg` (gh-ocannl-2472): on CUDA/HIP their class
+  types make `(g ? d : 0)` and `(int)(d * 1000.0)` ambiguous under nvrtc/hiprtc and cannot cross
+  variadic `%g`, while on cc and Metal their software storage types otherwise log raw bit integers.
+  Guards: `test/operations/routine_log_rng_init` (parameter init with logging at `log_level=2`, on
+  cc and Metal) and `test/operations/routine_log_narrow_floats` (`half`/`bfloat16`/`fp8` across
+  `Set`, bounds-guarded `Where`, `Set_local`, and `Set_from_vec`, under both `%de-3` and `%g`).
 - Metal routine logs arrive on Metal's own dispatch threads, through the `MTLLogState` handler,
   so no OCaml may run there. The backend installs ocaml-metal's native
   `LogState.add_buffered_log_handler`, which copies each message into a C-side buffer, and `await`
