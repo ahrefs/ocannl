@@ -2066,6 +2066,10 @@ if harness_leg 'harness fixture and heredoc literals'; then
   fx_reach 'fail-closed: trailing backslash in a # comment does not swallow the next line override' tools/test-a.sh tools/test-c.sh
   twin_text 'shopt -s expand_aliases' 'builtin alias cat="ba\' 'sh"' 'cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
   fx_reach 'fail-closed: double-quoted backslash-continued alias definition keeps cat heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'shopt -s expand_aliases' "builtin alias cat='ba\\" "sh'" 'cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: single-quoted backslash-continued builtin alias keeps cat heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'shopt -s expand_aliases' "builtin alias unused='a" "b' cat='bash'" 'cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: multiline quoted alias before cat= keeps cat heredoc scanned' tools/test-a.sh tools/test-c.sh
   twin_text 'code=$(case y in' '  x) : >esac;;' '  y) printf '\''bash tools/sub.sh\n'\'';;' 'esac)' 'bash -c "$code"'
   fx_reach 'fail-closed: >esac redirection operand inside multiline $(case ...) does not pop case early' tools/test-a.sh tools/test-c.sh
   twin_text 'code=$(case y in' '  x) : > esac;;' '  y) printf '\''bash tools/sub.sh\n'\'';;' 'esac)' 'bash -c "$code"'

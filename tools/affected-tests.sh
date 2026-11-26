@@ -1723,13 +1723,16 @@ sub sh_scan_overrides {
       }
     }
   } else {
-    while ($line =~ /(?:^|[;&|({])\s*alias\b([^;&|)]*)/g) {
-      my $args = $1;
-      $funcs_ref->{$1} = 1 while $args =~ /(?:^|\s)['"]?(echo|printf|cat|tee)=/g;
+    my $ov_pre = qr/(?:^|[;&|({])\s*(?:(?:[A-Za-z_]\w*=\S*|builtin|command(?:\s+(?:-p|--))*|!|time|then|do|else|elif)\s+)*/;
+    # An untokenizable line carrying a command-position `alias` (e.g. a
+    # multiline single-quoted alias value) cannot have all its arguments parsed
+    # on one physical line: fail closed for all four excluded command heads.
+    if ($line =~ /${ov_pre}['"]?alias['"]?(?=\s|\z)/) {
+      $funcs_ref->{$_} = 1 for qw(echo printf cat tee);
     }
-    $funcs_ref->{"\0exec_stdout"} = 1 if $line =~ /(?:^|[;&|({])\s*exec\s+(?:&>>?|(?:0*1)?(?:>>?|>\||>&)|0*1<>)/;
-    $funcs_ref->{"\0exec_stderr"} = 1 if $line =~ /(?:^|[;&|({])\s*exec\s+(?:&>>?|0*2(?:>>?|>\||>&|<>))/;
-    $funcs_ref->{"\0exec_any_fd"} = 1 if $line =~ /(?:^|[;&|({])\s*exec\s+(?:\{[A-Za-z_]\w*\}(?:>>?|<>)|&>>?|\d*(?:>>?|>&|<>))/;
+    $funcs_ref->{"\0exec_stdout"} = 1 if $line =~ /${ov_pre}exec\s+(?:&>>?|(?:0*1)?(?:>>?|>\||>&)|0*1<>)/;
+    $funcs_ref->{"\0exec_stderr"} = 1 if $line =~ /${ov_pre}exec\s+(?:&>>?|0*2(?:>>?|>\||>&|<>))/;
+    $funcs_ref->{"\0exec_any_fd"} = 1 if $line =~ /${ov_pre}exec\s+(?:\{[A-Za-z_]\w*\}(?:>>?|<>)|&>>?|\d*(?:>>?|>&|<>))/;
   }
 }
 # Scan one physical shell line for quote state (updating $$sq_ref / $$dq_ref)
