@@ -24,11 +24,13 @@ each settings-borne key outside Keyed changes its settings field: true
 and moves no component of the cache key: true
 no registered non-Keyed key moves the cache key when flipped off its default: true
 two fresh builds of the probe compile to the same kernel under the same key: true
+the traced compile_probe compiles cold without reusing a cached kernel: true
 every key a compile reads whose class promises an unchanged kernel has oracle values or an exemption: true
 every key read in a codegen-stage module whose class promises an unchanged kernel has oracle values or an exemption: true
 emitted_flips, emitted_exemptions, codegen_not_traced, and settings_flips are disjoint with no duplicate keys: true
 every emitted_flips and emitted_exemptions row is in an oracle class, has non-empty flip candidates, and is read at codegen or during compile_probe: true
 every codegen_not_traced row is an oracle-class key read in a codegen-stage module and not traced during compile_probe: true
+every per-compile oracle-class key read in cc_backend.ml is traced by compile_probe on cc: true
 no such key changes the emitted kernel while leaving the cache key unchanged: true
 
 Keyed keys this sweep cannot flip in-process:
