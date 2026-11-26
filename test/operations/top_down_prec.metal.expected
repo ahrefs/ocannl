@@ -19,7 +19,9 @@ kernel void d_fwd(
     device char* __pool15 [[buffer(15)]],
     device const uint* __pool_slots [[buffer(16)]],
     uint3 gid [[threadgroup_position_in_grid]],
-    uint3 lid [[thread_position_in_threadgroup]]) {
+    uint3 lid [[thread_position_in_threadgroup]],
+    uint ocannl_simdgroup [[simdgroup_index_in_threadgroup]],
+    uint ocannl_simd_lane [[thread_index_in_simdgroup]]) {
 
   /* Pool base pointers. */
   device char* __pools[16] = { __pool0, __pool1, __pool2, __pool3, __pool4, __pool5, __pool6, __pool7, __pool8, __pool9, __pool10, __pool11, __pool12, __pool13, __pool14, __pool15 };

@@ -9099,6 +9099,8 @@ let launch_dims (llc : t) : launch_dims =
   done;
   { grid; block }
 
+let launch_block_threads (launch : launch_dims) : int = Array.fold launch.block ~init:1 ~f:( * )
+
 (** The binding arithmetic of a [Grid] loop at [slot >= 2] under the [.z] fold (see the section
     comment): [(stride, cap)] such that the loop's index is [(z / stride) % cap] — [stride] the
     product of the per-slot maxima of grid slots in [\[2, slot)], [cap = Some m] with [m] the loop's

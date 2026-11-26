@@ -378,7 +378,7 @@ let scratch_standin =
   {
     standin with
     Ir.Backend_intf.mma_kernel_workgroup_bytes =
-      (fun ~triples -> if List.is_empty triples then 0 else 256);
+      (fun ~workgroup_threads:_ ~triples -> if List.is_empty triples then 0 else 256);
   }
 
 type judged_seed = { seed : Autotune.sketch_params; estimate : int; built : LL.optimized }

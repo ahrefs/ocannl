@@ -173,7 +173,10 @@ let fixture ?(materialize = true) ?(fp16_wide = false) ?scratch_triple tag build
       Context.release base_ctx;
       let opt = Option.value_exn ~here:[%here] !capture in
       let no_scratch =
-        { capabilities with Ir.Backend_intf.mma_kernel_workgroup_bytes = (fun ~triples:_ -> 0) }
+        {
+          capabilities with
+          Ir.Backend_intf.mma_kernel_workgroup_bytes = (fun ~workgroup_threads:_ ~triples:_ -> 0);
+        }
       in
       let seeding =
         Autotune.search_seeding ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices:[] opt
@@ -217,8 +220,12 @@ let fixture ?(materialize = true) ?(fp16_wide = false) ?scratch_triple tag build
          tensorized and the backend charges it a positive scratch: both read off the capabilities
          under the fixture's policy, never off which candidates compiled. *)
       Option.iter scratch_triple ~f:(fun ((d_prec, a_prec, b_prec) as triple) ->
+          let workgroup_threads =
+            Option.value_map limits.Ir.Backend_intf.mma ~default:1 ~f:(fun m -> m.mma_simd_width)
+          in
           let scratch =
-            capabilities.Ir.Backend_intf.mma_kernel_workgroup_bytes ~triples:[ triple ]
+            capabilities.Ir.Backend_intf.mma_kernel_workgroup_bytes ~workgroup_threads
+              ~triples:[ triple ]
           in
           let when_, aggregation =
             match Ll_test.tensorized_capability ~is_gpu ~is_cpu ~limits ~a_prec ~b_prec ~d_prec with

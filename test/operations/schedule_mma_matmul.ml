@@ -236,21 +236,36 @@ let hip_table_boundary ~acc src =
   && (not (has ("rocwmma::load_matrix_sync(" ^ acc)))
   && not (has "rocwmma::store_matrix_sync(__mma_dp")
 
-(* Metal's converted boundary uses a float coordinate fragment, with no destination-typed staging
-   fragment and no intrinsic load/store of d (gh-ocannl-1075). *)
-let metal_table_boundary ~acc src =
+(* Metal's converted boundary stages the float accumulator through a per-simdgroup threadgroup
+   scratch with [simdgroup_load]/[simdgroup_store] and [simdgroup_barrier], with no
+   [thread_elements()] loop, no [ocannl_mma_rc8] table, no destination-typed staging fragment and no
+   direct intrinsic load/store on [__mma_dp] (gh-ocannl-2372). *)
+let metal_scratch_boundary ~acc src =
   let has s = String.is_substring src ~substring:s in
+  let has_on_same_line ~prefix ~needle =
+    let rec loop pos =
+      match String.substr_index ~pos src ~pattern:prefix with
+      | None -> false
+      | Some i ->
+          let line_end = Option.value (String.index_from src i '\n') ~default:(String.length src) in
+          String.is_substring (String.sub src ~pos:i ~len:(line_end - i)) ~substring:needle
+          || loop line_end
+    in
+    loop 0
+  in
   has ("simdgroup_float8x8 " ^ acc)
-  && has "simdgroup_float8x8 __mma_rc;"
-  && has "simdgroup_load(__mma_rc, ocannl_mma_rc8, (ulong)8)"
-  && has "threadgroup float ocannl_mma_rc8[64]"
-  && has "if (all(lid == uint3(0)))"
-  && has "ocannl_mma_rc8[__rc] = (float)__rc"
+  && has "threadgroup float ocannl_mma_dscr["
+  && has "threadgroup float *__mma_dscr = ocannl_mma_dscr + ocannl_simdgroup * 64;"
+  && has "simdgroup_barrier(mem_flags::mem_threadgroup);"
+  && has_on_same_line ~prefix:("simdgroup_load(" ^ acc) ~needle:", __mma_dscr, (ulong)8)"
+  && has_on_same_line ~prefix:("simdgroup_store(" ^ acc) ~needle:", __mma_dscr, (ulong)8)"
+  && (not (has "thread_elements()"))
+  && (not (has "ocannl_mma_rc8"))
   && (not (has "__mma_dstage"))
   && (not (has ("simdgroup_half8x8 " ^ acc)))
   && (not (has ("simdgroup_bfloat8x8 " ^ acc)))
-  && (not (has ("simdgroup_load(" ^ acc)))
-  && not (has ("simdgroup_store(" ^ acc))
+  && (not (has_on_same_line ~prefix:("simdgroup_load(" ^ acc) ~needle:"__mma_dp"))
+  && not (has_on_same_line ~prefix:("simdgroup_store(" ^ acc) ~needle:"__mma_dp")
 
 (* The CUDA wmma f32 accumulator-fragment declaration, the element type every f16 -> f32 and wide
    uniform-f16 wmma leg below pins (gh-ocannl-925). *)
@@ -899,7 +914,7 @@ let () =
    let fallback () = Ll_test.all_declined ~what:"Fp16_wide" census_hw in
    let ok =
      if on_metal then
-       intrinsics () && metal_table_boundary ~acc:"__mma_acc" src && has "simdgroup_half8x8"
+       intrinsics () && metal_scratch_boundary ~acc:"__mma_acc" src && has "simdgroup_half8x8"
      else if on_hip then
        if Lazy.force hip_mma then
          (* HIP: the rocWMMA uniform-f16 arm swapped to an f32 accumulator fragment over the same
@@ -1310,7 +1325,7 @@ let () =
        intrinsics ()
        && has "simdgroup_float8x8 __mma_acc"
        && has "simdgroup_bfloat8x8 __mma_af"
-       && metal_table_boundary ~acc:"__mma_acc" src
+       && metal_scratch_boundary ~acc:"__mma_acc" src
      else if on_hip then
        if Lazy.force hip_mma then
          (* The [float] accumulator declaration AND the table-addressed boundary: the
@@ -1919,7 +1934,7 @@ let () =
       (* f16 operands with an f32 accumulator: every tensor-core backend renders the marked
          accumulator as an f32 fragment array resident across [k_o]. On Metal (gh-ocannl-923) the
          fragment is the destination's own type, so it loads and stores [d] directly — no
-         [ocannl_mma_rc8], which is the wide-f16 arm's conversion. Metal and HIP are verified, so
+         [ocannl_mma_dscr], which is the wide-f16 arm's conversion. Metal and HIP are verified, so
          their pins are strict; on CUDA below sm_70, and on HIP without the tile (gh-ocannl-1032),
          the capability withholds the tile and the census must record the lane-0 fallback
          instead. *)
@@ -1932,7 +1947,7 @@ let () =
           staged_half_resident src
           && has "simdgroup_float8x8 __mma_fragment_"
           && has "simdgroup_half8x8 __mma_af"
-          && not (has "ocannl_mma_rc8")
+          && not (has "ocannl_mma_dscr")
         else
           (not (advertised ~a_prec:half ~b_prec:half ~d_prec:single ())) || staged_half_resident src
       in
@@ -2071,7 +2086,8 @@ let () =
         (Ll_test.all_rendered ~what:"staged Fp16_wide" Ir.C_syntax.Mma_intrinsics census_fw
         && staged_half_resident ~converted_d:true src
         &&
-        if on_metal then metal_table_boundary ~acc:"__mma_fragment_" src && has "simdgroup_half8x8"
+        if on_metal then
+          metal_scratch_boundary ~acc:"__mma_fragment_" src && has "simdgroup_half8x8"
         else if on_hip then hip_table_boundary ~acc:"__mma_fragment_" src
         else
           (* The f32 fragment array, the half operand fragments, and the table-addressed boundary —
@@ -2214,7 +2230,8 @@ let () =
     if on_metal then "simdgroup_float8x8" else if on_hip then rocwmma_f32_acc else wmma_f32_acc
   in
   let acc_decl, operand_decl, conversion =
-    if on_metal then ("simdgroup_float8x8 __mma_acc", "simdgroup_half8x8 __mma_af", "ocannl_mma_rc8")
+    if on_metal then
+      ("simdgroup_float8x8 __mma_acc", "simdgroup_half8x8 __mma_af", "ocannl_mma_dscr")
     else if on_hip then (rocwmma_f32_acc ^ " __mma_acc", rocwmma_f16_a, "ocannl_wmma_rc16")
     else (wmma_f32_acc ^ " __mma_acc", "matrix_a, 16, 16, 16, __half", "ocannl_wmma_rc16")
   in
@@ -2440,7 +2457,7 @@ let () =
           staged_half_resident ~converted_d:true src
           &&
           if on_metal then
-            metal_table_boundary ~acc:"__mma_fragment_" src && has "simdgroup_bfloat8x8"
+            metal_scratch_boundary ~acc:"__mma_fragment_" src && has "simdgroup_bfloat8x8"
           else hip_table_boundary ~acc:"__mma_fragment_" src));
   (* The swizzled twin exists only where an [ldmatrix] arm reads it: Metal and HIP decline the
      layout to the scalar fallback, which is width-correct by construction and not this leg's

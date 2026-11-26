@@ -1221,6 +1221,9 @@ val launch_dims : t -> launch_dims
 (** Per-slot maximum extents over the kernel's annotated loops; [grid.(2)] is the product of the
     per-slot maxima of grid slots [>= 2] (the [.z] fold, see the section comment). *)
 
+val launch_block_threads : launch_dims -> int
+(** Total threads per workgroup of a launch ([block.(0) * block.(1) * block.(2)]). *)
+
 val grid_fold : hardware_axis_info list -> slot:int -> int * int option
 (** The binding arithmetic of a [Grid] loop at [slot >= 2] under the [.z] fold: [(stride, cap)] such
     that the loop binds [(z / stride) % cap] — [stride] the product of the per-slot maxima of grid

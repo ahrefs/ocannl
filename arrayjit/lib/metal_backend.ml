@@ -896,7 +896,10 @@ module Impl = struct
 
     let extra_args =
       [
-        "uint3 gid [[threadgroup_position_in_grid]]"; "uint3 lid [[thread_position_in_threadgroup]]";
+        "uint3 gid [[threadgroup_position_in_grid]]";
+        "uint3 lid [[thread_position_in_threadgroup]]";
+        "uint ocannl_simdgroup [[simdgroup_index_in_threadgroup]]";
+        "uint ocannl_simd_lane [[thread_index_in_simdgroup]]";
       ]
 
     (* Hardware axis bindings (docs/design/axis-types-for-loops.md §5): [Grid] loops bind
@@ -991,6 +994,8 @@ module Impl = struct
           (* MSL built-in variables *)
           "gid";
           "lid";
+          "ocannl_simdgroup";
+          "ocannl_simd_lane";
         ]
 
     (* gh-ocannl-1338: [metal_stdlib]'s global types and macros ([uint4] -- the storage type of
@@ -1203,22 +1208,21 @@ module Impl = struct
     let mma_operand_loads = Metal_mma.operand_loads
     let mma_operand_fragments = Metal_mma.operand_fragments
 
-    (* MSL leaves the element-to-thread mapping unspecified, so a half/bfloat fragment cannot supply
-       the coordinates of a float accumulator (gh-ocannl-1075). Load the row-major table into the
-       accumulator's own type and convert scalar cells at the coordinates it names. [simdgroup_load]
-       accepts only device/threadgroup memory (MSL 4.1 section 6.8.1), so the table is one tile's
-       worth of [float]s (256 bytes) of threadgroup storage. It holds the same 0..63 for every
-       scope, so it is declared and initialized ONCE per kernel, at kernel scope, when any accepted
-       emission converts (gh-ocannl-1255) — not once per scope, which charged 256 bytes for every
-       converted [Tile_mma] copy an [Unroll] or [Partition] made. A single thread writes it even
-       when the workgroup contains several SIMD groups; each converted scope's opening barrier
-       orders that write before its reads. *)
-    let mma_rc_table_len = 8 * 8
-    let mma_rc_table_prec = Ops.single
+    (* gh-ocannl-2372: stage the converted destination boundary through a per-simdgroup 8x8 [float]
+       scratch in [threadgroup] memory rather than elementwise [thread_elements()] through a
+       coordinate table (gh-ocannl-1075). Each simdgroup owns 64 [float]s (256 B) indexed by
+       [ocannl_simdgroup], and its 32 lanes widen/narrow their two cells via [ocannl_simd_lane]
+       between [simdgroup_barrier(mem_flags::mem_threadgroup)] pairs around
+       [simdgroup_load]/[simdgroup_store]. That keeps the accumulator out of [thread_elements()]
+       while preserving the exact [(float)]/[(half)]/[(bfloat)] conversions, and requires no
+       kernel-prologue initialization because every cell is written before it is read. One array per
+       kernel serves every converted scope in sequence (gh-ocannl-1255). *)
+    let mma_d_scratch_tile_elems = Metal_mma.tile * Metal_mma.tile
+    let mma_d_scratch_prec = Ops.single
+    let mma_simd_width = Metal_mma.capability.mma_simd_width
 
     (* Whether the destination boundary converts: the accumulator fragment type differs from the
-       destination's. The one predicate behind the table, the boundary lines and the table's
-       bytes. *)
+       destination's. The one predicate behind the scratch, the boundary lines and the estimate. *)
     let mma_d_converts ~acc_frag ~d_frag = not (String.equal acc_frag d_frag)
 
     let triple_converts (d_prec, a_prec, b_prec) =
@@ -1226,58 +1230,77 @@ module Impl = struct
       | Some (acc_frag, _, _, d_frag) -> mma_d_converts ~acc_frag ~d_frag
       | None -> false
 
-    let mma_kernel_prologue ~triples =
-      if not (List.exists triples ~f:triple_converts) then []
+    let mma_d_scratch_elems ~workgroup_threads ~triples =
+      if not (List.exists triples ~f:triple_converts) then 0
       else
-        let typ = typ_of_prec mma_rc_table_prec in
+        let simdgroups = Int.max 1 ((workgroup_threads + mma_simd_width - 1) / mma_simd_width) in
+        simdgroups * mma_d_scratch_tile_elems
+
+    let mma_kernel_prologue ~workgroup_threads ~triples =
+      let elems = mma_d_scratch_elems ~workgroup_threads ~triples in
+      if elems = 0 then []
+      else
+        let typ = typ_of_prec mma_d_scratch_prec in
         [
-          Printf.sprintf "threadgroup %s ocannl_mma_rc8[%d];" typ mma_rc_table_len;
-          "if (all(lid == uint3(0))) {";
-          Printf.sprintf "  for (int __rc = 0; __rc < %d; ++__rc) ocannl_mma_rc8[__rc] = (%s)__rc;"
-            mma_rc_table_len typ;
-          "}";
+          Printf.sprintf "threadgroup %s ocannl_mma_dscr[%d];" typ elems;
+          Printf.sprintf "threadgroup %s *__mma_dscr = ocannl_mma_dscr + ocannl_simdgroup * %d;" typ
+            mma_d_scratch_tile_elems;
         ]
 
-    (* The table's bytes, for the schedule-level shared-memory estimate (gh-ocannl-1205): the same
-       predicate and declaration as [mma_kernel_prologue], once per kernel (gh-ocannl-1255). *)
-    let mma_kernel_workgroup_bytes ~triples =
-      if List.exists triples ~f:triple_converts then
-        mma_rc_table_len * Ops.prec_in_bytes mma_rc_table_prec
-      else 0
+    (* The scratch's bytes, for the schedule-level shared-memory estimate (gh-ocannl-1205,
+       gh-ocannl-2372): the same predicate and sizing helper as [mma_kernel_prologue], once per
+       kernel (gh-ocannl-1255) and scaled by the workgroup's simdgroup count. *)
+    let mma_kernel_workgroup_bytes ~workgroup_threads ~triples =
+      mma_d_scratch_elems ~workgroup_threads ~triples * Ops.prec_in_bytes mma_d_scratch_prec
 
-    let mma_d_boundary_lines ~dir ~acc_frag ~d_frag ~acc ~ptr ~ldd =
-      if not (mma_d_converts ~acc_frag ~d_frag) then
-        [
-          (match dir with
-          | `Load -> Printf.sprintf "simdgroup_load(%s, %s, (ulong)%d);" acc ptr ldd
-          | `Store -> Printf.sprintf "simdgroup_store(%s, %s, (ulong)%d);" acc ptr ldd);
-        ]
-      else
-        let d_elem =
-          match d_frag with
-          | "simdgroup_half8x8" -> "half"
-          | "simdgroup_bfloat8x8" -> "bfloat"
-          | _ -> invalid_arg ("Metal_backend.mma_d_boundary_lines: unconverted " ^ d_frag)
-        in
-        (* [thread_elements()] returns a pointer, whose sizeof is not the per-lane element count.
-           Divide this fragment's logical storage by the advertised 32-thread SIMD-group width. *)
-        let elt = Printf.sprintf "%s.thread_elements()[__ei]" acc in
-        let cell = Printf.sprintf "(%s)[(__rc >> 3) * %d + (__rc & 7)]" ptr ldd in
-        [
-          "{ /* simdgroup converted d boundary: coordinates from ocannl_mma_rc8 */";
-          Printf.sprintf "  %s __mma_rc;" acc_frag;
-          "  simdgroup_load(__mma_rc, ocannl_mma_rc8, (ulong)8);";
-          Printf.sprintf
-            "  for (int __ei = 0; __ei < (int)(sizeof(%s::storage_type) / sizeof(float) / 32); \
-             ++__ei) {"
-            acc_frag;
-          "    const int __rc = (int)__mma_rc.thread_elements()[__ei];";
-          (match dir with
-          | `Load -> Printf.sprintf "    %s = (float)%s;" elt cell
-          | `Store -> Printf.sprintf "    %s = (%s)%s;" cell d_elem elt);
-          "  }";
-          "}";
-        ]
+    let mma_d_boundary_lines ~dir ~acc_frag ~d_frag ~acc ~ldd ~mt ~nt =
+      let tile = Metal_mma.tile in
+      let ptr = Printf.sprintf "__mma_dp + __mi * %d * %d + __ni * %d" tile ldd tile in
+      let frag = Printf.sprintf "%s[__mi][__ni]" acc in
+      let inner =
+        if not (mma_d_converts ~acc_frag ~d_frag) then
+          [
+            (match dir with
+            | `Load -> Printf.sprintf "simdgroup_load(%s, %s, (ulong)%d);" frag ptr ldd
+            | `Store -> Printf.sprintf "simdgroup_store(%s, %s, (ulong)%d);" frag ptr ldd);
+          ]
+        else
+          let d_elem =
+            match d_frag with
+            | "simdgroup_half8x8" -> "half"
+            | "simdgroup_bfloat8x8" -> "bfloat"
+            | _ -> invalid_arg ("Metal_backend.mma_d_boundary_lines: unconverted " ^ d_frag)
+          in
+          let cell = Printf.sprintf "(%s)[(__e >> 3) * %d + (__e & 7)]" ptr ldd in
+          let loop body =
+            Printf.sprintf "  for (int __e = (int)ocannl_simd_lane; __e < %d; __e += %d) %s"
+              mma_d_scratch_tile_elems mma_simd_width body
+          in
+          let sg_barrier = "  simdgroup_barrier(mem_flags::mem_threadgroup);" in
+          [ "{ /* simdgroup converted d boundary: staged via ocannl_mma_dscr */" ]
+          @ (match dir with
+            | `Load ->
+                [
+                  loop (Printf.sprintf "__mma_dscr[__e] = (float)%s;" cell);
+                  sg_barrier;
+                  Printf.sprintf "  simdgroup_load(%s, __mma_dscr, (ulong)%d);" frag tile;
+                  sg_barrier;
+                ]
+            | `Store ->
+                [
+                  Printf.sprintf "  simdgroup_store(%s, __mma_dscr, (ulong)%d);" frag tile;
+                  sg_barrier;
+                  loop (Printf.sprintf "%s = (%s)__mma_dscr[__e];" cell d_elem);
+                  sg_barrier;
+                ])
+          @ [ "}" ]
+      in
+      [
+        Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
+        Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
+      ]
+      @ List.map inner ~f:(fun line -> "    " ^ line)
+      @ [ "  }"; "}" ]
 
     let mma_address_space = function
       | `Device -> Some "device"
@@ -1366,34 +1389,14 @@ module Impl = struct
                     "threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);"
                   in
                   let body_lines =
-                    [
-                      barrier;
-                      Printf.sprintf "%s __mma_acc[%d][%d];" acc_frag mt nt;
-                      Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                      Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                    ]
-                    @ List.map
-                        (mma_d_boundary_lines ~dir:`Load ~acc_frag ~d_frag
-                           ~acc:"__mma_acc[__mi][__ni]"
-                           ~ptr:
-                             (Printf.sprintf "__mma_dp + __mi * %d * %d + __ni * %d" tile ldd tile)
-                           ~ldd)
-                        ~f:(fun line -> "    " ^ line)
-                    @ [ "  }"; "}" ]
+                    [ barrier; Printf.sprintf "%s __mma_acc[%d][%d];" acc_frag mt nt ]
+                    @ mma_d_boundary_lines ~dir:`Load ~acc_frag ~d_frag ~acc:"__mma_acc" ~ldd ~mt
+                        ~nt
                     @ Metal_mma.k_loop_lines ~a_frag ~b_frag ~acc:"__mma_acc" ~ta ~tb ~lda ~ldb ~m
                         ~n ~k
-                    @ [
-                        Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                        Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                      ]
-                    @ List.map
-                        (mma_d_boundary_lines ~dir:`Store ~acc_frag ~d_frag
-                           ~acc:"__mma_acc[__mi][__ni]"
-                           ~ptr:
-                             (Printf.sprintf "__mma_dp + __mi * %d * %d + __ni * %d" tile ldd tile)
-                           ~ldd)
-                        ~f:(fun line -> "    " ^ line)
-                    @ [ "  }"; "}"; barrier ]
+                    @ mma_d_boundary_lines ~dir:`Store ~acc_frag ~d_frag ~acc:"__mma_acc" ~ldd ~mt
+                        ~nt
+                    @ [ barrier ]
                   in
                   let body ~a_ptr ~b_ptr =
                     ptr_decl "__mma_dp" d_as (typ_of_prec d_prec) d_ptr
@@ -1442,33 +1445,15 @@ module Impl = struct
               let barrier =
                 "threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);"
               in
-              let d_addr = Printf.sprintf "__mma_dp + __mi * %d * %d + __ni * %d" tile ldd tile in
               let lines_before =
-                [
-                  barrier;
-                  Printf.sprintf "%s %s[%d][%d];" acc_frag fragment mt nt;
-                  Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                  Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                ]
-                @ List.map
-                    (mma_d_boundary_lines ~dir:`Load ~acc_frag ~d_frag
-                       ~acc:(Printf.sprintf "%s[__mi][__ni]" fragment)
-                       ~ptr:d_addr ~ldd)
-                    ~f:(fun line -> "    " ^ line)
-                @ [ "  }"; "}"; "/* simdgroup fragment reduction body begins */" ]
+                [ barrier; Printf.sprintf "%s %s[%d][%d];" acc_frag fragment mt nt ]
+                @ mma_d_boundary_lines ~dir:`Load ~acc_frag ~d_frag ~acc:fragment ~ldd ~mt ~nt
+                @ [ "/* simdgroup fragment reduction body begins */" ]
               in
               let lines_after =
                 [ "/* simdgroup fragment reduction body ends */" ]
-                @ [
-                    Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                    Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                  ]
-                @ List.map
-                    (mma_d_boundary_lines ~dir:`Store ~acc_frag ~d_frag
-                       ~acc:(Printf.sprintf "%s[__mi][__ni]" fragment)
-                       ~ptr:d_addr ~ldd)
-                    ~f:(fun line -> "    " ^ line)
-                @ [ "  }"; "}"; barrier ]
+                @ mma_d_boundary_lines ~dir:`Store ~acc_frag ~d_frag ~acc:fragment ~ldd ~mt ~nt
+                @ [ barrier ]
               in
               let d_decl =
                 string (Printf.sprintf "%s %s *__mma_dp = " d_as (typ_of_prec d_prec))
@@ -2340,7 +2325,7 @@ module Impl = struct
     let queue = dev.runner.queue in
     let runner_label = get_name dev in
     let _func, pso = pipeline_of program ~metal_device ~func_name symbol in
-    let block_product = launch.block.(0) * launch.block.(1) * launch.block.(2) in
+    let block_product = Low_level.launch_block_threads launch in
     let max_threads = Me.ComputePipelineState.get_max_total_threads_per_threadgroup pso in
     if block_product > max_threads then
       reject_link Schedule_outcome.Workgroup_threads ~requested:block_product ~limit:max_threads

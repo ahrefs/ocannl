@@ -1682,20 +1682,23 @@ files.
   storage-format table** (gh-ocannl-837, `arrayjit/lib/metal_backend.ml`'s
   `mma_d_boundary_lines`). A standalone `MTLDevice.makeLibrary(source:)` probe on an Apple M4 Max
   (40-core GPU, Metal 4, macOS 26.6.2 build 25G83, Swift 6.3.3) compiled and ran half A/B fragments
-  with a `simdgroup_float8x8` accumulator. Since gh-ocannl-1075 the converted boundary loads
-  `ocannl_mma_rc8` into a float fragment, then widens/narrows each scalar cell at the coordinate
-  that fragment names (the coordinate-table principle above); no half/bfloat staging fragment
-  remains. MSL 4.1 section 6.8.1 accepts only device/threadgroup pointers for `simdgroup_load`, so
-  `mma_kernel_prologue` initializes a 64-float threadgroup table with a single writer (`lid == 0`
-  in every dimension) at kernel scope, once per kernel (gh-ocannl-1255), ahead of every converted
-  scope's opening barrier. This costs 256 static bytes per kernel; `link_proc` checks the compiled
-  kernel's actual allocation.
-  The per-lane count derives from the float fragment's `storage_type` divided by the advertised
-  32-thread width; `sizeof(thread_elements())` counts pointer bytes, not elements. Both scopes
-  keep the old `(float)`, `(half)` and `(bfloat)` casts, preserving conversion rounding.
-  `schedule_mma_matmul`'s `metal_table_boundary` pins the accumulator-typed table load and the
-  absence of cross-type copies in both wide arms/scopes: against the former emitter all four
-  structure claims fail, even while the value discriminators pass. The k=144 probe/test makes the
+  with a `simdgroup_float8x8` accumulator. Since gh-ocannl-2372 (replacing gh-ocannl-1075's
+  `ocannl_mma_rc8` coordinate-table `thread_elements()` loop, which cost ~6x on Apple M4 Max by
+  forcing accumulator fragments out of registers), the converted boundary stages each 8x8 tile
+  through a per-simdgroup 64-float slice of `threadgroup float ocannl_mma_dscr[64 * simdgroups]`
+  addressed by MSL's `[[simdgroup_index_in_threadgroup]]` and `[[thread_index_in_simdgroup]]`:
+  load widens `d` into the slice, `simdgroup_barrier(mem_flags::mem_threadgroup)`,
+  `simdgroup_load`, barrier; store reverses the order. No `thread_elements()` touches the
+  accumulator and no half/bfloat staging fragment remains. `mma_kernel_prologue` declares the
+  uninitialized scratch and per-simdgroup pointer once per kernel, costing `256 * ceil(workgroup_threads / 32)`
+  static threadgroup bytes (256 B for a 1-simdgroup kernel); `link_proc` checks the compiled
+  kernel's actual allocation. Both scopes
+  keep the old `(float)`, `(half)` and `(bfloat)` casts, preserving conversion rounding bitwise.
+  `schedule_mma_matmul`'s `metal_scratch_boundary` pins the scratch-staged `simdgroup_load`/
+  `simdgroup_store` and forbids `thread_elements()`, `ocannl_mma_rc8` and cross-type copies in both
+  wide arms/scopes; `schedule_mma_scope_scratch` pins the 256 B/simdgroup scaling and executes a
+  2-simdgroup (`block = [32, 2, 1]`) converted bf16 `Tile_mma` parity check (`staticThreadgroupMemoryLength = 512`).
+  The k=144 probe/test makes the
   first 16-wide block contribute 2048 and
   each of the remaining eight contribute 1: residency across the reduction returns 2056, whereas
   narrowing at each block boundary returns 2048. The default policy still uses

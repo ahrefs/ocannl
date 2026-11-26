@@ -644,9 +644,10 @@ files.
   memory must reach `Schedule.workgroup_memory_bytes` (gh-ocannl-1205): staged tiles from
   `workgroup_shared`, and backend-emitted scratch through
   `codegen_capabilities.mma_kernel_workgroup_bytes`, which the emitting backend derives from the same
-  predicate as its kernel-scope declaration (`C_syntax_config.mma_kernel_prologue`): Metal's
-  converted-boundary coordinate table, 256 B once per kernel however many converted `Tile_mma`
-  scopes (each `Unroll`/`Partition` copy is one) read it (gh-ocannl-1255; it was per scope). The
+  predicate and sizing helper as its kernel-scope declaration (`C_syntax_config.mma_kernel_prologue`):
+  Metal's converted-boundary per-simdgroup 64-float staging scratch, `256 * ceil(workgroup_threads / 32)`
+  bytes once per kernel however many converted `Tile_mma` scopes (each `Unroll`/`Partition` copy is
+  one) reuse it (gh-ocannl-1255, gh-ocannl-2372; it was a single 256 B coordinate table before). The
   renderer hands the prologue the triples of the emissions it accepted, the estimate those of every
   `Tile_mma`, so the estimate is the upper bound. Renderer-inserted collectives route the same way:
   the lane all-reduce's `lred_partials_` (`lane_all_reduce_workgroup_bytes`, gh-ocannl-1168) and

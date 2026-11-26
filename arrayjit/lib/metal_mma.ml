@@ -63,10 +63,10 @@ let mma_accumulator ~d_prec ~a_prec ~b_prec =
      on Metal): [simdgroup_multiply_accumulate] is generic over its operand element type, and bfloat
      operands into a float accumulator compile and execute on Apple silicon (schedule_mma_matmul's
      bf32 and [Bf16_wide] legs, M4 Max). The f32-storage arm needs no conversion; the wide arm
-     converts at the bfloat destination through the coordinate table exactly as the wide-f16 one
-     does. Since gh-ocannl-2029 the wide arm is [Bf16_auto]'s too ([bf16_accum_wide]); only
-     [Bf16_narrow] reaches the bfloat accumulator, whose 8-deep blocks narrow differently from the
-     per-step serial loop. *)
+     converts at the bfloat destination through the per-simdgroup threadgroup scratch exactly as the
+     wide-f16 one does (gh-ocannl-2372). Since gh-ocannl-2029 the wide arm is [Bf16_auto]'s too
+     ([bf16_accum_wide]); only [Bf16_narrow] reaches the bfloat accumulator, whose 8-deep blocks
+     narrow differently from the per-step serial loop. *)
   | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ -> Some Ops.single
   | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ when bf16_accum_wide () ->
       Some Ops.single

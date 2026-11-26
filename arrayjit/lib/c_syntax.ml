@@ -1512,21 +1512,23 @@ module type C_syntax_config = sig
       space and layout to decide acceptance by, no address — because they are addressed by the
       nested [Tile_mma]s, each at its own position inside the reduction loop. *)
 
-  val mma_kernel_prologue : triples:(Ops.prec * Ops.prec * Ops.prec) list -> string list
-  (** Kernel-scope lines — declarations and their initialization — that the tile-MMA emissions of
-      one kernel share, given the [(d, a, b)] storage triples of the emissions the hooks accepted in
-      it (gh-ocannl-1255). [compile_proc] places them once, after the local declarations and before
-      the main logic; every emission scope reading them opens with a barrier, which orders the
-      initialization before its reads. Metal's converted destination boundary is the one non-empty
-      case: its coordinate table, the same 0..63 for every scope, lives in [threadgroup] memory, so
-      one copy per kernel serves all of them. Default: none. *)
+  val mma_kernel_prologue :
+    workgroup_threads:int -> triples:(Ops.prec * Ops.prec * Ops.prec) list -> string list
+  (** Kernel-scope lines — declarations and their setup — that the tile-MMA emissions of one kernel
+      share, given the launch's workgroup thread count and the [(d, a, b)] storage triples of the
+      emissions the hooks accepted in it (gh-ocannl-1255, gh-ocannl-2372). [compile_proc] places
+      them once, after the local declarations and before the main logic; every emission scope
+      accessing them opens and closes with a workgroup barrier. Metal's converted destination
+      boundary is the one non-empty case: one 64-float [threadgroup] scratch slot per simdgroup
+      serves every converted scope in the kernel. Default: none. *)
 
-  val mma_kernel_workgroup_bytes : triples:(Ops.prec * Ops.prec * Ops.prec) list -> int
-  (** The workgroup-shared bytes {!mma_kernel_prologue} declares for these triples, derived from the
-      same predicate, so [Schedule.check_hardware_limits_classified]'s estimate cannot drift from
-      the kernel. The estimate passes the triples of EVERY [Tile_mma] statement of the kernel —
-      including those a hook then declines (extents, spaces, layouts), which the renderer does not
-      pass — so it is an upper bound. Default 0. *)
+  val mma_kernel_workgroup_bytes :
+    workgroup_threads:int -> triples:(Ops.prec * Ops.prec * Ops.prec) list -> int
+  (** The workgroup-shared bytes {!mma_kernel_prologue} declares for this workgroup size and these
+      triples, derived from the same predicate, so [Schedule.check_hardware_limits_classified]'s
+      estimate cannot drift from the kernel. The estimate passes the triples of EVERY [Tile_mma]
+      statement of the kernel — including those a hook then declines (extents, spaces, layouts),
+      which the renderer does not pass — so it is an upper bound. Default 0. *)
 
   val workgroup_allocation_alignment : int
   (** The granule, in bytes, the device's allocator rounds each [shared_decl_prefix] array up to
@@ -3340,8 +3342,8 @@ struct
   let mma_operand_fragments ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = None
   let mma_arm ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = None
   let mma_fragment_syntax = None
-  let mma_kernel_prologue ~triples:_ = []
-  let mma_kernel_workgroup_bytes ~triples:_ = 0
+  let mma_kernel_prologue ~workgroup_threads:_ ~triples:_ = []
+  let mma_kernel_workgroup_bytes ~workgroup_threads:_ ~triples:_ = 0
   let workgroup_allocation_alignment = 1
   let workgroup_start_alignment = 1
   let workgroup_reporting_granule = 1
@@ -10900,10 +10902,14 @@ module C_syntax (B : C_syntax_config) = struct
       ^^ space ^^ string "void" ^^ space ^^ string name
       ^^ nest 4 (lparen ^^ hardline ^^ separate (comma ^^ hardline) args_docs ^^ rparen)
     in
-    (* gh-ocannl-1255: kernel-scope scratch of the accepted tile-MMA emissions (Metal's converted
-       destination boundary's coordinate table), declared and initialized once, before the main
-       logic, whose emission scopes each open with a barrier ahead of their first read of it. *)
-    (match B.mma_kernel_prologue ~triples:!(ctx.emitted_mma_triples) with
+    (* gh-ocannl-1255, gh-ocannl-2372: kernel-scope scratch of the accepted tile-MMA emissions
+       (Metal's converted destination boundary's per-simdgroup staging scratch), declared once
+       before the main logic. *)
+    (match
+       B.mma_kernel_prologue
+         ~workgroup_threads:(Low_level.launch_block_threads launch)
+         ~triples:!(ctx.emitted_mma_triples)
+     with
     | [] -> ()
     | lines ->
         body :=

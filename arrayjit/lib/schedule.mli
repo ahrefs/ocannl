@@ -1440,13 +1440,15 @@ val launch_geometry_excess :
 
 val kernel_workgroup_bytes :
   capabilities:Backend_intf.codegen_capabilities ->
+  workgroup_threads:int ->
   arrays:int list ->
   mma_triples:(Ops.prec * Ops.prec * Ops.prec) list ->
   int
-(** The workgroup-shared charge of a kernel declaring [arrays] (each one array's declared bytes) and
-    tile-MMA emission scopes of the [(d, a, b)] storage triples [mma_triples]. The allocations
-    include the backend's per-kernel {!field:Backend_intf.mma_kernel_workgroup_bytes} over the
-    triples (gh-ocannl-1255). Each size is rounded up to
+(** The workgroup-shared charge of a kernel launching [workgroup_threads] threads per workgroup,
+    declaring [arrays] (each one array's declared bytes) and tile-MMA emission scopes of the
+    [(d, a, b)] storage triples [mma_triples]. The allocations include the backend's per-kernel
+    {!field:Backend_intf.mma_kernel_workgroup_bytes} over [workgroup_threads] and the triples
+    (gh-ocannl-1255, gh-ocannl-2372). Each size is rounded up to
     {!field:Backend_intf.workgroup_allocation_alignment} (gh-ocannl-1330), with
     {!field:Backend_intf.workgroup_start_alignment} padding between arrays, charged for the largest
     possible footprint across array orders (gh-ocannl-2465). {!workgroup_memory_bytes} and the
@@ -1458,12 +1460,13 @@ val workgroup_memory_bytes :
     (Metal rounds every [threadgroup] array up to 4 bytes, gh-ocannl-1330): its [workgroup_shared]
     tiles (a pipelined tile, one array of rotating copies, counted once per copy) plus, once for the
     kernel, the rendering backend's {!field:Backend_intf.mma_kernel_workgroup_bytes} over the
-    storage triples of its tile-MMA emission scopes — Metal declares one coordinate table per kernel
-    when any of them converts its destination boundary (gh-ocannl-1205, gh-ocannl-1255). A scope is
-    one [Tile_mma] statement, each copy listed where a loop transform duplicated it; a
-    simdgroup-fragment scope is rendered only around exactly one [Tile_mma], so it is the same list.
-    Plus, per lane all-reduce site that stages per-simdgroup partials
-    ([Low_level.lane_all_reduce_sites]' [lar_cross_simdgroup], gh-ocannl-1168), the backend's
+    launch's workgroup thread count and the storage triples of its tile-MMA emission scopes — Metal
+    declares one 64-float staging scratch slot per simdgroup when any of them converts its
+    destination boundary (gh-ocannl-1205, gh-ocannl-1255, gh-ocannl-2372). A scope is one [Tile_mma]
+    statement, each copy listed where a loop transform duplicated it; a simdgroup-fragment scope is
+    rendered only around exactly one [Tile_mma], so it is the same list. Plus, per lane all-reduce
+    site that stages per-simdgroup partials ([Low_level.lane_all_reduce_sites]'
+    [lar_cross_simdgroup], gh-ocannl-1168), the backend's
     {!field:Backend_intf.lane_all_reduce_workgroup_bytes} for its extent at the larger of its
     local's compute and accumulator precisions. Plus, per warp-shuffle reduction into a cell
     ([Low_level.warp_reduce_cell_sites], gh-ocannl-1452), the backend's

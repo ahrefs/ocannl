@@ -81,16 +81,16 @@ let mma_tile_for_precisions = Ir.Backend_intf.mma_tile_for_precisions
    emission scope where the backend's uniform-f16 arm accumulates f32. CUDA sm_80+ supports the
    per-statement inline-PTX m16n8k16 scope and, since gh-ocannl-925, the persistent-fragment scope
    through wmma f32 fragments and a table-addressed converted d boundary; HIP's converted rocWMMA d
-   boundary supports both since gh-ocannl-789, and Metal's converted [thread_elements()] boundary
-   supports both since gh-ocannl-837. Consulting the scope list here keeps a staged outer-k split
-   from acquiring an extra f16 boundary merely because the same intrinsic is wide over its inner
-   tile.
+   boundary supports both since gh-ocannl-789, and Metal's converted destination boundary (staged
+   through per-simdgroup threadgroup scratch since gh-ocannl-2372) supports both since
+   gh-ocannl-837. Consulting the scope list here keeps a staged outer-k split from acquiring an
+   extra f16 boundary merely because the same intrinsic is wide over its inner tile.
 
    gh-ocannl-838: [Numerics.Bf16_wide] asks the same question of a bf16-storage destination, against
    [mma_bf16_wide_acc_scopes] — HIP's converted rocWMMA boundary serves both scopes, CUDA's
    inline-PTX arm (f32 accumulate in hardware) both since gh-ocannl-1063, and Metal's converted
-   [thread_elements()] boundary both since gh-ocannl-923. The witness names whichever policy
-   withheld the seed.
+   destination boundary both since gh-ocannl-923. The witness names whichever policy withheld the
+   seed.
 
    gh-ocannl-2195: [Fp16_auto] resolves wide on CUDA and HIP, so the f16 question is the backend's
    resolution ([mma_f16_auto_wide], read through the same [Numerics.fp16_accum_wide] as its
@@ -3980,6 +3980,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                            allocation granule (gh-ocannl-1330); no tile-MMA scope here. *)
                         let staged =
                           Sched.kernel_workgroup_bytes ~capabilities
+                            ~workgroup_threads:(if tm > 0 && tn > 0 then bm / tm * (bn / tn) else 1)
                             ~arrays:
                               [
                                 bm * bk * Ir.Ops.prec_in_bytes a_prec;
@@ -4118,8 +4119,8 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                   (* The gate's own charge ([Sched.kernel_workgroup_bytes]): each operand tile one
                      array of [depth] copies, rounded to the backend's allocation granule, plus the
                      per-kernel scratch of the site's triple, which every completion's [Tile_mma]
-                     carries — Metal's coordinate table where its boundary converts (gh-ocannl-1330,
-                     gh-ocannl-1255). *)
+                     carries — Metal's per-simdgroup staging scratch where its boundary converts
+                     (gh-ocannl-1330, gh-ocannl-1255, gh-ocannl-2372). *)
                   (* A geometry padding the row or column role pad-masks the accumulator, and on
                      a staged pipeline [Tensorize] places that masked fragment, a [bm x bn] tile at
                      [d]'s storage precision, in workgroup-shared memory beside the operand tiles
@@ -4142,7 +4143,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                     else []
                   in
                   let charge ~mma_triples =
-                    Sched.kernel_workgroup_bytes ~capabilities
+                    Sched.kernel_workgroup_bytes ~capabilities ~workgroup_threads:w
                       ~arrays:(operand_tiles @ masked_fragment @ shared_target)
                       ~mma_triples
                   in
@@ -5313,6 +5314,7 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
                       | Some cap ->
                           let bytes =
                             Sched.kernel_workgroup_bytes ~capabilities
+                              ~workgroup_threads:mma.Ir.Backend_intf.mma_simd_width
                               ~arrays:
                                 ([
                                    copies * rows * nred_p * Ir.Ops.prec_in_bytes a_prec;
