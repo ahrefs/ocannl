@@ -295,8 +295,10 @@ let () =
     || (String.is_prefix path ~prefix:"test/ppx/" && String.is_suffix path ~suffix:"_actual.ml")
   in
   let sources =
-    List.filter paths ~f:(fun (path, _) ->
-        String.is_suffix path ~suffix:".ml" && not (derived path))
+    let kept =
+      Set.of_list (module String) (Test_scan.Config_key_scan.sources_among (List.map paths ~f:fst))
+    in
+    List.filter paths ~f:(fun (path, _) -> Set.mem kept path && not (derived path))
   in
   let ignore_file =
     match require_ignore_file ~fail ignore_file with
@@ -344,9 +346,8 @@ let () =
   printf "Sources naming a schedule cache directory, all with the `%s` prefix that `%s` covers:\n"
     Scan.required_prefix Scan.required_glob;
   List.iter naming ~f:(fun source -> printf "  %s\n" source);
-  (* No count of sources SCANNED: the globs reach into the build tree, so how many `.ml` files they
-     match depends on which `(select …)` copies have been built by the time this rule runs, and a
-     golden pinning that would fail on build order rather than on anything true. *)
+  (* No count of sources SCANNED: a tally in a golden moves on every unrelated source addition, and
+     generated `(select …)` targets are already excluded via `Config_key_scan.sources_among`. *)
   (* The list above is what the census establishes; its length is a tally that every new tuning test
      moved, and two branches each adding one merged cleanly to a wrong total (gh-ocannl-1046). *)
   eprintf "Sources naming a schedule cache directory: %d (not part of the golden).\n"

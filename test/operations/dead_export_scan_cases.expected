@@ -50,6 +50,9 @@ a deriving payload naming a deriver is not a spelling of the derived value: true
 an unqualified mention under an open counts: true
 a same-named type elsewhere credits by name, conservatively: true
 dune's preprocessed interface beside its source is not an interface source: true
+sources_among drops a select target and its preprocessed twin while keeping every checked-in arm: true
+sources_among yields the same corpus when the select target is absent from _build: true
+select_target_of_arm maps dotted arms and ignores plain, pp, hidden and multi-dot names: true
 a type's derived mentions are exactly what its derivers generate, members aside: true
 every derived export set is exactly what the installed derivers generate: true
 a generated helper referenced only through an extension point, or held by a used generated module, is live: true

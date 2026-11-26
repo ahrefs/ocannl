@@ -2711,15 +2711,33 @@ let modules_of ?(directory_modules = []) stanzas stanza =
       List.filter directory_modules ~f:(fun m -> not (Set.mem claimed (String.lowercase m)))
 
 (** The modules a directory holds, from the repository-relative [paths] of the sources a scan was
-    handed: the basename of every [.ml] directly in [dir] ([""] or [.] for the root). What
+    handed and the directory's [stanzas]: the basename of every plain [.ml] directly in [dir] ([""]
+    or [.] for the root) -- omitting dotted [(select)] arms such as [helper.real.ml] -- plus the
+    logical target module of every [(select <target>.ml from …)] in [stanzas] (gh-ocannl-2482). What
     {!modules_of} takes as [directory_modules]. *)
-let directory_modules ~dir paths =
+let directory_modules ?(stanzas = []) ~dir paths =
   let dir = in_subdir "" dir in
-  List.filter_map paths ~f:(fun path ->
-      let parent = in_subdir "" (Stdlib.Filename.dirname path) in
-      if String.equal parent dir then
-        String.chop_suffix (Stdlib.Filename.basename path) ~suffix:".ml"
-      else None)
+  let from_paths =
+    List.filter_map paths ~f:(fun path ->
+        let parent = in_subdir "" (Stdlib.Filename.dirname path) in
+        if String.equal parent dir then
+          match String.chop_suffix (Stdlib.Filename.basename path) ~suffix:".ml" with
+          | Some stem when not (String.contains stem '.') -> Some stem
+          | _ -> None
+        else None)
+  in
+  let from_selects =
+    List.concat_map stanzas ~f:(fun stanza ->
+        List.filter_map (select_arms stanza) ~f:(fun (target, _arm) ->
+            String.chop_suffix (Stdlib.Filename.basename target) ~suffix:".ml"))
+  in
+  let seen = Hash_set.create (module String) in
+  List.filter (from_paths @ from_selects) ~f:(fun m ->
+      let key = String.lowercase m in
+      if Hash_set.mem seen key then false
+      else (
+        Hash_set.add seen key;
+        true))
 
 (** The modules a stanza tells dune have no implementation, lowercased: an [.mli] runs nothing, so a
     scan handed no [.ml] for one of them is missing no input. *)

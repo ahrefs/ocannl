@@ -244,6 +244,16 @@ a captured Verdict run is refused when only a sibling run clears the variable: t
 an inner nonempty binding undoes the clear for a captured Verdict run: true
 a captured Verdict run passes with an empty binding or its own dependency: true
 
+Synthetic controls: `(select …)` arms are checked under their own file names.
+a clean select stanza passes with no generated target on disk: true
+an undeclared tracing gate in a non-default select arm is refused by arm file name: true
+an undeclared ambient env read in a non-default select arm is refused by arm file name: true
+an unpinned search in a non-default select arm is refused: true
+a pinned search in a non-default select arm passes: true
+an inline test in a non-default select arm requires a per-module alias: true
+a default-module-set stanza discovers a select target and checks its arms: true
+a vector-file key literal in a sibling's non-default select arm invalidates an initialization pin: true
+
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:57263e03b8b032365fbd586bbd2705a3] stderr from Verdict-linked
   [scanner-refusal:2b65edf20e36d983c1a016b72c2aadd1] plugged-in check receives
@@ -457,6 +467,14 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:fac99db54dbc751b212940875f53c769] captured Verdict run
   [scanner-refusal:edc4786c103754e1274b9e12cf08fa3f] nonempty binding undoes
   [scanner-refusal:e41ce36dfe9ad79d2112520081833ba9] captured Verdict run
+  [scanner-refusal:3f8d91b20ff8dd63fdb0fa1e1cd5cc7b] select stanza passes
+  [scanner-refusal:cab6ce652200dd6b791b352310a35bdc] undeclared tracing gate
+  [scanner-refusal:4b254ada2beaa28473ff82577bf198ee] undeclared ambient env
+  [scanner-refusal:1692b7fcf8f2e58a4884d397c7d39c9c] non-default select arm
+  [scanner-refusal:f1f5e5ad4613c408d71f8a02b4462be9] non-default select arm
+  [scanner-refusal:4112d0c301944346aa5b2b228db48361] non-default select arm
+  [scanner-refusal:c32893cb68f676d5b920e664ddd544a1] default-module-set stanza discovers
+  [scanner-refusal:cc3f3f4d2c2871eaf60a3bbe9f670f42] invalidates an initialization
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
   [scanner-refusal:f11c09a8318b3a7863444256973f57d4] running an executable
   [scanner-refusal:941a9fb77d867c7b1576a0f19ee5db3b] declares

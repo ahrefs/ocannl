@@ -484,7 +484,43 @@ let () =
   Verdict.p "dune's preprocessed interface beside its source is not an interface source"
     (List.equal String.equal
        (Scan.interfaces_among [ "a.mli"; "a.pp.mli"; "b.pp.mli"; "c.ml" ])
-       [ "a.mli"; "b.pp.mli" ])
+       [ "a.mli"; "b.pp.mli" ]);
+  (* gh-ocannl-2482: generated `(select)` targets and their `.pp.ml` twins are dropped while every
+     checked-in arm stays under its own file name, yielding the exact same corpus whether or not a
+     toolkit enabled the select target in `_build`. *)
+  let expected_sources = [ "a/x.missing.ml"; "a/x.real.ml"; "a/y.ml"; "a/z.pp.ml" ] in
+  Verdict.p
+    "sources_among drops a select target and its preprocessed twin while keeping every checked-in \
+     arm"
+    (List.equal String.equal
+       (Test_scan.Config_key_scan.sources_among
+          [
+            "a/x.ml";
+            "a/x.pp.ml";
+            "a/x.real.ml";
+            "a/x.missing.ml";
+            "a/y.ml";
+            "a/y.pp.ml";
+            "a/z.pp.ml";
+          ])
+       expected_sources);
+  Verdict.p "sources_among yields the same corpus when the select target is absent from _build"
+    (List.equal String.equal
+       (Test_scan.Config_key_scan.sources_among
+          [ "a/x.real.ml"; "a/x.missing.ml"; "a/y.ml"; "a/y.pp.ml"; "a/z.pp.ml" ])
+       expected_sources);
+  Verdict.p
+    "select_target_of_arm maps dotted arms and ignores plain, pp, hidden and multi-dot names"
+    (Option.equal String.equal
+       (Test_scan.Config_key_scan.select_target_of_arm "dir/cuda_wmma_floor.real.ml")
+       (Some "dir/cuda_wmma_floor.ml")
+    && Option.equal String.equal
+         (Test_scan.Config_key_scan.select_target_of_arm "cuda_backend_impl.cudajit.ml")
+         (Some "cuda_backend_impl.ml")
+    && Option.is_none (Test_scan.Config_key_scan.select_target_of_arm "dir/plain.ml")
+    && Option.is_none (Test_scan.Config_key_scan.select_target_of_arm "dir/plain.pp.ml")
+    && Option.is_none (Test_scan.Config_key_scan.select_target_of_arm "dir/a.real.pp.ml")
+    && Option.is_none (Test_scan.Config_key_scan.select_target_of_arm "dir/.hidden.ml"))
 
 (* The derived half of a type's mentions, held equal to the derivers' own expansion rather than to a
    restatement of their naming rules. Referencing each registration links it, so [Driver] expands
