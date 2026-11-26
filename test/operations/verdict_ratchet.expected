@@ -887,6 +887,8 @@ refuses a lazy policy-wrapper force after a conditional first force and an unwra
 accepts separately allocated sub_legs returned through a nested local factory helper: true
 refuses a disallowed call in an eager argument when projecting a field from an immediately applied anonymous function: true
 refuses a lazy policy-wrapper force after an iterator callback force over an unknown collection and an unwrapped claim: true
+refuses a lazy policy-wrapper force after an uncalled optional default force and an unwrapped claim: true
+refuses a disallowed call in an unused optional default of an immediately applied anonymous function: true
 refuses a non-allowlisted leg-gate call, an ambient-policy mismatch, a stale leg-gate exemption, and a leg-gate reader that raised: true
 a claim reader's exception on a source that parses reaches the scanner-defect refusal, not the parse one: true
 a syntax matrix cell whose reader raises reads as a reader defect, not a parse failure: true

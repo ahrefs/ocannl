@@ -8276,7 +8276,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                       match resolve_inline_fn_apply env expr with
                       | Some (params, body, all_args) -> (
                           let whole_ids = ref [] in
-                          let arms, extra_args, scrut_opt =
+                          let arms, extra_args, eager_args, scrut_opt =
                             self#inline_fn_arms ~eval_kind:ek
                               ~on_whole_arg:(fun aexpr id -> whole_ids := (aexpr, id) :: !whole_ids)
                               env params body all_args
@@ -8284,7 +8284,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                           match (arms, extra_args) with
                           | [ (call_env, None, rhs) ], [] ->
                               eager_inline_args :=
-                                (ek, all_args, !whole_ids, scrut_opt) :: !eager_inline_args;
+                                (ek, eager_args, !whole_ids, scrut_opt) :: !eager_inline_args;
                               find ~ek call_env rhs
                           | _ -> None)
                       | None -> (
@@ -8323,7 +8323,8 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
         go env expr
 
       method bind_local_call ?(arg_inv_id = Some current_inv_id) ?arg_wids
-          ?(on_whole_arg = fun _ _ -> ()) fn_env params all_args =
+          ?(on_whole_arg = fun _ _ -> ()) ?(on_selected_default = fun _ _ -> ()) fn_env params
+          all_args =
         let nolabel_args =
           List.filter_map all_args ~f:(fun (albl, aexpr, aenv, aeval) ->
               match albl with Ppxlib.Asttypes.Nolabel -> Some (aexpr, aenv, aeval) | _ -> None)
@@ -8352,12 +8353,20 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                     | Some (`Direct hit) -> Some hit
                     | Some (`Optional (aexpr, aenv, aeval)) -> (
                         match self#resolve_option_arg aenv aexpr with
-                        | `None_lit -> Option.map default_opt ~f:(fun d -> (d, acc, None))
+                        | `None_lit ->
+                            Option.map default_opt ~f:(fun d ->
+                                on_selected_default d acc;
+                                (d, acc, None))
                         | `Some_expr (inner, inner_env) ->
                             if Option.is_some default_opt then Some (inner, inner_env, aeval)
                             else Some (aexpr, aenv, aeval)
-                        | `Opaque -> Some (aexpr, aenv, aeval))
-                    | None -> Option.map default_opt ~f:(fun d -> (d, acc, None)))
+                        | `Opaque ->
+                            Option.iter default_opt ~f:(fun d -> on_selected_default d acc);
+                            Some (aexpr, aenv, aeval))
+                    | None ->
+                        Option.map default_opt ~f:(fun d ->
+                            on_selected_default d acc;
+                            (d, acc, None)))
                 | Ppxlib.Asttypes.Nolabel ->
                     let k = !nl_idx in
                     Int.incr nl_idx;
@@ -8400,7 +8409,14 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
 
       method inline_fn_arms ?eval_kind ?(on_whole_arg = fun _ _ -> ()) ?(on_cap_pat = fun _ _ -> ())
           fn_env params body all_args =
-        let call_env, extra_args = self#bind_local_call ~on_whole_arg fn_env params all_args in
+        let selected_defaults = ref [] in
+        let call_env, extra_args =
+          self#bind_local_call ~on_whole_arg
+            ~on_selected_default:(fun d d_env ->
+              selected_defaults := (Ppxlib.Asttypes.Nolabel, d, d_env, None) :: !selected_defaults)
+            fn_env params all_args
+        in
+        let eager_args = all_args @ List.rev !selected_defaults in
         match ((strip body).pexp_desc, extra_args) with
         | ( Pexp_function ([], _, Pfunction_cases (cases, _, _)),
             (scrut, scrut_env, scrut_eval) :: rest ) ->
@@ -8421,8 +8437,8 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                   | _ -> ());
                   (c_env, c.pc_guard, c.pc_rhs))
             in
-            (arms, rest, Some (scrut, scrut_env, scrut_eval, !scrut_whole_ids))
-        | _ -> ([ (call_env, None, body) ], extra_args, None)
+            (arms, rest, eager_args, Some (scrut, scrut_env, scrut_eval, !scrut_whole_ids))
+        | _ -> ([ (call_env, None, body) ], extra_args, eager_args, None)
 
       (* Returns [true] if [expr] evaluates to an UNCHANGED ambient [Ir.Numerics.get ()] rather than
          an adjusted/pinned policy record (e.g. [{ (Ir.Numerics.get ()) with tf32_matmuls = true
@@ -8455,7 +8471,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                   | None -> (
                       match resolve_inline_fn_apply env expr with
                       | Some (params, body, all_args) ->
-                          let arms, _, _ = self#inline_fn_arms env params body all_args in
+                          let arms, _, _, _ = self#inline_fn_arms env params body all_args in
                           List.exists arms ~f:(fun (c_env, _, rhs) -> check c_env rhs)
                       | None -> (
                           let base, app_args = flatten_apply expr in
@@ -8559,7 +8575,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                   | None -> (
                       match resolve_inline_fn_apply env expr with
                       | Some (params, body, all_args) ->
-                          let arms, _, _ = self#inline_fn_arms env params body all_args in
+                          let arms, _, _, _ = self#inline_fn_arms env params body all_args in
                           List.exists arms ~f:(fun (c_env, _, rhs) -> check_proj c_env proj rhs)
                       | None -> (
                           let base, app_args = flatten_apply expr in
@@ -8920,7 +8936,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                       in
                       let walk_applied_fn ~scan_unused_args fn_env params body all_args =
                         let whole_arg_ids = ref [] in
-                        let arms, extra_args, scrut_opt =
+                        let arms, extra_args, eager_args, scrut_opt =
                           self#inline_fn_arms ~eval_kind
                             ~on_whole_arg:(fun aexpr id ->
                               whole_arg_ids := (aexpr, id) :: !whole_arg_ids)
@@ -8934,8 +8950,8 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                               ~eval_kind:(Option.value aeval ~default:eval_kind)
                               ~in_explicit_policy aenv aexpr);
                         if scan_unused_args then
-                          scan_unused_inline_args ~eval_kind ~in_explicit_policy all_args extra_args
-                            !whole_arg_ids scrut_opt
+                          scan_unused_inline_args ~eval_kind ~in_explicit_policy eager_args
+                            extra_args !whole_arg_ids scrut_opt
                       in
                       match
                         if is_context_query then None
@@ -9441,7 +9457,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                       match resolve_inline_fn_apply env expr with
                       | Some (params, body, all_args) ->
                           let whole_arg_ids = ref [] in
-                          let arms, extra_args, scrut_opt =
+                          let arms, extra_args, eager_args, scrut_opt =
                             self#inline_fn_arms ~eval_kind
                               ~on_whole_arg:(fun aexpr id ->
                                 whole_arg_ids := (aexpr, id) :: !whole_arg_ids)
@@ -9454,8 +9470,8 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                               walk
                                 ~eval_kind:(Option.value aeval ~default:eval_kind)
                                 ~in_explicit_policy aenv aexpr);
-                          scan_unused_inline_args ~eval_kind ~in_explicit_policy all_args extra_args
-                            !whole_arg_ids scrut_opt
+                          scan_unused_inline_args ~eval_kind ~in_explicit_policy eager_args
+                            extra_args !whole_arg_ids scrut_opt
                       | None -> (
                           let base, app_args = flatten_apply expr in
                           match (tuple_selector env base, app_args) with
@@ -10096,51 +10112,10 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                           next_id <- next_id + 1;
                           (next_id, 0)))
             in
-            let nolabel_idx = ref start_nolabel in
-            let f_env =
-              List.fold params ~init:env ~f:(fun acc param ->
-                  match param.pparam_desc with
-                  | Pparam_val (label, default, pat) ->
-                      Option.iter default ~f:(fun d -> ignore (self#expression acc d : expression));
-                      ignore (self#pattern acc pat : pattern);
-                      let my_nolabel =
-                        match label with
-                        | Ppxlib.Asttypes.Nolabel ->
-                            let k = !nolabel_idx in
-                            Int.incr nolabel_idx;
-                            k
-                        | _ -> -1
-                      in
-                      let acc = self#forget acc (Lexical_scope.pattern_unpacks [ pat ]) in
-                      let pairs = extract_pat_projs pat in
-                      if List.is_empty pairs then acc
-                      else
-                        let frame =
-                          List.fold pairs
-                            ~init:(Map.empty (module String))
-                            ~f:(fun m (name, proj) ->
-                              let v = self#local in
-                              v.lg_param <-
-                                Some
-                                  {
-                                    pm_fn_id = fn_id;
-                                    pm_label = label;
-                                    pm_nolabel_idx = my_nolabel;
-                                    pm_default = Option.map default ~f:(fun d -> (d, acc));
-                                    pm_proj = proj;
-                                    pm_name = name;
-                                    pm_line = pat.ppat_loc.loc_start.pos_lnum;
-                                  };
-                              Map.set m ~key:name ~data:v)
-                        in
-                        Lexical_scope.push_frame acc frame
-                  | Pparam_newtype _ -> acc)
-            in
-            Option.iter constraint_ ~f:(fun c ->
-                ignore (self#type_constraint f_env c : type_constraint));
-            (* A named function definition [let check () = ...] does not execute its body when
-               defined; only actual call sites / callbacks execute it, so mark definition-time
-               traversal so deferred [sub_leg] force-order checks ignore uninvoked definitions. *)
+            (* A named function definition [let check () = ...] does not execute its defaults or
+               body when defined; only actual call sites / callbacks execute them, so mark
+               definition-time traversal before walking defaults or body. Parameter defaults are
+               also conditional on omission, so never let them populate [executed_lazy_vals]. *)
             let saved_uninvoked = in_uninvoked_fn_def in
             let is_named_def =
               match Hashtbl.find fn_id_by_expr_pos pos with
@@ -10154,6 +10129,50 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
             Exn.protect
               ~finally:(fun () -> in_uninvoked_fn_def <- saved_uninvoked)
               ~f:(fun () ->
+                let nolabel_idx = ref start_nolabel in
+                let f_env =
+                  List.fold params ~init:env ~f:(fun acc param ->
+                      match param.pparam_desc with
+                      | Pparam_val (label, default, pat) ->
+                          Option.iter default ~f:(fun d ->
+                              self#with_saved_lazy (fun () ->
+                                  ignore (self#expression acc d : expression)));
+                          ignore (self#pattern acc pat : pattern);
+                          let my_nolabel =
+                            match label with
+                            | Ppxlib.Asttypes.Nolabel ->
+                                let k = !nolabel_idx in
+                                Int.incr nolabel_idx;
+                                k
+                            | _ -> -1
+                          in
+                          let acc = self#forget acc (Lexical_scope.pattern_unpacks [ pat ]) in
+                          let pairs = extract_pat_projs pat in
+                          if List.is_empty pairs then acc
+                          else
+                            let frame =
+                              List.fold pairs
+                                ~init:(Map.empty (module String))
+                                ~f:(fun m (name, proj) ->
+                                  let v = self#local in
+                                  v.lg_param <-
+                                    Some
+                                      {
+                                        pm_fn_id = fn_id;
+                                        pm_label = label;
+                                        pm_nolabel_idx = my_nolabel;
+                                        pm_default = Option.map default ~f:(fun d -> (d, acc));
+                                        pm_proj = proj;
+                                        pm_name = name;
+                                        pm_line = pat.ppat_loc.loc_start.pos_lnum;
+                                      };
+                                  Map.set m ~key:name ~data:v)
+                            in
+                            Lexical_scope.push_frame acc frame
+                      | Pparam_newtype _ -> acc)
+                in
+                Option.iter constraint_ ~f:(fun c ->
+                    ignore (self#type_constraint f_env c : type_constraint));
                 match body with
                 | Pfunction_body b ->
                     (match (strip b).pexp_desc with
@@ -10164,7 +10183,8 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                     ignore (self#expression f_env b : expression)
                 | Pfunction_cases (cases, _, _) ->
                     let my_nolabel = !nolabel_idx in
-                    List.iter cases ~f:(fun c ->
+                    self#join_lazy_branches
+                      (fun c ->
                         let c_env =
                           let acc =
                             self#forget f_env (Lexical_scope.pattern_unpacks [ c.pc_lhs ])
@@ -10195,7 +10215,8 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                         ignore (self#pattern f_env c.pc_lhs : pattern);
                         Option.iter c.pc_guard ~f:(fun g ->
                             ignore (self#expression c_env g : expression));
-                        ignore (self#expression c_env c.pc_rhs : expression)));
+                        ignore (self#expression c_env c.pc_rhs : expression))
+                      cases);
             expr
         | Pexp_apply (callee, arguments) -> (
             let pos = expr.pexp_loc.loc_start.pos_cnum in

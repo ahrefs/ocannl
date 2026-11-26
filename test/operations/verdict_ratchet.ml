@@ -7261,6 +7261,30 @@ let () =
   in_leg ~leg:sub "outside" (fun label -> p label true);
   Lazy.force run|ocaml},
       [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses a lazy policy-wrapper force after an uncalled optional default force and an \
+       unwrapped claim",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let run =
+  lazy
+    (Test_utils.with_policy
+       (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+       (fun () -> in_leg ~leg:sub "tf32 default" (fun label -> p label true)))
+let _check ?(_x = Lazy.force run) () = ()
+let () =
+  in_leg ~leg:sub "outside" (fun label -> p label true);
+  Lazy.force run|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses a disallowed call in an unused optional default of an immediately applied anonymous \
+       function",
+      {ocaml|open Verdict.Claims
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:((fun ?(_probe = Option.is_some (Autotune.detect_conv llc)) () -> true) ())
+    ()
+let () = in_leg ~leg "unused default" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
   ]
 
 let run_leg_gate_controls () =
