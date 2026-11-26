@@ -68,6 +68,15 @@
    or parse is refused, since what it names is then unknown. [availability_only] excuses this as it
    excuses the package-wide demand.
 
+   THE RULE, SELECT IDENTITY (gh-ocannl-2482). Glob-fed repository scans drop generated `(select
+   <target>.ml from …)` targets via `Config_key_scan.sources_among` (`select_target_of_arm`),
+   keeping every checked-in arm under its own file name on every box. That name rule stays exact
+   only while two invariants hold over the clean source tree: (1) every `(select <target>.ml from
+   …)` arm in every repository `dune` file satisfies `select_target_of_arm (dir/arm) = Some
+   (dir/target)`, and (2) no checked-in `.ml` file in the clean source inventory has a path that is
+   `select_target_of_arm` of another checked-in `.ml` file. Both are checked here from the clean
+   sandbox.
+
    WHAT IT DOES NOT READ. Whether the copy keeps the module name the executable gives the arm, an
    `arms/dune` convention: a deviation still compiles the arm's text. How a source names a module is
    read off its parse tree, not resolved: the head of every qualified path (`Nvrtc.x`, `Nvrtc.T.t`),
@@ -428,6 +437,12 @@ type census = {
           its libraries and preprocessors are held to *)
   uncopied : string list;  (** the stand-in tree's other libraries, compiling no copy *)
   paired : (string * string) list;  (** each paired copy's source with the copy's own path *)
+  select_identities : (string * string * bool) list;
+      (** each `select` arm's path, its target path, and whether `select_target_of_arm` maps the arm
+          to that target *)
+  select_target_collisions : (string * string) list;
+      (** each checked-in `.ml` file whose path equals `select_target_of_arm` of another checked-in
+          `.ml` file *)
 }
 
 (* The preprocessors dune runs over module [m] of a stanza: a `(pps …)`'s libraries before any `--`,
@@ -722,7 +737,55 @@ let mirrors ~fail ~exceptions ~all ~packages ~package_modules ~uses ~backends ~c
     List.concat_map checked ~f:(fun (_, dir, pairs) ->
         List.map pairs ~f:(fun p -> (p.source, Printf.sprintf "%s/%s.ml" dir p.module_))) )
 
-let analyze ?(exceptions = availability_only) ?(sources = fun _ -> None) ~fail ~dune_files () =
+(* Pin `Config_key_scan.select_target_of_arm` to every `select` in the repository's dune files and
+   to the checked-in `.ml` source inventory (gh-ocannl-2482). *)
+let check_select_identities ~fail ~all ~ml_paths =
+  let select_identities =
+    List.concat_map all ~f:(fun s ->
+        List.map (Scan.select_choices s.sexp) ~f:(fun (target, _condition, arm) ->
+            let target_path = Scan.normalize_path (Scan.in_subdir s.dir target) in
+            let arm_path = Scan.normalize_path (Scan.in_subdir s.dir arm) in
+            let ok =
+              Option.equal String.equal
+                (Test_scan.Config_key_scan.select_target_of_arm arm_path)
+                (Some target_path)
+            in
+            if not ok then
+              fail
+                (Printf.sprintf
+                   "%s selects `%s` for `%s`, which does not match `<target>.<variant>.ml` -- \
+                    `Config_key_scan.sources_among` drops generated `select` targets by that \
+                    naming rule, so a differently named arm leaves the generated target in every \
+                    scan corpus (gh-ocannl-2482); rename the arm to `%s.<variant>.ml`"
+                   (site s) arm target
+                   (Stdlib.Filename.remove_extension target));
+            (arm_path, target_path, ok)))
+    |> List.dedup_and_sort ~compare:Poly.compare
+  in
+  let implied_targets =
+    List.filter_map ml_paths ~f:(fun arm ->
+        Option.map (Test_scan.Config_key_scan.select_target_of_arm arm) ~f:(fun target ->
+            (target, arm)))
+    |> Map.of_alist_reduce (module String) ~f:(fun first _ -> first)
+  in
+  let select_target_collisions =
+    List.filter_map ml_paths ~f:(fun path ->
+        match Map.find implied_targets path with
+        | None -> None
+        | Some arm ->
+            fail
+              (Printf.sprintf
+                 "%s is a checked-in source whose path is `Config_key_scan.select_target_of_arm` \
+                  of checked-in `%s` -- `sources_among` would drop `%s` as a generated `select` \
+                  target (gh-ocannl-2482); rename one of them"
+                 path arm path);
+            Some (path, arm))
+    |> List.dedup_and_sort ~compare:Poly.compare
+  in
+  (select_identities, select_target_collisions)
+
+let analyze ?(exceptions = availability_only) ?(sources = fun _ -> None) ?(ml_paths = []) ~fail
+    ~dune_files () =
   if List.is_empty dune_files then (
     fail "no dune files among the arguments -- the rule's dune-file glob matches nothing";
     {
@@ -734,6 +797,8 @@ let analyze ?(exceptions = availability_only) ?(sources = fun _ -> None) ~fail ~
       mirrors = [];
       uncopied = [];
       paired = [];
+      select_identities = [];
+      select_target_collisions = [];
     })
   else
     let all = List.concat_map dune_files ~f:(stanzas_of ~fail) in
@@ -838,6 +903,9 @@ let analyze ?(exceptions = availability_only) ?(sources = fun _ -> None) ~fail ~
     let mirrors, uncopied, paired =
       mirrors ~fail ~exceptions ~all ~packages ~package_modules ~uses ~backends ~copies
     in
+    let select_identities, select_target_collisions =
+      check_select_identities ~fail ~all ~ml_paths
+    in
     {
       packages;
       package_modules;
@@ -847,6 +915,8 @@ let analyze ?(exceptions = availability_only) ?(sources = fun _ -> None) ~fail ~
       mirrors;
       uncopied;
       paired;
+      select_identities;
+      select_target_collisions;
     }
 
 (* Synthetic trees: the repository satisfies the rule, so its own corpus cannot tell a rule from a
@@ -908,15 +978,17 @@ let backend_stand_in ?(preprocess = "") libraries =
 let control () =
   let source = "test/operations/vendor_stub_arms_scan.ml" in
   (* Every source reads as empty, naming no module, unless a case gives its own. *)
-  let run_tree ?exceptions ?(sources = fun _ -> Some "") dune_files =
+  let run_tree ?exceptions ?(sources = fun _ -> Some "") ?(ml_paths = []) dune_files =
     let messages = ref [] in
     let census =
-      analyze ?exceptions ~sources ~fail:(fun m -> messages := m :: !messages) ~dune_files ()
+      analyze ?exceptions ~sources ~ml_paths
+        ~fail:(fun m -> messages := m :: !messages)
+        ~dune_files ()
     in
     (List.rev !messages, census)
   in
-  let refused ?exceptions ?sources label ~format ~fragment dune_files =
-    let messages, _ = run_tree ?exceptions ?sources dune_files in
+  let refused ?exceptions ?sources ?ml_paths label ~format ~fragment dune_files =
+    let messages, _ = run_tree ?exceptions ?sources ?ml_paths dune_files in
     let routed =
       match messages with [ m ] -> String.is_substring m ~substring:fragment | _ -> false
     in
@@ -1053,14 +1125,14 @@ let control () =
     ~vendor:copied ~ungated:[]
     (stand_ins @ [ ("t/dune", program ()); arms_copy () ]);
   accepted "a vendor arm copied by a copy_files glob is accepted"
-    ~vendor:[ ("t/probe_cuda.ml", Some "arrayjit/vendor_stubs/arms/probe_cuda.ml") ]
+    ~vendor:[ ("t/probe_impl.cudajit.ml", Some "arrayjit/vendor_stubs/arms/probe_impl.cudajit.ml") ]
     ~ungated:[]
     (stand_ins
     @ [
-        ("t/dune", program ~arm:"probe_cuda.ml" ());
+        ("t/dune", program ());
         ( "arrayjit/vendor_stubs/arms/dune",
-          "(copy_files# (files ../../../t/probe_cuda.{ml,mli}))\n\
-           (library (name probe_arm) (modules probe_cuda))\n" );
+          "(copy_files# (files ../../../t/probe_impl.cudajit.{ml,mli}))\n\
+           (library (name probe_arm) (modules probe_impl.cudajit))\n" );
       ]);
   refused "a default-module stand-in library beside a copy_files glob is refused"
     ~format:
@@ -1070,9 +1142,10 @@ let control () =
     ~fragment:"arrayjit/vendor_stubs/arms/dune:2 compiles dune's default module set"
     (stand_ins
     @ [
-        ("t/dune", program ~arm:"probe_cuda.ml" ());
+        ("t/dune", program ());
         ( "arrayjit/vendor_stubs/arms/dune",
-          "(copy_files# (files ../../../t/probe_cuda.{ml,mli}))\n(library (name probe_arm))\n" );
+          "(copy_files# (files ../../../t/probe_impl.cudajit.{ml,mli}))\n\
+           (library (name probe_arm))\n" );
       ]);
   accepted "an arm gated on no vendor library is not demanded" ~vendor:[]
     ~ungated:[ "t/probe_impl.unix.ml" ]
@@ -1300,6 +1373,38 @@ let control () =
       "%s does not read as a dune file (%s) -- its `select` arms and stand-in copies went unchecked"
     ~fragment:"t/dune does not read as a dune file"
     (stand_ins @ [ ("t/dune", "(executable (name probe)\n") ]);
+  refused "a select arm that does not match <target>.<variant>.ml is refused"
+    ~format:
+      "%s selects `%s` for `%s`, which does not match `<target>.<variant>.ml` -- \
+       `Config_key_scan.sources_among` drops generated `select` targets by that naming rule, so a \
+       differently named arm leaves the generated target in every scan corpus (gh-ocannl-2482); \
+       rename the arm to `%s.<variant>.ml`"
+    ~fragment:"t/dune:1 selects `other.ml` for `probe_impl.ml`, which does not match"
+    (stand_ins @ [ ("t/dune", program ~condition:"base" ~arm:"other.ml" ()) ]);
+  refused "a checked-in .ml source colliding with a select arm's target path is refused"
+    ~format:
+      "%s is a checked-in source whose path is `Config_key_scan.select_target_of_arm` of \
+       checked-in `%s` -- `sources_among` would drop `%s` as a generated `select` target \
+       (gh-ocannl-2482); rename one of them"
+    ~fragment:
+      "t/probe_impl.ml is a checked-in source whose path is `Config_key_scan.select_target_of_arm` \
+       of checked-in `t/probe_impl.cudajit.ml`"
+    ~ml_paths:[ "t/probe_impl.ml"; "t/probe_impl.cudajit.ml" ]
+    stand_ins;
+  (let messages, census =
+     run_tree
+       ~ml_paths:[ "t/probe_impl.cudajit.ml"; "t/probe_impl.missing.ml"; "t/other.ml" ]
+       (stand_ins @ [ ("t/dune", program ()); arms_copy () ])
+   in
+   p "checked-in select arms beside unrelated sources have no target-path collision"
+     (Poly.equal
+        (messages, census.select_target_collisions, census.select_identities)
+        ( [],
+          [],
+          [
+            ("t/probe_impl.cudajit.ml", "t/probe_impl.ml", true);
+            ("t/probe_impl.missing.ml", "t/probe_impl.ml", true);
+          ] )));
   refused "an empty dune-file corpus is refused"
     ~format:"no dune files among the arguments -- the rule's dune-file glob matches nothing"
     ~fragment:"no dune files among the arguments" [];
@@ -1330,8 +1435,9 @@ let () =
     |> List.map ~f:(fun (file : Inventory.file) -> (file.path, file.on_disk))
     |> Map.of_alist_exn (module String)
   in
+  let ml_paths = Map.keys on_disk |> List.filter ~f:(String.is_suffix ~suffix:".ml") in
   let sources path = Option.map (Map.find on_disk path) ~f:In_channel.read_all in
-  let census = analyze ~sources ~fail ~dune_files () in
+  let census = analyze ~sources ~ml_paths ~fail ~dune_files () in
   (* The tally moves with every new vendor arm, so it stays off the golden; the floor is what says
      the reader is not blind. *)
   eprintf "Vendor-gated select arms: %d (not part of the golden).\n" (List.length census.vendor);
@@ -1344,6 +1450,10 @@ let () =
       match copy with
       | Some copy -> List.mem census.paired (arm, copy) ~equal:Poly.equal
       | None -> false);
+  p_all ~min:1 "every select arm matches Config_key_scan.select_target_of_arm for its target"
+    census.select_identities ~f:(fun (_, _, ok) -> ok);
+  p_empty "no checked-in .ml source collides with a select arm's target path" ~over:ml_paths
+    census.select_target_collisions;
   printf "\nVendor packages with a stand-in: %s\n" (String.concat ~sep:", " census.packages);
   printf
     "Package stand-in modules, each with the library its agreement alias is gated on (any: no \

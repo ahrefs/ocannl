@@ -532,7 +532,14 @@ let () =
   in
   let golden_files = of_suffix ".expected" in
   let in_harness_only_root (name, _) = String.is_prefix name ~prefix:harness_only_root in
-  let harness_only_ml, all_ml = List.partition_tf (of_suffix ".ml") ~f:in_harness_only_root in
+  let kept_ml =
+    let all = of_suffix ".ml" in
+    let kept =
+      Set.of_list (module String) (Test_scan.Config_key_scan.sources_among (List.map all ~f:fst))
+    in
+    List.filter all ~f:(fun (name, _) -> Set.mem kept name)
+  in
+  let harness_only_ml, source_files = List.partition_tf kept_ml ~f:in_harness_only_root in
   (* The dune files of the scanned roots, whose rules say which alias re-runs each member. *)
   let stanzas =
     List.filter arguments ~f:(fun (name, _) ->
@@ -556,26 +563,6 @@ let () =
               | Emitter_frontier.At_label label -> Scan.At_label label
               | Emitter_frontier.At_position position -> Scan.At_position position);
         })
-  in
-  let present name = List.exists all_ml ~f:(fun (n, _) -> String.equal n name) in
-  let source_files =
-    (* Two kinds of argument are a second copy of a source already in the list, and both would make
-       the inventory differ between machines rather than between trees.
-
-       dune's preprocessed twin [x.pp.ml] is the ppx expansion of [x.ml], and exists only where the
-       library that owns it is built. And a [(select)] target [x.ml] is a COPY of whichever of
-       [x.real.ml] / [x.missing.ml] this machine's toolchain selected -- so on a box with Metal it
-       holds the real test and on a box without it holds the stub, and the inventory would move with
-       the hardware. Both are dropped only when the source they copy is present, so a file genuinely
-       named that way is not lost; the [.real.ml] and [.missing.ml] originals are inventoried on
-       every machine alike. *)
-    List.filter all_ml ~f:(fun (name, _) ->
-        match String.chop_suffix name ~suffix:".pp.ml" with
-        | Some stem -> not (present (stem ^ ".ml"))
-        | None -> (
-            match String.chop_suffix name ~suffix:".ml" with
-            | Some stem -> not (present (stem ^ ".real.ml") || present (stem ^ ".missing.ml"))
-            | None -> true))
   in
   let handed_over = List.map (golden_files @ source_files) ~f:fst in
   let stale = stale_exclusions ~excluded ~handed_over in

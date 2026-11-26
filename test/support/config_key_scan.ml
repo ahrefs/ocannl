@@ -1712,23 +1712,56 @@ let initialization_items content =
     enumerated (gh-ocannl-592: a hand-written list says nothing about the file that falls off it,
     and three files did, each staying green because their keys were read from somewhere else too).
 
-    Two kinds of argument are therefore not sources. Anything that is not a [.ml] file: the config
-    file the rule depends on, the reference file, the executable itself. And dune's preprocessed
-    twin [x.pp.ml] of an [x.ml] that is in the list — those are the ppx expansion of a file already
-    scanned, so they would double every census, and they exist only where the library that owns them
+    Three kinds of argument are therefore not sources. Anything that is not a [.ml] file: the config
+    file the rule depends on, the reference file, the executable itself. Dune's preprocessed twin
+    [x.pp.ml] of an [x.ml] that is in the list — those are the ppx expansion of a file already
+    scanned, so they would double every census, and they exist only where the library that owns it
     is built, which is what would make the census differ between a machine with the CUDA toolchain
-    and one without. A twin is dropped only when its original is present, so a source genuinely
-    named [x.pp.ml] is not silently lost.
+    and one without; a twin is dropped only when its original is present, so a source genuinely
+    named [x.pp.ml] is not silently lost. And the generated target [d/t.ml] of a Dune [(select)]
+    whose arm [d/t.<variant>.ml] is in the list (gh-ocannl-2482) — the generated target holds
+    whichever alternative the current host selected, while every checked-in arm is handed over under
+    its own file name on every box; dropping the generated target makes every scan judge every
+    select alternative identically across toolchains. [vendor_stub_arms_scan] pins this naming rule
+    against every repository [dune] [(select)] and against checked-in source collisions.
 
     Nothing else is filtered, and both tests print how many files they scanned: a glob that stops
     matching shows up as a diff rather than as a quietly smaller census. *)
+
+(** The generated [(select)] target path implied by a checked-in arm path of the form
+    [d/t.<variant>.ml], where [<variant>] is non-empty, dot-free and not ["pp"]. Returns
+    [Some "d/t.ml"], preserving [path]'s directory prefix and separator, or [None] otherwise. *)
+let select_target_of_arm path =
+  match String.chop_suffix path ~suffix:".ml" with
+  | None -> None
+  | Some without_ext -> (
+      let split_at =
+        String.rfindi without_ext ~f:(fun _ c -> Char.equal c '/' || Char.equal c '\\')
+      in
+      let prefix, base =
+        match split_at with
+        | None -> ("", without_ext)
+        | Some i -> (String.prefix without_ext (i + 1), String.drop_prefix without_ext (i + 1))
+      in
+      match String.lsplit2 base ~on:'.' with
+      | Some (stem, variant)
+        when (not (String.is_empty stem))
+             && (not (String.is_empty variant))
+             && (not (String.contains variant '.'))
+             && not (String.equal variant "pp") ->
+          Some (prefix ^ stem ^ ".ml")
+      | _ -> None)
+
 let sources_among args =
   let sources =
     List.filter args ~f:(String.is_suffix ~suffix:".ml")
     |> List.dedup_and_sort ~compare:String.compare
   in
   let present = Set.of_list (module String) sources in
+  let selected = List.filter_map sources ~f:select_target_of_arm |> Set.of_list (module String) in
   List.filter sources ~f:(fun path ->
+      (not (Set.mem selected path))
+      &&
       match String.chop_suffix path ~suffix:".pp.ml" with
       | Some stem -> not (Set.mem present (stem ^ ".ml"))
       | None -> true)

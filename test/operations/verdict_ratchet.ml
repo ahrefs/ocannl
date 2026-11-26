@@ -8457,9 +8457,9 @@ let () =
       let content = In_channel.read_all path in
       (* A source this reader cannot read is reported by NAME and the scan carries on, rather than
          taking the run down with a syntax error naming no file: the corpus is globbed, so what
-         arrives is whatever the test directories hold -- including whatever a `(select …)` or a ppx
-         put there -- and the one thing worse than a parse failure here is one that leaves nobody
-         knowing which of three hundred files it was about. *)
+         arrives is every checked-in source in the test directories (`sources_among` drops generated
+         `(select …)` targets and `.pp.ml` twins), and the one thing worse than a parse failure here
+         is one that leaves nobody knowing which of three hundred files it was about. *)
       let scanned, (helper_claims, probe_tokens), dialects, line_breaks =
         read_claims ~fail ~source content
       in

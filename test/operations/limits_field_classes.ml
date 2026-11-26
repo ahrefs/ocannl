@@ -1354,8 +1354,7 @@ let () =
 
 let () =
   let sources =
-    Array.to_list (Array.subo argv ~pos:1)
-    |> List.filter ~f:(String.is_suffix ~suffix:".ml")
+    Test_scan.Config_key_scan.sources_among (Array.to_list (Array.subo argv ~pos:1))
     |> List.filter ~f:(fun path -> not (String.is_suffix path ~suffix:".pp.ml"))
   in
   let base path = Stdlib.Filename.basename path in

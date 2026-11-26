@@ -1489,9 +1489,11 @@ let main () =
     List.map sources ~f:(fun (path, _) -> Stdlib.Filename.dirname path)
     |> Set.of_list (module String)
   in
-  let source_of ~dir module_name =
-    List.Assoc.find sources ~equal:String.equal
-      (String.lowercase (Scan.in_subdir dir (module_name ^ ".ml")))
+  (* Every checked-in source file that compiles as [module_name] in [stanza]: the direct
+     [<module>.ml], or every arm of a [(select <module>.ml from …)] (gh-ocannl-2482). *)
+  let module_source_files ~dir stanza module_name =
+    Policy.module_sources stanza module_name
+    |> List.map ~f:(fun file -> (file, String.lowercase (Scan.in_subdir dir file)))
   in
   (* gh-ocannl-1368: the search's entry points, derived. The anchor is refused when it moves, as the
      width's are: a renamed `tune` would otherwise retire the rule with an empty population. *)
@@ -2980,11 +2982,13 @@ let main () =
                         | _ -> false)
                   in
                   let sources =
-                    List.filter_map modules ~f:(function
+                    List.concat_map modules ~f:(function
                       | Sexp.Atom module_name ->
-                          Option.map (source_of ~dir module_name) ~f:(fun on_disk ->
-                              (module_name ^ ".ml", In_channel.read_all on_disk))
-                      | _ -> None)
+                          List.filter_map (module_source_files ~dir stanza module_name)
+                            ~f:(fun (file, key) ->
+                              Option.map (List.Assoc.find sources ~equal:String.equal key)
+                                ~f:(fun on_disk -> (file, In_channel.read_all on_disk)))
+                      | _ -> [])
                   in
                   (* Each module read once, through its refusal (gh-ocannl-1500): an unparsable
                      module used to raise out of the whole check here. *)
@@ -3159,8 +3163,12 @@ let main () =
                          TOLD has no implementation is not a missing input: an `.mli` runs
                          nothing. *)
                       List.iter own_modules ~f:(fun module_name ->
+                          let has_all_sources =
+                            List.for_all (module_source_files ~dir:here stanza module_name)
+                              ~f:(fun (_, key) -> List.Assoc.mem sources key ~equal:String.equal)
+                          in
                           if
-                            Option.is_none (source_of ~dir:here module_name)
+                            (not has_all_sources)
                             && Scan.needs_source declared module_name
                             && Set.mem scanned_dirs directory
                           then
@@ -3175,8 +3183,8 @@ let main () =
                       (* gh-ocannl-1368: a program starting a search, with a run that can select cc,
                          pins the vector file or says at its stanza why its claims hold at every
                          width. *)
-                      let in_here module_name =
-                        String.lowercase (Scan.in_subdir here (module_name ^ ".ml"))
+                      let module_keys module_name =
+                        List.map (module_source_files ~dir:here stanza module_name) ~f:snd
                       in
                       (* One subject per program: a `(tests (names a b))` stanza builds a separate
                          executable per name, linking each one's main module and the shared ones but
@@ -3270,59 +3278,75 @@ let main () =
                          module of the program names a search at all, since its initializers may run
                          before the pinning one. *)
                       let init_pin modules =
-                        let names_search m = Map.mem search_reach (in_here m) in
+                        let names_search m =
+                          List.exists (module_keys m) ~f:(Map.mem search_reach)
+                        in
                         let key_literals =
                           List.concat_map vector_file_keys ~f:(fun (key, _) ->
                               vector_file_literals key)
+                        in
+                        let arm_pin ~others (file, key) =
+                          match Map.find vector_file_init_order key with
+                          | Some (items, helper_of, is_search, first_applied) ->
+                              let barrier = function
+                                | path when is_search path -> true
+                                | first :: _ :: _ -> List.mem others first ~equal:String.equal
+                                | _ -> false
+                              in
+                              let spells_key item =
+                                List.exists item.Sources.literals ~f:(fun literal ->
+                                    List.mem key_literals literal ~equal:String.equal)
+                              in
+                              let rec scan index pinned = function
+                                | [] -> pinned
+                                | item :: rest
+                                  when Option.exists first_applied ~f:(Int.equal index)
+                                       || List.exists item.Sources.paths ~f:barrier ->
+                                    (* No later pin counts after a search or cross-module barrier,
+                                       and a key literal in this item or any later one may still
+                                       reset the pin before a search runs. *)
+                                    if List.exists (item :: rest) ~f:spells_key then None
+                                    else pinned
+                                | item :: rest ->
+                                    let pinned =
+                                      match
+                                        if item.Sources.runs then
+                                          List.filter_map item.Sources.called ~f:helper_of
+                                        else []
+                                      with
+                                      | [] -> pinned
+                                      | helpers -> Some helpers
+                                    in
+                                    let pinned = if spells_key item then None else pinned in
+                                    scan (index + 1) pinned rest
+                              in
+                              Option.map (scan 0 None items) ~f:(fun helpers ->
+                                  Printf.sprintf "%s calls %s at initialization, before any search"
+                                    file
+                                    (String.concat ~sep:", "
+                                       (List.map
+                                          (List.dedup_and_sort helpers ~compare:String.compare)
+                                          ~f:(fun helper -> "`" ^ helper ^ "`"))))
+                          | None -> None
                         in
                         List.find_map modules ~f:(fun m ->
                             let others =
                               List.filter modules ~f:(fun m' -> not (String.equal m m'))
                             in
-                            match Map.find vector_file_init_order (in_here m) with
-                            | Some (items, helper_of, is_search, first_applied)
-                              when not (List.exists others ~f:names_search) ->
-                                let barrier = function
-                                  | path when is_search path -> true
-                                  | first :: _ :: _ -> List.mem others first ~equal:String.equal
-                                  | _ -> false
-                                in
-                                let spells_key item =
-                                  List.exists item.Sources.literals ~f:(fun literal ->
-                                      List.mem key_literals literal ~equal:String.equal)
-                                in
-                                let rec scan index pinned = function
-                                  | [] -> pinned
-                                  | item :: rest
-                                    when Option.exists first_applied ~f:(Int.equal index)
-                                         || List.exists item.Sources.paths ~f:barrier ->
-                                      (* No later pin counts after a search or cross-module barrier,
-                                         and a key literal in this item or any later one may still
-                                         reset the pin before a search runs. *)
-                                      if List.exists (item :: rest) ~f:spells_key then None
-                                      else pinned
-                                  | item :: rest ->
-                                      let pinned =
-                                        match
-                                          if item.Sources.runs then
-                                            List.filter_map item.Sources.called ~f:helper_of
-                                          else []
-                                        with
-                                        | [] -> pinned
-                                        | helpers -> Some helpers
-                                      in
-                                      let pinned = if spells_key item then None else pinned in
-                                      scan (index + 1) pinned rest
-                                in
-                                Option.map (scan 0 None items) ~f:(fun helpers ->
-                                    Printf.sprintf
-                                      "%s.ml calls %s at initialization, before any search"
-                                      (String.lowercase m)
-                                      (String.concat ~sep:", "
-                                         (List.map
-                                            (List.dedup_and_sort helpers ~compare:String.compare)
-                                            ~f:(fun helper -> "`" ^ helper ^ "`"))))
-                            | _ -> None)
+                            if List.exists others ~f:names_search then None
+                            else
+                              match module_source_files ~dir:here stanza m with
+                              | [ single ] -> arm_pin ~others single
+                              | arms -> (
+                                  let searching_arms =
+                                    List.filter arms ~f:(fun (_, key) -> Map.mem search_reach key)
+                                  in
+                                  match searching_arms with
+                                  | [] -> None
+                                  | _ ->
+                                      Option.map
+                                        (Option.all (List.map searching_arms ~f:(arm_pin ~others)))
+                                        ~f:(String.concat ~sep:"; ")))
                       in
                       (* How a subject pins the whole file on every cc run, or [None]. Per key and
                          run, by precedence: a command-line setting leaves it unpinned (the
@@ -3355,8 +3379,8 @@ let main () =
                       let searching =
                         List.filter_map subjects ~f:(fun (subject, modules, mine, runs) ->
                             match
-                              List.filter_map modules ~f:(fun m ->
-                                  Map.find search_reach (in_here m))
+                              List.concat_map modules ~f:(fun m ->
+                                  List.filter_map (module_keys m) ~f:(Map.find search_reach))
                               |> List.concat
                               |> List.dedup_and_sort ~compare:String.compare
                             with
@@ -3525,11 +3549,14 @@ let main () =
                      (String.concat ~sep:", " operands)
                      (String.concat ~sep:", " (aliases_of stanza))
                      (String.concat ~sep:", " (goldens_in stanza))));
-          List.iter libraries ~f:(fun (library, _) ->
+          List.iter libraries ~f:(fun (library, lib_stanza) ->
               List.iter (modules_of_library library) ~f:(fun module_name ->
                   let holds =
-                    Option.value_map (source_of ~dir:here module_name) ~default:false
-                      ~f:(fun on_disk -> holds_inline_tests (In_channel.read_all on_disk))
+                    List.exists (module_source_files ~dir:here lib_stanza module_name)
+                      ~f:(fun (_, key) ->
+                        Option.value_map (List.Assoc.find sources ~equal:String.equal key)
+                          ~default:false ~f:(fun on_disk ->
+                            holds_inline_tests (In_channel.read_all on_disk)))
                   in
                   let served =
                     List.exists runs ~f:(fun (_, runs_library, operands) ->
@@ -6809,6 +6836,151 @@ let verdict_capture_control () =
         ~f:(fun (ok, (status, text)) ->
           if not ok then eprintf "Verdict capture control %s:\n%s\n" (describe_status status) text))
 
+(* gh-ocannl-2482: every module-to-source lookup inspects every `(select …)` arm under its own
+   checked-in file name, even when `sources_among` drops the generated target `<module>.ml` (or when
+   no generated target exists on disk). *)
+let select_arm_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_select_arm" "" in
+  Exn.protect
+    ~finally:(fun () -> try remove_tree root with Unix.Unix_error _ -> ())
+    ~f:(fun () ->
+      let context = control_context () in
+      List.iter context ~f:(fun (file, content) ->
+          write_file (Stdlib.Filename.concat root file) content);
+      let context_paths = List.map context ~f:fst in
+      let clean_dune =
+        {dune|(rule
+ ; ocannl-backend: none -- synthetic ambient-gate control fixture.
+ (alias runtest-gate)
+ (deps ocannl_config (universe))
+ (action (run %{dep:gate.exe})))
+
+(executable
+ (name gate)
+ (modules gate)
+ (link_flags -linkall)
+ (libraries arrayjit.utils))
+
+(alias
+ (name runtest)
+ (deps (alias runtest-gate)))
+
+(test
+ ; ocannl-backend: cc -- synthetic select-arm control fixture.
+ (name probe)
+ (deps ocannl_config)
+ (modules probe)
+ (libraries base (select probe.ml from (cudajit.cuda -> probe.real.ml) (-> probe.missing.ml))))
+|dune}
+      in
+      let inline_dune =
+        {dune|(rule
+ ; ocannl-backend: none -- synthetic ambient-gate control fixture.
+ (alias runtest-gate)
+ (deps ocannl_config (universe))
+ (action (run %{dep:gate.exe})))
+
+(executable
+ (name gate)
+ (modules gate)
+ (link_flags -linkall)
+ (libraries arrayjit.utils))
+
+(alias
+ (name runtest)
+ (deps (alias runtest-gate)))
+
+(library
+ ; ocannl-backend: none -- synthetic select-arm inline-test fixture.
+ (name probelib)
+ (modules probe)
+ (inline_tests (deps ocannl_config))
+ (libraries base (select probe.ml from (cudajit.cuda -> probe.real.ml) (-> probe.missing.ml))))
+|dune}
+      in
+      let run ~dune ~real_src ?generated_src () =
+        write_file (Stdlib.Filename.concat root "t/dune") dune;
+        write_file (Stdlib.Filename.concat root "t/gate.ml") "let () = ()\n";
+        write_file (Stdlib.Filename.concat root "t/probe.real.ml") real_src;
+        write_file (Stdlib.Filename.concat root "t/probe.missing.ml") "let () = ()\n";
+        let extra =
+          match generated_src with
+          | None -> []
+          | Some content ->
+              write_file (Stdlib.Filename.concat root "t/probe.ml") content;
+              [ "t/probe.ml" ]
+        in
+        let paths =
+          ("t/dune" :: "t/gate.ml" :: "t/probe.real.ml" :: "t/probe.missing.ml" :: extra)
+          @ context_paths
+        in
+        run_checker ~root ~exe ("." :: paths)
+      in
+      let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
+      let says substring (_, text) = String.is_substring text ~substring in
+      let clean = run ~dune:clean_dune ~real_src:"let () = ()\n" () in
+      let gate_arm =
+        run ~dune:clean_dune
+          ~real_src:"[%%global_debug_log_level_from_env_var \"OCANNL_LOG_LEVEL_PROBE\"]\n"
+          ~generated_src:"let () = ()\n" ()
+      in
+      let env_arm =
+        run ~dune:clean_dune ~real_src:"let _ = Sys.getenv_opt \"OCANNL_BACKEND\"\n"
+          ~generated_src:"let () = ()\n" ()
+      in
+      let search_arm =
+        run ~dune:clean_dune ~real_src:"let _ = Autotune.tune ()\n" ~generated_src:"let () = ()\n"
+          ()
+      in
+      let pinned_search_arm =
+        run ~dune:clean_dune
+          ~real_src:"let () = Fissioned_chain.small_menu ()\nlet _ = Autotune.tune ()\n" ()
+      in
+      let inline_arm =
+        run ~dune:inline_dune
+          ~real_src:"let%expect_test \"arm\" = print_string \"x\"; [%expect {| x |}]\n"
+          ~generated_src:"let () = ()\n" ()
+      in
+      let clean_ok = exited 0 clean in
+      let gate_ok =
+        exited 1 gate_arm
+        && says "t/probe.real.ml reads the tracing gate OCANNL_LOG_LEVEL_PROBE" gate_arm
+      in
+      let env_ok =
+        exited 1 env_arm
+        && says "t/probe.real.ml reads the environment variable OCANNL_BACKEND by name" env_arm
+      in
+      let search_ok = exited 1 search_arm && says "starts a search" search_arm in
+      let pinned_ok = exited 0 pinned_search_arm in
+      let inline_ok = exited 1 inline_arm && says "`probe.ml` holds inline tests" inline_arm in
+      List.iter
+        [
+          ("clean", clean_ok, clean);
+          ("gate", gate_ok, gate_arm);
+          ("env", env_ok, env_arm);
+          ("search", search_ok, search_arm);
+          ("pinned_search", pinned_ok, pinned_search_arm);
+          ("inline", inline_ok, inline_arm);
+        ]
+        ~f:(fun (label, ok, (status, text)) ->
+          if not ok then
+            eprintf "select-arm control (%s) %s:\n%s\n" label (describe_status status) text);
+      printf "\nSynthetic controls: `(select …)` arms are checked under their own file names.\n";
+      Verdict.p "a clean select stanza passes with no generated target on disk" clean_ok;
+      Verdict.p "an undeclared tracing gate in a non-default select arm is refused by arm file name"
+        gate_ok;
+      Verdict.p
+        "an undeclared ambient env read in a non-default select arm is refused by arm file name"
+        env_ok;
+      Verdict.p "an unpinned search in a non-default select arm is refused" search_ok;
+      Verdict.p "a pinned search in a non-default select arm passes" pinned_ok;
+      Verdict.p "an inline test in a non-default select arm requires a per-module alias" inline_ok)
+
 let () =
   match Array.to_list argv with
   | _ :: [ "--control" ] ->
@@ -6828,6 +7000,7 @@ let () =
       module_reads_control ();
       malformed_tree_control ();
       verdict_capture_control ();
+      select_arm_control ();
       (* Dune's repository-wide rule hands the same source to [main] as [./env_var_deps.ml] after a
          full build has materialized the local build-tree copy. Exercise that spelling here too: the
          manifest identity is repository-relative even when the file used to extract the diagnostics

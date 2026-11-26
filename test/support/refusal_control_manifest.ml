@@ -412,6 +412,8 @@ let raw_entries =
         "[scanner-refusal:26f527c022e2a36b727d2635a64c83e2] compiles a copy";
         "[scanner-refusal:3f49f1a86b0b50ae1cc45ae30b8d6bcd] preprocesses";
         "[scanner-refusal:b1fb94e1e4593366f815fcc28f356790] the availability-only exception";
+        "[scanner-refusal:dee2d648128c5e060fd019f8fb9194cc] Config_key_scan.sources_among";
+        "[scanner-refusal:84df002d61c09f8e4c713e4286fdc7ac] Config_key_scan.select_target_of_arm";
         "[scanner-refusal:e62fde2478073ff697b31a8548df54f1] dune-file glob matches";
         "[scanner-refusal:513451a79c3ecc3b1fb18f6fee5ee404] arrayjit/vendor_stubs/<package>/dune";
         "[scanner-refusal:b079d32e59c7b93562738e4061682b90] arrayjit/vendor_stubs/";
@@ -420,8 +422,11 @@ let raw_entries =
         "[scanner-refusal:047374463fd606fe95cf257ebf928364] arrayjit/vendor_stubs/";
         "[scanner-refusal:518629fae55a4ef4b29ab72b3a71d8ce] each module's agreement";
         "[scanner-refusal:f4e3a8ac36957f5a6f54cd735b3c2092] package stand-in declared";
+        "[scanner-refusal:6cd3c184704a37f8cb97e98efd6a0a87] beside unrelated sources";
         "[scanner-refusal:90b26d38400dc5a37ed715269ba3cfbe] every vendor-gated select";
         "[scanner-refusal:4cc754a0d44bcdcb048630ccd8e65a5b] vendor-gated arm's stand-in";
+        "[scanner-refusal:2c9effa9c434f42e299fea8a5bb96b20] Config_key_scan.select_target_of_arm";
+        "[scanner-refusal:1c9ecdb5107c44b922f23d89fb734f94] checked-in ml source";
       ] );
     ( "config_statement_scan.ml",
       [
@@ -887,6 +892,12 @@ let raw_entries =
         "[scanner-refusal:fac99db54dbc751b212940875f53c769] captured Verdict run";
         "[scanner-refusal:edc4786c103754e1274b9e12cf08fa3f] nonempty binding undoes";
         "[scanner-refusal:e41ce36dfe9ad79d2112520081833ba9] captured Verdict run";
+        "[scanner-refusal:3f8d91b20ff8dd63fdb0fa1e1cd5cc7b] select stanza passes";
+        "[scanner-refusal:cab6ce652200dd6b791b352310a35bdc] undeclared tracing gate";
+        "[scanner-refusal:4b254ada2beaa28473ff82577bf198ee] undeclared ambient env";
+        "[scanner-refusal:1692b7fcf8f2e58a4884d397c7d39c9c] non-default select arm";
+        "[scanner-refusal:f1f5e5ad4613c408d71f8a02b4462be9] non-default select arm";
+        "[scanner-refusal:4112d0c301944346aa5b2b228db48361] non-default select arm";
       ] );
     ( "ocamlformat_ignore_scan.ml",
       [

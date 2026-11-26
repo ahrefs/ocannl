@@ -30,10 +30,9 @@ module Sort = Test_scan.Forced_decline_sort
 let logs_dir = "forced_decline_logs"
 
 let sources =
-  Stdlib.Sys.readdir "." |> Array.to_list
+  Stdlib.Sys.readdir "." |> Array.to_list |> Test_scan.Config_key_scan.sources_among
   (* Dune's preprocessed [.pp.ml] files beside them are marshalled ASTs, not sources. *)
-  |> List.filter ~f:(fun f ->
-      String.is_suffix f ~suffix:".ml" && not (String.is_suffix f ~suffix:".pp.ml"))
+  |> List.filter ~f:(fun f -> not (String.is_suffix f ~suffix:".pp.ml"))
   |> List.sort ~compare:String.compare
   |> List.map ~f:(fun f -> ("test/operations/" ^ f, In_channel.read_all f))
 
