@@ -217,6 +217,7 @@ let () =
       ("true", "   ", false);
       ("true", "-ffp-contract=off", true);
       ("true", "-fapprox-func -ffp-contract=off", true);
+      ("true", "-ffp-model=strict", true);
       ("true", "-ffp-contract=off -ffp-contract=fast", false);
       ("true", "-ffp-contract=fast -ffp-contract=off", true);
       ("false", "", true);
@@ -224,6 +225,10 @@ let () =
       ("false", "-ffp-contract=fast", false);
       ("false", "-ffp-contract=on", false);
       ("false", "-ffast-math", false);
+      ("false", "-Ofast", false);
+      ("false", "-ffp-model=fast", false);
+      ("false", "-ffp-model=precise", false);
+      ("false", "-ffp-model=fast -ffp-model=strict", true);
       ("false", "-ffast-math -ffp-contract=off", true);
     ]
     ~f:(fun (fast_math, extra, want) ->

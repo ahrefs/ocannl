@@ -67,17 +67,18 @@ let hip_math_options ~fast_math =
       "-fno-gpu-approx-transcendentals";
     ]
 
-(* gh-ocannl-1457: whether a clang-family option vector (cc's kernel flags, hiprtc's) pins
-   contraction off. Clang applies floating-point switches left to right and [-ffast-math] implies
-   [-ffp-contract=fast], so the last of the two decides; a vector naming neither leaves contraction
-   to the toolchain's default, which is never a pin. *)
+(* gh-ocannl-1457, gh-ocannl-2344: whether a clang-family option vector (cc's kernel flags,
+   hiprtc's) pins contraction off. Clang applies floating-point switches left to right:
+   [-ffp-model=strict] implies [-ffp-contract=off], while [-ffast-math], [-Ofast], [-ffp-model=fast]
+   and [-ffp-model=precise] re-enable contraction, so the last contraction-setting switch decides; a
+   vector naming none leaves contraction to the toolchain's default, which is never a pin. *)
 let clang_contraction_off options =
   List.fold_left
     (fun off option ->
       match option with
-      | "-ffp-contract=off" -> true
-      | "-ffast-math" | "-ffp-contract=fast" | "-ffp-contract=on"
-      | "-ffp-contract=fast-honor-pragmas" ->
+      | "-ffp-contract=off" | "-ffp-model=strict" -> true
+      | "-ffast-math" | "-Ofast" | "-ffp-model=fast" | "-ffp-model=precise" | "-ffp-contract=fast"
+      | "-ffp-contract=on" | "-ffp-contract=fast-honor-pragmas" ->
           false
       | _ -> off)
     false options

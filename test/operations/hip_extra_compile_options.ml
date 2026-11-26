@@ -27,6 +27,22 @@ let () = Utils.state_config ~key:"fp_contract" ~data:"false"
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_hip = String.equal backend_name "hip"
 let hip_leg = Verdict.leg ~when_:on_hip ~on:backend_name ()
+
+let hip_cache_leg =
+  Verdict.sub_leg ~aggregation:`Environment hip_leg
+    ~when_:
+      (lazy
+        ((not
+            (Utils.settings.output_debug_files_in_build_directory && Utils.settings.log_level > 1))
+        &&
+        match
+          Int.of_string_opt
+            (String.strip (Utils.get_global_arg ~default:"256" ~arg_name:"hip_kernel_cache_mib"))
+        with
+        | Some m -> m > 0
+        | None -> false))
+    ~on:(backend_name ^ " (kernel cache disabled)")
+
 let p2 n = Float.ldexp 1. n
 let r32 x = Int32.float_of_bits (Int32.bits_of_float x)
 let bits x = Int64.bits_of_float x
@@ -377,7 +393,7 @@ let () =
         && List.equal String.equal (moved r.comp_default r.comp_approx) [ "codegen" ]
         && List.equal String.equal (moved r.comp_contract_off r.comp_approx) [ "codegen" ]
         && equal_components r.comp_approx r.comp_approx_ws));
-  in_leg ~leg:hip_leg
+  in_leg ~leg:hip_cache_leg
     "kernel code cache hits on matching or whitespace-equivalent extra options and misses on \
      changes" (fun label ->
       let r = Lazy.force results in
