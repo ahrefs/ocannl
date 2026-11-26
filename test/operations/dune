@@ -6421,7 +6421,14 @@
   arrayjit.context
   arrayjit.autotune)
  (preprocess
-  (pps ppx_ocannl)))
+  (pps ppx_ocannl))
+ ; The real and stand-in limits supply the launch-fill advisories for these claims.
+ (action
+  (run
+   %{test}
+   --ocannl_model_multiprocessors=
+   --ocannl_model_fill_threads=
+   --ocannl_model_fill_chains=)))
 
 ; The dual (floor) extraction over the same hand-checkable style of programs
 ; (Ir.Cost_model.completion_floor, gh-ocannl-514 phase 3).
