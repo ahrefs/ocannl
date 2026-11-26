@@ -861,11 +861,12 @@ sub sh_skip_balanced {
     return $depth == 0 ? $j : undef;
   }
   # Stack-balanced scan for $(...), <(...), >(...), tracking token boundaries
-  # ($in_word), `#` comments, and nested `case ... esac` so neither a commented
-  # `)` nor a case pattern terminator `x)` closes the substitution early, while
-  # escaped spaces (`foo\ #)`) and substitution suffixes (`$(cmd)#)`) stay words.
+  # ($in_word), redirection operands ($after_redir), `#` comments, and nested
+  # `case ... esac` so neither a commented `)` nor a case pattern terminator `x)`
+  # closes the substitution early, while escaped spaces (`foo\ #)`), substitution
+  # suffixes (`$(cmd)#)`), and redirection operands (`>esac`, `> esac`) stay words.
   my @stk = ("sub");
-  my ($j, $isq, $idq, $iesc, $in_word) = ($i + 2, 0, 0, 0, 0);
+  my ($j, $isq, $idq, $iesc, $in_word, $after_redir) = ($i + 2, 0, 0, 0, 0, 0);
   while ($j < $len && @stk) {
     my $c = substr($s, $j, 1);
     if ($iesc) {
@@ -887,6 +888,7 @@ sub sh_skip_balanced {
       if ($nl < 0) { $j = $len; last }
       $j = $nl + 1;
       $in_word = 0;
+      $after_redir = 0;
       next;
     }
     my $two = substr($s, $j, 2);
@@ -912,13 +914,26 @@ sub sh_skip_balanced {
       next;
     }
     if (!$isq && !$idq) {
-      if ($c eq "(") { push @stk, "paren"; $in_word = 0 }
+      if ($c eq "(") { push @stk, "paren"; $in_word = 0; $after_redir = 0 }
       elsif ($c eq ")") {
         pop @stk if $stk[-1] eq "paren" || $stk[-1] eq "sub";
         $in_word = 0;
-      } elsif ($c =~ /[\s;|&<>]/) {
+        $after_redir = 0;
+      } elsif ($c eq "<" || $c eq ">") {
         $in_word = 0;
-      } elsif (!$in_word && substr($s, $j) =~ /\A(case|esac)(?=[\s;|&()]|\z)/) {
+        $after_redir = 1;
+      } elsif ($c eq "\n" || $c eq ";") {
+        $in_word = 0;
+        $after_redir = 0;
+      } elsif ($c eq "|" || $c eq "&") {
+        $after_redir = 0 unless $after_redir && !$in_word;
+        $in_word = 0;
+      } elsif ($c eq "-" && $after_redir && !$in_word && $j >= 2 && substr($s, $j - 2, 2) eq "<<") {
+        # `<<-` tab-stripping heredoc operator still awaits its delimiter operand.
+      } elsif ($c =~ /[ \t\r]/) {
+        $after_redir = 0 if $in_word;
+        $in_word = 0;
+      } elsif (!$in_word && !$after_redir && substr($s, $j) =~ /\A(case|esac)(?=[\s;|&()]|\z)/) {
         my $kw = $1;
         if ($kw eq "case") { push @stk, "case" }
         elsif ($stk[-1] eq "case") { pop @stk }
@@ -1889,16 +1904,16 @@ sub sh_parse_base {
     $in_fn[$i] = 1 if grep { $_->[3] } @blk_stk;
     if (!$msq && !$mdq && !@sub_stk && !$in_bt) {
       if ($line =~ /^\s*#/) { $i++; next }
-      # Join explicit backslash-newline continuations into one logical command
-      # before discovering overrides (`alias \\\n  cat=bash`, `exec \\\n > >(bash)`)
-      # and walking compound groups.
+      # Join explicit backslash-newline continuations (outside single quotes and
+      # `#` comments, including inside double quotes where Bash removes `\`-NL)
+      # into one logical command before discovering overrides and walking groups.
       my $j = $i;
       my $log = $line;
       if ($j < $#l && $kind[$j + 1] eq "code" && $log =~ /(?<!\\)(?:\\\\)*\\\z/) {
         my ($jsq, $jdq) = (0, 0);
         while ($j < $#l && $kind[$j + 1] eq "code"
-            && sh_scan_line_quotes($l[$j], \$jsq, \$jdq) && !$jsq && !$jdq) {
-          $log =~ s/\\\z/ /;
+            && sh_scan_line_quotes($l[$j], \$jsq, \$jdq) && !$jsq) {
+          $log =~ s/\\\z//;
           $j++;
           $in_fn[$j] = 1 if grep { $_->[3] } @blk_stk;
           $log .= $l[$j];
@@ -1934,7 +1949,7 @@ sub sh_parse_base {
       $unfilt[$i] = 1 if @sub_stk || $in_bt;
     }
     # Character-level state update for multiline quotes or multiline substitutions.
-    my ($esc, $in_word, $p, $len) = (0, 0, 0, length $line);
+    my ($esc, $in_word, $after_redir, $p, $len) = (0, 0, 0, 0, length $line);
     while ($p < $len) {
       my $c = substr($line, $p, 1);
       if ($esc) { $esc = 0; $in_word = 1; $p++; next }
@@ -1954,6 +1969,7 @@ sub sh_parse_base {
         push @sub_stk, ["sub", $mdq];
         $mdq = 0;
         $in_word = 0;
+        $after_redir = 0;
         $unfilt[$i] = 1;
         $p += 2;
         next;
@@ -1970,19 +1986,21 @@ sub sh_parse_base {
         if (defined $nj) { $p = $nj; $in_word = 1; next }
         $in_bt = 1;
         $in_word = 0;
+        $after_redir = 0;
         $unfilt[$i] = 1;
         $p++;
         next;
       }
       if (@sub_stk && !$msq && !$mdq) {
-        if ($c eq "(") { push @sub_stk, ["paren", 0]; $in_word = 0; $p++; next }
+        if ($c eq "(") { push @sub_stk, ["paren", 0]; $in_word = 0; $after_redir = 0; $p++; next }
         if ($c eq ")") {
-          if ($sub_stk[-1][0] eq "sub") { $mdq = (pop @sub_stk)->[1]; $in_word = 1 }
-          elsif ($sub_stk[-1][0] eq "paren") { pop @sub_stk; $in_word = 0 }
+          if ($sub_stk[-1][0] eq "sub") { $mdq = (pop @sub_stk)->[1]; $in_word = 1; $after_redir = 0 }
+          elsif ($sub_stk[-1][0] eq "paren") { pop @sub_stk; $in_word = 0; $after_redir = 0 }
+          else { $in_word = 0; $after_redir = 0 }
           $p++;
           next;
         }
-        if (!$in_word && substr($line, $p) =~ /\A(case|esac)(?=[\s;|&()]|\z)/) {
+        if (!$in_word && !$after_redir && substr($line, $p) =~ /\A(case|esac)(?=[\s;|&()]|\z)/) {
           my $kw = $1;
           if ($kw eq "case") { push @sub_stk, ["case", 0] }
           elsif ($sub_stk[-1][0] eq "case") { pop @sub_stk }
@@ -1992,7 +2010,26 @@ sub sh_parse_base {
         }
       }
       if (!$msq && !$mdq) {
-        $in_word = ($c =~ /[\s;|&()<>]/) ? 0 : 1;
+        if ($c eq "<" || $c eq ">") {
+          $in_word = 0;
+          $after_redir = 1;
+        } elsif ($c eq ";") {
+          $in_word = 0;
+          $after_redir = 0;
+        } elsif ($c eq "|" || $c eq "&") {
+          $after_redir = 0 unless $after_redir && !$in_word;
+          $in_word = 0;
+        } elsif ($c eq "-" && $after_redir && !$in_word && $p >= 2 && substr($line, $p - 2, 2) eq "<<") {
+          # `<<-` tab-stripping heredoc operator still awaits its delimiter operand.
+        } elsif ($c eq "(" || $c eq ")") {
+          $in_word = 0;
+          $after_redir = 0;
+        } elsif ($c =~ /[ \t\r]/) {
+          $after_redir = 0 if $in_word;
+          $in_word = 0;
+        } else {
+          $in_word = 1;
+        }
       }
       $p++;
     }

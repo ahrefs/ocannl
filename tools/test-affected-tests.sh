@@ -2064,6 +2064,14 @@ if harness_leg 'harness fixture and heredoc literals'; then
   fx_reach 'control: top-level printf after closed $( # ... ) remains excluded' tools/test-a.sh
   twin_text 'echo ok # comment \' 'alias cat=bash' 'cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
   fx_reach 'fail-closed: trailing backslash in a # comment does not swallow the next line override' tools/test-a.sh tools/test-c.sh
+  twin_text 'shopt -s expand_aliases' 'builtin alias cat="ba\' 'sh"' 'cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: double-quoted backslash-continued alias definition keeps cat heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'code=$(case y in' '  x) : >esac;;' '  y) printf '\''bash tools/sub.sh\n'\'';;' 'esac)' 'bash -c "$code"'
+  fx_reach 'fail-closed: >esac redirection operand inside multiline $(case ...) does not pop case early' tools/test-a.sh tools/test-c.sh
+  twin_text 'code=$(case y in' '  x) : > esac;;' '  y) printf '\''bash tools/sub.sh\n'\'';;' 'esac)' 'bash -c "$code"'
+  fx_reach 'fail-closed: spaced > esac redirection operand inside multiline $(case ...) does not pop case early' tools/test-a.sh tools/test-c.sh
+  twin_text 'code=$(case y in x) : >esac;; y) printf '\''bash tools/sub.sh\n'\'';; esac)' 'bash -c "$code"'
+  fx_reach 'fail-closed: >esac redirection operand inside single-line $(case ...) does not close substitution early' tools/test-a.sh tools/test-c.sh
   hc_restore
 fi
 
