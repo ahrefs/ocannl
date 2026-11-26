@@ -140,9 +140,10 @@
 # build (which remains fail-closed on any nonzero `owed-run.sh` status). `--plan` alone does not
 # ask Dune or read records and prints no verdict line. A plan makes no build or readiness verdict
 # and writes no record. A conflict or an unreadable plan fails the query.
-# The only extra affected text read is one anchored, printable `affected: CROSS-CUTTING reason:`
-# line from the full-list ask. It is display-only; a missing, duplicate or malformed reason
-# contributes nothing. The trailers, exit statuses and existing list protocol still govern.
+# For display, read only the anchored, printable `affected: CROSS-CUTTING reason:` and
+# `affected: comment-only reason:` lines from the full-list ask. A missing, duplicate or malformed
+# reason contributes nothing. The status, verdict and selected alias list still come from
+# prepush, including its comment-only selection. The compile tier always includes scans.
 # --compile-only runs the existing Dune setup and the compile tier alone (`dune build --root .
 # @check @test/operations/scans` at the root of the merged tree), with the same command contract,
 # timing summary policy and exit statuses as the full run, skipping format, tests, owed-run record
@@ -151,7 +152,7 @@
 # combined with `--plan`, `--plan-merge`, `--base` or `--all` (exit 2).
 #
 # Test-reach cache (gh-ocannl-2488): successful `read_tests` answers (the test alias list, verdict,
-# owed flags/reasons, training/Linux reach needs, `CROSS-CUTTING reason:` lines, and literal-
+# owed flags/reasons, training/Linux reach needs, display reason lines, and literal-
 # dependency coverage lines) may be reused across `--plan --base`, `--plan-merge` and full merge
 # builds for the same clean merge candidate and Dune inputs. Failures (`tests=unread`), owed-run
 # record checks (`tools/owed-run.sh check`), builds and harnesses are never cached: the published
@@ -1211,7 +1212,10 @@ reach_cache_io() {
       );
     }
     sub valid_list  { my ($v) = @_; return defined $v && $v =~ m{\A@[^\s]+\z}; }
-    sub valid_cross { my ($v) = @_; return defined $v && index($v, "affected: CROSS-CUTTING reason: ") == 0; }
+    sub valid_reason {
+      my ($v) = @_;
+      return defined $v && $v =~ /\Aaffected: (?:CROSS-CUTTING|comment-only) reason: /;
+    }
     sub valid_dep   { my ($v) = @_; return defined $v && $v =~ m{\Aaffected: .+: named as a dependency by the rule of @[^\s]+\z}; }
     sub valid_dir {
       my @dst = lstat($cache_dir);
@@ -1248,7 +1252,7 @@ reach_cache_io() {
       bail() unless @lines >= 3 && $lines[0] eq "schema\tv1" && $lines[1] eq "key\t$key"
                  && $lines[-1] eq "end\tv1";
 
-      my (%scalars, @needs, @list, @cross, @deps);
+      my (%scalars, @needs, @list, @reasons, @deps);
       for my $i (2 .. $#lines - 1) {
         my $ln = $lines[$i];
         my $tab = index($ln, "\t");
@@ -1264,9 +1268,9 @@ reach_cache_io() {
         } elsif ($tag eq "list") {
           bail() unless valid_list($val);
           push @list, $val;
-        } elsif ($tag eq "cross_line") {
-          bail() unless valid_cross($val);
-          push @cross, $val;
+        } elsif ($tag eq "reason_line") {
+          bail() unless valid_reason($val);
+          push @reasons, $val;
         } elsif ($tag eq "dep") {
           bail() unless valid_dep($val);
           push @deps, $val;
@@ -1289,11 +1293,11 @@ reach_cache_io() {
 
       write_lines("$tests_dir/list", \@list);
       if ($scalars{has_ask_first} eq "1") {
-        write_lines("$tests_dir/ask", \@cross);
+        write_lines("$tests_dir/ask", \@reasons);
         write_lines("$tests_dir/ask-first", \@deps);
       } else {
         unlink "$tests_dir/ask-first";
-        write_lines("$tests_dir/ask", [@cross, @deps]);
+        write_lines("$tests_dir/ask", [@reasons, @deps]);
       }
 
       open my $mh, ">", "$tests_dir/cache-meta" or bail();
@@ -1333,15 +1337,15 @@ reach_cache_io() {
       close $lh;
     }
 
-    my @cross;
+    my @reasons;
     if (-f "$tests_dir/ask") {
       open my $ah, "<", "$tests_dir/ask" or bail();
       binmode $ah;
       while (my $ln = <$ah>) {
         $ln =~ s/\r?\n\z//;
-        next unless valid_cross($ln);
+        next unless valid_reason($ln);
         bail() if index($ln, "\0") >= 0;
-        push @cross, $ln;
+        push @reasons, $ln;
       }
       close $ah;
     }
@@ -1391,7 +1395,7 @@ reach_cache_io() {
     $ok &&= print $fh "linux_leg_args\t$linux_leg_args\n";
     for my $n (@needs) { $ok &&= print $fh "need\t$n\n"; }
     for my $l (@list) { $ok &&= print $fh "list\t$l\n"; }
-    for my $c (@cross) { $ok &&= print $fh "cross_line\t$c\n"; }
+    for my $r (@reasons) { $ok &&= print $fh "reason_line\t$r\n"; }
     for my $d (@deps) { $ok &&= print $fh "dep\t$d\n"; }
     $ok &&= print $fh "end\tv1\n";
     $ok &&= close $fh;
@@ -1504,16 +1508,19 @@ read_tests() {
   fi
 }
 
-show_cross_reason() {
-  local reason
-  case $tests_verdict in cross-cutting | cross-cutting,incomplete) ;; *) return 0 ;; esac
-  reason=$(sed -n 's/^affected: CROSS-CUTTING reason: //p' "$tests_dir/ask")
+show_affected_reason() {
+  local kind=$1 reason
+  reason=$(sed -n "s/^affected: $kind reason: //p" "$tests_dir/ask")
   # Pass LC_ALL=C through env, not a shell prefix assignment, so a forked subshell (merged_plan)
   # never triggers Homebrew Bash's dispose_temporary_env -> libintl_setlocale path (gh-ocannl-2462).
   if [ -n "$reason" ] && env LC_ALL=C grep -qx '[[:print:]][[:print:]]*' <<<"$reason" &&
-     [ "$(grep -c '^affected: CROSS-CUTTING reason: ' "$tests_dir/ask")" = 1 ]; then
-    printf '%s: tests tier: CROSS-CUTTING reason: %s\n' "$me" "$reason"
+     [ "$(grep -c "^affected: $kind reason: " "$tests_dir/ask")" = 1 ]; then
+    printf '%s: tests tier: %s reason: %s\n' "$me" "$kind" "$reason"
   fi
+}
+
+show_cross_reason() {
+  case $tests_verdict in cross-cutting | cross-cutting,incomplete) show_affected_reason CROSS-CUTTING ;; esac
 }
 
 check_record() {
@@ -1598,6 +1605,7 @@ merged_plan() (
     ok/list/*) echo "$me: tests plan: narrow" ;;
   esac
   show_cross_reason
+  show_affected_reason comment-only
   if [ ${#needs[@]} -eq 0 ]; then
     echo "$me: owed-run needs: none"
     echo 'ship-pr-merge-plan: nothing-owed'
@@ -1662,6 +1670,7 @@ run_compile_tier
 started=$SECONDS
 read_tests || finish_tier tests "$started" "$tests_why"
 [ "$reach_reused" = 0 ] || timing_rows+=("$me: tests reach: reused cached result")
+show_affected_reason comment-only
 if [ ${#needs[@]} -gt 0 ]; then
   [ -z "$tests_owed" ] || echo "$me: tests tier: OWED -- $tests_owed did not run here"
   [ "$train_why" = '' ] || echo "$me: tests tier: OWED -- $train_why"

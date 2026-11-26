@@ -118,7 +118,9 @@ tools/test-affected-tests.sh	tools/credential-env.sh
 tools/test-affected-tests.sh	tools/device-probe.sh
 tools/test-affected-tests.sh	tools/dune-golden-families.sh
 tools/test-affected-tests.sh	tools/fleet-worker-candidates.sh
+tools/test-affected-tests.sh	tools/merge-build-check.sh
 tools/test-affected-tests.sh	tools/opam-env.sh
+tools/test-affected-tests.sh	tools/owed-run.sh
 tools/test-affected-tests.sh	tools/per-test-cap.sh
 tools/test-affected-tests.sh	tools/test-affected-tests.sh
 tools/test-affected-tests.sh	tools/test-harnesses.sh

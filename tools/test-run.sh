@@ -117,7 +117,8 @@
 # leave the isolated query running; recovery refuses it until it exits.
 #
 # `prepush --since BASE` (gh-ocannl-1829) is the pre-push run as one command:
-# `affected --since BASE`'s default list (link-only aliases included) without
+# `affected --for-prepush --since BASE`'s list (link-only aliases included
+# except for comment-only library changes, as defined by affected) without
 # its `slow-` and `train-` members, handed to one Dune build via
 # `run [OPTIONS] --targets-file LIST [build DUNE OPTIONS...]` (one verdict,
 # digest and exit status). For selected scans, prepush enables Dune's
@@ -4903,7 +4904,7 @@ if [ "$sub" = prepush ]; then
   trap pp_close EXIT
   pp_query() {
     pp_rc=0
-    bash "$runner_root/tools/test-run.sh" affected "$@" "${pp_since[@]}" >"$pp_dir/affected" 2>"$pp_dir/affected.err" ||
+    bash "$runner_root/tools/test-run.sh" affected --for-prepush "$@" "${pp_since[@]}" >"$pp_dir/affected" 2>"$pp_dir/affected.err" ||
       pp_rc=$?
     cat "$pp_dir/affected.err" >&2
     case $pp_rc in
