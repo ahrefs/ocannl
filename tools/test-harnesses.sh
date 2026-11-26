@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Run the shell-harness tier CI runs, from any working directory.
 # Usage: tools/test-harnesses.sh [--shell|--toolchain|--promotion] [--list]
-#                               [--expected-skips FILE] [--jobs N]
-#        tools/test-harnesses.sh --ci-shell [--list] [--jobs N]
-#        tools/test-harnesses.sh --ci-real-dune [--list] [--jobs N]
-#        tools/test-harnesses.sh [GROUP] --affected [--list] [--jobs N] --since BASE
-#        tools/test-harnesses.sh [GROUP] --affected [--list] [--jobs N] --files PATH...
-#        tools/test-harnesses.sh --member HARNESS [--member HARNESS]... [--list] [--jobs N]
+#                               [--expected-skips FILE] [--jobs N] [--timings]
+#        tools/test-harnesses.sh --ci-shell [--list] [--jobs N] [--timings]
+#        tools/test-harnesses.sh --ci-real-dune [--list] [--jobs N] [--timings]
+#        tools/test-harnesses.sh [GROUP] --affected [--list] [--jobs N] [--timings] --since BASE
+#        tools/test-harnesses.sh [GROUP] --affected [--list] [--jobs N] [--timings] --files PATH...
+#        tools/test-harnesses.sh --member HARNESS [--member HARNESS]... [--list] [--jobs N] [--timings]
 # With no group, run all three. --shell needs no OCaml toolchain; --toolchain
 # runs the formatter controls and the scan-case type check (which links
 # ppxlib) and --promotion the controls of tools that read
@@ -63,6 +63,13 @@
 # seconds run from invocation to observed exit, before serial relay drain or
 # any wait to print an already-reaped member's output. Parallel rows are
 # flushed at exit, including on handled interruption.
+# --timings prints that same per-member timing table on stdout as a
+# `harnesses: timings:` block (indented `  HARNESS CMD finished in Ns (exit RC)`
+# rows in manifest order, plus `  HARNESS CMD interrupted after Ns (in flight)`
+# if the serial dispatcher exits on a signal mid-member) right before the
+# closing `harnesses:` summary or interruption exit. Without --timings, stdout
+# stays timing-free so merge-build shared-red comparisons stay line-stable.
+# --list runs no member and prints no timings.
 # In serial, each member writes its captured stderr (and stdout under
 # --ci-real-dune) directly to its per-member output file while a dispatcher-
 # owned live relay streams that file to stderr (and stdout). Verdict scans
@@ -170,7 +177,7 @@ exit_with() {
   exit "$1"
 }
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit_with 2
-group=all list=0 expected= ci_shell=0 ci_real_dune=0 affected=0 since= files=() explicit_members=() jobs=1
+group=all list=0 expected= ci_shell=0 ci_real_dune=0 affected=0 since= files=() explicit_members=() jobs=1 timings=0 timings_printed=0 serial_running_idx= serial_running_started=0
 original_args=("$@")
 while [ $# -gt 0 ]; do
   arg=$1
@@ -179,6 +186,7 @@ while [ $# -gt 0 ]; do
       [ "$group" = all ] || { echo "choose one harness group" >&2; exit_with 2; }
       group=${arg#--} ;;
     --list) list=1 ;;
+    --timings) timings=1 ;;
     --ci-shell) ci_shell=1 ;;
     --ci-real-dune) ci_real_dune=1 ;;
     --affected) affected=1 ;;
@@ -379,8 +387,28 @@ stop_serial_relays() {
 # previous command's `$?` before Bash re-raises the signal.
 trap '' HUP INT TERM
 trap - HUP INT TERM
+print_timings() {
+  [ "${timings:-0}" = 1 ] && [ "${timings_printed:-0}" = 0 ] || return 0
+  local i any=0 n=${total:-0}
+  for ((i = 0; i < n; i++)); do
+    if [ -n "${ended[i]-}" ] || [ "${serial_running_idx:-}" = "$i" ]; then
+      any=1; break
+    fi
+  done
+  [ "$any" = 1 ] || return 0
+  timings_printed=1
+  printf '\nharnesses: timings:\n'
+  for ((i = 0; i < n; i++)); do
+    if [ -n "${ended[i]-}" ]; then
+      printf '  HARNESS %s finished in %ss (exit %s)\n' "${run_commands[i]}" "${member_times[i]}" "${ended[i]}"
+    elif [ "${serial_running_idx:-}" = "$i" ]; then
+      printf '  HARNESS %s interrupted after %ss (in flight)\n' "${run_commands[i]}" "$((SECONDS - serial_running_started))"
+    fi
+  done
+}
 cleanup_harnesses() {
   stop_serial_relays
+  print_timings
   rm -rf ${scratch[@]+"${scratch[@]}"}
 }
 trap cleanup_harnesses EXIT
@@ -755,6 +783,7 @@ serial_member() { # SCRIPT STDOUT STDERR [ARGS...] (STDOUT empty unless --ci-rea
     serial_relays+=("$!")
   fi
   local started_at=$SECONDS
+  serial_running_started=$started_at
   if [ -n "$out" ]; then
     OCANNL_TOOL_HARNESS_NAME=$script "$member_bash" "$root/$script" "$@" \
       >"$out" 2>"$error" || rc=$?
@@ -763,6 +792,11 @@ serial_member() { # SCRIPT STDOUT STDERR [ARGS...] (STDOUT empty unless --ci-rea
       2>"$error" || rc=$?
   fi
   member_elapsed=$((SECONDS - started_at))
+  # Record observed exit status and elapsed time before draining relays so an
+  # interruption during relay drain still reports this member in --timings;
+  # member_ended updates ended[i] if verdict checks change the final status.
+  [ -z "${serial_running_idx:-}" ] || ended[$serial_running_idx]=$rc member_times[$serial_running_idx]=$member_elapsed
+  serial_running_idx=
   case $rc in
     # A descendant may outlive the interrupted member with stderr or stdout open.
     129|130|143)
@@ -785,8 +819,10 @@ member_ended() { # INDEX RC OUTPUT ELAPSED: ordinary failures count once per mem
   case $rc in
     129|130|143)
       printf 'HARNESS %s exit: %s\n' "$script" "$rc"
+      ended[$1]=$rc member_times[$1]=$4
       member_timing "$1" "$rc" "$4"
       stop_members
+      print_timings
       printf 'harnesses: interrupted (exit %s)\n' "$rc" >&2
       exit_with "$rc" ;;
   esac
@@ -799,6 +835,7 @@ member_ended() { # INDEX RC OUTPUT ELAPSED: ordinary failures count once per mem
   [ "$scan_rc" = 1 ] || [ "$rc" != 0 ] || rc=1
   printf 'HARNESS %s exit: %s\n' "$script" "$rc"
   if [ "$jobs" = 1 ]; then
+    ended[$1]=$rc member_times[$1]=$4
     member_timing "$1" "$rc" "$4"
   else
     ended[$1]=$rc
@@ -835,11 +872,13 @@ if [ "$jobs" = 1 ]; then
     printf '\nHARNESS %s (%s; bash %s)\n' "${run_commands[i]}" "${run_tiers[i]}" "$member_banner"
     member_output "$script"
     rc=0
+    serial_running_idx=$i serial_running_started=$SECONDS
     if [ "$ci_real_dune" = 1 ]; then
       serial_member "$script" "$output" "$output.err" ${args[@]+"${args[@]}"} || rc=$?
     else
       serial_member "$script" '' "$output.err" ${args[@]+"${args[@]}"} || rc=$?
     fi
+    serial_running_idx=
     member_ended "$i" "$rc" "$output.err" "$member_elapsed"
   done
 else
@@ -899,6 +938,7 @@ else
       cat "$output" "$output.err"
       printf 'HARNESS %s exit: %s\n' "$script" "${ended[i]}"
     done
+    print_timings
     printf 'harnesses: interrupted (exit %s)\n' "$interrupted" >&2
     exit_with "$interrupted"
   fi
@@ -947,6 +987,7 @@ if [ "$ci_real_dune" = 1 ]; then
     unreached=$((unreached + 1))
   done <"$dune_list"
 fi
+print_timings
 printf '\nharnesses: %s run, %s failed' "$total" "$failures"
 [ -z "$expected" ] || printf '; %s expected skip(s) did not occur' "$stale"
 [ "$ci_shell" = 0 ] || printf '; %s hidden-dune skip(s) misfiled' "$misfiled"

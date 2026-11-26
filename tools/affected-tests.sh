@@ -788,6 +788,8 @@ sub runs {
   my ($line) = @_;
   my @r;
   while ($line =~ m{([A-Za-z0-9_./-]+)}g) {
+    # Every key in %idx holds `.` or `/`; skip bare words before slicing $line.
+    next unless index($1, ".") >= 0 || index($1, "/") >= 0;
     my ($t, $pre) = ($1, substr($line, 0, $-[1]));
     my ($frag, $anchor) = (1, undef);
     if ($pre =~ /\$\z/) {
@@ -805,7 +807,7 @@ sub runs {
   }
   return @r;
 }
-my (%raw, %names, %loads, %assigns, %selfdirs, %sh_parsed, %py_info);
+my (%raw, %names, %loads, %assigns, %selfdirs, %sh_base, %sh_parsed, %py_info);
 sub raw {
   my ($f) = @_;
   return $raw{$f} if exists $raw{$f};
@@ -974,90 +976,97 @@ sub sh_tokenize {
   my @toks;
   my ($i, $len) = (0, length $s);
   while ($i < $len) {
-    my $c = substr($s, $i, 1);
-    if ($c =~ /[ \t\r\n]/) { $i++; next }
-    if ($c eq "#") {
+    pos($s) = $i;
+    if ($s =~ /\G[ \t\r\n]+/gc) { $i = pos($s); next }
+    if ($s =~ /\G(#[^\n]*)/gc) {
       # Inline comment to end of physical line.
-      my $e = index($s, "\n", $i);
-      $e = $len if $e < 0;
-      push @toks, ["comment", $i, $e, substr($s, $i, $e - $i)];
-      $i = $e;
+      push @toks, ["comment", $i, pos($s), $1];
+      $i = pos($s);
       next;
     }
-    my $rest = substr($s, $i);
-    if ($rest =~ /\A((?:\d+)?(?:<&|>&))/) {
-      push @toks, ["redir_fd", $i, $i + length($1), $1];
-      $i += length($1);
+    if ($s =~ /\G((?:\d+)?(?:<&|>&))/gc) {
+      push @toks, ["redir_fd", $i, pos($s), $1];
+      $i = pos($s);
       next;
     }
-    if ($rest =~ /\A((?:\d+)?<<<)/) {
-      push @toks, ["redir_herestr", $i, $i + length($1), $1];
-      $i += length($1);
+    if ($s =~ /\G((?:\d+)?<<<)/gc) {
+      push @toks, ["redir_herestr", $i, pos($s), $1];
+      $i = pos($s);
       next;
     }
-    if ($rest =~ /\A((?:\d+)?<<-?)/) {
-      push @toks, ["redir_hd", $i, $i + length($1), $1];
-      $i += length($1);
+    if ($s =~ /\G((?:\d+)?<<-?)/gc) {
+      push @toks, ["redir_hd", $i, pos($s), $1];
+      $i = pos($s);
       next;
     }
-    if ($rest =~ /\A((?:\d+)?<>)/) {
-      push @toks, ["redir_in", $i, $i + length($1), $1];
-      $i += length($1);
+    if ($s =~ /\G((?:\d+)?<>)/gc) {
+      push @toks, ["redir_in", $i, pos($s), $1];
+      $i = pos($s);
       next;
     }
-    if ($rest =~ /\A(&>>|(?:\d+)?>>)/) {
-      push @toks, ["redir_append", $i, $i + length($1), $1];
-      $i += length($1);
+    if ($s =~ /\G(&>>|(?:\d+)?>>)/gc) {
+      push @toks, ["redir_append", $i, pos($s), $1];
+      $i = pos($s);
       next;
     }
-    if ($rest =~ /\A(&>|(?:\d+)?>\||(?:\d+)?>)(?!\()/) {
-      push @toks, ["redir_out", $i, $i + length($1), $1];
-      $i += length($1);
+    if ($s =~ /\G(&>|(?:\d+)?>\||(?:\d+)?>)(?!\()/gc) {
+      push @toks, ["redir_out", $i, pos($s), $1];
+      $i = pos($s);
       next;
     }
-    if ($rest =~ /\A((?:\d+)?<)(?!\()/) {
-      push @toks, ["redir_in", $i, $i + length($1), $1];
-      $i += length($1);
+    if ($s =~ /\G((?:\d+)?<)(?!\()/gc) {
+      push @toks, ["redir_in", $i, pos($s), $1];
+      $i = pos($s);
       next;
     }
-    if ($rest =~ /\A(&&|\|\||;;&|;&|;;|\|&|[;&|()])/) {
+    if ($s =~ /\G(&&|\|\||;;&|;&|;;|\|&|[;&|()])/gc) {
       my $op = $1;
       my $tp = ($op eq "|" || $op eq "|&") ? "pipe"
         : $op eq "(" ? "open_grp"
         : $op eq ")" ? "close_grp" : "sep";
-      push @toks, [$tp, $i, $i + length($op), $op];
-      $i += length($op);
+      push @toks, [$tp, $i, pos($s), $op];
+      $i = pos($s);
       next;
     }
     # Normal shell word (including process substitutions <(...) and >(...)).
     my $st = $i;
     my ($sq, $dq, $esc) = (0, 0, 0);
     while ($i < $len) {
-      my $ch = substr($s, $i, 1);
       if ($esc) { $esc = 0; $i++; next }
-      if ($ch eq "\\" && !$sq) { $esc = 1; $i++; next }
-      if ($ch eq "'" && !$dq) { $sq = !$sq; $i++; next }
-      if ($ch eq '"' && !$sq) { $dq = !$dq; $i++; next }
+      pos($s) = $i;
+      if ($sq) {
+        if ($s =~ /\G[^']+/gc) { $i = pos($s); next }
+        $sq = 0; $i++; next;
+      }
+      if ($dq) {
+        if ($s =~ /\G[^"\\\$`]+/gc) { $i = pos($s); next }
+      } else {
+        if ($s =~ /\G[^ \t\r\n;&|()<>\\'"\$`]+/gc) { $i = pos($s); next }
+      }
+      my $ch = substr($s, $i, 1);
+      if ($ch eq "\\") { $esc = 1; $i++; next }
+      if ($ch eq "'" && !$dq) { $sq = 1; $i++; next }
+      if ($ch eq '"') { $dq = !$dq; $i++; next }
       my $two = substr($s, $i, 2);
-      if (!$sq && ($two eq '${' || $two eq '$(')) {
+      if ($two eq '${' || $two eq '$(') {
         my $nj = sh_skip_balanced($s, $i, $two, $dq);
         return undef unless defined $nj;
         $i = $nj;
         next;
       }
-      if (!$sq && !$dq && ($two eq '<(' || $two eq '>(')) {
+      if (!$dq && ($two eq '<(' || $two eq '>(')) {
         my $nj = sh_skip_balanced($s, $i, $two);
         return undef unless defined $nj;
         $i = $nj;
         next;
       }
-      if (!$sq && $ch eq '`') {
+      if ($ch eq '`') {
         my $nj = sh_skip_balanced($s, $i, '`');
         return undef unless defined $nj;
         $i = $nj;
         next;
       }
-      last if !$sq && !$dq && $ch =~ /[ \t\r\n;&|()<>]/;
+      last if !$dq && $ch =~ /[ \t\r\n;&|()<>]/;
       $i++;
     }
     return undef if $sq || $dq;
@@ -1486,9 +1495,22 @@ sub heredoc_is_data {
 # inside a function body / after persistent `exec` stdout redirect without a
 # per-command file stdout redirection).
 sub filter_sh_logical {
-  my ($s, $overridden, $in_fn) = @_;
-  my $toks = sh_tokenize($s);
+  my ($s, $overridden, $in_fn, $toks) = @_;
+  $toks //= sh_tokenize($s);
   return $s unless $toks;   # unbalanced -> fail closed
+  my $needs_filter = 0;
+  for my $t (@$toks) {
+    my $tp = $t->[0];
+    if ($tp eq "redir_hd" || $tp eq "redir_out") { $needs_filter = 1; last }
+    if ($tp eq "word") {
+      my $w = $t->[3];
+      if ($w eq "echo" || $w eq "printf"
+          || ($w =~ /['"\\]/ && do { my $u = sh_unquote($w); $u eq "echo" || $u eq "printf" })) {
+        $needs_filter = 1; last;
+      }
+    }
+  }
+  return $s unless $needs_filter;
   my $out = $s;
   my $pipes = sh_pipelines($toks);
   for my $pipe (@$pipes) {
@@ -1551,10 +1573,22 @@ sub filter_sh_logical {
 sub sh_scan_overrides {
   my ($line, $funcs_ref, $toks) = @_;
   return if $line =~ /^\s*#/;
-  $funcs_ref->{$1} = 1 while $line =~ /(?:^|[;&|({])\s*(?:function\s+)?(echo|printf|cat|tee)\s*\(\s*\)/g;
-  $funcs_ref->{$1} = 1 while $line =~ /(?:^|[;&|({])\s*function\s+(echo|printf|cat|tee)\b/g;
+  if ($line =~ /\b(?:echo|printf|cat|tee)\b/) {
+    $funcs_ref->{$1} = 1 while $line =~ /(?:^|[;&|({])\s*(?:function\s+)?(echo|printf|cat|tee)\s*\(\s*\)/g;
+    $funcs_ref->{$1} = 1 while $line =~ /(?:^|[;&|({])\s*function\s+(echo|printf|cat|tee)\b/g;
+  }
   $toks //= sh_tokenize($line);
   if ($toks) {
+    my $maybe_ov = 0;
+    for my $t (@$toks) {
+      next unless $t->[0] eq "word";
+      my $w = $t->[3];
+      if ($w eq "alias" || $w eq "exec"
+          || ($w =~ /['"\\]/ && do { my $u = sh_unquote($w); $u eq "alias" || $u eq "exec" })) {
+        $maybe_ov = 1; last;
+      }
+    }
+    return unless $maybe_ov;
     for my $pipe (@{sh_pipelines($toks)}) {
       for my $stage (@$pipe) {
         my ($hidx, $hraw) = stage_command_head($stage);
@@ -1608,6 +1642,239 @@ sub sh_scan_overrides {
     $funcs_ref->{"\0exec_any_fd"} = 1 if $line =~ /(?:^|[;&|({])\s*exec\s+(?:\{[A-Za-z_]\w*\}>|&>|\d*>|&>>|\d*>>|\d*>&)/;
   }
 }
+# Override-independent Pass 1a (heredoc spans) and Pass 1b (multiline
+# substitutions, piped compound blocks, function bodies, local overrides, and
+# single-line token classification), cached once per `.sh` file.
+sub sh_parse_base {
+  my ($f) = @_;
+  return $sh_base{$f} if $sh_base{$f};
+  my @l = split /\n/, raw($f), -1;
+  my @kind = ("code") x scalar(@l);
+  my %line_toks;
+  my (@queue, @closed_hds);
+  # Pass 1a: identify heredoc line spans (opener, body, closing delimiter),
+  # joining explicit `\`-newline continuations into one logical opener line
+  # (so both `bash \\\n <<'SH'` and `cat <<'SH' \\\n | bash` are seen whole)
+  # and carrying multiline quote state so quoted text never opens a heredoc.
+  my ($sq, $dq) = (0, 0);
+  my $i = 0;
+  while ($i <= $#l) {
+    my $line = $l[$i];
+    if (@queue) {
+      my $hd = $queue[0];
+      my $chk = $line;
+      $chk =~ s/^\t+// if $hd->{strip};
+      if ($chk eq $hd->{delim}) {
+        $kind[$_] = "hd_body" for @{$hd->{body}};
+        $kind[$i] = "hd_delim";
+        push @closed_hds, $hd;
+        shift @queue;
+      } else {
+        push @{$hd->{body}}, $i;
+      }
+      $i++;
+      next;
+    }
+    if (!$sq && !$dq && ($line =~ /^\s*#/ || $line !~ /['"\\`\$<#]/)) { $i++; next }
+    my ($cur, $log, $pos) = ($i, $line, 0);
+    my @new_hds;
+    while (1) {
+      my ($esc, $len) = (0, length $log);
+      while ($pos < $len) {
+        if ($esc) { $esc = 0; $pos++; next }
+        pos($log) = $pos;
+        if ($sq) {
+          if ($log =~ /\G[^']+/gc) { $pos = pos($log); next }
+          $sq = 0; $pos++; next;
+        }
+        if ($dq) {
+          if ($log =~ /\G[^"\\\$`]+/gc) { $pos = pos($log); next }
+        } else {
+          if ($log =~ /\G[^'"\\\$`<#]+/gc) { $pos = pos($log); next }
+        }
+        my $ch = substr($log, $pos, 1);
+        if ($ch eq "\\") { $esc = 1; $pos++; next }
+        if ($ch eq "'" && !$dq) { $sq = 1; $pos++; next }
+        if ($ch eq '"') { $dq = !$dq; $pos++; next }
+        if (!$dq && $ch eq "#" && ($pos == 0 || substr($log, $pos - 1, 1) =~ /[\s;|&(]/)) {
+          $pos = $len;
+          last;
+        }
+        my $two = substr($log, $pos, 2);
+        if ($two eq '${' || $two eq '$(') {
+          my $nj = sh_skip_balanced($log, $pos, $two, $dq);
+          if (defined $nj) { $pos = $nj; next }
+          $pos += 2;
+          next;
+        }
+        if ($ch eq '`') {
+          my $nj = sh_skip_balanced($log, $pos, '`');
+          if (defined $nj) { $pos = $nj; next }
+          $pos++;
+          next;
+        }
+        if (!$dq && $two eq "<<") {
+          if (substr($log, $pos, 3) eq "<<<") {
+            $pos++ while $pos < $len && substr($log, $pos, 1) eq "<";
+            next;
+          }
+          my $hd_pos = $pos;
+          $pos += 2;
+          my $strip = 0;
+          if ($pos < $len && substr($log, $pos, 1) eq "-") { $strip = 1; $pos++ }
+          $pos++ while $pos < $len && substr($log, $pos, 1) =~ /[ \t]/;
+          my ($delim, $quoted, $dsq, $ddq, $desc) = ("", 0, 0, 0, 0);
+          while ($pos < $len) {
+            my $dc = substr($log, $pos, 1);
+            if ($desc) { $delim .= $dc; $desc = 0; $pos++; next }
+            if ($dc eq "\\" && !$dsq) { $quoted = 1; $desc = 1; $pos++; next }
+            if ($dc eq "'" && !$ddq) { $quoted = 1; $dsq = !$dsq; $pos++; next }
+            if ($dc eq '"' && !$dsq) { $quoted = 1; $ddq = !$ddq; $pos++; next }
+            last if !$dsq && !$ddq && $dc =~ /[\s;&|()<>#]/;
+            $delim .= $dc;
+            $pos++;
+          }
+          if ($delim ne "" && !$dsq && !$ddq && !$desc) {
+            push @new_hds, { opener => $i, opener_end => $cur, delim => $delim, strip => $strip, quoted => $quoted,
+                             op_text => "", op_pos => $hd_pos, body => [] };
+          }
+          next;
+        }
+        $pos++;
+      }
+      if ($esc && $cur < $#l) {
+        substr($log, -1, 1, "");
+        $pos = length $log;
+        $cur++;
+        $log .= $l[$cur];
+        next;
+      }
+      last;
+    }
+    for my $hd (@new_hds) {
+      $hd->{op_text} = $log;
+      $hd->{opener_end} = $cur;
+      push @queue, $hd;
+    }
+    $i = $cur + 1;
+  }
+  # Pass 1b: track multiline substitutions ($(...), <(...), >(...), `...`),
+  # multiline piped compound blocks, multiline shell function bodies, and
+  # function/alias overrides across code lines.
+  my @unfilt = (0) x scalar(@l);
+  my @in_fn  = (0) x scalar(@l);
+  my (%funcs, @blk_stk, @sub_stk);
+  my ($msq, $mdq, $in_bt, $pending_fn) = (0, 0, 0, 0);
+  $i = 0;
+  while ($i <= $#l) {
+    if ($kind[$i] ne "code") { $i++; next }
+    my $line = $l[$i];
+    $in_fn[$i] = 1 if grep { $_->[3] } @blk_stk;
+    if (!$msq && !$mdq && !@sub_stk && !$in_bt) {
+      if ($line =~ /^\s*#/) { $i++; next }
+      # Join explicit backslash-newline continuations into one logical command
+      # before discovering overrides (`alias \\\n  cat=bash`, `exec \\\n > >(bash)`)
+      # and walking compound groups.
+      my $j = $i;
+      my $log = $line;
+      while ($j < $#l && $kind[$j + 1] eq "code" && $log =~ /(?<!\\)(?:\\\\)*\\\z/) {
+        $log =~ s/\\\z/ /;
+        $j++;
+        $in_fn[$j] = 1 if grep { $_->[3] } @blk_stk;
+        $log .= $l[$j];
+      }
+      my $toks = sh_tokenize($log);
+      sh_scan_overrides($log, \%funcs, $toks);
+      if ($toks) {
+        if ($j == $i && $line !~ /(?<!\\)(?:\\\\)*\\\z/) {
+          my $nf = 0;
+          for my $t (@$toks) {
+            my $tp = $t->[0];
+            if ($tp eq "redir_hd" || $tp eq "redir_out") { $nf = 1; last }
+            if ($tp eq "word") {
+              my $w = $t->[3];
+              if ($w eq "echo" || $w eq "printf"
+                  || ($w =~ /['"\\]/ && do { my $u = sh_unquote($w); $u eq "echo" || $u eq "printf" })) {
+                $nf = 1; last;
+              }
+            }
+          }
+          $line_toks{$i} = $nf ? $toks : 0;
+        }
+        sh_walk_groups($toks, \@blk_stk, \$pending_fn, $i,
+          sub {
+            my ($sln, undef, $eln, undef) = @_;
+            if ($sln < $eln) { $unfilt[$_] = 1 for $sln .. $eln }
+          });
+        $i = $j + 1;
+        next;
+      }
+    } else {
+      $unfilt[$i] = 1 if @sub_stk || $in_bt;
+    }
+    # Character-level state update for multiline quotes or multiline substitutions.
+    my ($esc, $p, $len) = (0, 0, length $line);
+    while ($p < $len) {
+      my $c = substr($line, $p, 1);
+      if ($esc) { $esc = 0; $p++; next }
+      if ($c eq "\\" && !$msq) { $esc = 1; $p++; next }
+      if ($in_bt) {
+        if ($c eq '`') { $in_bt = 0 }
+        $p++;
+        next;
+      }
+      if ($c eq "'" && !$mdq) { $msq = !$msq; $p++; next }
+      if ($c eq '"' && !$msq) { $mdq = !$mdq; $p++; next }
+      if (!$msq && !$mdq && $c eq "#" && ($p == 0 || substr($line, $p - 1, 1) =~ /[\s;|&(]/)) { last }
+      my $two = substr($line, $p, 2);
+      if (!$msq && ($two eq '$(' || (!$mdq && ($two eq '<(' || $two eq '>(')))) {
+        my $nj = sh_skip_balanced($line, $p, $two);
+        if (defined $nj) { $p = $nj; next }
+        push @sub_stk, ["sub", $mdq];
+        $mdq = 0;
+        $unfilt[$i] = 1;
+        $p += 2;
+        next;
+      }
+      if (!$msq && $two eq '${') {
+        my $nj = sh_skip_balanced($line, $p, '${', $mdq);
+        if (defined $nj) { $p = $nj; next }
+        $p += 2;
+        next;
+      }
+      if (!$msq && $c eq '`') {
+        my $nj = sh_skip_balanced($line, $p, '`');
+        if (defined $nj) { $p = $nj; next }
+        $in_bt = 1;
+        $unfilt[$i] = 1;
+        $p++;
+        next;
+      }
+      if (@sub_stk && !$msq && !$mdq) {
+        if ($c eq "(") { push @sub_stk, ["paren", 0]; $p++; next }
+        if ($c eq ")") {
+          if ($sub_stk[-1][0] eq "sub") { $mdq = (pop @sub_stk)->[1] }
+          elsif ($sub_stk[-1][0] eq "paren") { pop @sub_stk }
+          $p++;
+          next;
+        }
+        if (($p == 0 || substr($line, $p - 1, 1) =~ /[\s;|&(]/) && substr($line, $p) =~ /\A(case|esac)(?=[\s;|&()]|\z)/) {
+          my $kw = $1;
+          if ($kw eq "case") { push @sub_stk, ["case", 0] }
+          elsif ($sub_stk[-1][0] eq "case") { pop @sub_stk }
+          $p += length($kw);
+          next;
+        }
+      }
+      $p++;
+    }
+    $i++;
+  }
+  return $sh_base{$f} = {
+    lines => \@l, kind => \@kind, closed_hds => \@closed_hds,
+    unfilt => \@unfilt, in_fn => \@in_fn, funcs => \%funcs, line_toks => \%line_toks,
+  };
+}
 # Classify a `.sh` file's heredocs and build its filtered scan lines.
 # Cached per ($f, overridden-command key); most files share the empty-override entry.
 sub sh_parse {
@@ -1615,212 +1882,28 @@ sub sh_parse {
   my $okey = $overridden ? join(",", sort grep { $overridden->{$_} } keys %$overridden) : "";
   my $ckey = "$f\0$okey";
   return $sh_parsed{$ckey} if $sh_parsed{$ckey};
-  my @l = split /\n/, raw($f), -1;
+  my $base = sh_parse_base($f);
+  my @l = @{$base->{lines}};
   my $ov_hd = ($overridden && ($overridden->{cat} || $overridden->{tee}
     || $overridden->{"\0exec_stdout"} || $overridden->{"\0exec_stderr"} || $overridden->{"\0exec_any_fd"})) ? 1 : 0;
-  my ($kinds_ref, $funcs_ref, $unq_ref, $unfilt_ref, $infn_ref);
-  if (!$ov_hd && $sh_parsed{"$f\0"}) {
-    $kinds_ref  = $sh_parsed{"$f\0"}{kinds};
-    $funcs_ref  = $sh_parsed{"$f\0"}{funcs};
-    $unq_ref    = $sh_parsed{"$f\0"}{unq};
-    $unfilt_ref = $sh_parsed{"$f\0"}{unfilt};
-    $infn_ref   = $sh_parsed{"$f\0"}{in_fn};
+  my ($kinds_ref, $funcs_ref, $unq_ref);
+  my $unfilt_ref = $base->{unfilt};
+  my $infn_ref   = $base->{in_fn};
+  if (!@{$base->{closed_hds}}) {
+    $kinds_ref = $base->{kind};
+    $funcs_ref = $base->{funcs};
+    $unq_ref   = [];
+  } elsif (!$ov_hd && $sh_parsed{"$f\0"}) {
+    $kinds_ref = $sh_parsed{"$f\0"}{kinds};
+    $funcs_ref = $sh_parsed{"$f\0"}{funcs};
+    $unq_ref   = $sh_parsed{"$f\0"}{unq};
   } else {
-    my @kind = ("code") x scalar(@l);
-    my (@queue, @closed_hds, @unq_spans);
-    # Pass 1a: identify heredoc line spans (opener, body, closing delimiter),
-    # joining explicit `\`-newline continuations into one logical opener line
-    # (so both `bash \\\n <<'SH'` and `cat <<'SH' \\\n | bash` are seen whole)
-    # and carrying multiline quote state so quoted text never opens a heredoc.
-    my ($sq, $dq) = (0, 0);
-    my $i = 0;
-    while ($i <= $#l) {
-      my $line = $l[$i];
-      if (@queue) {
-        my $hd = $queue[0];
-        my $chk = $line;
-        $chk =~ s/^\t+// if $hd->{strip};
-        if ($chk eq $hd->{delim}) {
-          $kind[$_] = "hd_body" for @{$hd->{body}};
-          $kind[$i] = "hd_delim";
-          push @closed_hds, $hd;
-          shift @queue;
-        } else {
-          push @{$hd->{body}}, $i;
-        }
-        $i++;
-        next;
-      }
-      if (!$sq && !$dq && $line =~ /^\s*#/) { $i++; next }
-      my ($cur, $log, $pos) = ($i, $line, 0);
-      my @new_hds;
-      while (1) {
-        my ($esc, $len) = (0, length $log);
-        while ($pos < $len) {
-          my $ch = substr($log, $pos, 1);
-          if ($esc) { $esc = 0; $pos++; next }
-          if ($ch eq "\\" && !$sq) { $esc = 1; $pos++; next }
-          if ($ch eq "'" && !$dq) { $sq = !$sq; $pos++; next }
-          if ($ch eq '"' && !$sq) { $dq = !$dq; $pos++; next }
-          if (!$sq && !$dq && $ch eq "#" && ($pos == 0 || substr($log, $pos - 1, 1) =~ /[\s;|&(]/)) {
-            $pos = $len;
-            last;
-          }
-          my $two = substr($log, $pos, 2);
-          if (!$sq && ($two eq '${' || $two eq '$(')) {
-            my $nj = sh_skip_balanced($log, $pos, $two, $dq);
-            if (defined $nj) { $pos = $nj; next }
-            $pos += 2;
-            next;
-          }
-          if (!$sq && $ch eq '`') {
-            my $nj = sh_skip_balanced($log, $pos, '`');
-            if (defined $nj) { $pos = $nj; next }
-            $pos++;
-            next;
-          }
-          if (!$sq && !$dq && $two eq "<<") {
-            if (substr($log, $pos, 3) eq "<<<") {
-              $pos++ while $pos < $len && substr($log, $pos, 1) eq "<";
-              next;
-            }
-            my $hd_pos = $pos;
-            $pos += 2;
-            my $strip = 0;
-            if ($pos < $len && substr($log, $pos, 1) eq "-") { $strip = 1; $pos++ }
-            $pos++ while $pos < $len && substr($log, $pos, 1) =~ /[ \t]/;
-            my ($delim, $quoted, $dsq, $ddq, $desc) = ("", 0, 0, 0, 0);
-            while ($pos < $len) {
-              my $dc = substr($log, $pos, 1);
-              if ($desc) { $delim .= $dc; $desc = 0; $pos++; next }
-              if ($dc eq "\\" && !$dsq) { $quoted = 1; $desc = 1; $pos++; next }
-              if ($dc eq "'" && !$ddq) { $quoted = 1; $dsq = !$dsq; $pos++; next }
-              if ($dc eq '"' && !$dsq) { $quoted = 1; $ddq = !$ddq; $pos++; next }
-              last if !$dsq && !$ddq && $dc =~ /[\s;&|()<>#]/;
-              $delim .= $dc;
-              $pos++;
-            }
-            if ($delim ne "" && !$dsq && !$ddq && !$desc) {
-              push @new_hds, { opener => $i, opener_end => $cur, delim => $delim, strip => $strip, quoted => $quoted,
-                               op_text => "", op_pos => $hd_pos, body => [] };
-            }
-            next;
-          }
-          $pos++;
-        }
-        if ($esc && $cur < $#l) {
-          substr($log, -1, 1, "");
-          $pos = length $log;
-          $cur++;
-          $log .= $l[$cur];
-          next;
-        }
-        last;
-      }
-      for my $hd (@new_hds) {
-        $hd->{op_text} = $log;
-        $hd->{opener_end} = $cur;
-        push @queue, $hd;
-      }
-      $i = $cur + 1;
-    }
-    # Pass 1b: track multiline substitutions ($(...), <(...), >(...), `...`),
-    # multiline piped compound blocks, multiline shell function bodies, and
-    # function/alias overrides across code lines.
-    my @unfilt = (0) x scalar(@l);
-    my @in_fn  = (0) x scalar(@l);
-    my (%funcs, @blk_stk, @sub_stk);
-    my ($msq, $mdq, $in_bt, $pending_fn) = (0, 0, 0, 0);
-    $i = 0;
-    while ($i <= $#l) {
-      if ($kind[$i] ne "code") { $i++; next }
-      my $line = $l[$i];
-      $in_fn[$i] = 1 if grep { $_->[3] } @blk_stk;
-      if (!$msq && !$mdq && !@sub_stk && !$in_bt) {
-        if ($line =~ /^\s*#/) { $i++; next }
-        # Join explicit backslash-newline continuations into one logical command
-        # before discovering overrides (`alias \\\n  cat=bash`, `exec \\\n > >(bash)`)
-        # and walking compound groups.
-        my $j = $i;
-        my $log = $line;
-        while ($j < $#l && $kind[$j + 1] eq "code" && $log =~ /(?<!\\)(?:\\\\)*\\\z/) {
-          $log =~ s/\\\z/ /;
-          $j++;
-          $in_fn[$j] = 1 if grep { $_->[3] } @blk_stk;
-          $log .= $l[$j];
-        }
-        my $toks = sh_tokenize($log);
-        sh_scan_overrides($log, \%funcs, $toks);
-        if ($toks) {
-          sh_walk_groups($toks, \@blk_stk, \$pending_fn, $i,
-            sub {
-              my ($sln, undef, $eln, undef) = @_;
-              if ($sln < $eln) { $unfilt[$_] = 1 for $sln .. $eln }
-            });
-          $i = $j + 1;
-          next;
-        }
-      } else {
-        $unfilt[$i] = 1 if @sub_stk || $in_bt;
-      }
-      # Character-level state update for multiline quotes or multiline substitutions.
-      my ($esc, $p, $len) = (0, 0, length $line);
-      while ($p < $len) {
-        my $c = substr($line, $p, 1);
-        if ($esc) { $esc = 0; $p++; next }
-        if ($c eq "\\" && !$msq) { $esc = 1; $p++; next }
-        if ($in_bt) {
-          if ($c eq '`') { $in_bt = 0 }
-          $p++;
-          next;
-        }
-        if ($c eq "'" && !$mdq) { $msq = !$msq; $p++; next }
-        if ($c eq '"' && !$msq) { $mdq = !$mdq; $p++; next }
-        if (!$msq && !$mdq && $c eq "#" && ($p == 0 || substr($line, $p - 1, 1) =~ /[\s;|&(]/)) { last }
-        my $two = substr($line, $p, 2);
-        if (!$msq && ($two eq '$(' || (!$mdq && ($two eq '<(' || $two eq '>(')))) {
-          my $nj = sh_skip_balanced($line, $p, $two);
-          if (defined $nj) { $p = $nj; next }
-          push @sub_stk, ["sub", $mdq];
-          $mdq = 0;
-          $unfilt[$i] = 1;
-          $p += 2;
-          next;
-        }
-        if (!$msq && $two eq '${') {
-          my $nj = sh_skip_balanced($line, $p, '${', $mdq);
-          if (defined $nj) { $p = $nj; next }
-          $p += 2;
-          next;
-        }
-        if (!$msq && $c eq '`') {
-          my $nj = sh_skip_balanced($line, $p, '`');
-          if (defined $nj) { $p = $nj; next }
-          $in_bt = 1;
-          $unfilt[$i] = 1;
-          $p++;
-          next;
-        }
-        if (@sub_stk && !$msq && !$mdq) {
-          if ($c eq "(") { push @sub_stk, ["paren", 0]; $p++; next }
-          if ($c eq ")") {
-            if ($sub_stk[-1][0] eq "sub") { $mdq = (pop @sub_stk)->[1] }
-            elsif ($sub_stk[-1][0] eq "paren") { pop @sub_stk }
-            $p++;
-            next;
-          }
-          if (($p == 0 || substr($line, $p - 1, 1) =~ /[\s;|&(]/) && substr($line, $p) =~ /\A(case|esac)(?=[\s;|&()]|\z)/) {
-            my $kw = $1;
-            if ($kw eq "case") { push @sub_stk, ["case", 0] }
-            elsif ($sub_stk[-1][0] eq "case") { pop @sub_stk }
-            $p += length($kw);
-            next;
-          }
-        }
-        $p++;
-      }
-      $i++;
-    }
+    my @kind = @{$base->{kind}};
+    my %funcs = %{$base->{funcs}};
+    my @closed_hds = @{$base->{closed_hds}};
+    my @unfilt = @$unfilt_ref;
+    my @in_fn  = @$infn_ref;
+    my @unq_spans;
     # Pass 1c: classify every closed heredoc (and scan executable heredocs for
     # command overrides, iterating to a fixpoint if `hd_exec` defines `cat`/`tee`).
     my %eff_ov = (%funcs, $overridden ? %$overridden : ());
@@ -1853,11 +1936,9 @@ sub sh_parse {
         }
       }
     }
-    $kinds_ref  = \@kind;
-    $funcs_ref  = \%funcs;
-    $unq_ref    = \@unq_spans;
-    $unfilt_ref = \@unfilt;
-    $infn_ref   = \@in_fn;
+    $kinds_ref = \@kind;
+    $funcs_ref = \%funcs;
+    $unq_ref   = \@unq_spans;
   }
   my @kind = @$kinds_ref;
   my @scan = @l;
@@ -1868,11 +1949,19 @@ sub sh_parse {
     my @ex = split /\n/, extract_cmdsubs($whole, 0), -1;
     for my $k (0 .. $#$span) { $scan[$span->[$k]] = $ex[$k] // "" }
   }
+  my %eff_scan = (%$funcs_ref, $overridden ? %$overridden : ());
   my $i = 0;
   while ($i <= $#l) {
     if ($kind[$i] eq "hd_quoted" || $kind[$i] eq "hd_delim") { $scan[$i] = ""; $i++; next }
     if ($kind[$i] ne "code" || $unfilt_ref->[$i]) { $i++; next }
     if ($l[$i] =~ /^\s*#/) { $i++; next }
+    if (exists $base->{line_toks}{$i}) {
+      if (my $lt = $base->{line_toks}{$i}) {
+        $scan[$i] = filter_sh_logical($l[$i], \%eff_scan, $infn_ref->[$i] ? 1 : 0, $lt);
+      }
+      $i++;
+      next;
+    }
     # Gather a logical shell line across trailing `\` or an open multiline quote
     # in O(line length), failing closed if quotes never close, hit an unfiltered
     # region, or split a substitution opener across `\`-newline (`$\` + `(`).
@@ -1906,7 +1995,6 @@ sub sh_parse {
     if (!$lsq && !$ldq && !$split_sub) {
       my $joined = join "\n", @parts;
       my $blk_fn = (grep { $infn_ref->[$_] } $i .. $j) ? 1 : 0;
-      my %eff_scan = (%$funcs_ref, $overridden ? %$overridden : ());
       my @fl = split /\n/, filter_sh_logical($joined, \%eff_scan, $blk_fn), -1;
       for my $k (0 .. $#fl) { $scan[$i + $k] = $fl[$k] }
       $i = $j + 1;
