@@ -3,7 +3,8 @@
    privatized schedule both execute. The host controls distinguish rounding per step and rounding
    per window. Hand-built 1-D and 2-D affine nests check original contribution order with
    order-sensitive sums and interleaved channel loops, and pin the coupled-pair and residue-budget
-   declines. *)
+   declines. Strided unit-tap axes exercise both affine paths (gh-ocannl-2479), with hand-built
+   controls for shifted, negative, and guard-dependent single-term axes. *)
 
 (* cc-fp-contract: exact-operands -- the dyadic products and all sums onto the incoming values fit
    the f32 significand. *)
@@ -319,6 +320,9 @@ let overlapping_geoms_2d =
     { pos_h = 13; pos_w = 11; taps_h = 5; taps_w = 5; channels_2d = 3; stride_h = 2; stride_w = 2 };
   ]
 
+let unit_tap_overlap_2d =
+  { pos_h = 7; pos_w = 11; taps_h = 1; taps_w = 3; channels_2d = 6; stride_h = 3; stride_w = 2 }
+
 let () =
   let geoms =
     overlapping_geoms_2d
@@ -341,6 +345,16 @@ let () =
           stride_h = 4;
           stride_w = 3;
         };
+        unit_tap_overlap_2d;
+        {
+          pos_h = 7;
+          pos_w = 11;
+          taps_h = 3;
+          taps_w = 1;
+          channels_2d = 3;
+          stride_h = 4;
+          stride_w = 2;
+        };
       ]
   in
   Test_utils.with_policy
@@ -350,7 +364,84 @@ let () =
 let () =
   Test_utils.with_policy
     (fun policy -> { policy with Ir.Numerics.fp16_arithmetic = Ir.Numerics.Fp16_wide })
-    (fun () -> List.iter overlapping_geoms_2d ~f:check_fp16_2d)
+    (fun () -> List.iter (overlapping_geoms_2d @ [ unit_tap_overlap_2d ]) ~f:check_fp16_2d)
+
+let () =
+  let open Ll_test in
+  let i = sym () and d = sym () in
+  let out = node_factory ~prec:bf16 ~first_id:24790 ~dims:[| 6 |] () "ncgr_lone_axis" in
+  let source ?(guard = Fn.id) cell =
+    let update = set_at out cell (add_own (get out [| cell |]) (embed d)) in
+    loop_n d 3 (loop_n i 3 (guard update))
+  in
+  let path_is path code =
+    List.equal (List.equal Ir.Indexing.equal_symbol) (nest_paths code) [ path ]
+  in
+  let width_is wide code =
+    match LL.serial_accum_widths ~serialized:(fun _ _ -> false) ~tn:out code with
+    | [ site ] -> Bool.equal site.LL.sa_widens wide
+    | _ -> false
+  in
+  let shifted = source (aff [ (2, i) ] 1) |> LL.sink_narrow_reduction_loops in
+  p "the shifted positive affine axis sinks its reduction and widens"
+    (path_is [ i; d ] shifted && width_is true shifted);
+  let reverse = source (aff [ (-2, i) ] 5) |> LL.sink_narrow_reduction_loops in
+  p "the in-bounds negative affine axis keeps its reduction outside"
+    (path_is [ d; i ] reverse && width_is false reverse);
+  let outside = aff [ (2, i) ] (-1) in
+  let guard = if_ (cmp Ir.Ops.Cmple (embed_idx (fixed 0)) (embed_idx outside)) in
+  let guarded = source ~guard outside |> LL.sink_narrow_reduction_loops in
+  p "the positive affine axis needing a bounds guard keeps its reduction outside"
+    (path_is [ d; i ] guarded && width_is false guarded)
+
+let () =
+  let open Ll_test in
+  let module Nd = Ir.Ndarray in
+  let dims = [| 8 |] in
+  let d = sym () and i = sym () in
+  let out = node_factory ~prec:Ir.Ops.fp8 ~first_id:24791 ~dims () "ncgr_guarded_fp8" in
+  materialize out;
+  let cell = aff [ (2, i) ] 0 in
+  let contribution = embed_idx (aff [ (1, i); (1, d) ] 1) in
+  let guard = cmp Ir.Ops.Cmplt (embed_idx (aff [ (1, d) ] 1)) (embed i) in
+  let update = set_at out cell (add_own (get out [| cell |]) contribution) in
+  let source = loop_n d 3 (loop_n i 4 (if_ guard update)) in
+  let sunk = LL.sink_narrow_reduction_loops source in
+  (* Cells 0 and 2 receive no updates. Seed them with an E5M2 infinity and a NaN payload through raw
+     storage so the host codec cannot canonicalize either byte before the test starts. *)
+  let initial = [| 0x7c; 0x40; 0x7d; 0x44; 0x3c; 0x48; 0x3c; 0x4c |] in
+  let seed =
+    Bigarray.Array1.of_array Bigarray.Char Bigarray.C_layout (Array.map initial ~f:Char.of_int_exn)
+    |> Bigarray.genarray_of_array1
+  in
+  let run ~name code =
+    let opt = optimize_scoped ~name ~raw:source code in
+    let ctx, routine = link ~name opt in
+    let ctx = Context.from_host ctx out (Nd.Fp8_nd seed) in
+    let ctx = Context.run ctx routine in
+    let result = Context.to_host ctx out in
+    Context.release ctx;
+    match result with
+    | Nd.Fp8_nd bytes ->
+        let bytes = Bigarray.array1_of_genarray bytes in
+        Array.init dims.(0) ~f:(fun j -> Char.to_int bytes.{j})
+    | _ -> failwith "expected FP8 storage"
+  in
+  Test_utils.with_policy
+    (fun policy -> { policy with Ir.Numerics.narrow_compute_f32 = true })
+    (fun () ->
+      let reference = run ~name:"ncgr_guarded_fp8_reference" source in
+      let actual = run ~name:"ncgr_guarded_fp8_sunk" sunk in
+      let same_index = List.equal Ir.Indexing.equal_symbol in
+      p "a guarded FP8 axis keeps its reduction outside"
+        (List.equal same_index (nest_paths sunk) [ [ d; i ] ]);
+      p "the guarded FP8 reference preserves untouched bytes and updates its finite cells"
+        (reference.(0) = initial.(0)
+        && reference.(2) = initial.(2)
+        && reference.(4) <> initial.(4)
+        && reference.(6) <> initial.(6));
+      p_all2 "the guarded FP8 axis preserves the materialized result byte for byte" actual reference
+        ~f:Int.equal)
 
 let () =
   let open Ll_test in

@@ -793,6 +793,12 @@ files.
   and guarded affine scans), the narrow-float gate stays and the GPU schedule-time sink
   (`Autotune.reduction_sink`) stays separate. The allowlist is fail-closed (perfect serial chain, the target read only at its own cell,
   pure index guards that move with the loop they mention). Plain cell loops interchange.
+  Positive single-term affine axes `a*i + c` (gh-ocannl-2479) also keep `i` as a cell loop.
+  This covers the strided unit-tap axis of a 1×k or k×1 convolution and physical padding shifts.
+  The write symbol must be distinct from those of every other axis. Full-range physical bounds
+  and separation must hold even when a guard protects the original access.
+  Guarded nests with a single-term axis and FP8 storage decline. The guard can leave a cell
+  untouched, while a widened accumulator's write-back can change its bits.
   A cell with independent supported positive affine pairs, one per axis (gh-ocannl-2423,
   gh-ocannl-2464), is reparametrized per overlapping axis by owner and residue while preserving
   each cell's original contribution order across windows and interleaved reductions (each
@@ -821,7 +827,10 @@ files.
   split tail, a disjoint window with gaps, FP16, and the shorter-scan-over-64 decline; 2-D
   overlapping, mixed, and all-injective bf16 parity plus overlapping 2-D FP16 parity against the
   once-rounded f32 twin, privatized f32 tiles, a hand-built mixed-frame 2-D order witness, and
-  coupled-pair / residue-budget boundary controls). The 1-D and 2-D overlapping FP16 fixtures select
+  coupled-pair / residue-budget boundary controls). It also checks strided unit-tap convolutions
+  with overlapping and disjoint windows, and pins the declines for an in-bounds negative
+  coefficient and for a positive single-term axis that needs a guard for bounds.
+  The 1-D and 2-D overlapping FP16 fixtures select
   `Fp16_wide` explicitly and start at 2048 to match the BF16 fixtures' spacing of two at 256, so
   the same window contributions expose per-window rounding in both formats. The plain path is pinned by
   `lowered_nest_order`'s narrow legs and `narrow_grad_residency` (a bf16 dense layer's three

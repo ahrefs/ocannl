@@ -47,6 +47,17 @@ FP16 stride 2: the gradient equals the f32 gradient rounded once per cell: true
 2-D stride (4, 3): the bf16 gradient equals the f32 gradient rounded once per cell: true
 2-D stride (4, 3): the input gradient's accumulator tiles are f32: true
 2-D stride (4, 3): the privatized gradient equals the f32 gradient rounded once per cell: true
+2-D stride (3, 2): the materialized f32 gradient equals the host sums: true
+2-D stride (3, 2): rounding per step differs from rounding once per cell: true
+2-D stride (3, 2): rounding per window differs from rounding once per cell: true
+2-D stride (3, 2): the bf16 gradient equals the f32 gradient rounded once per cell: true
+2-D stride (3, 2): the input gradient's accumulator tiles are f32: true
+2-D stride (3, 2): the privatized gradient equals the f32 gradient rounded once per cell: true
+2-D stride (4, 2): the materialized f32 gradient equals the host sums: true
+2-D stride (4, 2): rounding per step differs from rounding once per cell: true
+2-D stride (4, 2): the bf16 gradient equals the f32 gradient rounded once per cell: true
+2-D stride (4, 2): the input gradient's accumulator tiles are f32: true
+2-D stride (4, 2): the privatized gradient equals the f32 gradient rounded once per cell: true
 2-D FP16 stride (1, 1): the materialized f32 gradient equals the host sums: true
 2-D FP16 stride (1, 1): rounding per step differs from rounding once per cell: true
 2-D FP16 stride (1, 1): rounding per window differs from rounding once per cell: true
@@ -59,6 +70,18 @@ FP16 stride 2: the gradient equals the f32 gradient rounded once per cell: true
 2-D FP16 stride (2, 2): the fp16 gradient equals the f32 gradient rounded once per cell: true
 2-D FP16 stride (2, 2): the input gradient's accumulator tiles are f32: true
 2-D FP16 stride (2, 2): the privatized gradient equals the f32 gradient rounded once per cell: true
+2-D FP16 stride (3, 2): the materialized f32 gradient equals the host sums: true
+2-D FP16 stride (3, 2): rounding per step differs from rounding once per cell: true
+2-D FP16 stride (3, 2): rounding per window differs from rounding once per cell: true
+2-D FP16 stride (3, 2): the fp16 gradient equals the f32 gradient rounded once per cell: true
+2-D FP16 stride (3, 2): the input gradient's accumulator tiles are f32: true
+2-D FP16 stride (3, 2): the privatized gradient equals the f32 gradient rounded once per cell: true
+the shifted positive affine axis sinks its reduction and widens: true
+the in-bounds negative affine axis keeps its reduction outside: true
+the positive affine axis needing a bounds guard keeps its reduction outside: true
+a guarded FP8 axis keeps its reduction outside: true
+the guarded FP8 reference preserves untouched bytes and updates its finite cells: true
+the guarded FP8 axis preserves the materialized result byte for byte: true
 a tied traversal chooses the frame with one residue nest: true
 the order witness loses the first small term at the overlapping cell: true
 the guarded nonunit-stride pair has a wide reduction in every residue: true
