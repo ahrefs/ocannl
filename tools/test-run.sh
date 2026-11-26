@@ -6334,12 +6334,19 @@ case $sub in
     # meanwhile is refused, not raced; Codex review round 1 on PR #832), under
     # a run directory that is never published and is removed at the end, and
     # its --cap bounds the build as a run's would.
-    # Save the request before option and targets-file expansion so the owed
-    # hook can compare its coverage with the command Dune actually ran.
+    # Save the fleet leg invocation identity (so owed-run.sh can tell an
+    # ineligible run of this leg from a stale or missing receipt) and, for an
+    # explicit spaced `run --expect-backend cc` request, the raw Dune request
+    # before option and targets-file expansion.
+    fleet_leg_record=
+    fleet_leg_receipt_link=
     fleet_leg_cmd=
-    if [ "$sub" = run ] && [ -n "${FLEET_LEG_RUN_RECORD:-}" ] &&
-       [ "${1-}" = --expect-backend ] && [ "${2-}" = cc ]; then
-      fleet_leg_cmd=$(printf '%q ' "${@:3}")
+    if [ "$sub" = run ] && [ -n "${FLEET_LEG_RUN_RECORD:-}" ]; then
+      fleet_leg_record=$FLEET_LEG_RUN_RECORD
+      fleet_leg_receipt_link=${FLEET_LEG_RECEIPT_LINK:-}
+      if [ "${1-}" = --expect-backend ] && [ "${2-}" = cc ] && [ $# -ge 3 ]; then
+        fleet_leg_cmd=$(printf '%q ' "${@:3}")
+      fi
     fi
     cap=${OCANNL_TOOL_TEST_CAP:-3600}
     cap_default=${OCANNL_TOOL_TEST_CAP:+explicit}
@@ -6470,9 +6477,9 @@ case $sub in
     trap 'fwd_sig TERM' TERM
     trap 'fwd_sig HUP' HUP
     new_run "$@"
-    if [ -n "$fleet_leg_cmd" ]; then
-      { printf '%s\n' "$FLEET_LEG_RUN_RECORD" >"$run_dir/fleet-leg-run-record" &&
-        printf '%s\n' "$fleet_leg_cmd" >"$run_dir/fleet-leg-command"; } ||
+    if [ -n "$fleet_leg_record" ]; then
+      { printf '%s\n' "$fleet_leg_record" >"$run_dir/fleet-leg-run-record" &&
+        { [ -z "$fleet_leg_cmd" ] || printf '%s\n' "$fleet_leg_cmd" >"$run_dir/fleet-leg-command"; }; } ||
         { rm -rf "$run_dir"; die "cannot record the fleet leg in $run_dir"; }
     fi
     if [ -n "$expect" ]; then
@@ -6514,6 +6521,33 @@ case $sub in
     if [ "$sub" != plan ]; then
       publish_run || { rm -rf "$run_dir"; die "cannot publish $run_dir"; }
     fi
+    # Isolate the supervisor, Dune, and child tests from the outer fleet leg's
+    # receipt variables; this launcher retains its copies above.
+    unset FLEET_LEG_RUN_RECORD FLEET_LEG_RECEIPT_LINK FLEET_LEG_RECEIPT_DIR
+    register_fleet_leg_receipt() {
+      local prev prev_rc
+      [ "$sub" = run ] && [ -n "$fleet_leg_record" ] && [ -n "$fleet_leg_receipt_link" ] || return 0
+      [ -f "$run_dir/exit" ] || return 0
+      if [ ! -e "$fleet_leg_receipt_link" ] && [ ! -L "$fleet_leg_receipt_link" ]; then
+        ln -s "$run_dir" "$fleet_leg_receipt_link" 2>/dev/null ||
+          echo "test-run: warning: cannot link fleet leg receipt $fleet_leg_receipt_link -> $run_dir" >&2
+        return 0
+      fi
+      [ -L "$fleet_leg_receipt_link" ] || return 0
+      prev=$(readlink "$fleet_leg_receipt_link" 2>/dev/null || true)
+      # Only replace an earlier test-run.sh receipt from this same leg invocation.
+      [ -n "$prev" ] && [ -d "$prev" ] &&
+        [ "$(cat "$prev/kind" 2>/dev/null)" != linux-shell ] &&
+        cmp -s "$prev/fleet-leg-run-record" <(printf '%s\n' "$fleet_leg_record") || return 0
+      prev_rc=$(cat "$prev/exit" 2>/dev/null || true)
+      # Keep a passing eligible-candidate receipt if a trailing run is ineligible or failed.
+      if [ -f "$prev/fleet-leg-command" ] && [ "$prev_rc" = 0 ] &&
+         { [ -z "$fleet_leg_cmd" ] || [ "$digest_rc" != 0 ]; }; then
+        return 0
+      fi
+      rm -f "$fleet_leg_receipt_link" && ln -s "$run_dir" "$fleet_leg_receipt_link" 2>/dev/null ||
+        echo "test-run: warning: cannot update fleet leg receipt $fleet_leg_receipt_link -> $run_dir" >&2
+    }
     # The supervisor inherits lock fd 9 and owns the run from here: it records
     # its identity, runs its child under the cap -- first the batch's
     # resolution (`_resolve`), which then runs dune -- and publishes the
@@ -6561,6 +6595,7 @@ case $sub in
       [ "$sub" != plan ] || plan_finish "$@"
       if [ -f "$run_dir/exit" ]; then
         digest "$run_dir"
+        register_fleet_leg_receipt
         exit "$digest_rc"
       fi
       echo "run died before its supervisor recorded itself: $run_dir (log: $run_dir/log)"
@@ -6590,6 +6625,7 @@ case $sub in
       [ "$sub" != plan ] || plan_finish "$@"
       if [ -f "$run_dir/exit" ]; then
         digest "$run_dir"
+        register_fleet_leg_receipt
         exit "$digest_rc"
       fi
       echo "run died without recording a verdict (supervisor killed?): $run_dir"

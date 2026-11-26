@@ -26,14 +26,22 @@
 # can read one, anonymously. Each write keeps the head's earlier records and adds its own.
 #
 # What `record` certifies:
-#   - For a tools/test-run.sh run record under ~/.ocannl-test-runs: `exit` present (the run
-#     finished) and 0; `dirty` present and empty (clean at launch); `head`, the commit;
-#     `expect-backend` exactly `cc`; and `cmd`, dune's argv, one of FULL or TRAIN below.
+#   - For a tools/test-run.sh run record (under ~/.ocannl-test-runs or a private
+#     OCANNL_TOOL_TEST_RUNS): `exit` present (the run finished) and 0; `dirty` present and empty
+#     (clean at launch); `head`, the commit; `expect-backend` exactly `cc`; and `cmd`, dune's
+#     argv, one of FULL or TRAIN below.
 #   - For a tools/linux-shell-leg.sh receipt (`kind` = `linux-shell`, gh-ocannl-2414): `exit`
 #     present and 0; `dirty` present and empty; `os` exactly `Linux`; `head`, the commit; and
 #     `targets`, a comma-separated canonical list of `harnesses`, `member:<MEMBER>` and/or
 #     `@<DIR>/runtest-<NAME>`.
 # Refused otherwise, nothing published.
+# `leg-record` (invoked by `tools/owed-run-report.sh`, gh-ocannl-2359, gh-ocannl-2468) prefers
+# `FLEET_LEG_RECEIPT_DIR` (never falling back to `last` when set) and falls back to the
+# worktree's `linux-shell` pointer or `tools/test-run.sh paths run last` only when unset. A
+# validly bound, clean, exit-0 receipt for this leg and observed SHA whose backend is not `cc` or
+# whose recorded request is not a FULL/TRAIN command logs `ineligible leg` instead of `record
+# refused`; broken bindings, stale receipts, wrong heads, and dirty/failed runs log `record
+# refused`.
 #
 # What `check HEAD NEED...` admits (exit 0, one `owed-run: admitted ...` line per record it
 # used), as a fail-closed allowlist. NEED is `runtest` (the full suite), `train` (every `train-`
@@ -443,7 +451,7 @@ on_record_master() {
 
 record_run() {
   local run=$1 print=$2 leg_record=${3-} observed_head=${4-}
-  local requested_cmd requested_cover h c host line checkout writer=record
+  local requested_cmd requested_cover exp_backend h c host line checkout writer=record
   case $run in
     '' | last) run=$(cd "$root" && "${BASH:-bash}" tools/test-run.sh paths run last) || die "record: no last run of this worktree" ;;
   esac
@@ -451,10 +459,6 @@ record_run() {
   if [ -n "$leg_record" ]; then
     cmp -s "$run/fleet-leg-run-record" <(printf '%s\n' "$leg_record") ||
       die "record: $run does not match this fleet leg's run record"
-    requested_cmd=$(cat "$run/fleet-leg-command" 2>/dev/null) &&
-      [[ $requested_cmd != *$'\n'* ]] && cmd_cover "$requested_cmd" ||
-      die "record: $run did not request an owed-run command"
-    requested_cover=$cover
   fi
   [ -f "$run/exit" ] || die "record: $run has no exit status: it has not finished"
   [ "$(cat "$run/exit")" = 0 ] || die "record: $run exited $(cat "$run/exit"), not 0"
@@ -462,18 +466,39 @@ record_run() {
   [ ! -s "$run/dirty" ] || die "record: $run ran a dirty checkout"
   h=$(sed -n 1p "$run/head" 2>/dev/null)
   is_sha "$h" || die "record: $run recorded no head commit"
-  [ "$(cat "$run/expect-backend" 2>/dev/null)" = cc ] ||
-    die "record: $run was not run with --expect-backend cc (its expect-backend: '$(cat "$run/expect-backend" 2>/dev/null)')"
-  c=$(sed -n 1p "$run/cmd" 2>/dev/null) c=${c% }
-  cmd_cover "$c" || die "record: $run ran '$c', none of the forms a record covers (tools/owed-run.sh's header)"
-  host=$(hostname -s 2>/dev/null || hostname)
   if [ -n "$leg_record" ]; then
-    [ "$cover" = "$requested_cover" ] || die "record: $run does not cover the fleet leg's requested targets"
     [ "$h" = "$observed_head" ] || die "record: $run is for a different head than the fleet leg observed"
     [ "$h" = "$(git -C "$root" rev-parse HEAD)" ] || die "record: $run is for a different head"
     checkout=$(git -C "$root" status --porcelain --untracked-files=all --ignore-submodules=none) ||
       die "record: could not read the fleet worktree's checkout state"
     [ -z "$checkout" ] || die "record: the fleet worktree is dirty"
+  fi
+  exp_backend=$(cat "$run/expect-backend" 2>/dev/null)
+  if [ "$exp_backend" != cc ]; then
+    if [ -n "$leg_record" ]; then
+      printf '%s\n' "$me: recorded nothing (ineligible leg: $run was not run with --expect-backend cc; expect-backend is '${exp_backend:-none}')"
+      return 0
+    fi
+    die "record: $run was not run with --expect-backend cc (its expect-backend: '$exp_backend')"
+  fi
+  if [ -n "$leg_record" ]; then
+    [ -f "$run/fleet-leg-command" ] ||
+      die "record: $run did not request an owed-run command (missing fleet-leg-command)"
+    requested_cmd=$(cat "$run/fleet-leg-command" 2>/dev/null) ||
+      die "record: could not read $run/fleet-leg-command"
+    [[ $requested_cmd != *$'\n'* ]] && [ -n "${requested_cmd% }" ] ||
+      die "record: $run did not request an owed-run command"
+    if ! cmd_cover "$requested_cmd"; then
+      printf '%s\n' "$me: recorded nothing (ineligible leg: $run did not request an owed-run command: '${requested_cmd% }')"
+      return 0
+    fi
+    requested_cover=$cover
+  fi
+  c=$(sed -n 1p "$run/cmd" 2>/dev/null) c=${c% }
+  cmd_cover "$c" || die "record: $run ran '$c', none of the forms a record covers (tools/owed-run.sh's header)"
+  host=$(hostname -s 2>/dev/null || hostname)
+  if [ -n "$leg_record" ]; then
+    [ "$cover" = "$requested_cover" ] || die "record: $run does not cover the fleet leg's requested targets"
     # Integration runs at merged heads owe no record and can leave a ref that no PR will prune.
     if on_record_master "$h"; then
       printf '%s\n' "$me: recorded nothing (head is on master at $OWED_RUN_URL)"
@@ -573,24 +598,37 @@ case $verb in
   leg-record)
     [ $# = 3 ] && [[ $1 = /* ]] && [ -n "$2" ] && is_sha "$3" ||
       die "leg-record: expected an absolute leg record path, request ID and observed SHA"
-    linux_cand=
-    if [ -n "${FLEET_LEG_RECEIPT_DIR:-}" ] && [ -d "$FLEET_LEG_RECEIPT_DIR" ] &&
-       [ "$(cat "$FLEET_LEG_RECEIPT_DIR/kind" 2>/dev/null)" = linux-shell ]; then
-      linux_cand=$FLEET_LEG_RECEIPT_DIR
-    elif ptr=$(linux_shell_last_pointer 2>/dev/null) && [ -r "$ptr" ]; then
-      cand=$(sed -n 1p "$ptr" 2>/dev/null)
-      if [ -n "$cand" ] && [ -d "$cand" ] && [ "$(cat "$cand/kind" 2>/dev/null)" = linux-shell ] &&
-         cmp -s "$cand/fleet-leg-run-record" <(printf '%s\n' "$1"); then
-        linux_cand=$cand
-      fi
-    fi
-    if [ -n "$linux_cand" ]; then
-      if ! ( export GIT_TERMINAL_PROMPT=0; record_linux_shell "$linux_cand" 0 "$1" "$3" ) </dev/null 2>&1; then
+    if [ -n "${FLEET_LEG_RECEIPT_DIR:-}" ]; then
+      if [[ $FLEET_LEG_RECEIPT_DIR != /* ]] || [[ $FLEET_LEG_RECEIPT_DIR = *$'\n'* ]]; then
+        printf '%s\n' "$me: record: FLEET_LEG_RECEIPT_DIR must be a single-line absolute path: $FLEET_LEG_RECEIPT_DIR"
         printf '%s\n' "$me: recorded nothing (record refused)"
+      elif [ -d "$FLEET_LEG_RECEIPT_DIR" ] &&
+           [ "$(cat "$FLEET_LEG_RECEIPT_DIR/kind" 2>/dev/null)" = linux-shell ]; then
+        if ! ( export GIT_TERMINAL_PROMPT=0; record_linux_shell "$FLEET_LEG_RECEIPT_DIR" 0 "$1" "$3" ) </dev/null 2>&1; then
+          printf '%s\n' "$me: recorded nothing (record refused)"
+        fi
+      else
+        if ! ( export GIT_TERMINAL_PROMPT=0; record_run "$FLEET_LEG_RECEIPT_DIR" 0 "$1" "$3" ) </dev/null 2>&1; then
+          printf '%s\n' "$me: recorded nothing (record refused)"
+        fi
       fi
     else
-      if ! ( export GIT_TERMINAL_PROMPT=0; record_run last 0 "$1" "$3" ) </dev/null 2>&1; then
-        printf '%s\n' "$me: recorded nothing (record refused)"
+      linux_cand=
+      if ptr=$(linux_shell_last_pointer 2>/dev/null) && [ -r "$ptr" ]; then
+        cand=$(sed -n 1p "$ptr" 2>/dev/null)
+        if [ -n "$cand" ] && [ -d "$cand" ] && [ "$(cat "$cand/kind" 2>/dev/null)" = linux-shell ] &&
+           cmp -s "$cand/fleet-leg-run-record" <(printf '%s\n' "$1"); then
+          linux_cand=$cand
+        fi
+      fi
+      if [ -n "$linux_cand" ]; then
+        if ! ( export GIT_TERMINAL_PROMPT=0; record_linux_shell "$linux_cand" 0 "$1" "$3" ) </dev/null 2>&1; then
+          printf '%s\n' "$me: recorded nothing (record refused)"
+        fi
+      else
+        if ! ( export GIT_TERMINAL_PROMPT=0; record_run last 0 "$1" "$3" ) </dev/null 2>&1; then
+          printf '%s\n' "$me: recorded nothing (record refused)"
+        fi
       fi
     fi ;;
   add)
