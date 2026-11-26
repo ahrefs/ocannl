@@ -2242,10 +2242,11 @@ val without_node_bounds : (unit -> 'a) -> 'a
 val sink_narrow_reduction_loops : t -> t
 (** In a perfect serial nest updating a narrow-float node read only at the written cell, put cell
     loops outside reductions so code generation can hold the whole reduction at [accum_prec]
-    (gh-ocannl-2362). For plain indices this is an interchange. For independent supported positive
-    affine pairs, one per axis (gh-ocannl-2423, gh-ocannl-2464), cell loops own every overlapping
-    window that reaches the cell. Both preserve each cell's contribution order. Part of
-    {!post_virtualization_pipeline}, after {!rewrite_one_hot_reductions}. *)
+    (gh-ocannl-2362). Plain indices and certified injective positive affine axes, including
+    single-term axes (gh-ocannl-2479), need only interchange. For independent positive affine pairs
+    that overlap (gh-ocannl-2423, gh-ocannl-2464), cell loops own every window that reaches the
+    cell. Both preserve each cell's contribution order. Part of {!post_virtualization_pipeline},
+    after {!rewrite_one_hot_reductions}. *)
 
 val widen_narrow_scatters :
   accum_prec:(Ops.prec -> Ops.prec) ->

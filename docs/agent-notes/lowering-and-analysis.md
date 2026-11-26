@@ -549,8 +549,10 @@ files.
   halves, roles read off each nest's accumulating write, with an interchanged negative control, and
   the narrow half: bf16 weight and input gradients raw reduction-outer, optimized output-first.
   A bf16 input gradient over independent affine window axes (1-D or 2-D) gains cell loops owning
-  every visit before all reductions (gh-ocannl-2423, gh-ocannl-2464). An f32 gradient (plain or
-  overlapping-window) keeps the lowered order (gh-ocannl-2422; backend-precision-and-simd.md).
+  every visit before all reductions (gh-ocannl-2423, gh-ocannl-2464). A unit kernel axis can fold
+  to a positive single-term affine index that keeps its iterator as a cell loop after the bounds
+  and separation checks (gh-ocannl-2479). An f32 gradient (plain or overlapping-window) keeps
+  the lowered order (gh-ocannl-2422; backend-precision-and-simd.md).
 - **A gh-490 extent guard is per-ITERATOR, so an axis with no product iterator gets none**, and
   `Accum_op` reaches that shape from ordinary `%op` code: a maximum-one symbolic axis has an empty
   product space, both sides indexed at `Fixed_idx 0`. Reducing over one bound to zero returned the

@@ -13781,21 +13781,22 @@ let validate_lane_bounds ?(site = "Low_level.validate_lane_bounds") ?comp_prec (
    gained on those two yet regressed on [lenet] under overlapping-window sinking. Because the
    optimizer is backend-independent, one ungated pass cannot replace the narrow-only gate plus the
    GPU schedule-time sink ([Autotune.reduction_sink]); - the leaf reads its target, and only at its
-   own cell (no other cell, no [Get_dynamic], no [Local_scope] body mentioning it), so no step
-   observes another cell's progress; - cell loops are plain iterators, or belong to independent
-   positive two-iterator affine axes (gh-ocannl-2423, gh-ocannl-2464) with pairwise-distinct write
-   symbols across all axes. Each overlapping pair is reparametrized by residue and owner so the
-   outer cell loops own all windows and the entire reduction can stay at [accum_prec]. The update
-   must be an ordinary accumulation with remappable indices. Coupled affine pairs sharing an
-   iterator, other affine forms, concatenation, residue products past the code-size cap and unproved
-   bounds decline. Injective pairs keep both iterators as outer cell loops after the separation
-   proof; - guards between levels are [pure_index_guard]s; each moves to just inside the innermost
-   (new order) chain loop it mentions, or above the chain if it mentions none -- a pure guard
-   filters tuples, so where it sits below its own loops changes neither which tuples run nor their
-   order. [Set_dynamic] scatters, [Tile_mma], scans, sibling statements and every other leaf are
-   left alone (narrow-float [Set_dynamic] add-scatters are widened by {!widen_narrow_scatters} in
-   {!specialize_proc}). Runs after [rewrite_one_hot_reductions], whose scatter match wants the
-   vocabulary loop innermost as lowered (gh-ocannl-466). *)
+   own cell (no other cell, no [Get_dynamic], no
+   [Local_scope] body mentioning it), so no step observes another cell's progress; - cell loops are
+   plain iterators or belong to positive single- or two-iterator affine axes (gh-ocannl-2423,
+   gh-ocannl-2464, gh-ocannl-2479) with pairwise-distinct write symbols across all axes. Each
+   overlapping pair is reparametrized by residue and owner so the outer cell loops own all windows
+   and the entire reduction can stay at [accum_prec]. The update must be an ordinary accumulation
+   with remappable indices. Coupled affine pairs sharing an iterator, other affine forms,
+   concatenation, residue products past the code-size cap and unproved bounds decline. Injective
+   pairs keep both iterators as outer cell loops after the separation proof; - guards between levels
+   are [pure_index_guard]s; each moves to just inside the innermost (new order) chain loop it
+   mentions, or above the chain if it mentions none -- a pure guard filters tuples, so where it sits
+   below its own loops changes neither which tuples run nor their order. [Set_dynamic] scatters,
+   [Tile_mma], scans, sibling statements and every other leaf are left alone (narrow-float
+   [Set_dynamic] add-scatters are widened by {!widen_narrow_scatters} in {!specialize_proc}). Runs
+   after [rewrite_one_hot_reductions], whose scatter match wants the vocabulary loop innermost as
+   lowered (gh-ocannl-466). *)
 let sink_narrow_reduction_loops (llc : t) : t =
   let only_self_reads d di =
     let rec go (s : scalar_t) =
@@ -13875,24 +13876,25 @@ let sink_narrow_reduction_loops (llc : t) : t =
     wrap placed.(0) (build 0 order)
   in
   (* Per-axis ownership and original contribution order (gh-ocannl-2423, gh-ocannl-2464). When [di]
-     has plain [Iterator] axes, [Fixed_idx] axes and M >= 1 independent positive two-iterator affine
-     axes [a_m*i_m + b_m*j_m + c_m] (all write symbols pairwise distinct), classify each affine axis
-     separately with [g_m = gcd(a_m, b_m)]: - Non-overlapping ([imax_m < b_m/g_m || jmax_m <
-     a_m/g_m]): injective on [0..imax_m] x [0..jmax_m], so both iterators stay outer cell loops. -
-     Overlapping ([imax_m >= b_m/g_m && jmax_m >= a_m/g_m]): set [j_m = r_m + (a_m/g_m)*q_m] and
-     [p_m = i_m + (b_m/g_m)*q_m] (or the symmetric frame). The axis coordinate is [a_m*p_m + b_m*r_m
-     + c_m], and since [gcd(a_m/g_m, b_m/g_m) = 1] and [|r - r'| < a_m/g_m], [(r_m, p_m)] determines
-     it uniquely. A cell is a tuple of axis coordinates, so distinct residue tuples own pairwise
-     disjoint cell sets, and within each tuple the cell loops determine every cell uniquely
-     (certified on the rebuilt cell by [Affine.within_box], [Affine.separates] and absence of
-     reduction symbols). Because [imax_m >= b_m/g_m], the union of [p_m] intervals over [q_m] has no
-     holes, so clipping to [lo_m..hi_m] keeps the owner in bounds unconditionally for the peel.
+     has plain [Iterator] axes, [Fixed_idx] axes and independent positive affine axes (all write
+     symbols pairwise distinct), a single-term axis [a*i + c] fixes [i] and stays a cell loop.
+     Classify each two-term axis [a_m*i_m + b_m*j_m + c_m] separately with [g_m = gcd(a_m, b_m)]: -
+     Non-overlapping ([imax_m < b_m/g_m || jmax_m < a_m/g_m]): injective on [0..imax_m] x
+     [0..jmax_m], so both iterators stay outer cell loops. - Overlapping ([imax_m >= b_m/g_m &&
+     jmax_m >= a_m/g_m]): set [j_m = r_m + (a_m/g_m)*q_m] and [p_m = i_m + (b_m/g_m)*q_m] (or the
+     symmetric frame). The axis coordinate is [a_m*p_m + b_m*r_m + c_m], and since [gcd(a_m/g_m,
+     b_m/g_m) = 1] and [|r - r'| < a_m/g_m], [(r_m, p_m)] determines it uniquely. A cell is a tuple
+     of axis coordinates, so distinct residue tuples own pairwise disjoint cell sets, and within
+     each tuple the cell loops determine every cell uniquely (certified on the rebuilt cell by
+     [Affine.within_box], [Affine.separates] and absence of reduction symbols). Because [imax_m >=
+     b_m/g_m], the union of [p_m] intervals over [q_m] has no holes, so clipping to [lo_m..hi_m]
+     keeps the owner in bounds unconditionally for the peel.
 
      Contribution order: fix a cell [x] and two distinct guard-passing original tuples hitting [x].
-     Their outermost differing position in the original loop list cannot be a plain write loop or
-     either iterator of an injective pair (each is fixed by [x]), nor [late_m] of an overlapping
-     pair (since [early_m] precedes [late_m], agreement on [early_m] forces agreement on [late_m]).
-     It must be a pure reduction or some [early_m]. Replacing each [early_m] in place by [step_m]
+     Their outermost differing position in the original loop list cannot be a plain or single-term
+     write loop or either iterator of an injective pair (each is fixed by [x]), nor [late_m] of an
+     overlapping pair ([early_m] precedes [late_m], and agreement on [early_m] fixes [late_m]). It
+     must be a pure reduction or some [early_m]. Replacing each [early_m] in place by [step_m]
      oriented so [early_m] ascends with [step_m] (visiting [q_m] descending when [early_m = i_m],
      ascending when [early_m = j_m]), dropping each [late_m] and all write loops, and keeping pure
      reductions in place therefore preserves every cell's exact lexicographic contribution order for
@@ -13948,27 +13950,10 @@ let sink_narrow_reduction_loops (llc : t) : t =
     in
     try
       let dims = Lazy.force d.Tn.dims in
-      let pairs =
-        Array.to_list di
-        |> List.filter_mapi ~f:(fun axis -> function
-          | Indexing.Iterator _ | Fixed_idx _ -> None
-          | Affine { symbols = [ (a, i); (b, j) ]; offset } when a > 0 && b > 0 ->
-              Some (axis, (a, i), (b, j), offset)
-          | Affine _ | Sub_axis | Concat _ -> raise Unsupported)
-      in
-      let plain =
-        Array.to_list di
-        |> List.filter_map ~f:(function Indexing.Iterator s -> Some s | _ -> None)
-      in
-      let all_write_syms =
-        plain @ List.concat_map pairs ~f:(fun (_, (_, i), (_, j), _) -> [ i; j ])
-      in
       if
-        List.is_empty pairs
-        || Array.length dims <> Array.length di
+        Array.length dims <> Array.length di
         || Array.exists dims ~f:(fun dim -> dim <= 0)
         || List.contains_dup (List.map all ~f:fst) ~compare:Indexing.compare_symbol
-        || List.contains_dup all_write_syms ~compare:Indexing.compare_symbol
         || Option.is_none (accum_update_parts ~tn:d ~idcs:di llsc)
       then raise Unsupported;
       let loop_position s =
@@ -13976,9 +13961,23 @@ let sink_narrow_reduction_loops (llc : t) : t =
         | Some (pos, (_, n)) -> (pos, checked n)
         | None -> raise Unsupported
       in
+      let pairs_rev, write_syms =
+        Array.foldi di ~init:([], []) ~f:(fun axis (pairs, syms) -> function
+          | Indexing.Iterator s -> (pairs, s :: syms)
+          | Fixed_idx _ -> (pairs, syms)
+          | Affine { symbols = [ (a, i) ]; offset } when a > 0 ->
+              let _, imax = loop_position i in
+              ignore (add (mul a imax) offset : int);
+              ignore (checked dims.(axis) : int);
+              (pairs, i :: syms)
+          | Affine { symbols = [ (a, i); (b, j) ]; offset } when a > 0 && b > 0 ->
+              ((axis, (a, i), (b, j), offset) :: pairs, i :: j :: syms)
+          | Affine _ | Sub_axis | Concat _ -> raise Unsupported)
+      in
+      if List.contains_dup write_syms ~compare:Indexing.compare_symbol then raise Unsupported;
       let max_residue_nests = 64 in
       let frames =
-        List.filter_map pairs ~f:(fun (axis, (a, i), (b, j), offset) ->
+        List.filter_map (List.rev pairs_rev) ~f:(fun (axis, (a, i), (b, j), offset) ->
             let pi, imax = loop_position i and pj, jmax = loop_position j in
             let (a, i, imax), (b, j, jmax) =
               if pi < pj then ((a, i, imax), (b, j, jmax)) else ((b, j, jmax), (a, i, imax))
@@ -14008,8 +14007,8 @@ let sink_narrow_reduction_loops (llc : t) : t =
       let is_write s = Array.exists di ~f:(Indexing.axis_index_mentions_symbol s) in
       match frames with
       | [] ->
-          (* Every affine pair is non-overlapping, so interchange suffices. Reuse the generic
-             separation proof, including the bounds the guarded peel will need. *)
+          (* Every axis is injective, so interchange suffices. Reuse the generic separation proof,
+             including the bounds the guarded peel will need. *)
           let writes, reductions = List.partition_tf all ~f:(fun (s, _) -> is_write s) in
           let range s = Option.map (find all s) ~f:(fun hi -> (0, hi)) in
           let coords = Affine.view ~dims di in
