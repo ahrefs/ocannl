@@ -1330,16 +1330,34 @@ owed_record_leg() {
   hook_head=$(git -C "$R" rev-parse HEAD)
   hook_url=$TMP/owed-record.git
   git init -q --bare "$hook_url" || { harness_abandon 'could not create the record repository'; return; }
-  leg_record() { # LAST_RUN LEG_RECORD OBSERVED_SHA
+  leg_record() { # LAST_RUN LEG_RECORD OBSERVED_SHA [RECEIPT_DIR]
     hrc=0
     (
       cd "$R" || exit 2
-      PATH=$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$hook_url FAKE_LAST_RUN=$1 \
-        "./$hook" "$2" fixture-request "$3"
+      if [ $# -ge 4 ]; then
+        PATH=$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$hook_url FAKE_LAST_RUN=$1 \
+          FLEET_LEG_RECEIPT_DIR=$4 "./$hook" "$2" fixture-request "$3"
+      else
+        PATH=$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$hook_url FAKE_LAST_RUN=$1 \
+          "./$hook" "$2" fixture-request "$3"
+      fi
     ) >"$TMP/hook-out" 2>&1 || hrc=$?
   }
-  hook_skip() { # LABEL EXPECTED: a refusal leaves the remote ref absent
+  hook_skip() { # LABEL EXPECTED: a refusal or ineligible skip leaves the remote ref absent
     if [ "$hrc" = 0 ] && grep -qF "$2" "$TMP/hook-out" &&
+       [ -z "$(git -C "$R" ls-remote "$hook_url" "refs/owed-runs/$hook_head")" ]; then
+      report 0 "$1"
+    else report 1 "$1" "exit $hrc; $(cat "$TMP/hook-out")"; fi
+  }
+  hook_ineligible() { # LABEL EXPECTED: ineligible leg is distinguished from a broken receipt binding
+    if [ "$hrc" = 0 ] && grep -qF 'ineligible leg:' "$TMP/hook-out" && grep -qF "$2" "$TMP/hook-out" &&
+       ! grep -qF 'record refused' "$TMP/hook-out" && ! grep -qF 'does not match' "$TMP/hook-out" &&
+       [ -z "$(git -C "$R" ls-remote "$hook_url" "refs/owed-runs/$hook_head")" ]; then
+      report 0 "$1"
+    else report 1 "$1" "exit $hrc; $(cat "$TMP/hook-out")"; fi
+  }
+  hook_refused() { # LABEL EXPECTED: broken binding or refusal prints record refused
+    if [ "$hrc" = 0 ] && grep -qF 'record refused' "$TMP/hook-out" && grep -qF "$2" "$TMP/hook-out" &&
        [ -z "$(git -C "$R" ls-remote "$hook_url" "refs/owed-runs/$hook_head")" ]; then
       report 0 "$1"
     else report 1 "$1" "exit $hrc; $(cat "$TMP/hook-out")"; fi
@@ -1352,35 +1370,58 @@ owed_record_leg() {
   touch "$leg_path" "$other_path"
   printf '%s\n' "build $alias -j 1" >"$last_run/fleet-leg-command"
   leg_record "$last_run" "$leg_path" "$hook_head"
-  hook_skip 'a receipt without a fleet invocation path is refused' "does not match this fleet leg's run record"
+  hook_refused 'a receipt without a fleet invocation path is refused' "does not match this fleet leg's run record"
   printf '%s\n' "$other_path" >"$last_run/fleet-leg-run-record"
   leg_record "$last_run" "$leg_path" "$hook_head"
-  hook_skip 'an earlier receipt for the same head and targets cannot stand for this leg' "does not match this fleet leg's run record"
+  hook_refused 'an earlier receipt for the same head and targets cannot stand for this leg' "does not match this fleet leg's run record"
   printf '%s\n' "$leg_path" >"$last_run/fleet-leg-run-record"
   leg_record "$last_run" "$leg_path" "$(git -C "$R" rev-parse HEAD^)"
-  hook_skip 'a matching invocation path cannot stand for a different observed head' 'is for a different head than the fleet leg observed'
+  hook_refused 'a matching invocation path cannot stand for a different observed head' 'is for a different head than the fleet leg observed'
   printf '%s\n' "build $alias @a/runtest-first" >"$last_run/fleet-leg-command"
   leg_record "$last_run" "$leg_path" "$hook_head"
-  hook_skip 'a mixed first-tier request with an eligible effective command is refused' 'did not request an owed-run command'
+  hook_ineligible 'a mixed first-tier request with an eligible effective command is logged as an ineligible leg' 'did not request an owed-run command'
   printf '%s\n' "--targets-file $TMP/list build" >"$last_run/fleet-leg-command"
   leg_record "$last_run" "$leg_path" "$hook_head"
-  hook_skip 'a targets file with an eligible effective command is refused' 'did not request an owed-run command'
+  hook_ineligible 'a targets file with an eligible effective command is logged as an ineligible leg' 'did not request an owed-run command'
+  rm -f "$last_run/fleet-leg-command"
+  leg_record "$last_run" "$leg_path" "$hook_head"
+  hook_refused 'a cc receipt missing fleet-leg-command is refused' 'missing fleet-leg-command'
+  printf 'non-canonical-cc-invocation\n' >"$last_run/fleet-leg-ineligible"
+  leg_record "$last_run" "$leg_path" "$hook_head" "$last_run"
+  hook_ineligible 'a cc receipt marked ineligible (non-canonical syntax) is logged as an ineligible leg' 'explicit spaced --expect-backend cc'
+  rm -f "$last_run/fleet-leg-ineligible"
   printf '%s\n' 'build @test/training/train-b' >"$last_run/fleet-leg-command"
   leg_record "$last_run" "$leg_path" "$hook_head"
-  hook_skip 'a receipt for different targets cannot stand for this leg' "does not cover the fleet leg's requested targets"
+  hook_refused 'a receipt for different targets cannot stand for this leg' "does not cover the fleet leg's requested targets"
   printf '%s\n' "build $alias -j 1" >"$last_run/fleet-leg-command"
-  gpu_run=$(rundir leg-gpu 0 '' cuda "build $alias" "$hook_head")
+  gpu_run=$(rundir leg-gpu 0 '' cuda "build @test/operations/runtest-focused" "$hook_head")
+  focused_run=$(rundir leg-focused-cc 0 '' cc "build @test/operations/runtest-focused" "$hook_head")
   dirty_run=$(rundir leg-dirty 0 ' M x.ml' cc "build $alias" "$hook_head")
-  for rejected_run in "$gpu_run" "$dirty_run"; do
-    cp "$last_run/fleet-leg-run-record" "$last_run/fleet-leg-command" "$rejected_run/"
-  done
-  leg_record "$gpu_run" "$leg_path" "$hook_head"
-  hook_skip 'a matching receipt still requires the cc backend' 'was not run with --expect-backend cc'
+  printf '%s\n' "$leg_path" >"$gpu_run/fleet-leg-run-record"
+  printf '%s\n' "$leg_path" >"$focused_run/fleet-leg-run-record"
+  printf '%s\n' 'build @test/operations/runtest-focused' >"$focused_run/fleet-leg-command"
+  cp "$last_run/fleet-leg-run-record" "$last_run/fleet-leg-command" "$dirty_run/"
+  leg_record "$last_run" "$leg_path" "$hook_head" "$gpu_run"
+  hook_ineligible 'a matching non-cc receipt via FLEET_LEG_RECEIPT_DIR is logged as an ineligible leg' 'was not run with --expect-backend cc'
+  leg_record "$last_run" "$leg_path" "$hook_head" "$focused_run"
+  hook_ineligible 'a matching focused cc receipt via FLEET_LEG_RECEIPT_DIR is logged as an ineligible leg' 'did not request an owed-run command'
   leg_record "$dirty_run" "$leg_path" "$hook_head"
-  hook_skip 'a dirty receipt is refused with hook exit zero' 'ran a dirty checkout'
+  hook_refused 'a dirty receipt is refused with hook exit zero' 'ran a dirty checkout'
+  # Stale receipt under the same SHA via FLEET_LEG_RECEIPT_DIR must refuse and never fall back to a matching last.
+  stale_same_sha=$(rundir leg-stale-same-sha 0 '' cc "$leg_cmd" "$hook_head")
+  printf '%s\n' "$other_path" >"$stale_same_sha/fleet-leg-run-record"
+  printf '%s\n' "build $alias -j 1" >"$stale_same_sha/fleet-leg-command"
+  leg_record "$last_run" "$leg_path" "$hook_head" "$stale_same_sha"
+  hook_refused 'a stale receipt under the same SHA via FLEET_LEG_RECEIPT_DIR refuses without falling back to last' "does not match this fleet leg's run record"
+  leg_record "$last_run" "$leg_path" "$hook_head" "$TMP/no-such-receipt-dir"
+  hook_refused 'a missing FLEET_LEG_RECEIPT_DIR refuses without falling back to last' 'no run directory'
+  leg_record "$last_run" "$leg_path" "$hook_head" last
+  hook_refused 'a relative FLEET_LEG_RECEIPT_DIR refuses without resolving last' 'FLEET_LEG_RECEIPT_DIR must be a single-line absolute path'
+  leg_record "$last_run" "$leg_path" "$hook_head" ''
+  hook_refused 'an explicitly empty FLEET_LEG_RECEIPT_DIR refuses without falling back to last' 'FLEET_LEG_RECEIPT_DIR must be a single-line absolute path'
   last x.ml
   leg_record "$last_run" "$leg_path" "$hook_head"
-  hook_skip 'a dirty checkout cannot publish a clean receipt' 'the fleet worktree is dirty'
+  hook_refused 'a dirty checkout cannot publish a clean receipt' 'the fleet worktree is dirty'
   git -C "$R" checkout -- x.ml
   git -C "$R" push -q "$hook_url" "$hook_head:refs/heads/master" ||
     { harness_abandon 'could not publish the already-merged control head'; return; }
@@ -1391,6 +1432,25 @@ owed_record_leg() {
     harness_abandon 'could not put the control head ahead of the record repository master'
     return
   fi
+  # Private OCANNL_TOOL_TEST_RUNS receipt via FLEET_LEG_RECEIPT_DIR publishes even when last is stale/unrelated.
+  priv_url=$TMP/owed-record-priv.git
+  git init -q --bare "$priv_url" || { harness_abandon 'could not create private record repository'; return; }
+  git -C "$R" push -q "$priv_url" "$hook_head^:refs/heads/master" ||
+    { harness_abandon 'could not seed private record repository master'; return; }
+  priv_run=$(rundir leg-private 0 '' cc "$leg_cmd" "$hook_head")
+  printf '%s\n' "$leg_path" >"$priv_run/fleet-leg-run-record"
+  printf '%s\n' "build $alias -j 1" >"$priv_run/fleet-leg-command"
+  saved_hook_url=$hook_url
+  hook_url=$priv_url
+  OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF=0 leg_record "$stale_same_sha" "$leg_path" "$hook_head" "$priv_run"
+  hook_url=$saved_hook_url
+  priv_host=$(hostname -s 2>/dev/null || hostname)
+  owed "$priv_url" check "$hook_head" "$alias"
+  if [ "$hrc" = 0 ] && [ "$orc" = 0 ] &&
+     grep -qF "($priv_host:$priv_run, writer=leg:$priv_host)" "$TMP/owed-out"; then
+    report 0 'FLEET_LEG_RECEIPT_DIR publishes a receipt from private state without reading last'
+  else report 1 'FLEET_LEG_RECEIPT_DIR publishes a receipt from private state without reading last' \
+    "hook=$hrc ($(cat "$TMP/hook-out")); check=$orc ($(cat "$TMP/owed-out"))"; fi
   # Simulate t1854: one transient `[remote rejected] ... (failed)` rejection on the fleet hook's push.
   : >"$TMP/hook-push-count"
   cat >"$hook_url/hooks/pre-receive" <<HOOK

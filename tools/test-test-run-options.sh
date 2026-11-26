@@ -1612,36 +1612,152 @@ harness_leg_run '39: read-only paths and lock-status queries #queries' leg_39
 shared_through argv_probe
 
 leg_125() {
-  local path="$TMP/leg record" target=@test/training/train-receipt
-  local FLEET_LEG_RUN_RECORD
+  local path="$TMP/leg record" other_path="$TMP/other leg" target=@test/training/train-receipt
+  local link="$TMP/leg-receipt-link" gpu_link="$TMP/leg-receipt-link-gpu"
+  local foreign_link="$TMP/leg-receipt-link-foreign" plain_link="$TMP/leg-receipt-link-plain"
+  local local_link="$TMP/leg-receipt-link-local" dirty_link="$TMP/leg-receipt-link-dirty" cc_dir gpu_dir
+  local env_bin="$TMP/leg125-env-bin" env_out="$TMP/leg125-child-env" saved_repeat_bin=$repeat_bin
+  local FLEET_LEG_RUN_RECORD FLEET_LEG_RECEIPT_LINK FLEET_LEG_RECEIPT_DIR
+  cp "$HERE/owed-run.sh" "$repeat_root/tools/owed-run.sh" || { report 1 'stage owed-run.sh for leg 125'; return; }
+  rm -f "$link" "$gpu_link" "$foreign_link" "$plain_link" "$local_link" "$dirty_link" "$env_out"
+  mkdir -p "$env_bin"
+  cat >"$env_bin/dune" <<EOF
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "\${FLEET_LEG_RUN_RECORD-unset}" "\${FLEET_LEG_RECEIPT_LINK-unset}" "\${FLEET_LEG_RECEIPT_DIR-unset}" >"$env_out"
+exec "$saved_repeat_bin/dune" "\$@"
+EOF
+  chmod +x "$env_bin/dune"
   export FLEET_LEG_RUN_RECORD="$path"
+  export FLEET_LEG_RECEIPT_LINK="$link"
+  export FLEET_LEG_RECEIPT_DIR="$TMP/inherited-receipt-dir"
+  repeat_bin=$env_bin
   argv_probe owed-receipt run --expect-backend cc build "$target" -j 1
+  repeat_bin=$saved_repeat_bin
+  unset FLEET_LEG_RECEIPT_DIR
+  cc_dir=$argv_dir
   if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
      [ "$argv_calls" = "build --no-buffer $target -j 1" ] &&
      cmp -s "$argv_dir/fleet-leg-run-record" <(printf '%s\n' "$path") &&
-     cmp -s "$argv_dir/fleet-leg-command" <(printf 'build %s -j 1 \n' "$target"); then
-    report 0 'the fleet receipt saves the exact path and the Dune request before injection'
+     cmp -s "$argv_dir/fleet-leg-command" <(printf 'build %s -j 1 \n' "$target") &&
+     [ -L "$link" ] && [ "$(readlink "$link")" = "$argv_dir" ]; then
+    report 0 'the fleet receipt saves the exact path, raw request, and receipt symlink'
   else
-    report 1 'the fleet receipt saves the exact path and the Dune request before injection' \
-      "exit $argv_rc; receipt: $argv_dir; Dune: $argv_calls; stderr: $argv_err"
+    report 1 'the fleet receipt saves the exact path, raw request, and receipt symlink' \
+      "exit $argv_rc; receipt: $argv_dir; link: $(readlink "$link" 2>/dev/null || echo absent); Dune: $argv_calls; stderr: $argv_err"
+  fi
+  if [ "$(cat "$env_out" 2>/dev/null)" = 'unset|unset|unset' ]; then
+    report 0 'child Dune processes do not inherit FLEET_LEG_RUN_RECORD, FLEET_LEG_RECEIPT_LINK, or FLEET_LEG_RECEIPT_DIR'
+  else
+    report 1 'child Dune processes do not inherit FLEET_LEG_RUN_RECORD, FLEET_LEG_RECEIPT_LINK, or FLEET_LEG_RECEIPT_DIR' \
+      "child saw: $(cat "$env_out" 2>/dev/null || echo absent)"
   fi
 
+  # A dirty receipt does not qualify, so a following clean run in the same leg replaces its symlink.
+  ln -s "$cc_dir" "$dirty_link"
+  printf ' M x.ml\n' >"$cc_dir/dirty"
+  export FLEET_LEG_RECEIPT_LINK="$dirty_link"
+  argv_probe owed-receipt-replace-dirty run --expect-backend cc build @test/operations/runtest-focused -j 1
+  : >"$cc_dir/dirty"
+  export FLEET_LEG_RECEIPT_LINK="$link"
+  if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
+     [ -L "$dirty_link" ] && [ "$(readlink "$dirty_link")" = "$argv_dir" ]; then
+    report 0 'a dirty receipt does not qualify and is replaced by a later clean run in the same leg'
+  else
+    report 1 'a dirty receipt does not qualify and is replaced by a later clean run in the same leg' \
+      "exit $argv_rc; receipt: $argv_dir; link: $(readlink "$dirty_link" 2>/dev/null || echo absent)"
+  fi
+
+  # A trailing focused cc run in the same leg must not overwrite a passing qualifying receipt symlink.
+  argv_probe owed-receipt-trailing-focused run --expect-backend cc build @test/operations/runtest-focused -j 1
+  if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
+     cmp -s "$argv_dir/fleet-leg-run-record" <(printf '%s\n' "$path") &&
+     [ -L "$link" ] && [ "$(readlink "$link")" = "$cc_dir" ]; then
+    report 0 'a trailing focused cc run preserves an already-registered qualifying receipt symlink'
+  else
+    report 1 'a trailing focused cc run preserves an already-registered qualifying receipt symlink' \
+      "exit $argv_rc; receipt: $argv_dir; link: $(readlink "$link" 2>/dev/null || echo absent)"
+  fi
+
+  # A trailing non-cc run in the same leg must not overwrite a passing qualifying receipt symlink.
+  export OCANNL_BACKEND=cuda
+  argv_probe owed-receipt-trailing-gpu run --expect-backend cuda build "$target" -j 1
+  unset OCANNL_BACKEND
+  if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
+     cmp -s "$argv_dir/fleet-leg-run-record" <(printf '%s\n' "$path") &&
+     [ ! -e "$argv_dir/fleet-leg-command" ] &&
+     [ -L "$link" ] && [ "$(readlink "$link")" = "$cc_dir" ]; then
+    report 0 'a trailing non-cc run preserves an already-registered eligible receipt symlink'
+  else
+    report 1 'a trailing non-cc run preserves an already-registered eligible receipt symlink' \
+      "exit $argv_rc; receipt: $argv_dir; link: $(readlink "$link" 2>/dev/null || echo absent)"
+  fi
+
+  # A non-cc run on a vacant link binds invocation identity and links its receipt without fleet-leg-command,
+  # and a subsequent eligible cc run in the same leg upgrades the link to the eligible receipt.
+  export FLEET_LEG_RECEIPT_LINK="$gpu_link"
+  export OCANNL_BACKEND=cuda
+  argv_probe owed-receipt-gpu run --expect-backend cuda build "$target" -j 1
+  unset OCANNL_BACKEND
+  gpu_dir=$argv_dir
+  if [ "$argv_rc" = 0 ] && [ -n "$gpu_dir" ] &&
+     cmp -s "$gpu_dir/fleet-leg-run-record" <(printf '%s\n' "$path") &&
+     [ ! -e "$gpu_dir/fleet-leg-command" ] &&
+     [ -L "$gpu_link" ] && [ "$(readlink "$gpu_link")" = "$gpu_dir" ]; then
+    report 0 'a non-cc fleet run binds invocation identity and links its receipt without fleet-leg-command'
+  else
+    report 1 'a non-cc fleet run binds invocation identity and links its receipt without fleet-leg-command' \
+      "exit $argv_rc; receipt: $gpu_dir; link: $(readlink "$gpu_link" 2>/dev/null || echo absent)"
+  fi
+  argv_probe owed-receipt-upgrade run --expect-backend cc build "$target" -j 1
+  if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
+     [ -L "$gpu_link" ] && [ "$(readlink "$gpu_link")" = "$argv_dir" ]; then
+    report 0 'a following eligible cc run in the same leg upgrades a non-cc receipt symlink'
+  else
+    report 1 'a following eligible cc run in the same leg upgrades a non-cc receipt symlink' \
+      "exit $argv_rc; receipt: $argv_dir; link: $(readlink "$gpu_link" 2>/dev/null || echo absent)"
+  fi
+
+  export FLEET_LEG_RECEIPT_LINK="$TMP/leg-receipt-link-equals"
+  rm -f "$FLEET_LEG_RECEIPT_LINK"
   argv_probe owed-receipt-equals run --expect-backend=cc build "$target" -j 1
   if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
-     [ ! -e "$argv_dir/fleet-leg-run-record" ] && [ ! -e "$argv_dir/fleet-leg-command" ]; then
-    report 0 'the fleet receipt requires the explicit spaced cc option'
+     cmp -s "$argv_dir/fleet-leg-run-record" <(printf '%s\n' "$path") &&
+     [ -f "$argv_dir/fleet-leg-ineligible" ] &&
+     [ ! -e "$argv_dir/fleet-leg-command" ]; then
+    report 0 'the fleet command record requires the explicit spaced cc option and marks equals syntax ineligible'
   else
-    report 1 'the fleet receipt requires the explicit spaced cc option' "exit $argv_rc; receipt: $argv_dir"
+    report 1 'the fleet command record requires the explicit spaced cc option and marks equals syntax ineligible' "exit $argv_rc; receipt: $argv_dir"
+  fi
+
+  # Pre-existing wrapper pointers (foreign symlink or non-symlink file) are never overwritten.
+  mkdir -p "$TMP/foreign-receipt"
+  printf '%s\n' "$other_path" >"$TMP/foreign-receipt/fleet-leg-run-record"
+  ln -s "$TMP/foreign-receipt" "$foreign_link"
+  export FLEET_LEG_RECEIPT_LINK="$foreign_link"
+  argv_probe owed-receipt-foreign run --expect-backend cc build "$target" -j 1
+  printf 'occupied\n' >"$plain_link"
+  export FLEET_LEG_RECEIPT_LINK="$plain_link"
+  argv_probe owed-receipt-plain run --expect-backend cc build "$target" -j 1
+  if [ "$(readlink "$foreign_link")" = "$TMP/foreign-receipt" ] &&
+     [ -f "$plain_link" ] && [ ! -L "$plain_link" ]; then
+    report 0 'a foreign receipt symlink or occupied path is never overwritten'
+  else
+    report 1 'a foreign receipt symlink or occupied path is never overwritten' \
+      "foreign=$(readlink "$foreign_link" 2>/dev/null || echo bad) plain=$(ls -ld "$plain_link" 2>/dev/null || echo bad)"
   fi
 
   unset FLEET_LEG_RUN_RECORD
+  export FLEET_LEG_RECEIPT_LINK="$local_link"
   argv_probe owed-receipt-local run --expect-backend cc build "$target" -j 1
   if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
-     [ ! -e "$argv_dir/fleet-leg-run-record" ] && [ ! -e "$argv_dir/fleet-leg-command" ]; then
-    report 0 'a local run records no fleet metadata'
+     [ ! -e "$argv_dir/fleet-leg-run-record" ] && [ ! -e "$argv_dir/fleet-leg-command" ] &&
+     [ ! -e "$local_link" ] && [ ! -L "$local_link" ]; then
+    report 0 'a local run records no fleet metadata or receipt symlink'
   else
-    report 1 'a local run records no fleet metadata' "exit $argv_rc; receipt: $argv_dir"
+    report 1 'a local run records no fleet metadata or receipt symlink' \
+      "exit $argv_rc; receipt: $argv_dir; link: $(ls -ld "$local_link" 2>/dev/null || echo absent)"
   fi
+  unset FLEET_LEG_RECEIPT_LINK
 }
 harness_leg_run '125: fleet receipts preserve the binding and the original command #options' leg_125
 

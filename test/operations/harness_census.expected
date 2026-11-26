@@ -487,6 +487,7 @@ tools/test-test-run-options.sh	tools/gpu-tokens.sh
 tools/test-test-run-options.sh	tools/kernel-window.sh
 tools/test-test-run-options.sh	tools/lab-map.sh
 tools/test-test-run-options.sh	tools/opam-env.sh
+tools/test-test-run-options.sh	tools/owed-run.sh
 tools/test-test-run-options.sh	tools/per-test-cap.sh
 tools/test-test-run-options.sh	tools/sweep-fingerprint.sh
 tools/test-test-run-options.sh	tools/sweep-supervisor.sh

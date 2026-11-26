@@ -6029,17 +6029,22 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
 - **Recipe.** On the box that ran it, from the run's own worktree:
   `env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc runtest -j 4`. A training run
   uses `build @test/training/train-<name>... -j 1` or `build @train`. After a clean, successful
-  main leg, the fleet's `owed-record` hook (gh-ocannl-2359) publishes with
-  `writer=leg:<hostname>`. It skips heads already on the record repository's master. The hook
-  compares the leg's temporary run-record path to the `FLEET_LEG_RUN_RECORD` path saved in the
-  worktree's last runner receipt and requires the receipt's SHA to match the observed SHA and
-  the current checkout. This rejects earlier receipts even for the same head and command. The
-  runner saves the original explicit `run --expect-backend cc` request alongside the path.
-  Its requested and effective commands must both be allowlisted and cover the same targets.
-  A wrapper can invoke the qualifying command in the leg's worktree and share the hook's runner
-  state directory. Use the actual run directory for manual recording if the wrapper sets a
-  private `OCANNL_TOOL_TEST_RUNS`. Targets files and receipts without the binding also require
-  manual recording if eligible. A refusal leaves the leg verdict intact. Check readiness with
+  main leg, the fleet's `owed-record` hook (gh-ocannl-2359, gh-ocannl-2468) publishes with
+  `writer=leg:<hostname>`. It skips heads already on the record repository's master.
+  `tools/test-run.sh run` writes `FLEET_LEG_RUN_RECORD` into the receipt, registers the finished
+  receipt directory through `FLEET_LEG_RECEIPT_LINK` (saving `fleet-leg-command` only for an
+  explicit spaced `run --expect-backend cc` request), and unsets the `FLEET_LEG_*` receipt
+  variables for child processes. `tools/owed-run.sh leg-record` prefers `FLEET_LEG_RECEIPT_DIR`
+  (never falling back to `last` when set), so wrappers setting a private `OCANNL_TOOL_TEST_RUNS`
+  publish automatically; it falls back to the worktree's `last` pointers only when
+  `FLEET_LEG_RECEIPT_DIR` is unset. The hook compares the leg's temporary run-record path to
+  `fleet-leg-run-record` and requires the receipt's SHA to match the observed SHA and the current
+  checkout, rejecting earlier receipts even for the same head and command. Its requested and
+  effective commands must both be allowlisted and cover the same targets. Validly bound, clean,
+  exit-0 receipts from non-`cc` or non-owed (focused/targeted or `--targets-file`) legs log
+  `ineligible leg` rather than `record refused`, distinguishing them from broken receipt bindings
+  and stale receipts. Targets files and receipts without the binding still require manual recording
+  if eligible. A refusal leaves the leg verdict intact. Check readiness with
   `tools/owed-run.sh check <head sha>
   <need>...` from a checkout with that head. Records accumulate on the head's ref and the
   reader takes their union. A run naming a `train` alias gets the two-hour training cap by
