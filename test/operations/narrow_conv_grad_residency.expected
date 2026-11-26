@@ -79,6 +79,9 @@ FP16 stride 2: the gradient equals the f32 gradient rounded once per cell: true
 the shifted positive affine axis sinks its reduction and widens: true
 the in-bounds negative affine axis keeps its reduction outside: true
 the positive affine axis needing a bounds guard keeps its reduction outside: true
+a guarded FP8 axis keeps its reduction outside: true
+the guarded FP8 reference preserves untouched bytes and updates its finite cells: true
+the guarded FP8 axis preserves the materialized result byte for byte: true
 a tied traversal chooses the frame with one residue nest: true
 the order witness loses the first small term at the overlapping cell: true
 the guarded nonunit-stride pair has a wide reduction in every residue: true

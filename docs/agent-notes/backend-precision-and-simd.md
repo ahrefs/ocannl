@@ -797,6 +797,8 @@ files.
   This covers the strided unit-tap axis of a 1×k or k×1 convolution and physical padding shifts.
   The write symbol must be distinct from those of every other axis. Full-range physical bounds
   and separation must hold even when a guard protects the original access.
+  Guarded nests with a single-term axis and FP8 storage decline. The guard can leave a cell
+  untouched, while a widened accumulator's write-back can change its bits.
   A cell with independent supported positive affine pairs, one per axis (gh-ocannl-2423,
   gh-ocannl-2464), is reparametrized per overlapping axis by owner and residue while preserving
   each cell's original contribution order across windows and interleaved reductions (each

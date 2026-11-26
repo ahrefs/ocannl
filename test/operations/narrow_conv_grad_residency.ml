@@ -396,6 +396,55 @@ let () =
 
 let () =
   let open Ll_test in
+  let module Nd = Ir.Ndarray in
+  let dims = [| 8 |] in
+  let d = sym () and i = sym () in
+  let out = node_factory ~prec:Ir.Ops.fp8 ~first_id:24791 ~dims () "ncgr_guarded_fp8" in
+  materialize out;
+  let cell = aff [ (2, i) ] 0 in
+  let contribution = embed_idx (aff [ (1, i); (1, d) ] 1) in
+  let guard = cmp Ir.Ops.Cmplt (embed_idx (aff [ (1, d) ] 1)) (embed i) in
+  let update = set_at out cell (add_own (get out [| cell |]) contribution) in
+  let source = loop_n d 3 (loop_n i 4 (if_ guard update)) in
+  let sunk = LL.sink_narrow_reduction_loops source in
+  (* Cells 0 and 2 receive no updates. Seed them with an E5M2 infinity and a NaN payload through raw
+     storage so the host codec cannot canonicalize either byte before the test starts. *)
+  let initial = [| 0x7c; 0x40; 0x7d; 0x44; 0x3c; 0x48; 0x3c; 0x4c |] in
+  let seed =
+    Bigarray.Array1.of_array Bigarray.Char Bigarray.C_layout (Array.map initial ~f:Char.of_int_exn)
+    |> Bigarray.genarray_of_array1
+  in
+  let run ~name code =
+    let opt = optimize_scoped ~name ~raw:source code in
+    let ctx, routine = link ~name opt in
+    let ctx = Context.from_host ctx out (Nd.Fp8_nd seed) in
+    let ctx = Context.run ctx routine in
+    let result = Context.to_host ctx out in
+    Context.release ctx;
+    match result with
+    | Nd.Fp8_nd bytes ->
+        let bytes = Bigarray.array1_of_genarray bytes in
+        Array.init dims.(0) ~f:(fun j -> Char.to_int bytes.{j})
+    | _ -> failwith "expected FP8 storage"
+  in
+  Test_utils.with_policy
+    (fun policy -> { policy with Ir.Numerics.narrow_compute_f32 = true })
+    (fun () ->
+      let reference = run ~name:"ncgr_guarded_fp8_reference" source in
+      let actual = run ~name:"ncgr_guarded_fp8_sunk" sunk in
+      let same_index = List.equal Ir.Indexing.equal_symbol in
+      p "a guarded FP8 axis keeps its reduction outside"
+        (List.equal same_index (nest_paths sunk) [ [ d; i ] ]);
+      p "the guarded FP8 reference preserves untouched bytes and updates its finite cells"
+        (reference.(0) = initial.(0)
+        && reference.(2) = initial.(2)
+        && reference.(4) <> initial.(4)
+        && reference.(6) <> initial.(6));
+      p_all2 "the guarded FP8 axis preserves the materialized result byte for byte" actual reference
+        ~f:Int.equal)
+
+let () =
+  let open Ll_test in
   let i = sym () and d = sym () and j = sym () in
   let out = node_factory ~prec:bf16 ~first_id:24234 ~dims:[| 200001 |] () "ncgr_residues" in
   let cell = aff [ (100000, i); (1, j) ] 0 in

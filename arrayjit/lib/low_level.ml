@@ -13781,14 +13781,14 @@ let validate_lane_bounds ?(site = "Low_level.validate_lane_bounds") ?comp_prec (
    gained on those two yet regressed on [lenet] under overlapping-window sinking. Because the
    optimizer is backend-independent, one ungated pass cannot replace the narrow-only gate plus the
    GPU schedule-time sink ([Autotune.reduction_sink]); - the leaf reads its target, and only at its
-   own cell (no other cell, no [Get_dynamic], no
-   [Local_scope] body mentioning it), so no step observes another cell's progress; - cell loops are
-   plain iterators or belong to positive single- or two-iterator affine axes (gh-ocannl-2423,
-   gh-ocannl-2464, gh-ocannl-2479) with pairwise-distinct write symbols across all axes. Each
-   overlapping pair is reparametrized by residue and owner so the outer cell loops own all windows
-   and the entire reduction can stay at [accum_prec]. The update must be an ordinary accumulation
-   with remappable indices. Coupled affine pairs sharing an iterator, other affine forms,
-   concatenation, residue products past the code-size cap and unproved bounds decline. Injective
+   own cell (no other cell, no [Get_dynamic], no [Local_scope] body mentioning it), so no step
+   observes another cell's progress; - cell loops are plain iterators or belong to positive single-
+   or two-iterator affine axes (gh-ocannl-2423, gh-ocannl-2464, gh-ocannl-2479) with
+   pairwise-distinct write symbols across all axes. Each overlapping pair is reparametrized by
+   residue and owner so the outer cell loops own all windows and the entire reduction can stay at
+   [accum_prec]. The update must be an ordinary accumulation with remappable indices. Coupled affine
+   pairs sharing an iterator, other affine forms, concatenation, residue products past the code-size
+   cap and unproved bounds decline. FP8 nests with guards and a single-term axis decline. Injective
    pairs keep both iterators as outer cell loops after the separation proof; - guards between levels
    are [pure_index_guard]s; each moves to just inside the innermost (new order) chain loop it
    mentions, or above the chain if it mentions none -- a pure guard filters tuples, so where it sits
@@ -13961,11 +13961,16 @@ let sink_narrow_reduction_loops (llc : t) : t =
         | Some (pos, (_, n)) -> (pos, checked n)
         | None -> raise Unsupported
       in
+      (* A guard can leave a cell with no updates, while a localized accumulator still writes it
+         back. The FP8 round trip can change such a cell's bits, e.g. an E5M2 infinity on CUDA. *)
+      let guarded_fp8 =
+        (not (List.is_empty guards)) && Ops.equal_prec (Lazy.force d.Tn.storage_prec) Ops.fp8
+      in
       let pairs_rev, write_syms =
         Array.foldi di ~init:([], []) ~f:(fun axis (pairs, syms) -> function
           | Indexing.Iterator s -> (pairs, s :: syms)
           | Fixed_idx _ -> (pairs, syms)
-          | Affine { symbols = [ (a, i) ]; offset } when a > 0 ->
+          | Affine { symbols = [ (a, i) ]; offset } when a > 0 && not guarded_fp8 ->
               let _, imax = loop_position i in
               ignore (add (mul a imax) offset : int);
               ignore (checked dims.(axis) : int);
