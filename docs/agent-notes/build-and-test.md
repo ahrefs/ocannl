@@ -3938,6 +3938,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   fails the run, as a text member does. `codegen_text_scan_cases` pins each route beside its near
   miss, including the negative control: a fixture whose staged callback writes a node by its bare
   label.
+- **On minix-amd-linux, run the inventory's slow HIP batches one at a time** (gh-ocannl-2343).
+  The `slow HIP batches on minix-amd-linux` section gives one backend-pinned command per widened
+  oracle shard, the widened scope generator and HIP scratch tuning. Omit those aliases from
+  combined HIP batches. They remain listed with the other codegen routes, whose lists still accept
+  `--targets-file`. Use the inventory's estimates to budget test action time, plus build and
+  slot acquisition. The oracle shards serialize on the training lock, and the combined 900 s
+  batch in staging#2105 stopped after three shards. Each recipe sets its own runner cap.
 - **Count compiles with `Context.backend_compiles`, not a wrapper around `Context.compile`**
   (gh-ocannl-1882). A test-local function that shadows or wraps `Context.compile` and forwards
   `?prelowered` is read as the second route above, so the census lists its file as a prelowered

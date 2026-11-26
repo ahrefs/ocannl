@@ -494,6 +494,9 @@ let raw_entries =
       ] );
     ( "codegen_text_inventory.ml",
       [
+        "[scanner-refusal:78fef1ba5a8812597666a8c7a41cf736] the eligible inventory";
+        "[scanner-refusal:bbee5d2953722bf625614fa7741f472a] the required inventory";
+        "[scanner-refusal:6428d3507ac51411ea25280739f681fd] HIP batch estimate";
         "[scanner-refusal:83dfdd0395c402128515f27b2f3b1b1c] the exclusion for";
         "[scanner-refusal:24dcaa782a3b33780918bb1933206e78] the compiler entry";
         "[scanner-refusal:3f0b314f29005911be716581fa1a4f10] the scan raised";
@@ -502,6 +505,7 @@ let raw_entries =
         "[scanner-refusal:564de56163a842792f2175c0c12d75d5] Utils.build_files_dir";
         "[scanner-refusal:d4306fe9c227b85db951de0b64f85ad8] Test_utils.Generated.main_logic";
         "[scanner-refusal:6eb14f027a4be6648748900004341e36] the after-marker exemption";
+        "[scanner-refusal:bdce0b6c9330d52290dc2dce205f1b0b] cover every eligible";
         "[scanner-refusal:b1a8055bff15f499f2f143975afca3d7] reaches the stale-exclusion";
         "[scanner-refusal:ae3ea5e30f52522fe3ba79794609f56f] reaches the stale-entry";
         "[scanner-refusal:2c67621c20b4be85e0176da0370f83cb] reaches the scanner-defect";
