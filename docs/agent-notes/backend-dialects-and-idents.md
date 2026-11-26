@@ -10,6 +10,16 @@ files.
   operand is inlined can otherwise emit `--x`, a pre-decrement that mutates the input or a local.
   `integer_constant_range` executes double negation at every unsigned precision, single and int32;
   its uint32, uint64, single and int32 rows fail without the parentheses.
+- Metal's AGX compiler can store fp16 bits in a thread-private `bfloat` array
+  (gh-ocannl-2473). The unfissioned cast-twin scatter reproduced on mac-studio (M4 Max) and
+  macbook-pro (M4 Pro), both on macOS 27.2.1: a result expected at 258 read back as 2^57.
+  The smaller write-then-read kernel did not reproduce on mac-studio. Keep the cast-twin
+  kernel unfissioned when investigating. Metal's `C_syntax_config.private_array_cell` selects a
+  two-byte struct holding the bf16 bits, with no implicit scalar conversions. Stores encode
+  after the ordinary narrowing and loads decode before the ordinary widening. Device and
+  threadgroup buffers use native `bfloat`. Existing f32 accumulators keep f32 storage.
+  `narrow_scatter_residency` pins the unfissioned parity and `bf16_local_scratch` checks the
+  emitted declaration and executed accesses against device storage.
 - Metal shader compiler miscompiles serial accumulations, and API validation hides it
   (`MTL_SHADER_VALIDATION=1` makes it vanish). Two spellings are affected: the original
   `acc[k] = acc[k] + f(i)` device-memory RMW can leave only the last iteration (fingerprint: loss

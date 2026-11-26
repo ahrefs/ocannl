@@ -1020,6 +1020,8 @@ end = struct
     lambda ~decl [ (blend_local_a, v) ] (binop_syntax prec op cond (PPrint.string blend_local_a))
 end
 
+type private_array_cell = { cell_type : string; load_cell : string; store_cell : string }
+
 module type C_syntax_config = sig
   val procs : Low_level.t array
   (** The low-level procedures this functor application will render: one per kernel of the
@@ -1383,6 +1385,12 @@ module type C_syntax_config = sig
   (** Declaration suffix aligning stack-allocated local arrays for SIMD access, e.g.
       [__attribute__((aligned(32)))] (gh-ocannl-164). Applies to the plain stack-array branch only,
       never to workgroup-shared placements. *)
+
+  val private_array_cell : Ops.prec -> private_array_cell option
+  (** Physical cell type and codecs for thread-private arrays that cannot use the native type. The
+      codecs act on values at logical storage precision, preserving the existing rounding points.
+      The cell preserves the native size and alignment, and all-zero bytes encode zero. [None] uses
+      the native type directly. *)
 
   val heap_local_arrays : bool
   (** Whether a [Local]-placement array past the stack budget is declared on the heap
@@ -3334,6 +3342,7 @@ struct
     ]
 
   let aligned_local_attr = Some (Printf.sprintf "__attribute__((aligned(%d)))" Ops.buffer_alignment)
+  let private_array_cell _ = None
   let heap_local_arrays = false
   let serial_device_scratch_budget () = None
 
@@ -5877,6 +5886,23 @@ module C_syntax (B : C_syntax_config) = struct
     (not (Tn.Placements.is_virtual_force plc tn (Site "431:is-local-virtual-query")))
     && not (Tn.Placements.is_materialized_force plc tn (Site "432:is-local-materialized-query"))
 
+  let private_array_cell_of ctx tn =
+    Option.filter
+      (B.private_array_cell (Lazy.force tn.Tn.storage_prec))
+      ~f:(fun _ -> (not (Set.mem !(ctx.current_workgroup_shared) tn)) && is_local ctx tn)
+
+  let load_cell ctx tn doc =
+    let open PPrint in
+    match private_array_cell_of ctx tn with
+    | None -> doc
+    | Some cell -> string cell.load_cell ^^ parens doc
+
+  let store_cell ctx tn doc =
+    let open PPrint in
+    match private_array_cell_of ctx tn with
+    | None -> doc
+    | Some cell -> string cell.store_cell ^^ parens doc
+
   let refuse_unseparated_thread_write ctx ~site ~(deferred : Indexing.symbol list) =
     let thread s = List.Assoc.find !(ctx.current_thread_axes) s ~equal:Indexing.equal_symbol in
     let deferred s = List.mem deferred s ~equal:Indexing.equal_symbol in
@@ -6437,6 +6463,11 @@ module C_syntax (B : C_syntax_config) = struct
   let heap_local_free (tn : Tn.t) : PPrint.document =
     PPrint.string (heap_local_free_line (get_ident tn))
 
+  let local_array_type ctx tn =
+    match private_array_cell_of ctx tn with
+    | None -> B.typ_of_prec (Lazy.force tn.Tn.storage_prec)
+    | Some cell -> cell.cell_type
+
   (* Renders a [Local]-placement (routine-scope scratch) array declaration; shared by
      [compile_proc]'s function-scope [local_decls] and the per-chunk declarations of pool-parallel
      [Grid] loops. With [alias_ptr], the array gets a mangled name and a [const] pointer alias under
@@ -6447,10 +6478,9 @@ module C_syntax (B : C_syntax_config) = struct
      into a heap allocation, aligned as the stack array would be: indexing is unchanged, a block
      captures the pointer by value (so no alias is needed), and {!heap_local_free} releases it at
      the end of the declaring scope. *)
-  let local_array_decl ?(alias_ptr = false) ?(heap = false) ~zero_init (tn : Tn.t) : PPrint.document
-      =
+  let local_array_decl ?(alias_ptr = false) ?(heap = false) ~typ ~zero_init (tn : Tn.t) :
+      PPrint.document =
     let open PPrint in
-    let typ = B.typ_of_prec @@ Lazy.force tn.Tn.storage_prec in
     let ident = get_ident tn in
     if heap then heap_local_decl ~typ ~ident ~zero_init tn
     else
@@ -7201,9 +7231,10 @@ module C_syntax (B : C_syntax_config) = struct
               ctx.volatility_events :=
                 Site (Volatile_rmw_reads (get_ident tn)) :: !(ctx.volatility_events);
             let assignment =
+              let stored_doc = store_cell ctx tn val_doc in
               group
                 (ident_doc ^^ brackets offset_doc ^^ string " ="
-                ^^ ifflat (space ^^ val_doc) (nest 4 (hardline ^^ val_doc))
+                ^^ ifflat (space ^^ stored_doc) (nest 4 (hardline ^^ stored_doc))
                 ^^ semi)
             in
             if Utils.debug_log_from_routines () then
@@ -7216,7 +7247,8 @@ module C_syntax (B : C_syntax_config) = struct
               let debug_val_str = log_format_of_debug debug_val_doc in
               let offset_spec, offset_arg_doc = B.log_index_arg offset_doc in
               let log_args_for_printf =
-                (offset_arg_doc :: log_value_args store_prec (ident_doc ^^ brackets offset_doc))
+                offset_arg_doc
+                :: log_value_args store_prec (load_cell ctx tn (ident_doc ^^ brackets offset_doc))
                 @ log_value_args store_prec new_var @ pp_args_docs
               in
               let log_doc =
@@ -7242,7 +7274,8 @@ module C_syntax (B : C_syntax_config) = struct
                 comment_log ^^ hardline ^^ value_log ^^ hardline ^^ flush_log
               in
               let assignment' =
-                ident_doc ^^ brackets offset_doc ^^ string " = " ^^ new_var ^^ semi
+                ident_doc ^^ brackets offset_doc ^^ string " = " ^^ store_cell ctx tn new_var
+                ^^ semi
               in
               let block_content =
                 if PPrint.is_empty local_defs then
@@ -7285,9 +7318,10 @@ module C_syntax (B : C_syntax_config) = struct
         in
         record_classified_store ctx ~tn ~reads:(reads_of_uids emitted_reads) llsc;
         let assignment =
+          let stored_doc = store_cell ctx tn val_doc in
           group
             (ident_doc ^^ brackets offset_doc ^^ string " ="
-            ^^ ifflat (space ^^ val_doc) (nest 4 (hardline ^^ val_doc))
+            ^^ ifflat (space ^^ stored_doc) (nest 4 (hardline ^^ stored_doc))
             ^^ semi)
         in
         if Utils.debug_log_from_routines () then
@@ -7300,7 +7334,8 @@ module C_syntax (B : C_syntax_config) = struct
           let debug_val_str = log_format_of_debug debug_val_doc in
           let offset_spec, offset_arg_doc = B.log_index_arg offset_doc in
           let log_args_for_printf =
-            (offset_arg_doc :: log_value_args store_prec (ident_doc ^^ brackets offset_doc))
+            offset_arg_doc
+            :: log_value_args store_prec (load_cell ctx tn (ident_doc ^^ brackets offset_doc))
             @ log_value_args store_prec new_var @ pp_args_docs
           in
           let log_doc =
@@ -7323,7 +7358,9 @@ module C_syntax (B : C_syntax_config) = struct
             in
             comment_log ^^ hardline ^^ value_log ^^ hardline ^^ flush_log
           in
-          let assignment' = ident_doc ^^ brackets offset_doc ^^ string " = " ^^ new_var ^^ semi in
+          let assignment' =
+            ident_doc ^^ brackets offset_doc ^^ string " = " ^^ store_cell ctx tn new_var ^^ semi
+          in
           let block_content =
             if PPrint.is_empty local_defs then
               decl ^^ hardline ^^ log_doc ^^ hardline ^^ assignment'
@@ -7400,7 +7437,8 @@ module C_syntax (B : C_syntax_config) = struct
                     (* When the block has multiple lanes, access the vector element *)
                     vec_var ^^ string (".v[" ^ Int.to_string i ^ "]")
                 in
-                ident_doc ^^ brackets offset_doc ^^ string " = " ^^ value_doc ^^ semi)
+                ident_doc ^^ brackets offset_doc ^^ string " = " ^^ store_cell ctx tn value_doc
+                ^^ semi)
           in
           separate hardline elem_assigns
         in
@@ -7421,7 +7459,8 @@ module C_syntax (B : C_syntax_config) = struct
                     (log_value_spec prec) vec_result_temporary i (log_value_spec prec)
                 in
                 let log_args =
-                  (offset_arg_doc :: log_value_args prec (ident_doc ^^ brackets offset_doc))
+                  offset_arg_doc
+                  :: log_value_args prec (load_cell ctx tn (ident_doc ^^ brackets offset_doc))
                   @ log_value_args prec
                       (string (vec_result_temporary ^ ".v[" ^ Int.to_string i ^ "]"))
                 in
@@ -8415,7 +8454,8 @@ module C_syntax (B : C_syntax_config) = struct
           in
           List.fold privatized ~init:decls ~f:(fun acc tn ->
               acc ^^ hardline
-              ^^ local_array_decl ~heap:(Set.mem heap tn) ~zero_init:(zero_init tn) tn)
+              ^^ local_array_decl ~heap:(Set.mem heap tn) ~typ:(local_array_type ctx tn)
+                   ~zero_init:(zero_init tn) tn)
         in
         let inner =
           string (Printf.sprintf "for (%s%s = %s; %s < %s; ++%s)" it ident lo ident hi ident)
@@ -9682,13 +9722,11 @@ module C_syntax (B : C_syntax_config) = struct
           let widen = B.convert_precision ~from:store_prec ~to_:prec in
           let narrow = B.convert_precision ~from:prec ~to_:store_prec in
           let fold_total =
+            let previous = wrap_conversion widen (load_cell ctx tn acc_doc) in
+            let updated = wrap_conversion narrow (combine previous (string vname)) in
             group
               (string "if (" ^^ pp_symbol i ^^ string " == 0) " ^^ lbrace
-              ^^ nest 2
-                   (hardline ^^ acc_doc ^^ string " = "
-                   ^^ wrap_conversion narrow
-                        (combine (wrap_conversion widen acc_doc) (string vname))
-                   ^^ semi)
+              ^^ nest 2 (hardline ^^ acc_doc ^^ string " = " ^^ store_cell ctx tn updated ^^ semi)
               ^^ hardline ^^ rbrace)
           in
           let tail =
@@ -10029,8 +10067,8 @@ module C_syntax (B : C_syntax_config) = struct
         in
         let expr =
           string prefix
-          ^^ (pp_device_read_ptr ctx) tn ident_doc
-          ^^ brackets offset_doc ^^ string postfix
+          ^^ load_cell ctx tn ((pp_device_read_ptr ctx) tn ident_doc ^^ brackets offset_doc)
+          ^^ string postfix
         in
         ([], expr)
     | Get_dynamic { tn; idcs; dyn_axis; dyn_value = iv, iprec } ->
@@ -10055,8 +10093,8 @@ module C_syntax (B : C_syntax_config) = struct
         let offset_doc = pp_array_offset_dyn (idcs, dims) ~dyn_axis ~dyn_idx_doc in
         let expr =
           string prefix
-          ^^ (pp_device_read_ptr ctx) tn ident_doc
-          ^^ brackets offset_doc ^^ string postfix
+          ^^ load_cell ctx tn ((pp_device_read_ptr ctx) tn ident_doc ^^ brackets offset_doc)
+          ^^ string postfix
         in
         (dyn_defs, expr)
     | Constant c ->
@@ -10144,7 +10182,9 @@ module C_syntax (B : C_syntax_config) = struct
         in
         let log_offset_doc = pp_array_offset (idcs, dims) in
         let offset_spec, offset_arg_doc = B.log_index_arg log_offset_doc in
-        let access_doc = string prefix ^^ ident_doc ^^ brackets offset_doc ^^ string postfix in
+        let access_doc =
+          string prefix ^^ load_cell ctx tn (ident_doc ^^ brackets offset_doc) ^^ string postfix
+        in
         (* The message names the node by its code name, the access reads its identifier. *)
         let expr_doc =
           string prefix
@@ -10877,18 +10917,17 @@ module C_syntax (B : C_syntax_config) = struct
                        | Some { Low_level.pt_depth; _ } -> pt_depth
                        | None -> 1))
                ^^ semi ^^ hardline
-             else (
-               outlined_locals :=
-                 (B.typ_of_prec @@ Lazy.force tn.storage_prec, get_ident tn) :: !outlined_locals;
+             else
+               let typ = local_array_type ctx tn in
+               outlined_locals := (typ, get_ident tn) :: !outlined_locals;
                let zero_init = node.Low_level.zero_initialized_by_code in
                let decl =
                  match Map.find scratch_arrays tn with
                  | None ->
                      local_array_decl
                        ~alias_ptr:(Set.mem !(ctx.current_local_ptr_alias) tn)
-                       ~heap:(Set.mem heap tn) ~zero_init tn
+                       ~heap:(Set.mem heap tn) ~typ ~zero_init tn
                  | Some (offset, bytes) ->
-                     let typ = B.typ_of_prec (Lazy.force tn.storage_prec) in
                      let ident = get_ident tn in
                      let decl =
                        string
@@ -10899,7 +10938,7 @@ module C_syntax (B : C_syntax_config) = struct
                        decl ^^ hardline ^^ string (Printf.sprintf "memset(%s, 0, %d);" ident bytes)
                      else decl
                in
-               decl ^^ hardline))
+               decl ^^ hardline)
            declared
     in
     body := !body ^^ local_decls ^^ hardline;

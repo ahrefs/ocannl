@@ -4,6 +4,8 @@ virtual twin: every Set_dynamic targets an f32 scatter_acc buffer: true
 virtual twin: bf16 wte.grad equals f32 reference narrowed once, cell for cell: true
 materialized twin: every Set_dynamic targets an f32 scatter_acc buffer: true
 materialized twin: bf16 wte.grad equals f32 reference narrowed once, cell for cell: true
+unfissioned virtual twin: every Set_dynamic targets an f32 scatter_acc buffer: true
+unfissioned virtual twin: bf16 wte.grad equals f32 reference narrowed once, cell for cell: true
 tied two-consumer: f32 wte.grad equals exact host sum: true
 tied two-consumer: per-hit bf16 differs from once-rounded f32 (non-vacuity): true
 tied two-consumer: bf16 wte.grad equals f32 narrowed once, cell for cell: true

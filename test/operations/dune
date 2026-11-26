@@ -3123,6 +3123,21 @@
     (diff bf16_codec_exhaustive.expected bf16_codec_exhaustive.actual)))))
 
 (test
+ (name bf16_local_scratch)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules bf16_local_scratch)
+ (libraries
+  base
+  arrayjit.context
+  arrayjit.utils
+  arrayjit.verdict
+  ll_test
+  test_utils))
+
+(test
  (name bf16_ops)
  (package neural_nets_lib)
  (deps

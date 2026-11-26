@@ -1,0 +1,8 @@
+bf16 scratch is placed locally: true
+the input distinguishes bf16 rounding from f32 storage: true
+dynamic accesses read the values rounded at the scratch store: true
+every packed draw is distinct and nonzero: true
+every packed lane stores its own draw: true
+re-zero clears the cells beyond the packed store: true
+private and device scratch agree bitwise: true
+Metal declares the two-byte scratch cells: true

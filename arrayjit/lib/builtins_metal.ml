@@ -3,6 +3,16 @@ let builtins =
   [
     ("METAL_HEADERS", {|#include <metal_stdlib>
 using namespace metal;|}, []);
+    ( "ocannl_bf16_cell",
+      {|struct ocannl_bf16_cell { ushort bits; };
+static_assert(sizeof(ocannl_bf16_cell) == sizeof(bfloat), "bf16 scratch cell width");|},
+      [] );
+    ( "ocannl_bf16_load_cell",
+      {|inline bfloat ocannl_bf16_load_cell(ocannl_bf16_cell c) { return as_type<bfloat>(c.bits); }|},
+      [ "ocannl_bf16_cell" ] );
+    ( "ocannl_bf16_store_cell",
+      {|inline ocannl_bf16_cell ocannl_bf16_store_cell(bfloat v) { return {as_type<ushort>(v)}; }|},
+      [ "ocannl_bf16_cell" ] );
     ("THREEFRY_C240", {|constant uint32_t THREEFRY_C240 = 0x1BD11BDA;|}, []);
     ("THREEFRY_ROTATION_0_0", {|constant uint THREEFRY_ROTATION_0_0 = 13;|}, []);
     ("THREEFRY_ROTATION_0_1", {|constant uint THREEFRY_ROTATION_0_1 = 15;|}, []);

@@ -61,9 +61,12 @@ let excluded =
 (* The Metal functions with no C counterpart. *)
 let metal_only =
   let threefry = "internal to the threefry functions, which are compared" in
+  let private_cell = "bf16 private-array codec, executed on Metal by bf16_local_scratch" in
   [
     ("rotl32", threefry);
     ("threefry_round", threefry);
+    ("ocannl_bf16_load_cell", private_cell);
+    ("ocannl_bf16_store_cell", private_cell);
     ( "ocannl_sin",
       "a domain guard over Metal's fast sin, executed on Metal by unary_math_special_values" );
     ( "ocannl_cos",
