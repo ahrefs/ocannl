@@ -788,7 +788,8 @@ files.
   `post_virtualization_pipeline` in `Low_level.specialize_proc` by
   `Low_level.widen_narrow_scatters`: because a scatter's destination cell is data-dependent and
   cannot reside in a scalar local, the stage threads the backend's `accum_prec` beside
-  `blends_value_selects` (through `Backends.lower_assignments` / `Assignments.lower` /
+  the arm-union charge derived by `Backend_intf.charges_select_arm_union` (through
+  `Backends.lower_assignments` / `Assignments.lower` /
   `Low_level.optimize` / `Context.lowered_for_decisions`) and brackets each eligible statement in a
   weakly-memoized `On_device` buffer in `scatter_accum_namespace` (`W = T; scatter(W); T = W`),
   rounding once at the store-back and leaving narrow policies, FP8, provably single-hit scatters,
@@ -2227,7 +2228,7 @@ files.
   `CUDA: floor PTX target only` and records the native-target skips as environment-scoped, with
   the reason on stderr; all applicable value claims still run natively. This scope also covers
   the pool kernel's assembly claim. Keep CUDA's short-circuiting renderer and
-  `cuda_facts.blends_value_selects = false`: enabling blending would change both emission and the
+  `cuda_facts.select_blend_policy = No_blend`: enabling blending would change both emission and the
   inline fan-in guard's arm-load accounting, which this performance census does not justify.
   A floor-policy pass is not evidence that native PTX stays branchless, nor a timing claim.
 - **A device-wide CUDA blend policy trades gains for a sparse equality regression** (gh-ocannl-2281).
@@ -2235,7 +2236,7 @@ files.
   scheduled kernels at sm_75 and sm_120 PTX. With six paired rounds and byte-identical controls,
   blending cut the max-pool backward time by 34% and 22%, respectively, and sped up both masks
   for `where_zero` and `relu_gate`. Sparse `where_eq` slowed by 3.8% and 4.1%, beyond the
-  control ranges at both targets. CUDA therefore keeps `blends_value_selects = false` at both
+  control ranges at both targets. CUDA therefore keeps `select_blend_policy = No_blend` at both
   targets. The issue records the per-cell timings.
 - **Widths that no local hardware can execute still get checked, three ways.** gh-ocannl-621's
   AVX-512, AVX512-FP16 and aarch64 rows were written on a machine with none of them (QEMU's TCG

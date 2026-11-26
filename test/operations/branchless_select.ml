@@ -818,8 +818,8 @@ let () =
       let text = kernel_text name in
       p claim (has text guard_spelling && not (has text blend_marker)))
 
-(* [out[i] := v[i] != 0 ? (i < 4 ? a[i] : 0) : -1] over [i < 6]: the outer, value select blends —
-   its arm's one read sits behind a guard of its own — and the inner index guard stays [?:]. *)
+(* [out[i] := v[i] != 0 ? (i < 4 ? a[i] : 0) : -1] over [i < 6]. The inner index guard protects the
+   read. HIP keeps the outer test too because a nested arm contains a load. *)
 let () =
   let name = "bs_nested_guard" in
   let a = mk_single ~dims:[| 4 |] (name ^ "_a") and v = mk_single ~dims:[| 6 |] (name ^ "_v") in
@@ -839,7 +839,14 @@ let () =
       p claim (has text blend_marker && has text guard_spelling));
   in_leg ~leg:hip_leg (name ^ ": HIP keeps both conditionals around the nested load") (fun claim ->
       let text = kernel_text name in
-      p claim ((not (has text blend_marker)) && String.count text ~f:(Char.equal '?') = 2))
+      let store = facts.node_ident_prefix ^ Option.value_exn out.Tn.code_name ^ "[" in
+      let statement =
+        Option.bind (String.substr_index text ~pattern:store) ~f:(fun pos ->
+            String.lsplit2 (String.drop_prefix text pos) ~on:';')
+      in
+      p claim
+        (Option.exists statement ~f:(fun (statement, _) ->
+             (not (has statement blend_marker)) && String.count statement ~f:(Char.equal '?') = 2)))
 
 (* [out[i] := v[i] != 0 ? ((int)a[i] / (int)b[i] == 0 ? g[i] : 0) : -1], and the same with one more
    select between: [v[i] != 0 ? (u[i] != 0 ? (... division select ...) : 0) : -1]. The division's
