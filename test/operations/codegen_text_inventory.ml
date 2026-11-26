@@ -86,6 +86,14 @@
     fails the run, since an entry renamed away would leave the population empty and the list
     cheerful.
 
+    {1 GPU targets files}
+
+    The lists use the derived Dune routes for text pins, kernel execution and direct calls to the
+    selected GPU's compiler. These routes are the emitter's entire input. Text routes are selected
+    by their golden-path substitutions, retaining an alias if any route applies. Alias names
+    beginning with [slow-] are reserved for separate batches. [tools/test-run.sh run] handles the
+    execution host's disabled aliases.
+
     {1 Pins one file away}
 
     A test can pin emitted text through a [test/support] helper that tests the text it is handed:
@@ -111,6 +119,22 @@ module Exec = Test_scan.Kernel_exec_scan
 module Dune = Test_scan.Dune_stanza_scan
 module Refusals = Test_scan.Refusal_control_manifest
 
+let alias_names routes = List.map routes ~f:(fun (r : Rerun.route) -> r.alias)
+let sort_aliases = List.dedup_and_sort ~compare:String.compare
+let is_slow_alias alias = String.is_prefix (Stdlib.Filename.basename alias) ~prefix:"slow-"
+
+let gpu_targets ~backend ~text_routes ~kernel_aliases ~compiler_aliases =
+  let text_aliases =
+    List.filter text_routes ~f:(fun route ->
+        match Rerun.selection route with
+        | Rerun.Every_backend -> true
+        | Rerun.Only backends -> List.mem backends backend ~equal:String.equal
+        | Rerun.Unnamed _ -> false)
+    |> alias_names
+  in
+  List.filter (text_aliases @ kernel_aliases @ compiler_aliases) ~f:(Fn.non is_slow_alias)
+  |> sort_aliases
+
 let hip_slow_aliases stanzas aliases =
   let single_run = function
     | Some [ Sexp.List (Sexp.Atom "run" :: _) ] -> true
@@ -133,9 +157,7 @@ let hip_slow_aliases stanzas aliases =
         | _ -> false)
     | _ -> false
   in
-  List.filter aliases ~f:(fun alias ->
-      String.is_prefix (Stdlib.Filename.basename alias) ~prefix:"slow-"
-      && not (pinned_elsewhere alias))
+  List.filter aliases ~f:(fun alias -> is_slow_alias alias && not (pinned_elsewhere alias))
   |> Set.of_list (module String)
 
 let check_hip_batch_coverage ~fail:(module F : Refusals.FAIL) ~aliases ~estimated ~excluded =
@@ -611,8 +633,12 @@ let refusal_control ~wrapper =
     Rerun.stanzas_of
       [
         ( "t",
-          "(rule (alias runtest-kept-extension) (action (diff \
-           \"kept.%{read:../config/ocannl_backend_extension.txt}.expected\" kept.actual)))\n" );
+          "(test (name plain))\n\
+           (rule (alias runtest-kept-extension) (action (diff \
+           \"kept.%{read:../config/ocannl_backend_extension.txt}.expected\" kept.actual)))\n\
+           (rule (alias runtest-hip_only) (action (diff \
+           \"hip_only.%{read:../config/ocannl_backend.txt}.expected\" hip_only.actual)))\n\
+           (rule (alias slow-text) (action (diff slow.expected slow.actual)))" );
       ]
   in
   let path = "t/kept.opencl.expected" in
@@ -622,21 +648,43 @@ let refusal_control ~wrapper =
     "a snapshot under an extension no backend emits reaches the unselected-route refusal, through \
      the route that diffs it"
     (!unselected_refused && not (List.is_empty routes));
+  let text_routes =
+    List.concat_map
+      [ "t/kept.cu.expected"; "t/hip_only.hip.expected"; "t/plain.expected"; "t/slow.expected" ]
+      ~f:(fun path -> Rerun.for_golden stanzas ~path)
+  in
+  let targets =
+    gpu_targets ~backend:"cuda" ~text_routes
+      ~kernel_aliases:[ "@t/runtest-kernel"; "@t/runtest-shared"; "@t/slow-kernel" ]
+      ~compiler_aliases:[ "@t/runtest-compiler"; "@t/runtest-shared" ]
+  in
+  Verdict.p
+    "GPU targets combine applicable text, kernel and compiler aliases once, excluding slow runs"
+    (List.equal String.equal targets
+       [
+         "@t/runtest-compiler";
+         "@t/runtest-kept-extension";
+         "@t/runtest-kernel";
+         "@t/runtest-plain";
+         "@t/runtest-shared";
+       ]);
   Test_scan.Refusal_control_manifest.print source
 
 let () =
   if Array.length argv = 3 && String.equal argv.(1) "--refusal-control" then (
     refusal_control ~wrapper:argv.(2);
     Stdlib.exit 0);
-  if Array.length argv < 2 then (
-    eprintf "Usage: %s <workspace_root> <file...>\n" argv.(0);
+  let emit_gpu_targets = Array.length argv > 1 && String.equal argv.(1) "--gpu-targets" in
+  let root_pos = if emit_gpu_targets then 2 else 1 in
+  if Array.length argv <= root_pos then (
+    eprintf "Usage: %s [--gpu-targets] <workspace_root> <file...>\n" argv.(0);
     Stdlib.exit 1);
   (* Reported repository-relative, opened as dune handed them over: the working directory is the
      rule's own, deep in the build tree. The translation is [Dune_stanza_scan]'s, shared with the
      other scans so that two of them cannot disagree about what a path names. *)
-  let base = Dune.base_dir argv.(1) in
+  let base = Dune.base_dir argv.(root_pos) in
   let arguments =
-    Array.to_list (Array.subo argv ~pos:2)
+    Array.to_list (Array.subo argv ~pos:(root_pos + 1))
     |> List.map ~f:(fun path -> (Dune.repo_relative base path, path))
     |> List.dedup_and_sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
   in
@@ -988,11 +1036,8 @@ let () =
      Every alias named above, once. Hand them to `tools/test-run.sh run build`; an alias re-running\n\
      a golden only when a pform reads some value covers that golden on the backend that makes it\n\
      so, listed next, and the goldens' families say which backends a change has to be run on.\n";
-  let text_aliases =
-    Map.data golden_routes @ Map.data site_routes
-    |> List.concat_map ~f:(List.map ~f:(fun (r : Rerun.route) -> r.Rerun.alias))
-    |> List.dedup_and_sort ~compare:String.compare
-  in
+  let text_routes = List.concat (Map.data golden_routes @ Map.data site_routes) in
+  let text_aliases = alias_names text_routes |> sort_aliases in
   List.iter text_aliases ~f:print_endline;
   (* gh-ocannl-1581: the conditional ones, split by the backend each condition's value means -- as
      the reader writing the file decides it, by running its own code over every backend. *)
@@ -1044,8 +1089,7 @@ let () =
      # For example, @test/operations/runtest-micrograd_demo_logging is required by those earlier\n\
      # sections but is absent from this kernel-execution list.\n";
   let kernel_aliases =
-    List.concat_map kernel_exec ~f:(fun (_, _, runs) -> List.map runs ~f:(fun r -> r.Rerun.alias))
-    |> List.dedup_and_sort ~compare:String.compare
+    List.concat_map kernel_exec ~f:(fun (_, _, runs) -> alias_names runs) |> sort_aliases
   in
   List.iter kernel_aliases ~f:print_endline;
   print_hip_slow_batches ~stanzas ~aliases:(text_aliases @ kernel_aliases);
@@ -1070,19 +1114,19 @@ let () =
         (String.concat ~sep:"; "
            (List.map routes ~f:Exec.route_name
            @ [ "run by " ^ String.concat ~sep:", " (List.map runs ~f:Rerun.render) ])));
+  let compiler_aliases backend =
+    List.concat_map compiling ~f:(fun (_, routes, runs) ->
+        if List.mem (backends_called routes) backend ~equal:String.equal then alias_names runs
+        else [])
+    |> sort_aliases
+  in
   printf "\n== of those, the aliases by the backend whose compiler they call ==\n";
   List.iter
     (List.dedup_and_sort ~compare:String.compare
        (List.map Exec.compiler_entries ~f:(fun e -> e.Exec.entry_backend)))
     ~f:(fun backend ->
       printf "%s:\n" backend;
-      match
-        List.concat_map compiling ~f:(fun (_, routes, runs) ->
-            if List.mem (backends_called routes) backend ~equal:String.equal then
-              List.map runs ~f:(fun r -> r.Rerun.alias)
-            else [])
-        |> List.dedup_and_sort ~compare:String.compare
-      with
+      match compiler_aliases backend with
       | [] -> printf "  (none)\n"
       | aliases -> List.iter aliases ~f:(printf "  %s\n"));
   printf "\n";
@@ -1181,4 +1225,12 @@ let () =
   Verdict.p_empty "every after-marker exemption still names a file reading after the banner"
     ~over:(List.map after_marker_exempt ~f:fst)
     (List.map stale_after_marker ~f:fst);
-  Test_scan.Refusal_control_manifest.print "codegen_text_inventory.ml"
+  Test_scan.Refusal_control_manifest.print "codegen_text_inventory.ml";
+  if emit_gpu_targets && not (Verdict.any_failed ()) then
+    List.iter Test_scan.Slot_kind.gpu_backends ~f:(fun backend ->
+        let path = "codegen_text_inventory." ^ backend ^ ".targets" in
+        let aliases =
+          gpu_targets ~backend ~text_routes ~kernel_aliases
+            ~compiler_aliases:(compiler_aliases backend)
+        in
+        Out_channel.write_lines path aliases)
