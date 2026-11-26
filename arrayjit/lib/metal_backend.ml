@@ -953,6 +953,18 @@ module Impl = struct
     let vectorize_pragma = []
     let aligned_local_attr = None
 
+    (* gh-ocannl-2473: AGX can store half bits in a thread-private [bfloat] array. A cell with no
+       implicit scalar conversion keeps accidental unencoded accesses loud. *)
+    let private_array_cell : Ops.prec -> C_syntax.private_array_cell option = function
+      | Ops.Bfloat16_prec _ ->
+          Some
+            {
+              cell_type = "ocannl_bf16_cell";
+              load_cell = "ocannl_bf16_load_cell";
+              store_cell = "ocannl_bf16_store_cell";
+            }
+      | _ -> None
+
     (* 16-byte packs that only move data: no vector arithmetic, so no register tile and no count. *)
     let vector_file = { Vector_file.bytes = 16; registers = 0 }
     let vector_style = `Packed_struct
