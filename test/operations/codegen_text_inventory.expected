@@ -938,6 +938,7 @@ test/operations/rev_sides_padded_target.ml [through Ll_test.link; run by @test/o
 test/operations/rev_sides_width1_store.ml [through Ll_test.link; run by @test/operations/runtest-rev_sides_width1_store]
 test/operations/rng_operand_precision.ml [through Ll_test.execute; run by @test/operations/runtest-rng_operand_precision]
 test/operations/routine_log_dropped_notice.ml [through Ll_test.run_routine; run by @test/operations/runtest-routine_log_dropped_notice]
+test/operations/routine_log_narrow_floats.ml [through Ll_test.run_routine; run by @test/operations/runtest-routine_log_narrow_floats]
 test/operations/routine_log_nested_scopes.ml [through Ll_test.run; run by @test/operations/runtest-routine_log_nested_scopes]
 test/operations/routine_log_stream_files.ml [through Ll_test.run_routine; run by @test/operations/runtest-routine_log_stream_files]
 test/operations/runtime_integer_power.ml [through Ll_test.execute; run by @test/operations/runtest-runtime_integer_power]
@@ -1100,6 +1101,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-rev_sides_width1_store
 @test/operations/runtest-rng_operand_precision
 @test/operations/runtest-routine_log_dropped_notice
+@test/operations/runtest-routine_log_narrow_floats
 @test/operations/runtest-routine_log_nested_scopes
 @test/operations/runtest-routine_log_stream_files
 @test/operations/runtest-runtime_integer_power
