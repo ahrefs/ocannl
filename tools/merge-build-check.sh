@@ -162,23 +162,27 @@
 # `$HOME/.cache/ocannl/merge-build-reach` (when `HOME` is absolute); disabled if neither is set.
 # Cache-key allowlist (fail-closed): schema version (`merge-build-reach-v1`), `TESTS_MAX`, two-
 # parent `HEAD` (`HEAD^1`, `HEAD^2`, no `HEAD^3`), `merge-base`, `HEAD^{tree}`, clean working tree
-# (`git status --porcelain -z --untracked-files=normal` empty; any dirty or untracked non-ignored
-# file bypasses both read and write), hashes of all gitignored non-directory files that
-# `affected-tests.sh` copies into its probe (regular readable files only; any symlink or non-
-# regular ignored file bypasses the cache), `uname -s`/`uname -m`, resolved `dune` and `ocamlc`
-# executables (`realpath`, stat metadata, plus content hash when `<= 65536` bytes), active opam
-# switch state (`.opam-switch/{switch-state,switch-config,environment}` and one-level
-# `lib/*/{dune-package,META}` metadata), `OCAMLPATH` `dune-package`/`META` metadata,
-# `OCAMLFIND_CONF`, `DUNE_WORKSPACE` and user Dune config (`${XDG_CONFIG_HOME:-$HOME/.config}/dune/config`)
-# file contents, relevant environment variables (`DUNE_*` excluding `DUNE_BUILD_DIR`, `DUNE_ROOT`,
+# (`git status --porcelain -z --untracked-files=normal` empty and `git ls-files -v -z` showing only
+# `H ` entries so `assume-unchanged`/`skip-worktree` and dirty/untracked files bypass both read
+# and write), hashes of all gitignored non-directory files that `affected-tests.sh` copies into its
+# probe (regular readable files only; any symlink or non-regular ignored file bypasses the cache),
+# `uname -s`/`uname -m`, resolved `dune` and `ocamlc` executables (`realpath`, stat metadata, plus
+# content hash when `<= 65536` bytes), active opam switch state (`.opam-switch/{switch-state,
+# switch-config,environment}` and content hashes of `lib` `dune-package`/`META`/`META.*` and
+# `findlib.conf`), `OCAMLPATH` and `findlib.conf` `path` package metadata hashes, `OCAMLFIND_CONF`,
+# `DUNE_WORKSPACE` and user Dune config (`${XDG_CONFIG_HOME:-$HOME/.config}/dune/config`) file
+# contents, relevant environment variables (`DUNE_*` excluding `DUNE_BUILD_DIR`, `DUNE_ROOT`,
 # `DUNE_TRACE` and `DUNE_CACHE*`; `OCANNL_*` excluding `OCANNL_TOOL_*`, plus
 # `OCANNL_TOOL_AFFECTED_PROBE` and `OCANNL_TOOL_AFFECTED_ARGS`; `OPAM_SWITCH_PREFIX`, `OPAMSWITCH`,
 # `OPAMROOT`, `OCAMLFIND_CONF`, `OCAMLPATH`, `CAML_LD_LIBRARY_PATH`, `OCAMLPARAM`, `INSIDE_DUNE`),
 # and `select_tiers`'s Linux-scope inputs (`linux_scope_err`, `linux_harness_all`, `scripts`,
 # `renamed_scripts`, `linux_harness_members`).
-# Storage boundary: entries are written atomically (`0600`) with an embedded key and `end` trailer.
-# Symlinks, wrong ownership, group/world-writable files, malformed entries, key mismatches or
-# unwritable cache directories are treated as cache misses / skipped writes and never fail a run.
+# Storage boundary: keys are revalidated after `read_tests` completes so mid-query mutations never
+# publish under a stale key. Entries are written atomically (`0600`) as `reach-<key>.v1` (via
+# `.ocannl-reach-tmp.<key>.<pid>.<6-digits>` staging files) with an embedded key and `end` trailer;
+# retention prunes only owner-matching files in those two exact shapes. Symlinks, wrong ownership,
+# group/world-writable files, malformed entries, key mismatches or unwritable cache directories are
+# treated as cache misses / skipped writes and never fail a run.
 # On `--plan-merge`/`--plan --base`, a cache hit prints `merge-build-check: tests plan: reused cached reach`;
 # on full merge builds, live output up to `passed` is unchanged for ship-pr's base-alone log
 # comparison, and `merge-build-check: tests reach: reused cached result` joins the exit summary.
@@ -961,9 +965,15 @@ reach_cache_key() {
     exit 1 if $has_p3;
 
     # Working tree and index must match HEAD^{tree} cleanly (no staged, modified, or untracked
-    # non-ignored files).
+    # non-ignored files, and no assume-unchanged/skip-worktree index flags that hide edits).
     my ($ok_st, $st_out) = git_capture("status", "--porcelain", "-z", "--untracked-files=normal");
     exit 1 unless $ok_st && length($st_out) == 0;
+    my ($ok_ls, $ls_out) = git_capture("ls-files", "-v", "-z");
+    exit 1 unless $ok_ls;
+    for my $ent (split /\0/, $ls_out) {
+      next unless length($ent);
+      exit 1 unless $ent =~ /\AH /;
+    }
 
     # Ignored non-directory files that affected-tests.sh copies into its probe (e.g.
     # dune-workspace, /ocannl_config). Any symlink or non-regular/unreadable ignored file bypasses.
@@ -1048,24 +1058,60 @@ reach_cache_key() {
       feed("ext", $tag, hash_file_bytes($path));
     }
 
+    my %scanned_lib_dirs;
     sub scan_lib_dir {
       my ($tag, $dir) = @_;
       if (!-d $dir) {
         feed("libdir", $tag, $dir, "absent");
         return;
       }
-      opendir my $dh, $dir or exit 1;
+      my $rp = realpath($dir);
+      exit 1 unless defined $rp;
+      if ($scanned_lib_dirs{$rp}++) {
+        feed("libdir_dup", $tag, $rp);
+        return;
+      }
+      opendir my $dh, $rp or exit 1;
       my @entries = sort grep { $_ ne "." && $_ ne ".." } readdir($dh);
       closedir $dh;
-      feed("libdir", $tag, $dir, scalar(@entries));
+      feed("libdir", $tag, $rp, scalar(@entries));
       for my $e (@entries) {
+        my $ep = "$rp/$e";
+        if ($e eq "dune-package" || $e eq "findlib.conf" || $e =~ /\AMETA(?:\..+)?\z/) {
+          exit 1 unless -f $ep && -r $ep;
+          feed("pkgflat", $tag, $e, hash_file_bytes($ep));
+          next;
+        }
+        next unless -d $ep;
         for my $name ("dune-package", "META") {
-          my $f = "$dir/$e/$name";
-          my @lst = lstat($f);
-          next unless @lst;
-          my @st = stat($f);
-          my $st_sig = @st ? join(":", @st[0, 1, 2, 7, 9]) : "broken";
-          feed("pkgmeta", $tag, $e, $name, join(":", @lst[0, 1, 2, 7, 9]), $st_sig);
+          my $f = "$ep/$name";
+          next unless -e $f || -l $f;
+          exit 1 unless -f $f && -r $f;
+          feed("pkgmeta", $tag, $e, $name, hash_file_bytes($f));
+        }
+      }
+    }
+
+    sub scan_findlib_conf {
+      my ($tag, $path) = @_;
+      fingerprint_ext_file($tag, $path);
+      return unless defined $path && length($path) && -f $path && -r $path;
+      my $conf_rp = realpath($path);
+      exit 1 unless defined $conf_rp;
+      my $conf_dir = dirname($conf_rp);
+      open my $fh, "<", $conf_rp or exit 1;
+      binmode $fh;
+      local $/;
+      my $body = <$fh>;
+      close $fh or exit 1;
+      return unless defined $body;
+      my $i = 0;
+      while ($body =~ /^\s*path\s*=\s*"([^"]*)"/mg) {
+        for my $d (split /:/, $1, -1) {
+          $i++;
+          next unless length($d);
+          $d = "$conf_dir/$d" unless $d =~ m{\A/};
+          scan_lib_dir("$tag:path:$i", $d);
         }
       }
     }
@@ -1076,6 +1122,7 @@ reach_cache_key() {
         fingerprint_ext_file("opam:$pref:$sf", "$pref/.opam-switch/$sf");
       }
       scan_lib_dir("switch:$pref", "$pref/lib");
+      scan_findlib_conf("switch_findlib:$pref", "$pref/lib/findlib.conf") if -e "$pref/lib/findlib.conf" || -l "$pref/lib/findlib.conf";
     }
 
     if (defined $ENV{OCAMLPATH} && length($ENV{OCAMLPATH})) {
@@ -1087,7 +1134,7 @@ reach_cache_key() {
       }
     }
 
-    fingerprint_ext_file("ocamlfind_conf", $ENV{OCAMLFIND_CONF});
+    scan_findlib_conf("ocamlfind_conf", $ENV{OCAMLFIND_CONF});
     if (defined $ENV{DUNE_WORKSPACE} && length($ENV{DUNE_WORKSPACE})) {
       my $ws = $ENV{DUNE_WORKSPACE};
       $ws = "$root/$ws" unless $ws =~ m{\A/};
@@ -1155,7 +1202,7 @@ reach_cache_load() {
       exit 1 unless -d $cache_dir;
     }
 
-    my $entry = "$cache_dir/$key.v1";
+    my $entry = "$cache_dir/reach-$key.v1";
     my @lst = lstat($entry);
     exit 1 unless @lst && -f _ && !-l _ && $lst[4] == $< && (($lst[2] & 0022) == 0);
 
@@ -1377,7 +1424,7 @@ reach_cache_store() {
 
     my ($fh, $tmp_path);
     for my $try (1 .. 16) {
-      my $cand = sprintf("%s/.tmp.%s.%d.%06d", $cache_dir, $key, $$, int(rand(1000000)));
+      my $cand = sprintf("%s/.ocannl-reach-tmp.%s.%d.%06d", $cache_dir, $key, $$, int(rand(1000000)));
       if (sysopen($fh, $cand, O_WRONLY | O_CREAT | O_EXCL, 0600)) {
         $tmp_path = $cand;
         last;
@@ -1402,22 +1449,23 @@ reach_cache_store() {
     for my $d (@deps) { $ok &&= print $fh "dep\t$d\n"; }
     $ok &&= print $fh "end\tv1\n";
     $ok &&= close $fh;
-    if (!$ok || !rename($tmp_path, "$cache_dir/$key.v1")) {
+    if (!$ok || !rename($tmp_path, "$cache_dir/reach-$key.v1")) {
       unlink $tmp_path;
       exit 0;
     }
 
-    # Best-effort retention: drop stale staging files (>1h), expire >14d, cap at 256 entries.
+    # Best-effort retention: prune only owner-matching files in this tool'\''s exact staging and
+    # entry filename formats (stale staging >1h, entries >14d, cap at 256 entries).
     if (opendir my $cdh, $cache_dir) {
       my $now = time();
       my @entries;
       while (my $name = readdir($cdh)) {
-        if ($name =~ /\A\.tmp\./) {
+        if ($name =~ /\A\.ocannl-reach-tmp\.[0-9a-f]{64}\.[0-9]+\.[0-9]{6}\z/) {
           my @st = lstat("$cache_dir/$name");
-          unlink "$cache_dir/$name" if @st && -f _ && ($now - $st[9]) > 3600;
-        } elsif ($name =~ /\A[0-9a-f]{64}\.v1\z/) {
+          unlink "$cache_dir/$name" if @st && -f _ && !-l _ && $st[4] == $< && ($now - $st[9]) > 3600;
+        } elsif ($name =~ /\Areach-[0-9a-f]{64}\.v1\z/) {
           my @st = lstat("$cache_dir/$name");
-          next unless @st && -f _;
+          next unless @st && -f _ && !-l _ && $st[4] == $<;
           if (($now - $st[9]) > 14 * 86400) {
             unlink "$cache_dir/$name";
           } else {
@@ -1440,7 +1488,7 @@ reach_cache_store() {
 }
 
 read_tests() {
-  local cache_key=
+  local cache_key= post_key=
   reach_reused=0
   resolve_reach_cache_dir
   if cache_key=$(reach_cache_key); then
@@ -1464,7 +1512,8 @@ read_tests() {
     [ ! -s "$tests_dir/ask" ] || cat "$tests_dir/ask" >&2
     return 1
   fi
-  if [ -n "$cache_key" ]; then
+  # Revalidate the key after computing reach so mid-query mutations never publish under stale inputs.
+  if [ -n "$cache_key" ] && post_key=$(reach_cache_key) && [ "$post_key" = "$cache_key" ]; then
     reach_cache_store "$cache_key"
   fi
 }

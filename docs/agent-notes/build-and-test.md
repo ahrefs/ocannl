@@ -6049,15 +6049,19 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   and Dune inputs instead of recomputing `affected` from scratch. The published owed-run record
   (`tools/owed-run.sh check`) is never cached and always checked afresh, and failures
   (`tests=unread`) are never cached. The key is fail-closed over candidate identity (`HEAD^1`,
-  `HEAD^2`, `merge-base`, `HEAD^{tree}`, rejecting dirty checkouts and octopus merges so base-alone
-  comparisons and moved bases/heads always miss), hashes of gitignored non-directory probe files,
-  host OS/architecture, resolved `dune`/`ocamlc` executables, opam switch state and `lib` package
-  metadata, `OCAMLPATH`/`OCAMLFIND_CONF`/`DUNE_WORKSPACE`/user Dune config, relevant `DUNE_*`/
-  `OCANNL_*`/`OPAM_*` environment variables, and `select_tiers`'s Linux-scope inputs. Entries are
-  written atomically (`0600`) with key and trailer validation; corrupt, symlinked, group/world-
-  writable or unwritable cache entries fall back silently to a fresh query. Full merge builds keep
-  live output up to `passed` identical on cache hits (reporting reuse only in the exit summary) so
-  ship-pr's failed-build base-alone comparison stays unaffected.
+  `HEAD^2`, `merge-base`, `HEAD^{tree}`, rejecting dirty checkouts, `assume-unchanged`/
+  `skip-worktree` index flags, and octopus merges so base-alone comparisons and moved bases/heads
+  always miss), hashes of gitignored non-directory probe files, host OS/architecture, resolved
+  `dune`/`ocamlc` executables, opam switch state and `lib` package metadata content hashes
+  (`dune-package`, `META`, flat `META.*`, `findlib.conf`), `OCAMLPATH`/`findlib.conf` `path`/
+  `OCAMLFIND_CONF`/`DUNE_WORKSPACE`/user Dune config, relevant `DUNE_*`/`OCANNL_*`/`OPAM_*`
+  environment variables, and `select_tiers`'s Linux-scope inputs. Keys are revalidated after
+  computing reach so mid-query mutations never publish under stale inputs. Entries are written
+  atomically (`0600`) as `reach-<key>.v1` (via `.ocannl-reach-tmp.*` staging files) with key and
+  trailer validation, and retention prunes only owner-matching files in those two exact shapes;
+  corrupt, symlinked, group/world-writable or unwritable cache entries fall back silently to a
+  fresh query. Full merge builds keep live output up to `passed` identical on cache hits (reporting
+  reuse only in the exit summary) so ship-pr's failed-build base-alone comparison stays unaffected.
 - **Training reach.** `prepush` prints each omitted training alias on stderr as
   `test-run: prepush: train: ALIAS`, beside the `slow:` lines, including `--list`
   and before a CROSS-CUTTING refusal (first-tier names are the full list's). The merge build reads

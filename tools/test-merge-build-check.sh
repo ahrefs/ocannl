@@ -185,6 +185,9 @@ case $1 in
     exit "${FAKE_TEST_RUN_RC:-0}" ;;
 esac
 printf '%s\n' "$*" >>"$FAKE_RECORD.tiers"
+if [ -n "${FAKE_MUTATE_FILE:-}" ]; then
+  printf 'mutated-mid-query\n' >>"$FAKE_MUTATE_FILE"
+fi
 if [ -n "${FAKE_PLAN_BASE:-}" ]; then
   [ "$(git rev-parse 'HEAD^1')" = "$FAKE_PLAN_BASE" ] &&
     [ "$(git rev-parse 'HEAD^2')" = "$FAKE_PLAN_HEAD" ] &&
@@ -725,9 +728,11 @@ if harness_leg 'test-reach cache reuses matching candidate reach and checks owed
   printf '(lang dune 3.20)\n' >"$rc_ws"
   rc_switch=$TMP/reach-cache-switch
   rc_bin=$rc_switch/bin
-  mkdir -p "$rc_switch/.opam-switch" "$rc_switch/lib/pkg_a" "$rc_bin"
+  mkdir -p "$rc_switch/.opam-switch" "$rc_switch/lib/pkg_a" "$rc_switch/lib/ocaml" "$rc_bin"
   printf 'installed: ["dune.3.24.2"]\n' >"$rc_switch/.opam-switch/switch-state"
   printf 'version = "1.0"\n' >"$rc_switch/lib/pkg_a/META"
+  printf 'destdir="."\npath="./ocaml:."\n' >"$rc_switch/lib/findlib.conf"
+  printf 'version = "5.5.1"\n' >"$rc_switch/lib/ocaml/META.stdlib"
   cp "$TMP/dunebin/dune" "$rc_bin/dune"
   chmod +x "$rc_bin/dune"
 
@@ -846,6 +851,24 @@ if harness_leg 'test-reach cache reuses matching candidate reach and checks owed
   else report 1 'restoring the clean working tree hits the original cached entry again' \
     "exit $rc; tiers=$(tiers); $(cat "$TMP/out")"; fi
 
+  # Git assume-unchanged and skip-worktree index flags hide edits from git status; both must bypass.
+  git -C "$R" update-index --assume-unchanged x.ml
+  printf 'hidden-edit\n' >>"$R/x.ml"
+  rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'assume-unchanged index flag bypasses the reach cache even when git status is empty'
+  else report 1 'assume-unchanged index flag bypasses the reach cache even when git status is empty' \
+    "exit $rc; tiers=$(tiers); $(cat "$TMP/out")"; fi
+  git -C "$R" update-index --no-assume-unchanged x.ml
+  git -C "$R" checkout -q -- x.ml
+  git -C "$R" update-index --skip-worktree x.ml
+  rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'skip-worktree index flag bypasses the reach cache'
+  else report 1 'skip-worktree index flag bypasses the reach cache' \
+    "exit $rc; tiers=$(tiers); $(cat "$TMP/out")"; fi
+  git -C "$R" update-index --no-skip-worktree x.ml
+
   # Ignored non-directory file invalidates cache when added or edited.
   printf 'v1\n' >"$R/fixture-ignored.cfg"
   rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
@@ -905,6 +928,32 @@ if harness_leg 'test-reach cache reuses matching candidate reach and checks owed
     report 0 'installing a package META under the switch lib directory invalidates the reach cache'
   else report 1 'installing a package META under the switch lib directory invalidates the reach cache' "exit $rc; $(tiers)"; fi
 
+  # Flat META.<package> in OCAMLPATH (including same-length in-place edits) invalidates cache.
+  rc_ocamlpath=$TMP/rc-ocamlpath
+  mkdir -p "$rc_ocamlpath"
+  printf 'version = "1.0"\n' >"$rc_ocamlpath/META.pkg_c"
+  OCAMLPATH=$rc_ocamlpath rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  rc_flat_1=0; rc_asked_prepush && rc_flat_1=1
+  OCAMLPATH=$rc_ocamlpath rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  rc_flat_2=0; ! rc_asked_prepush && has 'reused cached reach' && rc_flat_2=1
+  printf 'version = "2.0"\n' >"$rc_ocamlpath/META.pkg_c"
+  OCAMLPATH=$rc_ocamlpath rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && [ "$rc_flat_1" = 1 ] && [ "$rc_flat_2" = 1 ] &&
+     rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'editing a flat META.<package> file in OCAMLPATH invalidates the reach cache'
+  else report 1 'editing a flat META.<package> file in OCAMLPATH invalidates the reach cache' \
+    "exit $rc; m1=$rc_flat_1 h2=$rc_flat_2; $(tiers)"; fi
+
+  # Mid-query input mutation prevents publishing under the stale pre-query key.
+  rc_mid_cache=$TMP/reach-cache-mid
+  FAKE_MUTATE_FILE="$rc_switch/.opam-switch/switch-state" \
+    rc_cache=$rc_mid_cache rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  rc_mid_entries=$(find "$rc_mid_cache" -maxdepth 1 -name 'reach-*.v1' 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$rc" = 0 ] && rc_asked_prepush && [ "$rc_mid_entries" = 0 ]; then
+    report 0 'a mid-query switch-state change suppresses cache publication under the stale key'
+  else report 1 'a mid-query switch-state change suppresses cache publication under the stale key' \
+    "exit $rc; entries=$rc_mid_entries; $(cat "$TMP/out")"; fi
+
   printf '# modified dune shim\n' >>"$rc_bin/dune"
   rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
   if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
@@ -952,9 +1001,20 @@ if harness_leg 'test-reach cache reuses matching candidate reach and checks owed
     report 0 'a failed tests-tier read writes no cache entry'
   else report 1 'a failed tests-tier read writes no cache entry' "exit $rc; dir=$(ls -la "$rc_safe_cache" 2>&1)"; fi
 
-  # Populate rc_safe_cache once, then tamper with the entry in four ways.
+  # Populate rc_safe_cache once, then check pruning safety and tamper handling.
+  mkdir -p "$rc_safe_cache"
+  rc_unrelated_tmp=$rc_safe_cache/.tmp.unrelated
+  rc_unrelated_v1=$rc_safe_cache/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.v1
+  rc_stale_stage=$rc_safe_cache/.ocannl-reach-tmp.0000000000000000000000000000000000000000000000000000000000000000.99999.000001
+  : >"$rc_unrelated_tmp" && touch -t 202001010000 "$rc_unrelated_tmp"
+  : >"$rc_unrelated_v1" && touch -t 202001010000 "$rc_unrelated_v1"
+  : >"$rc_stale_stage" && touch -t 202001010000 "$rc_stale_stage"
   rc_cache=$rc_safe_cache rc_run "$TMP/linuxbin:$rc_bin" --plan --base "$rc_base2"
-  rc_entry=$(find "$rc_safe_cache" -maxdepth 1 -name '*.v1' | head -n 1)
+  if [ "$rc" = 0 ] && [ -f "$rc_unrelated_tmp" ] && [ -f "$rc_unrelated_v1" ] && [ ! -e "$rc_stale_stage" ]; then
+    report 0 'cache pruning removes stale reach staging files while preserving unrelated .tmp.* and *.v1 files'
+  else report 1 'cache pruning removes stale reach staging files while preserving unrelated .tmp.* and *.v1 files' \
+    "exit $rc; ls=$(ls -la "$rc_safe_cache" 2>&1)"; fi
+  rc_entry=$(find "$rc_safe_cache" -maxdepth 1 -name 'reach-*.v1' | head -n 1)
   if [ -n "$rc_entry" ]; then
     cp "$rc_entry" "$TMP/rc-good-entry"
     # (a) Truncated entry (missing end trailer) -> rejected as miss, overwritten cleanly.
