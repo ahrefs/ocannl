@@ -1992,6 +1992,90 @@ if harness_leg 'harness fixture and heredoc literals'; then
   fx_reach 'fail-closed: descriptor-0 output duplication (>&0) keeps printf scanned' tools/test-a.sh tools/test-c.sh
   twin_text 'emit() if true; then printf '\''bash tools/sub.sh\n'\''; fi' 'emit | bash'
   fx_reach 'fail-closed: non-brace function body (if ... fi) keeps unredirected printf scanned' tools/test-a.sh tools/test-c.sh
+  # gh-ocannl-2432: coproc compound-command bodies, persistent `exec <>` / `1<>`,
+  # multiline function/coproc opening-line commands, and `#` comments inside `$(...)`.
+  twin_text 'coproc NAME { printf '\''bash tools/sub.sh\n'\''; }' 'bash <&"${NAME[0]}"'
+  fx_reach 'fail-closed: named coproc brace body keeps unredirected printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'coproc { printf '\''bash tools/sub.sh\n'\''; }' 'bash <&"${COPROC[0]}"'
+  fx_reach 'fail-closed: unnamed coproc brace body keeps unredirected printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'coproc "NAME" { printf '\''bash tools/sub.sh\n'\''; }' 'bash <&"${NAME[0]}"'
+  fx_reach 'fail-closed: quoted-name coproc brace body keeps unredirected printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'coproc NAME ( printf '\''bash tools/sub.sh\n'\'' )' 'bash <&"${NAME[0]}"'
+  fx_reach 'fail-closed: coproc subshell body keeps unredirected printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'coproc NAME if true; then printf '\''bash tools/sub.sh\n'\''; fi' 'bash <&"${NAME[0]}"'
+  fx_reach 'fail-closed: coproc non-brace compound body keeps unredirected printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'coproc NAME {' '  printf '\''bash tools/sub.sh\n'\''' '}' 'bash <&"${NAME[0]}"'
+  fx_reach 'fail-closed: multiline coproc body keeps unredirected printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'coproc NAME { printf '\''bash tools/sub.sh\n'\''' '  echo ok' '}' 'bash <&"${NAME[0]}"'
+  fx_reach 'fail-closed: opening-line printf in multiline coproc body stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'emit() { printf '\''bash tools/sub.sh\n'\''' '  echo ok' '}' 'emit | bash'
+  fx_reach 'fail-closed: opening-line printf in multiline function body stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'coproc NAME {' '  cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH' '}' 'bash <&"${NAME[0]}"'
+  fx_reach 'fail-closed: unredirected cat heredoc inside coproc body stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'coproc NAME { cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH' '}' 'bash <&"${NAME[0]}"'
+  fx_reach 'fail-closed: opening-line cat heredoc inside multiline coproc body stays scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'coproc NAME { printf '\''tools/sub.sh\n'\'' >"$TMP/fx.txt"; }'
+  fx_reach 'a file-redirected printf inside a coproc body remains excluded' tools/test-a.sh
+  twin_text 'coproc NAME {' '  echo ok' '}' 'printf '\''tools/sub.sh\n'\'''
+  fx_reach 'a top-level printf after a closed multiline coproc body remains excluded' tools/test-a.sh
+  twin_text 'exec 1<> >(bash)' 'printf '\''bash tools/sub.sh\n'\'''
+  fx_reach 'fail-closed: persistent exec 1<> >(bash) keeps subsequent printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 1<> >(bash)' 'cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: persistent exec 1<> >(bash) keeps subsequent cat heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 2<> >(bash)' 'printf '\''bash tools/sub.sh\n'\'' >&2'
+  fx_reach 'fail-closed: persistent exec 2<> >(bash) with >&2 keeps printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 3<> >(bash)' 'printf '\''bash tools/sub.sh\n'\'' >"$OUT"'
+  fx_reach 'fail-closed: persistent exec 3<> >(bash) with bare-variable redirect keeps printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec {fd}<> >(bash)' 'printf '\''bash tools/sub.sh\n'\'' >"$OUT"'
+  fx_reach 'fail-closed: persistent exec {fd}<> >(bash) with bare-variable redirect keeps printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'printf '\''bash tools/sub.sh\n'\'' 1<>/dev/fd/3'
+  fx_reach 'fail-closed: unsafe 1<>/dev/fd/3 redirection keeps printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text '{ printf '\''bash tools/sub.sh\n'\''; } 1<>/dev/fd/3'
+  fx_reach 'fail-closed: compound command redirected with 1<>/dev/fd/3 keeps inner printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'emit() { printf '\''bash tools/sub.sh\n'\'' >"$TMP/f" 1<>/dev/fd/3; }' 'emit | bash'
+  fx_reach 'fail-closed: 1<> after >file inside a function cancels safe-file stdout status' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 01<> >(bash)' 'printf '\''bash tools/sub.sh\n'\'''
+  fx_reach 'fail-closed: zero-padded exec 01<> >(bash) keeps subsequent printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 02<> >(bash)' 'printf '\''bash tools/sub.sh\n'\'' >&02'
+  fx_reach 'fail-closed: zero-padded exec 02<> >(bash) with >&02 keeps printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'printf '\''bash tools/sub.sh\n'\'' 01<>/dev/fd/3'
+  fx_reach 'fail-closed: zero-padded 01<>/dev/fd/3 keeps printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'code=$( # )' '  printf '\''bash tools/sub.sh\n'\''' ')' 'bash -c "$code"'
+  fx_reach 'fail-closed: # ) comment inside $(...) does not close substitution early' tools/test-a.sh tools/test-c.sh
+  twin_text 'code=$(# )' '  printf '\''bash tools/sub.sh\n'\''' ')' 'bash -c "$code"'
+  fx_reach 'fail-closed: adjacent # ) comment inside $(# ) does not close substitution early' tools/test-a.sh tools/test-c.sh
+  twin_text 'code=$( (true)# )' '  printf '\''bash tools/sub.sh\n'\''' ')' 'bash -c "$code"'
+  fx_reach 'fail-closed: # ) comment immediately after ) inside $(...) does not close substitution early' tools/test-a.sh tools/test-c.sh
+  twin_text 'code="$( # )' '  printf '\''bash tools/sub.sh\n'\''' ')"' 'bash -c "$code"'
+  fx_reach 'fail-closed: # ) comment inside double-quoted "$(...)" does not close substitution early' tools/test-a.sh tools/test-c.sh
+  twin_text 'bash <( # )' '  printf '\''bash tools/sub.sh\n'\''' ')'
+  fx_reach 'fail-closed: # ) comment inside <(...) process substitution does not close it early' tools/test-a.sh tools/test-c.sh
+  twin_text 'cat <<EOF' '$( # )' 'bash tools/sub.sh' ')' 'EOF'
+  fx_reach 'fail-closed: # ) comment inside multiline $(...) in an unquoted heredoc keeps body scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'code=$(echo $#)' 'printf '\''tools/sub.sh\n'\'''
+  fx_reach 'control: $# inside $(...) is not treated as a comment' tools/test-a.sh
+  twin_text 'code=$(echo ${#foo})' 'printf '\''tools/sub.sh\n'\'''
+  fx_reach 'control: ${#foo} inside $(...) is not treated as a comment' tools/test-a.sh
+  twin_text 'code=$(printf '\''%s'\'' foo\ #)' 'printf '\''tools/sub.sh\n'\'''
+  fx_reach 'control: escaped space before # inside $(...) stays in the same word' tools/test-a.sh
+  twin_text 'code=$(echo $(echo a)#)' 'printf '\''tools/sub.sh\n'\'''
+  fx_reach 'control: # immediately after nested $(...) stays in the same word' tools/test-a.sh
+  twin_text 'code=$( # )' '  echo ok' ')' 'printf '\''tools/sub.sh\n'\'''
+  fx_reach 'control: top-level printf after closed $( # ... ) remains excluded' tools/test-a.sh
+  twin_text 'echo ok # comment \' 'alias cat=bash' 'cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: trailing backslash in a # comment does not swallow the next line override' tools/test-a.sh tools/test-c.sh
+  twin_text 'shopt -s expand_aliases' 'builtin alias cat="ba\' 'sh"' 'cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: double-quoted backslash-continued alias definition keeps cat heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'shopt -s expand_aliases' "builtin alias cat='ba\\" "sh'" 'cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: single-quoted backslash-continued builtin alias keeps cat heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'shopt -s expand_aliases' "builtin alias unused='a" "b' cat='bash'" 'cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
+  fx_reach 'fail-closed: multiline quoted alias before cat= keeps cat heredoc scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'code=$(case y in' '  x) : >esac;;' '  y) printf '\''bash tools/sub.sh\n'\'';;' 'esac)' 'bash -c "$code"'
+  fx_reach 'fail-closed: >esac redirection operand inside multiline $(case ...) does not pop case early' tools/test-a.sh tools/test-c.sh
+  twin_text 'code=$(case y in' '  x) : > esac;;' '  y) printf '\''bash tools/sub.sh\n'\'';;' 'esac)' 'bash -c "$code"'
+  fx_reach 'fail-closed: spaced > esac redirection operand inside multiline $(case ...) does not pop case early' tools/test-a.sh tools/test-c.sh
+  twin_text 'code=$(case y in x) : >esac;; y) printf '\''bash tools/sub.sh\n'\'';; esac)' 'bash -c "$code"'
+  fx_reach 'fail-closed: >esac redirection operand inside single-line $(case ...) does not close substitution early' tools/test-a.sh tools/test-c.sh
   hc_restore
 fi
 
@@ -2104,6 +2188,22 @@ if harness_leg 'harness python __file__ placement'; then
   py_twin_reach 'fail-closed: walrus binding inside an f-string keeps every tied owner' "${twins[@]}"
   py_text 'import os' '__file__ = "data/driver.py"' 'p = os.path.join(os.path.dirname(__file__), "twin.py")'
   py_twin_reach 'fail-closed: a rebound __file__ keeps every tied owner' "${twins[@]}"
+  # gh-ocannl-2432: Python backslash-newline string continuations preserve open
+  # quote and f-string state across the escaped newline.
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'message = "hello\' '"; HERE = "data"' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: reassignment after double-quoted backslash-newline string keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' "message = 'hello\\" "'; HERE = 'data'" 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: reassignment after single-quoted backslash-newline string keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'message = r"hello\' '"; HERE = "data"' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: reassignment after raw backslash-newline string keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'message = "hello\\\' '"; HERE = "data"' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: odd-backslash string continuation keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'msg = f"hello\' '{(HERE := '\''data'\'')}"' 'p = os.path.join(HERE, "twin.py")'
+  py_twin_reach 'fail-closed: walrus binding on second line of backslash-continued f-string keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 's = "prefix \' 'os.path.join(os.path.dirname(__file__), '\''twin.py'\'') \' 'suffix"'
+  py_twin_reach 'fail-closed: os.path.join inside a backslash-continued string keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'message = "hello\' '"; p = os.path.join(os.path.dirname(__file__), "twin.py")'
+  py_twin_reach 'path placement still applies to code after a backslash-continued string closes on the same line' tools/twin.py
   # Symlinked Python file: `.resolve()` / `os.path.realpath(__file__)` dereference
   # to the symlink target's directory (`data/`), while plain `dirname(__file__)`
   # stays at the symlink's own directory (`tools/`).
@@ -2218,6 +2318,21 @@ if harness_leg 'harness negative controls'; then
   twin_text 'cat >"$TMP/tools/sub.sh" <<'\''EOF'\''' 'fake' 'EOF'
   hcontrol 'an output redirection target is excluded from reaches' \
     '} elsif ($it->[0] eq "redir_out" && defined $it->[2]) {' '} elsif (0) {' --harnesses --files tools/sub.sh -- tools/test-a.sh
+  # Residual grammar edge-case controls (gh-ocannl-2432).
+  twin_text 'coproc NAME { printf '\''bash tools/sub.sh\n'\''; }' 'bash <&"${NAME[0]}"'
+  hcontrol 'coproc compound-command tracking keeps unredirected printf scanned' \
+    'if ($w eq "coproc") {' 'if (0 && $w eq "coproc") {' \
+    --harnesses --files tools/sub.sh -- tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 1<> >(bash)' 'printf '\''bash tools/sub.sh\n'\'''
+  hcontrol 'exec <> tracking keeps subsequent printf scanned' \
+    '|| ($it->[0] eq "redir_in" && $it->[1][3] =~ /\A\d*<>\z/)) {' \
+    '|| 0) {' \
+    --harnesses --files tools/sub.sh -- tools/test-a.sh tools/test-c.sh
+  twin_text 'code=$( # )' '  printf '\''bash tools/sub.sh\n'\''' ')' 'bash -c "$code"'
+  hcontrol 'comment skipping inside sh_skip_balanced keeps # ) from closing $(...) early' \
+    'if (!$isq && !$idq && !$in_word && $c eq "#") {' \
+    'if (0 && !$isq && !$idq && !$in_word && $c eq "#") {' \
+    --harnesses --files tools/sub.sh -- tools/test-a.sh tools/test-c.sh
   hc_restore
   py_harness_setup
   py_text 'import os' 'p = os.path.join(os.path.dirname(__file__), "twin.py")'
@@ -2226,6 +2341,10 @@ if harness_leg 'harness negative controls'; then
     --harness-census tools/test_p.py -- \
     "$(printf 'tools/test_p.py\ttools/test_p.py\tself\t-\t-\t-')" \
     "$(printf 'tools/test_p.py\ttools/twin.py\tnames\ttools/test_p.py:2\ttwin.py\t1')"
+  py_text 'import os' 'HERE = os.path.dirname(__file__)' 'message = "hello\' '"; HERE = "data"' 'p = os.path.join(HERE, "twin.py")'
+  hcontrol 'Python backslash-newline string continuation exposes trailing reassignment' \
+    'if (!$triple && !$was_esc) { $q = ""; $is_fstr = 0 }' 'if (!$triple) { $q = ""; $is_fstr = 0 }' \
+    --harnesses --files data/twin.py -- tools/test_p.py
   py_harness_teardown
 fi
 
@@ -2407,15 +2526,23 @@ if harness_leg 'source-only reach'; then
     if [ "$rc" = 0 ] && cmp -s "$TMP/want" "$out"; then report 0 "$path alone selects only the harnesses reading it"
     else report 1 "$path alone selects only the harnesses reading it" "exit $rc; got [$(tr '\n' '|' <"$out")]"; fi
   done <"$TMP/source-only"
-  # gh-ocannl-2380: printf fixture strings and output-redirected fixture/stub
-  # writers stop reaching the named source paths, while a non-fixture call
-  # naming an executable keeps its conservative reach.
+  # gh-ocannl-2380 / gh-ocannl-2432: printf fixture strings and direct
+  # truncating output-redirected fixture/stub writers stop reaching the named
+  # source paths (covering direct-redirect forms of #2303's fixture lib/dune +
+  # test/operations/dune writes and an inline-redirect rewrite of #2295's
+  # dispatcher manifest), while variable assignments (#2295's actual
+  # `local manifest=$target/tools/test-harnesses.sh` form) and non-fixture calls
+  # intentionally stay fail-closed.
+  od=test/operations'/dune' th=tools/test-'harnesses.sh'
   stem=${sj##*/} stem=${stem%.ml}
-  mkdir -p "$hrepo/${ld%/*}" "$hrepo/${bd%/*}" "$hrepo/${rw%/*}" "$hrepo/${sj%/*}" || exit 2
-  for f in "$ld" "$bd" "$rw" "$sj"; do : >"$hrepo/$f" || exit 2; done
+  mkdir -p "$hrepo/${ld%/*}" "$hrepo/${bd%/*}" "$hrepo/${rw%/*}" "$hrepo/${sj%/*}" "$hrepo/${od%/*}" || exit 2
+  for f in "$ld" "$bd" "$rw" "$sj" "$od"; do : >"$hrepo/$f" || exit 2; done
   for form in \
     "$ld|a quoted diagnostic location|printf 'File \"$ld\", line 3, characters 1-20:\\n'" \
     "$ld|a fixture repository's file under a variable prefix|cat >\"\$repo/$ld\" <<'DUNE'" \
+    "$ld|a direct-redirect fixture library dune (#2303)|printf '(library (name gate))\\n' >\"\$real_co/$ld\"" \
+    "$od|a direct-redirect fixture operations dune (#2303)|printf '(alias (name scans))\\n' >\"\$real_co/$od\"" \
+    "$th|an inline-redirect fixture dispatcher manifest (inline form of #2295)|printf 'printf \"%%s\\\\n\" tools/first.sh\\n' >\"\$target/$th\"" \
     "$rw|a trace location|printf 'debug solve_row_ineq begin \"$rw\":4164:31:\\n'" \
     "$sj|a bare basename|printf '(diff? $stem.ml $stem.ml.corrected)\\n'" \
     "$bd|a PATH stub|cat >\"\$TMP/$bd\" <<'SH'"; do
@@ -2423,13 +2550,21 @@ if harness_leg 'source-only reach'; then
     printf '%s\n' '#!/usr/bin/env bash' "$text" >"$hrepo/tools/test-c.sh"
     haffected --harnesses --files "$path"
     hexpect "$what no longer reaches its harness ($path)" 0
+    haffected --harness-census tools/test-c.sh
+    hexpect "and the census records only self for $what ($path)" 0 \
+      "$(printf 'tools/test-c.sh\ttools/test-c.sh\tself\t-\t-\t-')"
   done
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "local manifest=\$target/$th" \
+    'printf '\''printf "%%s\\n" tools/first.sh\n'\'' >"$manifest"' >"$hrepo/tools/test-c.sh"
+  haffected --harnesses --files "$th"
+  hexpect "fail-closed: #2295's variable-assigned manifest path still reaches its harness ($th)" 0 tools/test-c.sh
   printf '%s\n' '#!/usr/bin/env bash' "finish('./$stem.exe', b + 'test', 6, [])" >"$hrepo/tools/test-c.sh"
   haffected --harnesses --files "$sj"
   hexpect "the module's executable in a non-fixture call still reaches its harness ($sj)" 0 tools/test-c.sh
   hc_restore
-  for f in "$ld" "$bd" "$rw" "$sj"; do unlink "$hrepo/$f" || exit 2; done
-  rmdir "$hrepo/${ld%/*}" "$hrepo/${bd%/*}" "$hrepo/${rw%/*}" "$hrepo/${sj%/*}" "$hrepo/test" || exit 2
+  for f in "$ld" "$bd" "$rw" "$sj" "$od"; do unlink "$hrepo/$f" || exit 2; done
+  rmdir "$hrepo/${ld%/*}" "$hrepo/${bd%/*}" "$hrepo/${rw%/*}" "$hrepo/${sj%/*}" "$hrepo/${od%/*}" "$hrepo/test" || exit 2
 fi
 
 if harness_leg 'harness legs of this repository'; then
