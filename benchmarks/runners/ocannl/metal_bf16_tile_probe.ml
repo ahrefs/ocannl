@@ -760,7 +760,9 @@ let checks device queue =
 let check_strides device queue =
   let m = 64 and n = 96 and k = 256 in
   let g = make_gemm device ~stagings:stride_stagings ~m ~n ~k in
-  let a, b = exact_operands ~top:15 ~signed:true ~m ~n ~k in
+  (* With a period coprime to the B row coefficient, none of the four fragment starts in a staged
+     tile aliases another. Products and partial sums remain exact in the f32 accumulator. *)
+  let a, b = exact_operands ~top:31 ~signed:true ~m ~n ~k in
   set_inputs g a b;
   let reference = serial_f32 ~m ~n ~k a b in
   Printf.printf "Exact serial f32 reference (m = %d, n = %d, k = %d):\n" m n k;
