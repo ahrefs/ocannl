@@ -16787,6 +16787,26 @@
  (action
   (run %{dep:sweep_harness_driver.exe} %{dep:sweep_components.sh})))
 
+; Put system awk first in the driver's input PATH so losing the pin exposes BWK
+; awk. Keep the inherited suffix for mawk installations outside the fallback dirs.
+
+(rule
+ ; ocannl-backend: none -- runs a standalone awk expression through the shell-test driver.
+ (alias runtest-sweep_components)
+ (enabled_if
+  (= %{system} macosx))
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  sweep_mawk_pin_probe.sh
+  sweep_harness_mawk.stamp)
+ (action
+  (setenv
+   PATH
+   "/usr/bin:/bin:%{env:PATH=/usr/bin:/bin}"
+   (run %{dep:sweep_harness_driver.exe} %{dep:sweep_mawk_pin_probe.sh}))))
+
 (rule
  ; ocannl-backend: none -- the harness uses fake opam and a Verdict-only skip probe; neither links a backend.
  (alias runtest-sweep_harness)
