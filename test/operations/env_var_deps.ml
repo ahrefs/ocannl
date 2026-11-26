@@ -1176,8 +1176,14 @@ let width_key = "cc_vector_bytes"
    rounds 1-3 of staging#1263, where proving arbitrary statements of a setting kept finding new ways
    to write one). An initialization pin is invalidated if any top-level item from the pinning one
    onward -- including the search item and later items -- spells a vector-file key literal (by
-   config key or env-var name), without trying to distinguish read-only diagnostics from resets; a
-   program that needs to mention a key after pinning pins via `(setenv …)` or carries the marker.
+   config key or env-var name), without trying to distinguish read-only diagnostics from resets, or
+   if any sibling module of the same program (excluding `modules_without_implementation`) spells a
+   vector-file key literal anywhere in its parsed expressions or lacks a parsable implementation
+   source; a program that only makes a read-only mention of a key after pinning or in a sibling
+   module can pin via `(setenv …)` or carry the marker (in-process `Utils.state_config` resets
+   outrank `(setenv …)` and are not checked by the `setenv` branch). Dynamic key strings computed at
+   runtime and linked library modules outside the program's own module set are outside this literal
+   pass.
 
    "Starts a search" is derived from the search's entry points [search_value] (and
    [search_values_extra]) of [search_home] and the values of the framework library
@@ -3268,28 +3274,44 @@ let main () =
                          pinning one onward (including the search item and later items) spells a key
                          of the file, which could reset it (round 4, gh-ocannl-2458). No other
                          module of the program names a search at all, since its initializers may run
-                         before the pinning one. *)
+                         before the pinning one, nor spells a vector-file key literal or lacks a
+                         parsable implementation source when it needs one (gh-ocannl-2490). *)
                       let init_pin modules =
                         let names_search m = Map.mem search_reach (in_here m) in
                         let key_literals =
                           List.concat_map vector_file_keys ~f:(fun (key, _) ->
                               vector_file_literals key)
                         in
+                        let spells_key item =
+                          List.exists item.Sources.literals ~f:(fun literal ->
+                              List.mem key_literals literal ~equal:String.equal)
+                        in
+                        let sibling_disqualifies m =
+                          if not (Scan.needs_source declared m) then false
+                          else
+                            match source_of ~dir:here m with
+                            | None -> true
+                            | Some on_disk -> (
+                                match
+                                  Test_scan.Scan_attempt.run (fun () ->
+                                      Sources.initialization_items (In_channel.read_all on_disk))
+                                with
+                                | Scanned items -> List.exists items ~f:spells_key
+                                | Unparsed _ | Raised _ -> true)
+                        in
                         List.find_map modules ~f:(fun m ->
                             let others =
-                              List.filter modules ~f:(fun m' -> not (String.equal m m'))
+                              List.filter modules ~f:(fun m' ->
+                                  not (String.equal (String.lowercase m) (String.lowercase m')))
                             in
                             match Map.find vector_file_init_order (in_here m) with
                             | Some (items, helper_of, is_search, first_applied)
-                              when not (List.exists others ~f:names_search) ->
+                              when (not (List.exists others ~f:names_search))
+                                   && not (List.exists others ~f:sibling_disqualifies) ->
                                 let barrier = function
                                   | path when is_search path -> true
                                   | first :: _ :: _ -> List.mem others first ~equal:String.equal
                                   | _ -> false
-                                in
-                                let spells_key item =
-                                  List.exists item.Sources.literals ~f:(fun literal ->
-                                      List.mem key_literals literal ~equal:String.equal)
                                 in
                                 let rec scan index pinned = function
                                   | [] -> pinned
@@ -6335,6 +6357,42 @@ let search_control () =
                ^ Printf.sprintf "let () = Utils.state_config ~key:%S ~data:\"-1\"; search ()\n"
                    width_key)
              ()) );
+      ( "sibling_reset",
+        refused
+          (run ~programs:"(name probe)\n (modules probe helper)"
+             ~extra:
+               [
+                 ( "t/helper.ml",
+                   Printf.sprintf "let reset () = Utils.state_config ~key:%S ~data:\"-1\"\n"
+                     width_key );
+               ]
+             ~probe:(pin ^ "let () = Helper.reset ()\n" ^ tune)
+             ()) );
+      ( "sibling_registers_reset",
+        refused
+          (run ~programs:"(name probe)\n (modules probe helper)"
+             ~extra:
+               [ ("t/helper.ml", Printf.sprintf "let () = Unix.putenv %S \"-1\"\n" registers_var) ]
+             ~probe:helper ()) );
+      ( "sibling_unparsable",
+        refused
+          (run ~programs:"(name probe)\n (modules probe helper)"
+             ~extra:[ ("t/helper.ml", "let broken =\n") ]
+             ~probe:(pin ^ "let () = Helper.setup ()\n" ^ tune)
+             ()) );
+      ( "sibling_missing",
+        refused (run ~programs:"(name probe)\n (modules probe missing)" ~probe:helper ()) );
+      ( "sibling_clean",
+        passed
+          (run ~programs:"(name probe)\n (modules probe helper)"
+             ~extra:[ ("t/helper.ml", Printf.sprintf "(* %s *)\nlet setup () = ()\n" width_key) ]
+             ~probe:(pin ^ "let () = Helper.setup ()\n" ^ tune)
+             ()) );
+      ( "sibling_interface_only",
+        passed
+          (run
+             ~programs:"(name probe)\n (modules probe sigs)\n (modules_without_implementation sigs)"
+             ~probe:helper ()) );
       ("marked", passed (run ~marker ~probe:named ()));
       ("setenv", passed (run ~action:(setenv "32") ~probe:named ()));
       ("helper", passed (run ~probe:helper ()));
@@ -6518,6 +6576,13 @@ let search_control () =
   Verdict.p "a width reset in a direct search item invalidates an earlier pin" (ok "direct_reset");
   Verdict.p "a width reset in a later item after a search invalidates an earlier pin"
     (ok "later_reset" && ok "applied_later_reset");
+  Verdict.p
+    "a sibling module spelling a vector-file key literal or lacking a parsable source invalidates \
+     an initialization pin"
+    (ok "sibling_reset" && ok "sibling_registers_reset" && ok "sibling_unparsable"
+   && ok "sibling_missing");
+  Verdict.p "a clean or interface-only sibling module does not invalidate an initialization pin"
+    (ok "sibling_clean" && ok "sibling_interface_only");
   Verdict.p "the same stanza carrying `; cc-vector-width: independent -- <reason>` passes"
     (ok "marked");
   Verdict.p "and so does one pinning the variable with `setenv` around its run" (ok "setenv");
