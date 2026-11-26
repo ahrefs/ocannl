@@ -26,8 +26,8 @@
    accumulators, dependent or guarded updates, elementwise work), the capped normalized credit's
    exact values at the stand-in with a cap of 4 (and the launch tail), the controls that keep it
    bitwise the thread-only fill (cap 1, unknown chains, chains at the cap), the census on the
-   scheduled qkv leaves ([tm * tn]), and that no backend advises a cap: under the running backend's
-   own limits the ranking is the thread-only one. *)
+   scheduled qkv leaves ([tm * tn]), and that a backend advertising both launch-fill inputs ranks as
+   under the thread-only fill. *)
 
 (* cc-fp-contract: not-executed -- the bitwise claim compares cost-model scores computed in OCaml *)
 
@@ -644,9 +644,9 @@ let () =
       | Some (r, _) -> Float.(r > rank)
       | None -> false);
   (* gh-ocannl-1639 ships the census with no cap advised on any backend (the rog fit moved no order
-     at the gh-1479 cells): under the running backend's own limits -- cc's, or CUDA's on its leg --
-     every leaf ranks bitwise as under the thread-only fill. Setting a backend's [fill_chains] turns
-     this claim red: that is the change that needs its own evidence. *)
+     at the gh-1479 cells). Where the backend advertises both launch-fill inputs, every leaf must
+     rank bitwise as under the thread-only fill. A backend advising an ILP cap needs its own ranking
+     evidence. *)
   let running_ctx = Context.auto () in
   let own = Context.hardware_limits running_ctx in
   let thread_only = { own with fill_chains = Some 1 } in
