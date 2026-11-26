@@ -69,7 +69,10 @@
 # a filtered or first-tier run); a NEED no record covers.
 # Transport unreadable (exit 3, saying why and naming OWED_RUN_URL): a ref read or object fetch
 # that could not complete within FETCH_CAP seconds, or a fetched ref whose commit object is missing
-# (unreadable). `check` does not retry transport failures so callers keep their read cap bounded;
+# (unreadable). On expiry, bounded Git commands get TERM then KILL in their private process
+# group, with a short grace and a bounded wait for Git itself. This covers helpers that stay in
+# that group. Helpers that detach and processes stuck in uninterruptible kernel waits require
+# separate operator recovery. `check` does not retry transport failures;
 # callers decide whether to fail closed (the main merge build) or withhold a verdict (`--plan-merge`).
 # Writer and source are informational. The writer identifies the publication path. Anyone with
 # push access can still craft a line claiming any writer. The record certifies the checkout at
@@ -127,8 +130,56 @@ die() { echo "$me: $*" >&2; exit 2; }
 refuse() { echo "$me: REFUSED -- $* (records on $OWED_RUN_URL)"; exit 1; }
 unreadable() { echo "$me: REFUSED -- $* (records on $OWED_RUN_URL)"; exit 3; }
 is_sha() { case $1 in *[!0-9a-f]* | '') return 1 ;; esac; [ "${#1}" = 40 ]; }
-# bounded CMD...: CMD under FETCH_CAP (macOS has no timeout(1); perl's alarm survives exec).
-bounded() { perl -e 'alarm shift; exec @ARGV or exit 127' "$FETCH_CAP" "$@"; }
+# macOS has no timeout(1). Keep the group leader unreaped through escalation so its PID
+# still identifies this transport even if the leader exits on TERM and its helper does not.
+bounded() {
+  perl -MPOSIX -MTime::HiRes=sleep -e '
+    my $cap = shift;
+    my $blocked = POSIX::SigSet->new(SIGINT, SIGTERM, SIGHUP);
+    my $old = POSIX::SigSet->new();
+    sigprocmask(SIG_BLOCK, $blocked, $old) or die "block signals: $!";
+    my $stop;
+    $SIG{HUP}  = sub { $stop //= 129 };
+    $SIG{INT}  = sub { $stop //= 130 };
+    $SIG{ALRM} = sub { $stop //= 142 };
+    $SIG{TERM} = sub { $stop //= 143 };
+    my $pid = fork();
+    defined $pid or die "fork: $!";
+    if (!$pid) {
+      $SIG{$_} = "DEFAULT" for qw(INT TERM HUP ALRM);
+      setpgid(0, 0) or die "isolate Git transport: $!";
+      sigprocmask(SIG_SETMASK, $old) or die "restore signals: $!";
+      exec { $ARGV[0] } @ARGV or exit 127;
+    }
+    # Either side can establish the group before the supervisor accepts cancellation. EACCES
+    # means the child already execed after setting its group, and ESRCH means it already exited.
+    if (!setpgid($pid, $pid) && !$!{EACCES} && !$!{ESRCH}) {
+      my $error = $!;
+      kill("KILL", -$pid) or kill("KILL", $pid);
+      die "isolate Git transport: $error";
+    }
+    alarm $cap;
+    sigprocmask(SIG_SETMASK, $old) or die "restore signals: $!";
+    until (defined $stop) {
+      my $waited = waitpid($pid, WNOHANG);
+      if ($waited == $pid) {
+        my $status = $?;
+        exit($status & 127 ? 128 + ($status & 127) : $status >> 8);
+      }
+      die "wait for Git transport: $!" if $waited < 0 && !$!{EINTR};
+      sleep 0.02;
+    }
+    alarm 0;
+    kill "TERM", -$pid;
+    sleep 0.25;
+    kill "KILL", -$pid;
+    for (1 .. 25) {
+      last if waitpid($pid, WNOHANG) != 0;
+      sleep 0.02;
+    }
+    exit $stop;
+  ' -- "$FETCH_CAP" "$@"
+}
 # A read never prompts, reads no ambient credential helper's prompt, and keeps English diagnostics.
 rgit() { LC_ALL=C GIT_TERMINAL_PROMPT=0 bounded git -C "$root" "$@"; }
 
@@ -187,7 +238,7 @@ retry_or_die() {
 
 # remote_ref REF: sets `remote_sha` to what REF names on OWED_RUN_URL, empty when it names nothing.
 # Nonzero status when the repository could not be read; sets `remote_err` to stderr on failure.
-# Uses scratch files rather than pipes so an orphaned transport helper cannot hold $(...) past FETCH_CAP.
+# A scratch file keeps the read independent of pipe EOF, including from detached helpers.
 remote_ref() {
   local rc=0
   remote_sha=

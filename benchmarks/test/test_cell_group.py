@@ -492,6 +492,53 @@ class CellGroupTest(unittest.TestCase):
         self.assertIs(observed, cell_group.GONE)
         child.wait()
 
+    @unittest.skipUnless(os.name == "posix", "driver signal fixtures require POSIX")
+    def test_shared_cells_reaps_a_resistant_descendant_on_cancel_or_timeout(self):
+        for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, None):
+            with self.subTest(signal=signum):
+                pidfile = self.dir / f"shared-cells-{signum}.pid"
+                kill_the_group_on_cleanup(self, pidfile)
+                worker = (
+                    "import signal, sys, time\n"
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                    + publish_pid("sys.argv[1]", "os.getpid()")
+                    + "time.sleep(300)\n"
+                )
+                leader = (
+                    "import subprocess, sys\n"
+                    f"subprocess.Popen([sys.executable, '-c', {worker!r}, sys.argv[1]]).wait()"
+                )
+                with subprocess.Popen(
+                    self.python(
+                        "import os, signal, subprocess, sys, cells\n"
+                        "from test.test_cell_group import cap_counted_from\n"
+                        "signal.signal(signal.SIGHUP, signal.SIG_DFL)\n"
+                        "cells.install_cancellation('test shared cells')\n"
+                        "with cap_counted_from(sys.argv[2]):\n"
+                        "    print(cells.run_in_group([sys.executable, '-c', sys.argv[1], "
+                        "sys.argv[2]], '.', os.environ, float(sys.argv[3]), "
+                        "subprocess.DEVNULL, subprocess.DEVNULL))\n",
+                        leader, pidfile, 60 if signum else 0.2,
+                    ),
+                    cwd=HERE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                ) as driver:
+                    try:
+                        self.wait_file(pidfile)
+                        pid = int(pidfile.read_text())
+                        if signum is not None:
+                            driver.send_signal(signum)
+                        out, err = driver.communicate(timeout=10)
+                    finally:
+                        if driver.poll() is None:
+                            driver.kill()
+                if signum is None:
+                    self.assertEqual((driver.returncode, out.strip()), (0, "timeout"), err)
+                elif signum == signal.SIGINT:
+                    self.assertIn("KeyboardInterrupt", err)
+                else:
+                    self.assertIn(f"test shared cells: terminated by signal {signum}", err)
+                self.assertTrue(self.wait_gone(pid), "descendant outlived the shared cell driver")
+
     def gh1002_driver(self, child_source, pidfile, timeout=30):
         driver = subprocess.Popen(
             self.python(
