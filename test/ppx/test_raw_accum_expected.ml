@@ -13,7 +13,7 @@ let test_raw_unop a =
                Ir.Assignments.Noop in
            let __cd_fwd2 =
              if Tensor.is_fwd_root a
-             then Tensor.take_forward_code a
+             then Tensor.embed_forward_code a
              else Ir.Assignments.empty_comp in
            [__cd_fwd1;
            __cd_fwd2;
@@ -50,7 +50,7 @@ let test_raw_unop_transpose a =
                Ir.Assignments.Noop in
            let __cd_fwd2 =
              if Tensor.is_fwd_root a
-             then Tensor.take_forward_code a
+             then Tensor.embed_forward_code a
              else Ir.Assignments.empty_comp in
            [__cd_fwd1;
            __cd_fwd2;
@@ -87,7 +87,7 @@ let test_raw_unop_permute a =
                Ir.Assignments.Noop in
            let __cd_fwd2 =
              if Tensor.is_fwd_root a
-             then Tensor.take_forward_code a
+             then Tensor.embed_forward_code a
              else Ir.Assignments.empty_comp in
            [__cd_fwd1;
            __cd_fwd2;
@@ -126,7 +126,7 @@ let test_raw_identity a =
                Ir.Assignments.Noop in
            let __cd_fwd2 =
              if Tensor.is_fwd_root a
-             then Tensor.take_forward_code a
+             then Tensor.embed_forward_code a
              else Ir.Assignments.empty_comp in
            [__cd_fwd1;
            __cd_fwd2;
@@ -163,15 +163,15 @@ let test_raw_ternop_fma a b c =
                Ir.Assignments.Noop in
            let __cd_fwd2 =
              if Tensor.is_fwd_root a
-             then Tensor.take_forward_code a
+             then Tensor.embed_forward_code a
              else Ir.Assignments.empty_comp in
            let __cd_fwd3 =
              if Tensor.is_fwd_root b
-             then Tensor.take_forward_code b
+             then Tensor.embed_forward_code b
              else Ir.Assignments.empty_comp in
            let __cd_fwd4 =
              if Tensor.is_fwd_root c
-             then Tensor.take_forward_code c
+             then Tensor.embed_forward_code c
              else Ir.Assignments.empty_comp in
            [__cd_fwd1;
            __cd_fwd2;
@@ -217,15 +217,15 @@ let test_raw_ternop_pointwise a b c =
                Ir.Assignments.Noop in
            let __cd_fwd2 =
              if Tensor.is_fwd_root a
-             then Tensor.take_forward_code a
+             then Tensor.embed_forward_code a
              else Ir.Assignments.empty_comp in
            let __cd_fwd3 =
              if Tensor.is_fwd_root b
-             then Tensor.take_forward_code b
+             then Tensor.embed_forward_code b
              else Ir.Assignments.empty_comp in
            let __cd_fwd4 =
              if Tensor.is_fwd_root c
-             then Tensor.take_forward_code c
+             then Tensor.embed_forward_code c
              else Ir.Assignments.empty_comp in
            [__cd_fwd1;
            __cd_fwd2;
@@ -271,15 +271,15 @@ let test_raw_ternop_einsum a b c =
                Ir.Assignments.Noop in
            let __cd_fwd2 =
              if Tensor.is_fwd_root a
-             then Tensor.take_forward_code a
+             then Tensor.embed_forward_code a
              else Ir.Assignments.empty_comp in
            let __cd_fwd3 =
              if Tensor.is_fwd_root b
-             then Tensor.take_forward_code b
+             then Tensor.embed_forward_code b
              else Ir.Assignments.empty_comp in
            let __cd_fwd4 =
              if Tensor.is_fwd_root c
-             then Tensor.take_forward_code c
+             then Tensor.embed_forward_code c
              else Ir.Assignments.empty_comp in
            [__cd_fwd1;
            __cd_fwd2;
@@ -358,7 +358,7 @@ let test_merge_grad_operand a b =
                Ir.Assignments.Noop in
            let __cd_fwd2 =
              if Tensor.is_fwd_root b
-             then Tensor.take_forward_code b
+             then Tensor.embed_forward_code b
              else Ir.Assignments.empty_comp in
            [__cd_fwd1;
            __cd_fwd2;
@@ -403,7 +403,7 @@ let test_statement_sequence a =
                                  p1.Tensor.value) Ir.Assignments.Noop in
                 let __cd_fwd2 =
                   if Tensor.is_fwd_root a
-                  then Tensor.take_forward_code a
+                  then Tensor.embed_forward_code a
                   else Ir.Assignments.empty_comp in
                 [__cd_fwd1;
                 __cd_fwd2;
@@ -427,7 +427,7 @@ let test_statement_sequence a =
                                p2.Tensor.value) Ir.Assignments.Noop in
               let __cd_fwd2 =
                 if Tensor.is_fwd_root a
-                then Tensor.take_forward_code a
+                then Tensor.embed_forward_code a
                 else Ir.Assignments.empty_comp in
               [__cd_fwd1;
               __cd_fwd2;

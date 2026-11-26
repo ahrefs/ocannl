@@ -24,7 +24,7 @@ type handout =
   | Not_handed_out
   | Taken
       (** What became of one side of a tensor's code once it stopped being a root: [Taken] by
-          {!consume_forward_code}, {!take_forward_code} (the [%cd] embedding path) or
+          {!consume_forward_code}, {!embed_forward_code} (the [%cd] embedding path) or
           {!consume_backprop_code}; [Not_handed_out] while it is a root, and for a parameter or a
           subterm whose code a consumer embeds. *)
 
@@ -128,16 +128,13 @@ val is_bprop_root : t -> bool
     Reclamation is the GC's to time: a consumer dropped but not yet collected still holds the leaf,
     and [Gc.full_major ()] settles it. *)
 
-val take_forward_code : t -> comp
-(** The unchecked half of {!consume_forward_code}, for a tensor the caller has established is a
-    forward root ({!is_fwd_root}): removes it from the forward roots, marks its forward code as
-    taken, and returns the code. It is an EMBEDDING, not a handout: {!rewind_to_last_closure} treats
-    an embedding made since the last closure as discarded work and makes the tensor a root again;
-    code a caller keeps is handed out with {!consume_forward_code}. This is the handout every path
-    that embeds a tensor's forward code goes through -- {!consume_forward_code} and the [%cd]
-    operands' embedding alike -- so that a later {!consume_forward_code} on the same tensor returns
-    the same comp. Like {!consume_forward_code}, it returns the code with the fetch of every random
-    seed the code reads and does not write prepended (gh-ocannl-2157). *)
+val embed_forward_code : t -> comp
+(** Removes a tensor the caller has established is a forward root ({!is_fwd_root}), marks its
+    forward code as taken, and returns that code for use in a larger computation. Rewinding past an
+    embedding restores a root that was present at the checkpoint. A caller retaining the code
+    independently uses {!consume_forward_code}, which records the external handout for rewind. Both
+    paths return the same comp, with the fetch of every random seed the code reads and does not
+    write prepended (gh-ocannl-2157). *)
 
 val with_unchanged_roots : f:(unit -> 'a) -> 'a
 (** Runs [f] and restores the forward and backprop root maps afterwards, including the consumption
@@ -332,9 +329,9 @@ val consume_forward_code : t -> comp
     handout, checks that non-embedded reads are not owned by other unconsumed roots -- including a
     root the caller dropped before consuming it, whose code can then never run, so its readers must
     be rebuilt (gh-ocannl-1796) -- then removes [t] from the forward roots and returns its comp.
-    Subsequent calls return the same comp, including after {!take_forward_code} (the [%cd] embedding
-    path), without checking or modifying roots constructed since the first handout. This is
-    equivalent to retaining the original comp; the caller still owns execution order and the
+    Subsequent calls return the same comp, including after {!embed_forward_code} (the [%cd]
+    embedding path), without checking or modifying roots constructed since the first handout. This
+    is equivalent to retaining the original comp; the caller still owns execution order and the
     availability of non-embedded inputs. Parameters and subtensors embedded in a tensor consumer
     remain rejected.
 
@@ -447,8 +444,8 @@ val rewind : ?reason:string -> checkpoint -> unit
     {!rewind_to_last_closure} or {!unsafe_reinitialize} ran since; or the window memoized state of
     the frontier that no rewind can reset -- a dims, padding or projections read of an open shape
     that raised (its lazy keeps the exception), or an open node's precision that began settling.
-    {!rewind_to_last_closure} is always available. A [Tensor.take_forward_code] called directly on a
-    tensor that was not a root at the checkpoint leaves its marker taken. Raises when called from
+    {!rewind_to_last_closure} is always available. A [Tensor.embed_forward_code] called directly on
+    a tensor that was not a root at the checkpoint leaves its marker taken. Raises when called from
     within an [op_asn]. *)
 
 val with_checkpoint : ?label:string -> (unit -> 'a) -> 'a
