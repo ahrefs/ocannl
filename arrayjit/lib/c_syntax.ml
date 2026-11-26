@@ -933,25 +933,27 @@ type async_copy_syntax = {
 (** gh-ocannl-487 phase 2: asynchronous staging copies for software-pipelined tiles (see
     {!C_syntax_config.async_copy}). *)
 
+type blend_wrapper = [ `Lambda | `Stmt_expr ]
+(** Wrapper around {!Blend_over_locals}'s local bindings: an immediately-invoked C++ lambda
+    (CUDA/HIP, where NVRTC rejects statement expressions) or a GNU statement expression (MSL 3.1,
+    where lambdas are unsupported). *)
+
 (** How a backend renders a value select both of whose arms it may evaluate (gh-ocannl-1622,
     gh-ocannl-1695): {!C_syntax_config.select_blend_syntax}'s answer.
 
     - [Blend_truth blend]: [blend truth a b], applied to the select's C truth expression -- built by
       [C_syntax.pp_scalar_op] as the C spelling's own test -- and the two arms (cc, whose
       [OCANNL_SELECT] final step needs the truth apart from the arms);
-    - [Blend_over_locals decl]: the backend's own short-circuiting spelling ([ternop_syntax] /
-      [binop_syntax]) applied to arms first bound to locals declared [decl] (C++'s [auto]) in an
-      immediately-invoked lambda. The truth is exactly the dialect's own test, and each local keeps
-      its arm's type, so the value and type are the short-circuiting spelling's (a lambda returns
-      the decayed type of its one [return], the [?:]'s). A lambda rather than cc's GNU statement
-      expression: NVRTC (13.4) rejects [({ ... })] ("expected an expression").
-    - [Blend_over_locals_stmt decl]: the same local-binding blend in a GNU statement expression
-      [({ decl ocannl_sel_a__ = ...; ...; })] for dialects that accept statement expressions and
-      reject C++ lambdas (MSL 3.1, gh-ocannl-2400). *)
+    - [Blend_over_locals { decl; wrap }]: the backend's own short-circuiting spelling
+      ([ternop_syntax] / [binop_syntax]) applied to arms first bound to locals declared [decl]
+      (C++'s [auto]) inside [wrap]. The truth is exactly the dialect's own test, and each local
+      keeps its arm's type, so the value and type are the short-circuiting spelling's. [`Lambda] is
+      an immediately-invoked lambda (CUDA/HIP: NVRTC 13.4 rejects [({ ... })]); [`Stmt_expr] is a
+      GNU statement expression [({ decl ocannl_sel_a__ = ...; ...; })] (MSL 3.1 rejects C++ lambdas,
+      gh-ocannl-2400). *)
 type select_blend =
   | Blend_truth of (PPrint.document -> PPrint.document -> PPrint.document -> PPrint.document)
-  | Blend_over_locals of string
-  | Blend_over_locals_stmt of string
+  | Blend_over_locals of { decl : string; wrap : blend_wrapper }
 
 (** How a dialect spells a builtin's parameter guard ({!Param_guards}): [C_guards] a compile-time
     assertion over the operand's [__typeof__] (GNU C), [Cxx_guards] a braced initialization, which
@@ -979,7 +981,7 @@ let blend_local_a = "ocannl_sel_a__"
     line. *)
 module Over_locals : sig
   val blend_where :
-    ?stmt_expr:bool ->
+    wrap:blend_wrapper ->
     decl:string ->
     ternop_syntax:
       (Ops.prec ->
@@ -995,7 +997,7 @@ module Over_locals : sig
     PPrint.document
 
   val blend_gate :
-    ?stmt_expr:bool ->
+    wrap:blend_wrapper ->
     decl:string ->
     binop_syntax:(Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.document) ->
     Ops.prec ->
@@ -1006,27 +1008,29 @@ module Over_locals : sig
 end = struct
   let blend_local_b = "ocannl_sel_b__"
 
-  let wrap ~stmt_expr ~decl bindings body =
+  let wrap ~wrap ~decl bindings body =
     let open PPrint in
     let binding (name, value) =
       string decl ^^ space ^^ string name ^^ string " =" ^^ nest 2 (break 1 ^^ value) ^^ string ";"
     in
     let open_tok, ret_tok, close_tok =
-      if stmt_expr then ("({ ", "", "; })") else ("[&]() { ", "return ", "; }()")
+      match wrap with
+      | `Stmt_expr -> ("({ ", "", "; })")
+      | `Lambda -> ("[&]() { ", "return ", "; }()")
     in
     group
       (string open_tok
       ^^ separate (break 1) (List.map bindings ~f:binding)
       ^^ break 1 ^^ string ret_tok ^^ body ^^ string close_tok)
 
-  let blend_where ?(stmt_expr = false) ~decl ~ternop_syntax prec cond a b =
+  let blend_where ~wrap:wrapper ~decl ~ternop_syntax prec cond a b =
     let open PPrint in
-    wrap ~stmt_expr ~decl
+    wrap ~wrap:wrapper ~decl
       [ (blend_local_a, a); (blend_local_b, b) ]
       (ternop_syntax prec Ops.Where cond (string blend_local_a) (string blend_local_b))
 
-  let blend_gate ?(stmt_expr = false) ~decl ~binop_syntax prec op cond v =
-    wrap ~stmt_expr ~decl
+  let blend_gate ~wrap:wrapper ~decl ~binop_syntax prec op cond v =
+    wrap ~wrap:wrapper ~decl
       [ (blend_local_a, v) ]
       (binop_syntax prec op cond (PPrint.string blend_local_a))
 end
@@ -1175,9 +1179,9 @@ module type C_syntax_config = sig
       With both arms already values, the compiler if-converts. HIP blends load-free arms over [auto]
       locals and leaves selected loads behind their condition (gh-ocannl-2427). [None] (the
       {!Pure_C_config} default) keeps the short-circuiting [ternop_syntax] / [binop_syntax]
-      spelling: CUDA's, which ptxas if-converts itself, and Metal's, where short-circuiting [?:]
-      outperforms eager blending on sparse/uniform-false loaded-arm inputs on M4 Max and load-free
-      arms already compile to branch-free AIR [select] (gh-ocannl-2400). *)
+      spelling: CUDA's, which ptxas if-converts itself. Metal blends speculable selects inside
+      single-threaded serial-loop kernels via a GNU statement expression and keeps parallel GPU
+      kernels short-circuiting (gh-ocannl-2400). *)
 
   val unop_syntax : Ops.prec -> Ops.unop -> PPrint.document -> PPrint.document
   val vec_unop_syntax : Ops.prec -> Ops.vec_unop -> PPrint.document -> PPrint.document
@@ -1686,7 +1690,7 @@ let codegen_capabilities (module Config : C_syntax_config) =
         match Config.select_blend_syntax prec with
         | None -> None
         | Some (Blend_truth _) -> Some `Blend_truth
-        | Some (Blend_over_locals _ | Blend_over_locals_stmt _) -> Some `Blend_over_locals);
+        | Some (Blend_over_locals _) -> Some `Blend_over_locals);
   }
 
 (** Whether [c] lies exactly halfway between two adjacent f32 values, so that narrowing it to f32 is
@@ -2045,16 +2049,15 @@ let operand_conditionality_violations ~ternop_syntax ~binop_syntax ~binop_arg1_u
       | None -> ()
       | Some (Blend_truth blend) ->
           check_blend (at_prec "select blend") (fun () -> blend a1 a2 a3) ~arms:[ "$2"; "$3" ]
-      | Some ((Blend_over_locals decl | Blend_over_locals_stmt decl) as kind) ->
-          let stmt_expr = match kind with Blend_over_locals_stmt _ -> true | _ -> false in
+      | Some (Blend_over_locals { decl; wrap }) ->
           check_blend
             (at_prec "select blend over a where")
-            (fun () -> Over_locals.blend_where ~stmt_expr ~decl ~ternop_syntax prec a1 a2 a3)
+            (fun () -> Over_locals.blend_where ~wrap ~decl ~ternop_syntax prec a1 a2 a3)
             ~arms:[ "$2"; "$3" ];
           List.iter [ Ops.Relu_gate; Ops.Satur01_gate ] ~f:(fun op ->
               check_blend
                 (at_prec ("select blend over " ^ Ops.binop_cd_fallback_syntax op))
-                (fun () -> Over_locals.blend_gate ~stmt_expr ~decl ~binop_syntax prec op a1 a2)
+                (fun () -> Over_locals.blend_gate ~wrap ~decl ~binop_syntax prec op a1 a2)
                 ~arms:[ "$2" ]));
   List.rev !violations
 
@@ -3924,9 +3927,52 @@ module C_syntax (B : C_syntax_config) = struct
     | Local_scope _ | Get_local _ | Get_merge_buffer _ | Get _ | Constant_bits _ | Embed_index _ ->
         false
 
+  (* gh-ocannl-2400: whether [llc] is a single-threaded serial-loop kernel (contains at least one
+     [Serial] loop and no hardware-parallel [Grid] / [Workgroup] / [Workgroup_reduce] loop). *)
+  let is_serial_loop_kernel (llc : Low_level.t) =
+    let has_serial = ref false and has_parallel = ref false in
+    let rec scan_scalar (s : Low_level.scalar_t) =
+      match s with
+      | Local_scope { body; _ } -> scan body
+      | Ternop (_, (a, _), (b, _), (c, _)) ->
+          scan_scalar a;
+          scan_scalar b;
+          scan_scalar c
+      | Binop (_, (a, _), (b, _)) ->
+          scan_scalar a;
+          scan_scalar b
+      | Unop (_, (a, _)) -> scan_scalar a
+      | Get_dynamic { dyn_value = v, _; _ } -> scan_scalar v
+      | Get_local _ | Get_merge_buffer _ | Get _ | Constant _ | Constant_bits _ | Embed_index _ ->
+          ()
+    and scan (l : Low_level.t) =
+      match l with
+      | For_loop { axis = Serial; body; _ } ->
+          has_serial := true;
+          scan body
+      | For_loop { axis = Grid | Workgroup | Workgroup_reduce; body; _ } ->
+          has_parallel := true;
+          scan body
+      | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> scan body
+      | Seq (a, b) ->
+          scan a;
+          scan b
+      | Set { llsc; _ } -> scan_scalar llsc
+      | Set_dynamic { dyn_value = v, _; llsc; _ } ->
+          scan_scalar v;
+          scan_scalar llsc
+      | Set_from_vec { arg = v, _; _ } -> scan_scalar v
+      | Set_local (_, v) -> scan_scalar v
+      | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier
+      | Tile_mma _ ->
+          ()
+    in
+    scan llc;
+    !has_serial && not !has_parallel
+
   (* gh-ocannl-1622: blending needs a spelling at the compute precision and permission to evaluate
      every arm. Both the expression and the scope-order oracle use this decision. *)
-  let blend_for prec ~cond ~arms =
+  let blend_for ~serial_loop_kernel prec ~cond ~arms =
     if not (Ops.is_float prec) then None
     else
       match B.select_blend_syntax prec with
@@ -3935,8 +3981,11 @@ module C_syntax (B : C_syntax_config) = struct
              && not (List.for_all arms ~f:(fun (arm, _) -> Low_level.select_arm_is_load_free arm))
         ->
           None
-      | Some (Blend_over_locals _ | Blend_over_locals_stmt _)
-        when List.exists arms ~f:(fun (a, _) -> holds_nan_literal a) ->
+      | Some _
+        when Backend_intf.equal_select_blend_policy (B.select_blend_policy ()) Blend_serial_loop
+             && not serial_loop_kernel ->
+          None
+      | Some (Blend_over_locals _) when List.exists arms ~f:(fun (a, _) -> holds_nan_literal a) ->
           (* gh-ocannl-1695: the GPU dialects compile under no-NaNs fast math (HIP's [-ffast-math]),
              where a NaN literal bound to a local is the one NaN the optimizer can see, and a select
              of it is its to drop: blended, a masked attention's [where mask s NAN] came back finite
@@ -3947,11 +3996,12 @@ module C_syntax (B : C_syntax_config) = struct
       | _ -> None
 
   (* The expression of a ternary operator over its rendered operands at [prec], as {!binop_expr}. *)
-  let ternop_expr ?(blend = true) prec op ~v1 ~v2 ~v3 e1 e2 e3 =
+  let ternop_expr ?(blend = true) ?(serial_loop_kernel = false) prec op ~v1 ~v2 ~v3 e1 e2 e3 =
     let open PPrint in
     let blend =
       match (op, blend) with
-      | Ops.Where, true -> blend_for prec ~cond:v1 ~arms:[ (v2, prec); (v3, prec) ]
+      | Ops.Where, true ->
+          blend_for ~serial_loop_kernel prec ~cond:v1 ~arms:[ (v2, prec); (v3, prec) ]
       | _ -> None
     in
     match (op, blend) with
@@ -3959,17 +4009,17 @@ module C_syntax (B : C_syntax_config) = struct
         (* The truth is the short-circuiting spelling's own test ([Ops.ternop_c_syntax]'s float
            arm), so a NaN condition still selects the then-arm. *)
         blend (parens e1 ^^ string " != 0.0") e2 e3
-    | Ops.Where, Some (Blend_over_locals decl) ->
-        Over_locals.blend_where ~stmt_expr:false ~decl ~ternop_syntax:B.ternop_syntax prec e1 e2 e3
-    | Ops.Where, Some (Blend_over_locals_stmt decl) ->
-        Over_locals.blend_where ~stmt_expr:true ~decl ~ternop_syntax:B.ternop_syntax prec e1 e2 e3
+    | Ops.Where, Some (Blend_over_locals { decl; wrap }) ->
+        Over_locals.blend_where ~wrap ~decl ~ternop_syntax:B.ternop_syntax prec e1 e2 e3
     | _ -> group (B.ternop_syntax prec op e1 e2 e3)
 
   (* The expression of a binary operator over its rendered operands [e1], [e2] at [prec]; [v1], [v2]
      are the operands themselves, which the select blend's speculability reads. *)
-  let binop_expr ?(blend = true) prec op ~v1 ~v2 e1 e2 =
+  let binop_expr ?(blend = true) ?(serial_loop_kernel = false) prec op ~v1 ~v2 e1 e2 =
     let open PPrint in
-    let gate_blend () = if blend then blend_for prec ~cond:v1 ~arms:[ (v2, prec) ] else None in
+    let gate_blend () =
+      if blend then blend_for ~serial_loop_kernel prec ~cond:v1 ~arms:[ (v2, prec) ] else None
+    in
     (* Each truth is the short-circuiting spelling's own test, with the same typed zero. *)
     match op with
     | Ops.Relu_gate | Ops.Satur01_gate -> (
@@ -3980,10 +4030,8 @@ module C_syntax (B : C_syntax_config) = struct
         | _, Some (Blend_truth blend) ->
             let prefix, suffix = Ops.c_sat01_gate_condition in
             blend (string prefix ^^ e1 ^^ string suffix) e2 zero
-        | _, Some (Blend_over_locals decl) ->
-            Over_locals.blend_gate ~stmt_expr:false ~decl ~binop_syntax:B.binop_syntax prec op e1 e2
-        | _, Some (Blend_over_locals_stmt decl) ->
-            Over_locals.blend_gate ~stmt_expr:true ~decl ~binop_syntax:B.binop_syntax prec op e1 e2
+        | _, Some (Blend_over_locals { decl; wrap }) ->
+            Over_locals.blend_gate ~wrap ~decl ~binop_syntax:B.binop_syntax prec op e1 e2
         | _, None -> group (B.binop_syntax prec op e1 e2))
     | _ -> group (B.binop_syntax prec op e1 e2)
 
@@ -4021,15 +4069,16 @@ module C_syntax (B : C_syntax_config) = struct
   (* gh-ocannl-2213: whether a [Where] or a blendable gate at [prec] short-circuits -- the one
      decision [pp_scalar_op_at] renders by and {!scope_order_oracle} hands the scope emission
      order. *)
-  let short_circuits ~prec (node : Low_level.scalar_t) =
+  let short_circuits ~serial_loop_kernel ~prec (node : Low_level.scalar_t) =
     match node with
     | Ternop (Ops.Where, (v1, _), (v2, _), (v3, _)) ->
-        Option.is_none (blend_for prec ~cond:v1 ~arms:[ (v2, prec); (v3, prec) ])
+        Option.is_none
+          (blend_for ~serial_loop_kernel prec ~cond:v1 ~arms:[ (v2, prec); (v3, prec) ])
     | Binop ((Ops.Relu_gate | Ops.Satur01_gate), (v1, _), (v2, _)) ->
-        Option.is_none (blend_for prec ~cond:v1 ~arms:[ (v2, prec) ])
+        Option.is_none (blend_for ~serial_loop_kernel prec ~cond:v1 ~arms:[ (v2, prec) ])
     | _ -> true
 
-  let pp_scalar_op_at ~operand ~capture_reads ~charge_reads (prec : Ops.prec)
+  let pp_scalar_op_at ~serial_loop_kernel ~operand ~capture_reads ~charge_reads (prec : Ops.prec)
       (vcomp : Low_level.scalar_t) : local_def list * PPrint.document =
     let open PPrint in
     match vcomp with
@@ -4049,7 +4098,8 @@ module C_syntax (B : C_syntax_config) = struct
         in
         let (d1, e1), r1 =
           match op with
-          | Ops.Where when short_circuits ~prec vcomp -> capture_reads (fun () -> operand ps.(0) v1)
+          | Ops.Where when short_circuits ~serial_loop_kernel ~prec vcomp ->
+              capture_reads (fun () -> operand ps.(0) v1)
           | _ -> (operand ps.(0) v1, [])
         in
         let d2, e2 = operand ps.(1) v2 in
@@ -4058,12 +4108,12 @@ module C_syntax (B : C_syntax_config) = struct
            blend evaluates both arms, so they stay with the condition's. *)
         let defs =
           match op with
-          | Ops.Where when short_circuits ~prec vcomp ->
+          | Ops.Where when short_circuits ~serial_loop_kernel ~prec vcomp ->
               d1
               @ guard_arms ~cond:{ doc = e1; reads = r1 } ~cond_prec:ps.(0) ~v1 ~cond_defs:d1 d2 d3
           | _ -> List.concat [ d1; d2; d3 ]
         in
-        let expr = ternop_expr prec op ~v1 ~v2 ~v3 e1 e2 e3 in
+        let expr = ternop_expr ~serial_loop_kernel prec op ~v1 ~v2 ~v3 e1 e2 e3 in
         (defs, expr)
     | Binop (Ops.ToPowOf, (base, _), (Constant exponent, _))
       when Ops.is_float prec && Float.is_finite exponent && Float.is_integer exponent ->
@@ -4083,12 +4133,15 @@ module C_syntax (B : C_syntax_config) = struct
             in
             let blended =
               match op with
-              | Ops.Relu_gate | Ops.Satur01_gate -> not (short_circuits ~prec vcomp)
+              | Ops.Relu_gate | Ops.Satur01_gate ->
+                  not (short_circuits ~serial_loop_kernel ~prec vcomp)
               | _ -> false
             in
             let extra_arg1_uses =
               match
-                (op, if blended then blend_for prec ~cond:v1 ~arms:[ (v2, prec) ] else None)
+                ( op,
+                  if blended then blend_for ~serial_loop_kernel prec ~cond:v1 ~arms:[ (v2, prec) ]
+                  else None )
               with
               | (Ops.Relu_gate | Ops.Satur01_gate), Some (Blend_truth _) -> 0
               | _ -> B.binop_arg1_uses op - 1
@@ -4113,7 +4166,7 @@ module C_syntax (B : C_syntax_config) = struct
                   d1 @ gate_entries prec op ~v1 ~first_prec:ps.(0) ~d1 ~r1 e1 d2
               | _ -> List.concat [ d1; d2 ]
             in
-            let expr = binop_expr prec op ~v1 ~v2 e1 e2 in
+            let expr = binop_expr ~serial_loop_kernel prec op ~v1 ~v2 e1 e2 in
             (defs, expr))
     (* gh-ocannl-1975: at exactly [t], never [comp_prec t], which on a wide-compute backend rounds
        nothing and takes an f64 source through f32 first (gh-ocannl-1956); then into the slot. *)
@@ -4174,7 +4227,9 @@ module C_syntax (B : C_syntax_config) = struct
       let d, e = sub v in
       if fv v then (d, convert_doc ~from:f ~to_:p e) else (d, e)
     in
-    let table () = pp_scalar_op_at ~operand ~capture_reads ~charge_reads p vcomp in
+    let table () =
+      pp_scalar_op_at ~serial_loop_kernel:false ~operand ~capture_reads ~charge_reads p vcomp
+    in
     match vcomp with
     | Unop (op, (v, _)) -> (
         match Ops.unop_integer_valuation op with
@@ -4261,13 +4316,14 @@ module C_syntax (B : C_syntax_config) = struct
 
   (* The operator arms of [pp_scalar]: at an integer compute precision through {!integer_op},
      converting a float-valued result to the precision once, here. *)
-  let pp_scalar_op ?(capture_reads = fun f -> (f (), [])) ?(charge_reads = fun _ -> ()) ~operand
-      (prec : Ops.prec) (vcomp : Low_level.scalar_t) : local_def list * PPrint.document =
+  let pp_scalar_op ~serial_loop_kernel ?(capture_reads = fun f -> (f (), []))
+      ?(charge_reads = fun _ -> ()) ~operand (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
+      local_def list * PPrint.document =
     if Ops.is_integer prec then
       let defs, doc = integer_op ~operand ~capture_reads ~charge_reads prec vcomp in
       if Low_level.float_valued vcomp then (defs, convert_doc ~from:int_math_prec ~to_:prec doc)
       else (defs, doc)
-    else pp_scalar_op_at ~operand ~capture_reads ~charge_reads prec vcomp
+    else pp_scalar_op_at ~serial_loop_kernel ~operand ~capture_reads ~charge_reads prec vcomp
 
   (* The signature's coupling contract: an accumulator resides at least as wide as the arithmetic
      that feeds it. The failure mode this catches is an [include]-time stale pairing — a backend
@@ -4558,6 +4614,7 @@ module C_syntax (B : C_syntax_config) = struct
         (** Set by [compile_proc] so that [pp_ll] can consult per-node tracing info (e.g. to elide a
             [Zero_out] loop that the declaration's [= {0}] already covers). *)
     current_kernel_name : string;
+    serial_loop_kernel : bool;
     volatile_accumulation_reads : bool ref;
         (** Whether scalar device loads at the current expression-rendering point must use the Metal
             accumulation workaround. Bracketed narrowly by the two recognized accumulating-statement
@@ -5145,10 +5202,10 @@ module C_syntax (B : C_syntax_config) = struct
      [Emitted] mode ({!Low_level.Scope_order.emission}): this functor's own select decision and
      precisions, and the precision each rendering unit's scalars render at in [pp_ll] -- before
      rendering, with the procedure family's accumulator census. *)
-  let scope_order_oracle : Low_level.Scope_order.oracle =
+  let scope_order_oracle ~serial_loop_kernel : Low_level.Scope_order.oracle =
     let store llsc (tn : Tn.t) = fst (store_precs ~store_prec:(Lazy.force tn.storage_prec) llsc) in
     {
-      short_circuits;
+      short_circuits = short_circuits ~serial_loop_kernel;
       comp_prec;
       int_math_prec;
       root_precs =
@@ -5174,9 +5231,11 @@ module C_syntax (B : C_syntax_config) = struct
      what [Access_fold]'s [Emitted] mode walks is checked against what renders, on every statement
      with definitions. A mismatch is an internal inconsistency: fix the derivation
      ({!Low_level.Scope_order.entries}) or the oracle. *)
-  let check_scope_order ~stmt ~roots (plan : (_, _) Low_level.Scope_order.plan) =
+  let check_scope_order ~serial_loop_kernel ~stmt ~roots (plan : (_, _) Low_level.Scope_order.plan)
+      =
     if not (List.is_empty plan.unconditional && List.is_empty plan.conditional) then (
-      let derived = Low_level.Scope_order.derived_plan scope_order_oracle roots in
+      let oracle = scope_order_oracle ~serial_loop_kernel in
+      let derived = Low_level.Scope_order.derived_plan oracle roots in
       let same_ir x y =
         Low_level.Scope_order.equal_key ~comp_prec x.Low_level.Scope_order.key
           y.Low_level.Scope_order.key
@@ -5186,7 +5245,7 @@ module C_syntax (B : C_syntax_config) = struct
           "C_syntax.pp_local_defs: the scope emission order Low_level.Scope_order derives from the \
            IR differs from the one rendered (gh-ocannl-2213)";
       Option.iter stmt ~f:(fun stmt ->
-          let precs = scope_order_oracle.root_precs stmt in
+          let precs = oracle.root_precs stmt in
           if not (List.equal Ops.equal_prec precs (List.map roots ~f:fst)) then
             invalid_arg
               "C_syntax.pp_local_defs: scope_order_oracle's root precisions differ from the ones \
@@ -5197,7 +5256,8 @@ module C_syntax (B : C_syntax_config) = struct
     let plan =
       Low_level.Scope_order.plan ~same:same_test ~reads:(fun d -> Lazy.force d.reads) local_defs
     in
-    Option.iter check ~f:(fun (stmt, roots) -> (check_scope_order ~stmt ~roots) plan);
+    Option.iter check ~f:(fun (stmt, roots) ->
+        (check_scope_order ~serial_loop_kernel:ctx.serial_loop_kernel ~stmt ~roots) plan);
     let charge_reads reads =
       if !(ctx.render_census_enabled) && not (List.is_empty reads) then
         match !(ctx.render_stmt_reads) with Some acc -> acc := reads @ !acc | None -> ()
@@ -8933,7 +8993,8 @@ module C_syntax (B : C_syntax_config) = struct
                         raise Vectorization_declined
                     | Binop _ | Unop _ | Ternop _ ->
                         let _no_defs, doc =
-                          pp_scalar_op ~capture_reads:(capture_expr_reads ctx)
+                          pp_scalar_op ~serial_loop_kernel:ctx.serial_loop_kernel
+                            ~capture_reads:(capture_expr_reads ctx)
                             ~charge_reads:(charge_stmt_reads ctx) ~operand:lane_operand prec llsc
                         in
                         doc
@@ -10106,7 +10167,8 @@ module C_syntax (B : C_syntax_config) = struct
         let expr = string prefix ^^ idx_doc ^^ string postfix in
         ([], expr)
     | Ternop _ | Binop _ | Unop _ ->
-        pp_scalar_op ~capture_reads:(capture_expr_reads ctx) ~charge_reads:(charge_stmt_reads ctx)
+        pp_scalar_op ~serial_loop_kernel:ctx.serial_loop_kernel
+          ~capture_reads:(capture_expr_reads ctx) ~charge_reads:(charge_stmt_reads ctx)
           ~operand:(pp_scalar ctx) prec vcomp
 
   and debug_float ctx ?guard (prec : Ops.prec) (value : Low_level.scalar_t) :
@@ -10298,6 +10360,7 @@ module C_syntax (B : C_syntax_config) = struct
         current_placements = placements;
         current_traced_store = traced_store;
         current_kernel_name = name;
+        serial_loop_kernel = is_serial_loop_kernel llc;
         volatile_accumulation_reads = ref false;
         volatile_accumulation_scope_stack = ref [];
         volatile_read_observers = ref [];
@@ -10621,11 +10684,12 @@ module C_syntax (B : C_syntax_config) = struct
        conditional definition's declarations stay inside its [if]. After the collapse, whose scopes
        render as expressions where they stand; the gate above judged the caller's tree and names the
        scope bodies it built. *)
+    let oracle = scope_order_oracle ~serial_loop_kernel:(is_serial_loop_kernel llc) in
     Low_level.validate_local_binders ~site:"C_syntax.compile_proc"
-      ~emission:(Low_level.Scope_order.emission scope_order_oracle)
+      ~emission:(Low_level.Scope_order.emission oracle)
       llc;
     if !(scope_order_oracles_enabled ()) then
-      scope_order_oracles () := (name, (scope_order_oracle, llc)) :: !(scope_order_oracles ());
+      scope_order_oracles () := (name, (oracle, llc)) :: !(scope_order_oracles ());
     (* Launch-extent guards (construct-then-fold, axis-types proposal §2), only for kinds this
        backend binds in hardware -- the serial fallback iterates the true extent. *)
     let llc =

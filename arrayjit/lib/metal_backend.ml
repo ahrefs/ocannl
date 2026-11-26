@@ -5,18 +5,11 @@ module Lazy = Utils.Lazy
 module Me = Metal (* Alias for Metal module *)
 open Backend_intf
 
-let captured_sources = Stdlib.Domain.DLS.new_key (fun () -> None)
+let with_select_rendering_policy ~policy f =
+  Backend_intf.with_select_rendering_policy ~facts:Backend_intf.metal_facts ~policy f
 
 let with_select_rendering ~blend f =
-  let saved = Stdlib.Domain.DLS.get captured_sources in
-  let sources = ref [] in
-  Stdlib.Domain.DLS.set captured_sources (Some sources);
-  let result =
-    Exn.protect
-      ~f:(fun () -> Backend_intf.with_select_blend ~facts:Backend_intf.metal_facts ~blend f)
-      ~finally:(fun () -> Stdlib.Domain.DLS.set captured_sources saved)
-  in
-  (result, List.rev !sources)
+  Backend_intf.with_select_rendering ~facts:Backend_intf.metal_facts ~blend f
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
@@ -1576,16 +1569,16 @@ module Impl = struct
       (Backend_intf.effective_facts Backend_intf.metal_facts).Backend_intf.select_blend_policy
 
     (* gh-ocannl-2400: when Metal's effective select policy blends, render an admitted value select
-       over [auto] locals in a GNU statement expression ([Blend_over_locals_stmt], since MSL 3.1
-       rejects C++ lambda expressions while accepting statement expressions). MSL has no [double],
-       so only the native float precisions ([half], [bfloat], [float]) blend; [fp8] computes at
-       [single]. *)
+       over [auto] locals in a GNU statement expression ([Blend_over_locals { decl = "auto"; wrap =
+       `Stmt_expr }], since MSL 3.1 rejects C++ lambda expressions while accepting statement
+       expressions). MSL has no [double], so only the native float precisions ([half], [bfloat],
+       [float]) blend; [fp8] computes at [single]. *)
     let select_blend_syntax prec =
       if Backend_intf.equal_select_blend_policy (select_blend_policy ()) No_blend then None
       else
         match prec with
         | Ops.Half_prec _ | Ops.Bfloat16_prec _ | Ops.Single_prec _ ->
-            Some (C_syntax.Blend_over_locals_stmt "auto")
+            Some (C_syntax.Blend_over_locals { decl = "auto"; wrap = `Stmt_expr })
         | _ -> None
 
     let infix_binop op v1 v2 = parens (infix 2 1 (string op) v1 v2)
@@ -2076,8 +2069,7 @@ module Impl = struct
       else symbols.(0)
     in
     let source = r.assemble (List.init n ~f:Fn.id) in
-    Option.iter (Stdlib.Domain.DLS.get captured_sources) ~f:(fun sources ->
-        sources := source :: !sources);
+    Backend_intf.record_select_source ~facts:Backend_intf.metal_facts source;
     ( r.entries,
       {
         artifact_name;

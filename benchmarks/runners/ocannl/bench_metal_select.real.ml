@@ -1,15 +1,19 @@
-(* gh-ocannl-2400. Replay fixed Metal kernel segments with short-circuiting [?:] and local-value
-   blending ([Blend_over_locals]), then compile and time a whole training step (the [cifar_conv]
-   two-conv classifier with ReLU and 2x2 max pooling, forward, backward and SGD) under each, beside
-   a second short-circuiting compile as its control. Context.compile and Autotune.untuned_compile
-   bypass the schedule cache.
+(* gh-ocannl-2400. Replay fixed Metal kernel segments with short-circuiting [?:] ([No_blend]) and
+   local-value blending ([Blend_over_locals] with [`Stmt_expr], [Blend_speculable]), then compile
+   and time a whole training step (the [cifar_conv] two-conv classifier with ReLU and 2x2 max
+   pooling, forward, backward and SGD) under [No_blend], [Blend_serial_loop] (Metal's default),
+   [Blend_speculable], and a second [No_blend] compile as its control. Context.compile and
+   Autotune.untuned_compile bypass the schedule cache.
 
-   The pointwise fixtures span both divergent within-simdgroup densities (1/32 sparse, 16/32 half,
-   31/32 dense) and simdgroup-uniform densities (0/32 all-false, alternating all-true/all-false
-   simdgroups), plus a causal-mask score-load kernel ([where mask (score * scale) (-inf)], matching
-   gh-ocannl-2427's shape) and the realistic ReLU + 2x2 max-pool backward kernel. Comparing
-   uniform-false and causal-mask ratios against divergent ratios distinguishes AGX predication from
-   simdgroup branch skipping without an AGX disassembler.
+   The parallel pointwise fixtures span both divergent within-simdgroup densities (1/32 sparse,
+   16/32 half, 31/32 dense) and simdgroup-uniform densities (0/32 all-false, alternating
+   all-true/all-false simdgroups), plus a causal-mask score-load kernel ([where mask (score * scale)
+   (-inf)], matching gh-ocannl-2427's shape), a load-free register arm ([reg_arm]), the realistic
+   ReLU + 2x2 max-pool backward kernel, and a single-threaded serial accumulation loop
+   ([serial_relu_accum], matching [cifar_conv]'s unparallelized bias-grad shape) across densities.
+   These timings compare short-circuiting [?:] against eager local-value blending end to end on
+   Metal without claiming whether AGX lowers the AIR [br i1] to a hardware branch or a predicated
+   load.
 
    The source check reads only this compile's returned MSL source. It detects the renderer's first
    arm local by its declared name and compares the segments' control source byte for byte. The step
@@ -203,6 +207,66 @@ let reg_arm ~elements ~node =
     fixtures =
       [
         ("uniform_zero", fixture Uniform_zero); ("sparse", fixture Sparse); ("dense", fixture Dense);
+      ];
+  }
+
+(* Single-threaded serial accumulation loop matching [cifar_conv]'s [bias_sel_conv1_grad] shape:
+   zero [Grid]/[Workgroup] loops, accumulating into 32 output channels over [iters / 32] outer
+   serial iterations (which also activates Metal's [volatile_serial_accumulation]). *)
+let serial_relu_accum () =
+  let open Ll_test in
+  let name = "serial_relu_accum" in
+  let channels = 32 in
+  let outer_n = 8192 in
+  let total = outer_n * channels in
+  let mk ~id ~dims label =
+    Ir.Tnode.create (Ir.Tnode.Specified Ir.Ops.single) ~id ~label:[ label ]
+      ~unpadded_dims:(lazy dims)
+      ~padding:(lazy None)
+      ()
+  in
+  let flag = mk ~id:29000 ~dims:[| total |] "sra_flag" in
+  let payload = mk ~id:29001 ~dims:[| total |] "sra_payload" in
+  let output = mk ~id:29002 ~dims:[| channels |] "sra_output" in
+  let o = sym () and c = sym () in
+  let idx = aff [ (channels, o); (1, c) ] 0 in
+  let gate = binop_own Ops.Relu_gate (get flag [| idx |]) (get payload [| idx |]) in
+  let accum = set_at output (iter c) (binop_own Ops.Add (get output [| iter c |]) gate) in
+  let code =
+    LL.Seq
+      ( LL.Zero_out output,
+        loop_n ~axis:LL.Serial o outer_n (loop_n ~axis:LL.Serial c channels accum) )
+  in
+  List.iter [ flag; payload; output ] ~f:materialize;
+  let segment = optimize ~name code in
+  let dyadic i = Float.of_int ((i % 7) - 3) *. 0.125 in
+  let payloads = Array.init total ~f:dyadic in
+  let fixture density () =
+    let take i =
+      match density with
+      | Uniform_zero -> false
+      | Uniform_half -> i / 32 % 2 = 0
+      | Sparse -> i % 20 = 0
+      | Half_div -> i % 2 = 0
+      | Dense -> true
+    in
+    let flags = Array.init total ~f:(fun i -> if take i then 1. else -1.) in
+    let want = Array.create ~len:channels 0. in
+    for i = 0 to total - 1 do
+      if Float.(flags.(i) > 0.) then want.(i % channels) <- want.(i % channels) +. payloads.(i)
+    done;
+    { seeds = [ (flag, flags); (payload, payloads) ]; want }
+  in
+  {
+    name;
+    segment;
+    output;
+    fixtures =
+      [
+        ("uniform_zero", fixture Uniform_zero);
+        ("sparse", fixture Sparse);
+        ("half_div", fixture Half_div);
+        ("dense", fixture Dense);
       ];
   }
 
@@ -427,9 +491,9 @@ let build_step ~root ~batch =
   let snapshot = Bench_harness.param_values init_ctx loss in
   { loss; comp; init_ctx; snapshot }
 
-let compile_step ~blend step =
+let compile_step ~policy step =
   let (ctx, routine), sources =
-    Metal_backend.with_select_rendering ~blend (fun () ->
+    Metal_backend.with_select_rendering_policy ~policy (fun () ->
         Autotune.untuned_compile ~name:"sel_step" step.init_ctx step.comp Ir.Indexing.Empty)
   in
   (* The routine that runs is the extent's last compile: an untuned compile may retry after a
@@ -456,20 +520,27 @@ let step_outputs step (ctx, routine) =
 let count_sub src ~sub = List.length (String.substr_index_all src ~may_overlap:false ~pattern:sub)
 
 let compare_step ~dry ~step_segments ~calls step =
+  let module BI = Ir.Backend_intf in
   let linked = ref [] in
   Exn.protect
     ~finally:(fun () -> List.iter !linked ~f:Context.release)
     ~f:(fun () ->
       let arms =
         List.map
-          [ ("short", false); ("blend", true); ("control", false) ]
-          ~f:(fun (name, blend) ->
-            let (((ctx, _), _) as arm) = compile_step ~blend step in
+          [
+            ("short", BI.No_blend);
+            ("serial_loop", BI.Blend_serial_loop);
+            ("blend", BI.Blend_speculable);
+            ("control", BI.No_blend);
+          ]
+          ~f:(fun (name, policy) ->
+            let (((ctx, _), _) as arm) = compile_step ~policy step in
             linked := ctx :: !linked;
             (name, arm))
       in
       let get name = List.Assoc.find_exn arms ~equal:String.equal name in
       let _, src_a = get "short" in
+      let _, src_s = get "serial_loop" in
       let _, src_b = get "blend" in
       let _, src_c = get "control" in
       let label = "metal/train_step" in
@@ -487,10 +558,12 @@ let compare_step ~dry ~step_segments ~calls step =
             let cut s = String.prefix s 240 in
             p "%s line %d short:   %s\n%s line %d control: %s\n" label (k + 1) (cut x) label (k + 1)
               (cut y)));
-      p "%s control_matches=%b short_has_local=%b blend_has_local=%b\n" label control_matches
-        (has_local src_a) (has_local src_b);
+      let locals_s = count_sub src_s ~sub:(Ir.C_syntax.blend_local_a ^ " =") in
+      let locals_b = count_sub src_b ~sub:(Ir.C_syntax.blend_local_a ^ " =") in
+      p "%s control_matches=%b short_has_local=%b serial_loop_locals=%d blend_locals=%d\n" label
+        control_matches (has_local src_a) locals_s locals_b;
       Verdict.pass_fail (label ^ " emitted rendering")
-        (control_matches && (not (has_local src_a)) && has_local src_b);
+        (control_matches && (not (has_local src_a)) && locals_s > 0 && locals_s < locals_b);
       if Verdict.any_failed () then failwith (label ^ ": source check failed");
       List.iter arms ~f:(fun (name, (_, src)) ->
           dump_source ~name:"train_step" ~arm:name src;
@@ -524,7 +597,13 @@ let compare_step ~dry ~step_segments ~calls step =
       if not dry then (
         compare_times ~before:restore ~calls ~label
           ~arms:(List.map arms ~f:(fun (name, (c, _)) -> (name, c)))
-          ~ratios:[ ("blend", "short"); ("control", "short") ]
+          ~ratios:
+            [
+              ("serial_loop", "short");
+              ("blend", "short");
+              ("blend", "serial_loop");
+              ("control", "short");
+            ]
           ();
         if step_segments then (
           let (short_ctx, short_routine), _ = get "short" in
@@ -646,11 +725,11 @@ let () =
         | None -> 8
         | Some _ -> Bench_retime.calls_of_env ()
       in
-      if (not step_only) && calls % 4 <> 0 then
+      if calls % 4 <> 0 then
         invalid_arg
           (Printf.sprintf
              "bench_metal_select: BENCH_RETIME_CALLS=%d must be a multiple of 4 for the four-arm \
-              comparison (pass --step-only for the three-arm step alone)"
+              comparisons"
              calls);
       let caps = Metal_backend.host_capabilities () in
       let cap k = Option.value ~default:"unknown" (List.Assoc.find caps ~equal:String.equal k) in
@@ -660,15 +739,19 @@ let () =
          timing=queued calls=%d dry_run=%b metal_math_api=%s metal_driver_build=%s\n"
         backend elements (elements / 16) batch calls dry (cap "metal_math_api")
         (cap "metal_driver_build");
-      if not step_only then p "4-arm %s\n" (Bench_design.describe ~arms:4 ~batches:calls);
-      p "3-arm %s\n" (Bench_design.describe ~arms:3 ~batches:calls);
+      p "4-arm %s\n" (Bench_design.describe ~arms:4 ~batches:calls);
       let node = Ll_test.node_factory ~first_id:20000 ~dims:[| elements |] () in
       let control = pointwise ~elements ~node Control in
       let workloads =
         if step_only then []
         else
           List.map [ Where_zero; Relu_gate; Where_eq; Where_masked ] ~f:(pointwise ~elements ~node)
-          @ [ causal_mask ~elements ~node; reg_arm ~elements ~node; pool ~root ~elements ]
+          @ [
+              causal_mask ~elements ~node;
+              reg_arm ~elements ~node;
+              serial_relu_accum ();
+              pool ~root ~elements;
+            ]
       in
       let step = build_step ~root ~batch in
       Exn.protect

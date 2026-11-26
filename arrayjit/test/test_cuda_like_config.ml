@@ -182,7 +182,7 @@ let () =
   p_all "HIP blends value selects over auto locals at f16, bf16, f32 and f64" float_precs
     ~f:(fun prec ->
       match Hip.select_blend_syntax prec with
-      | Some (Cs.Blend_over_locals "auto") -> true
+      | Some (Cs.Blend_over_locals { decl = "auto"; wrap = `Lambda }) -> true
       | _ -> false);
   p_all "HIP keeps fp8's short-circuiting select, and CUDA every precision's"
     (Ops.fp8 :: float_precs) ~f:(fun prec ->
@@ -201,7 +201,7 @@ let () =
   let kind_of_syntax = function
     | None -> None
     | Some (Cs.Blend_truth _) -> Some `Blend_truth
-    | Some (Cs.Blend_over_locals _ | Cs.Blend_over_locals_stmt _) -> Some `Blend_over_locals
+    | Some (Cs.Blend_over_locals _) -> Some `Blend_over_locals
   in
   let same_blend = Option.equal Poly.equal in
   p_all
@@ -242,7 +242,7 @@ let () =
 
     let select_blend_syntax = function
       | Ops.Single_prec _ -> Some (Cs.Blend_truth (fun _ a _ -> a))
-      | Ops.Half_prec _ -> Some (Cs.Blend_over_locals "auto")
+      | Ops.Half_prec _ -> Some (Cs.Blend_over_locals { decl = "auto"; wrap = `Lambda })
       | _ -> None
   end
   in
@@ -258,21 +258,37 @@ let () =
   let x = PPrint.string "x" and g = PPrint.string "g" in
   let gate =
     render
-      (Cs.Over_locals.blend_gate ~decl:"auto" ~binop_syntax:Hip.binop_syntax Ops.single
-         Ops.Satur01_gate x g)
+      (Cs.Over_locals.blend_gate ~wrap:`Lambda ~decl:"auto" ~binop_syntax:Hip.binop_syntax
+         Ops.single Ops.Satur01_gate x g)
+  in
+  let gate_stmt =
+    render
+      (Cs.Over_locals.blend_gate ~wrap:`Stmt_expr ~decl:"auto" ~binop_syntax:Hip.binop_syntax
+         Ops.single Ops.Satur01_gate x g)
   in
   p "the GPU Satur01 blend binds its operand, then keeps the dialect's own test over the local"
     (String.is_prefix gate ~prefix:"[&]() { auto ocannl_sel_a__ = g;"
     && String.is_substring gate ~substring:"x > 0.0f && x < 1.0f"
-    && String.is_substring gate ~substring:"? ocannl_sel_a__ : 0.0f");
+    && String.is_substring gate ~substring:"? ocannl_sel_a__ : 0.0f"
+    && String.is_prefix gate_stmt ~prefix:"({ auto ocannl_sel_a__ = g;"
+    && String.is_suffix gate_stmt ~suffix:"; })");
   let where =
     render
-      (Cs.Over_locals.blend_where ~decl:"auto" ~ternop_syntax:Hip.ternop_syntax Ops.single x a b)
+      (Cs.Over_locals.blend_where ~wrap:`Lambda ~decl:"auto" ~ternop_syntax:Hip.ternop_syntax
+         Ops.single x a b)
+  in
+  let where_stmt =
+    render
+      (Cs.Over_locals.blend_where ~wrap:`Stmt_expr ~decl:"auto" ~ternop_syntax:Hip.ternop_syntax
+         Ops.single x a b)
   in
   p "the GPU Where blend binds both arms, then selects between them with the dialect's own ternary"
     (String.equal where
        "[&]() { auto ocannl_sel_a__ = a; auto ocannl_sel_b__ = b; return ((x) ? ocannl_sel_a__ : \
-        ocannl_sel_b__); }()")
+        ocannl_sel_b__); }()"
+    && String.equal where_stmt
+         "({ auto ocannl_sel_a__ = a; auto ocannl_sel_b__ = b; ((x) ? ocannl_sel_a__ : \
+          ocannl_sel_b__); })")
 
 (* gh-ocannl-707: each dialect's vendor-header table reaches the EFFECTIVE config. It is checked
    through [kernel_ident] of the instantiated syntax rather than by membership in the list: [Make]

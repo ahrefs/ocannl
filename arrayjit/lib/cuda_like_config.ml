@@ -1002,7 +1002,7 @@ struct
     else
       match prec with
       | Ops.Half_prec _ | Ops.Bfloat16_prec _ | Ops.Single_prec _ | Ops.Double_prec _ ->
-          Some (C_syntax.Blend_over_locals "auto")
+          Some (C_syntax.Blend_over_locals { decl = "auto"; wrap = `Lambda })
       | _ -> None
 
   let kernel_log_param = Some ("int", "log_id")

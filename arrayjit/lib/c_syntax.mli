@@ -494,14 +494,16 @@ type async_copy_syntax = {
 }
 (** Asynchronous global-to-workgroup-shared copies for staging software-pipelined tiles. *)
 
+type blend_wrapper = [ `Lambda | `Stmt_expr ]
+(** Wrapper around {!Blend_over_locals}'s local bindings: an immediately-invoked C++ lambda
+    (CUDA/HIP, where NVRTC rejects statement expressions) or a GNU statement expression (MSL 3.1,
+    where lambdas are unsupported). *)
+
 type select_blend =
   | Blend_truth of (PPrint.document -> PPrint.document -> PPrint.document -> PPrint.document)
-  | Blend_over_locals of string
-  | Blend_over_locals_stmt of string
-      (** How a backend renders a select evaluating both arms: a truth blend, arms bound to locals
-          in an immediately-invoked lambda (CUDA/HIP, where NVRTC rejects statement expressions), or
-          arms bound to locals in a GNU statement expression (MSL 3.1, where lambdas are
-          unsupported). *)
+  | Blend_over_locals of { decl : string; wrap : blend_wrapper }
+      (** How a backend renders a select evaluating both arms: a truth blend, or arms bound to
+          locals declared with [decl] inside [wrap]. *)
 
 type param_guard_dialect =
   | C_guards
@@ -665,9 +667,9 @@ module type C_syntax_config = sig
       With both arms already values, the compiler if-converts. HIP blends load-free arms over [auto]
       locals and leaves selected loads behind their condition (gh-ocannl-2427). [None] (the
       {!Pure_C_config} default) keeps the short-circuiting [ternop_syntax] / [binop_syntax]
-      spelling: CUDA's, which ptxas if-converts itself, and Metal's, where short-circuiting [?:]
-      outperforms eager blending on sparse/uniform-false loaded-arm inputs on M4 Max and load-free
-      arms already compile to branch-free AIR [select] (gh-ocannl-2400). *)
+      spelling: CUDA's, which ptxas if-converts itself. Metal blends speculable selects inside
+      single-threaded serial-loop kernels via a GNU statement expression and keeps parallel GPU
+      kernels short-circuiting (gh-ocannl-2400). *)
 
   val unop_syntax : Ops.prec -> Ops.unop -> PPrint.document -> PPrint.document
   val vec_unop_syntax : Ops.prec -> Ops.vec_unop -> PPrint.document -> PPrint.document
@@ -1249,7 +1251,7 @@ val with_compiler_options :
     {!operand_conditionality_violations}. *)
 module Over_locals : sig
   val blend_where :
-    ?stmt_expr:bool ->
+    wrap:blend_wrapper ->
     decl:string ->
     ternop_syntax:
       (Ops.prec ->
@@ -1265,7 +1267,7 @@ module Over_locals : sig
     PPrint.document
 
   val blend_gate :
-    ?stmt_expr:bool ->
+    wrap:blend_wrapper ->
     decl:string ->
     binop_syntax:(Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.document) ->
     Ops.prec ->

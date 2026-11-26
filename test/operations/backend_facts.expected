@@ -12,3 +12,4 @@ host_load_attributable alone moves the dispersion policy: true
 renders_lane_bounds_check alone moves whether a compile under the key owes the cc-only notice: true
 speculating loaded arms moves the inline fan-in cap's decision on a select: true
 load-free blending keeps the loaded select within the fan-in cap: true
+serial-loop blending keeps the loaded select within the fan-in cap: true

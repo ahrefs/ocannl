@@ -1145,7 +1145,8 @@ type queued_timing =
           [Schedule_cache.queued_objective_version]). *)
 [@@deriving equal]
 
-type select_blend_policy = No_blend | Blend_load_free | Blend_speculable [@@deriving equal]
+type select_blend_policy = No_blend | Blend_load_free | Blend_serial_loop | Blend_speculable
+[@@deriving equal]
 
 type backend_facts = {
   grid_execution : grid_execution;
@@ -1177,10 +1178,9 @@ type backend_facts = {
   select_blend_policy : select_blend_policy;
       (** Which speculable value selects the renderer may blend at supported precisions. cc
           speculates loaded arms too (gh-ocannl-1622). HIP speculates only load-free arms
-          (gh-ocannl-2427). CUDA and Metal emit short-circuiting selects by default (gh-ocannl-2400:
-          on M4 Max, short-circuiting [?:] outperforms eager blending by 12-34% on sparse and
-          uniform-false loaded-arm inputs with no measurable dense penalty, and Metal's front end
-          already compiles load-free arms to branch-free AIR [select]). *)
+          (gh-ocannl-2427). CUDA emits short-circuiting selects by default. Metal blends speculable
+          selects inside single-threaded serial-loop kernels and keeps parallel kernels
+          short-circuiting (gh-ocannl-2400). *)
   renders_lane_bounds_check : bool;
       (** The dialect renders [debug_check_lane_bounds]'s run-time bound check of a packed-uniform
           lane extract's lane operand (gh-ocannl-1867): cc's [OCANNL_CHECKED_LANE], which aborts
@@ -1190,14 +1190,24 @@ type backend_facts = {
 }
 [@@deriving equal]
 
-(* A load-free blend adds no arm loads, so the wider-arm charge suffices. Only an eager blend of
-   loaded arms needs their union (gh-ocannl-1775). *)
+(* A load-free blend adds no arm loads, and a serial-loop-only blend leaves parallel GPU kernels
+   short-circuiting, so the wider-arm charge suffices for both. Only an eager blend of loaded arms
+   across all kernels needs their union (gh-ocannl-1775). *)
 let charges_select_arm_union facts =
   equal_select_blend_policy facts.select_blend_policy Blend_speculable
 
-(* The [with_select_blend] in effect on this domain: the facts record it targets and the select
-   policy it states for them. *)
-let select_blend_override = Stdlib.Domain.DLS.new_key (fun () -> None)
+(** Whether a single-threaded serial-loop kernel blends speculable loaded-arm value selects under
+    [facts]. *)
+let blends_serial_loop_selects facts =
+  match facts.select_blend_policy with
+  | Blend_speculable | Blend_serial_loop -> true
+  | No_blend | Blend_load_free -> false
+
+(* The select-blend override (and optional source capture) in effect on this domain: the facts
+   record it targets, the select policy it states for them, and any source accumulator. *)
+let select_blend_override :
+    (backend_facts * select_blend_policy * string list ref option) option Stdlib.Domain.DLS.key =
+  Stdlib.Domain.DLS.new_key (fun () -> None)
 
 (** gh-ocannl-2326, a measurement and test seam: within [f], on the calling domain, the backend
     whose facts are physically [facts] (one of the records below) lowers and renders value selects
@@ -1209,13 +1219,36 @@ let select_blend_override = Stdlib.Domain.DLS.new_key (fun () -> None)
 let with_select_blend ~facts ~blend f =
   let saved = Stdlib.Domain.DLS.get select_blend_override in
   let policy = if blend then Blend_speculable else No_blend in
-  Stdlib.Domain.DLS.set select_blend_override (Some (facts, policy));
+  Stdlib.Domain.DLS.set select_blend_override (Some (facts, policy, None));
   Exn.protect ~f ~finally:(fun () -> Stdlib.Domain.DLS.set select_blend_override saved)
+
+(** Record [source] emitted by the backend whose facts are physically [facts], if a matching
+    {!with_select_rendering_policy} capture is active on the calling domain. *)
+let record_select_source ~facts source =
+  match Stdlib.Domain.DLS.get select_blend_override with
+  | Some (target, _, Some sources) when phys_equal target facts -> sources := source :: !sources
+  | _ -> ()
+
+(** Run [f] with [facts]'s select policy set to [policy] and return all sources recorded via
+    {!record_select_source} for [facts], in emission order (gh-ocannl-2400). *)
+let with_select_rendering_policy ~facts ~policy f =
+  let saved = Stdlib.Domain.DLS.get select_blend_override in
+  let sources = ref [] in
+  Stdlib.Domain.DLS.set select_blend_override (Some (facts, policy, Some sources));
+  let result =
+    Exn.protect ~f ~finally:(fun () -> Stdlib.Domain.DLS.set select_blend_override saved)
+  in
+  (result, List.rev !sources)
+
+(** Shorthand for {!with_select_rendering_policy} with [Blend_speculable] when [blend] is true and
+    [No_blend] otherwise. *)
+let with_select_rendering ~facts ~blend f =
+  with_select_rendering_policy ~facts ~policy:(if blend then Blend_speculable else No_blend) f
 
 (** [facts] under the {!with_select_blend} in effect for them, if any. *)
 let effective_facts facts =
   match Stdlib.Domain.DLS.get select_blend_override with
-  | Some (target, select_blend_policy) when phys_equal target facts ->
+  | Some (target, select_blend_policy, _) when phys_equal target facts ->
       { facts with select_blend_policy }
   | _ -> facts
 
@@ -1296,7 +1329,7 @@ let metal_facts =
     host_load_attributable = false;
     node_ident_prefix = "t_";
     source_extension = ".metal";
-    select_blend_policy = No_blend;
+    select_blend_policy = Blend_serial_loop;
     renders_lane_bounds_check = false;
   }
 
