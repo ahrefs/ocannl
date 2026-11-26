@@ -1177,7 +1177,9 @@ type backend_facts = {
   select_blend_policy : select_blend_policy;
       (** Which speculable value selects the renderer may blend at supported precisions. cc
           speculates loaded arms too (gh-ocannl-1622). HIP speculates only load-free arms
-          (gh-ocannl-2427). CUDA and Metal emit short-circuiting selects by default. *)
+          (gh-ocannl-2427). CUDA and Metal emit short-circuiting selects by default (gh-ocannl-2400:
+          AGX skips device loads behind [?:] on sparse/uniform-false inputs and Metal's front end
+          already compiles load-free arms branch-free in AIR). *)
   renders_lane_bounds_check : bool;
       (** The dialect renders [debug_check_lane_bounds]'s run-time bound check of a packed-uniform
           lane extract's lane operand (gh-ocannl-1867): cc's [OCANNL_CHECKED_LANE], which aborts
@@ -1200,7 +1202,7 @@ let select_blend_override = Stdlib.Domain.DLS.new_key (fun () -> None)
     whose facts are physically [facts] (one of the records below) lowers and renders value selects
     under [Blend_speculable] when [blend] is true and [No_blend] otherwise. The fan-in guard
     ([Backends.lower_assignments], through {!effective_facts}) and the renderers that have a blend
-    (cc, CUDA, HIP) read the same policy. Not part of the schedule cache's identity, nor of a
+    (cc, CUDA, HIP, Metal) read the same policy. Not part of the schedule cache's identity, nor of a
     [Lowering_reuse] cell's: a timing run under it compiles with the cache bypassed, and compiles
     under different overrides share no reuse cell. *)
 let with_select_blend ~facts ~blend f =

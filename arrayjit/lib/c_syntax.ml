@@ -1175,8 +1175,9 @@ module type C_syntax_config = sig
       With both arms already values, the compiler if-converts. HIP blends load-free arms over [auto]
       locals and leaves selected loads behind their condition (gh-ocannl-2427). [None] (the
       {!Pure_C_config} default) keeps the short-circuiting [ternop_syntax] / [binop_syntax]
-      spelling: CUDA's, which ptxas if-converts itself, and Metal's, whose compiler no tool here can
-      read. *)
+      spelling: CUDA's, which ptxas if-converts itself, and Metal's, where [?:] skips device loads
+      on sparse/uniform-false inputs and load-free arms already compile branch-free in AIR
+      (gh-ocannl-2400). *)
 
   val unop_syntax : Ops.prec -> Ops.unop -> PPrint.document -> PPrint.document
   val vec_unop_syntax : Ops.prec -> Ops.vec_unop -> PPrint.document -> PPrint.document

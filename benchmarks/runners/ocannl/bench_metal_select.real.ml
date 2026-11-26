@@ -168,7 +168,7 @@ let reg_arm ~elements ~node =
   let at tn = get tn [| idx |] in
   let local_v = LL.get_scope (node "ra_loc") in
   virtualize local_v.tn;
-  let decl_local = LL.Declare_local { id = local_v; needs_init = false } in
+  let decl_local = declare_local local_v in
   let init_local =
     LL.Set_local (local_v, binop_own Ops.Add (binop_own Ops.Mul (at flag) (c 0.5)) (c 1.))
   in

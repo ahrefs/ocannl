@@ -15,8 +15,9 @@
    pool, backward: blended and short-circuiting, the same gradient, bitwise, with the blend emitted
    only where stated.
 
-   Emission claims run in a leg open where the renderer has a blend (cc, CUDA, HIP); Metal renders
-   none, so they skip there, while the placement and value claims run on every backend. *)
+   Emission claims run in a leg open where the renderer has a blend (cc, CUDA, HIP, Metal under
+   [Blend_over_locals_stmt], gh-ocannl-2400), while the placement and value claims run on every
+   backend. *)
 
 (* cc-fp-contract: exact-operands -- sums of small integers, and a pool gradient selecting dyadic
    weights *)

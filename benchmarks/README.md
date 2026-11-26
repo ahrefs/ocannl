@@ -1223,6 +1223,32 @@ ambient settings, verifies the resolved configuration, and captures the paired m
 in `$RUN_DIR/stdout`. Accept results from a successful cell whose recorded floor and native targets
 are distinct.
 
+### Metal value-select benchmark
+
+`bench_metal_select` is the Metal counterpart of `bench_cuda_select` (gh-ocannl-2400). It checks
+and times short-circuiting `[?:]` against local-value blending (`C_syntax.Blend_over_locals_stmt`,
+via `Metal_backend.with_select_rendering`) across fixed pointwise segments (`where_zero`,
+`relu_gate`, `where_eq`, `where_masked`) over five densities (`uniform_zero`, `uniform_half`,
+`sparse`, `half_div`, `dense`), a causal-mask score-load segment (`causal_mask`), a register-only
+arm (`reg_arm`), the realistic `pool_backward` kernel, and the `cifar_conv` training step (batch
+64; `--step-segments` also attributes each blended segment of the step, and `--step-only` runs only
+the step). It generates its inputs in memory; `BENCH_SELECT_SOURCES=<dir>` writes each arm's
+emitted `.metal` sources. Build and verify with a dry run before requesting an exclusive
+`mac-studio` (M4 Max) measurement window:
+
+```sh
+dune build benchmarks/runners/ocannl/bench_metal_select.exe
+python3 -B benchmarks/cells.py cell --backend metal --dir "$RUN_DIR" --timeout 600 \
+  --expect metal_kernel_cache_mib=0 --expect output_debug_files_in_build_directory=false -- \
+  BENCH_RETIME_CALLS=6 _build/default/benchmarks/runners/ocannl/bench_metal_select.exe \
+  --ocannl_metal_kernel_cache_mib=0 --ocannl_output_debug_files_in_build_directory=false --dry-run
+```
+
+Start the exclusive window on `mac-studio` with `benchmarks/check-box.sh --box m4-max
+--generated-inputs --box-only` and proceed only on exit 0; then run without `--dry-run` (add
+`--step-segments` for per-segment attribution). Every Mac reading names its Mac (`mac-studio` M4
+Max vs `macbook-pro` M4 Pro).
+
 ## Measurement boxes
 
 **Start every measurement session with `benchmarks/check-box.sh`** (gh-ocannl-1062), from the

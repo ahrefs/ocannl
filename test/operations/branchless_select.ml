@@ -29,12 +29,13 @@
    (gh-ocannl-1695), the same claim of the code object the run compiled (SASS through [ptxas] and
    [nvdisasm]). HIP keeps loaded arms conditional and blends the register-only gate
    (gh-ocannl-2427), whose AMDGPU code object is read through [llvm-objdump]. On Metal
-   (gh-ocannl-1828), the AIR the Metal Toolchain compiles the run's [.metal] artifact to under the
-   run's own compile options, which keeps the short-circuit's branch on every leg: pinned as
-   counted, on the toolchain version counted, the zero-branch claim skipping there. - The realistic
-   composition: a ReLU feeding a 2x2 max pool, backward through the default placements (the selects
-   inlined into their consumers) — the gradient emits the blend and equals, bitwise, both an OCaml
-   reference and the same program with inlining off. *)
+   (gh-ocannl-1828, gh-ocannl-2400), the AIR the Metal Toolchain compiles the run's [.metal]
+   artifact to under the run's own compile options, which keeps the short-circuit's branch on
+   loaded-arm legs (pinned as counted on the toolchain version counted, the zero-branch claim
+   skipping there) and compiles the register-only gate branch-free (0 conditional branches). - The
+   realistic composition: a ReLU feeding a 2x2 max pool, backward through the default placements
+   (the selects inlined into their consumers) — the gradient emits the blend and equals, bitwise,
+   both an OCaml reference and the same program with inlining off. *)
 
 (* cc-fp-contract: exact-operands -- selects, adds and a pool gradient multiplying dyadic weights by
    one *)
@@ -374,20 +375,22 @@ let gpu_census dialect ~patterns name =
               : bool);
           reading)
 
-(* Metal's finding (gh-ocannl-1828): Metal keeps the short-circuiting [?:] for every [Where]
-   (backend-dialects-and-idents.md: MSL [select] evaluates both arms, which a range guard's
-   deliberately out-of-range read must not), and the toolchain's front end keeps that short-circuit
-   around the arm's device load as a [br i1] on the select's line: one on each of the four
-   hand-built legs. The realistic pool kernel's [?:] lines, whose anchor (as on CUDA) also holds the
-   window loops' index guards, carry one too, but on the guards' line: its selects' own lines carry
-   none, so its pin counts the lines together and claims no short-circuit of a select. So the
-   zero-branch claim, version-independent, skips on Metal citing [air_divergence], and the census is
-   pinned instead as it reads: exactly [air_branches] per leg, on the Metal Toolchain versions it
-   was counted on, an environment skip on any other (the maintainer's rule on gh-ocannl-1828: exact
-   counts name the version they pin). A fix that makes Metal's value selects branch-free reddens the
-   pin, which is the cue to drop it and let the zero-branch claim run. What AIR shows is the front
-   end's IR, not the GPU's machine code ([Asm.disassemble_gpu]). *)
-let air_divergence = "gh-ocannl-2400"
+(* Metal's boundary (gh-ocannl-1828, settled in gh-ocannl-2400): Metal keeps the short-circuiting
+   [?:] for every [Where] and gate ([select_blend_policy = No_blend]). In AIR (Metal Toolchain
+   32023.922, mac-studio M4 Max), a select whose arm loads device memory keeps [1 br i1] around the
+   load on each of the four hand-built legs, while a load-free arm ([bs_register_gate]) already
+   compiles to a branchless AIR [select] with [0 br i1]. Exclusive M4 Max measurements
+   ([bench_metal_select]) show AGX does NOT predicate away loaded-arm branches: [?:] skips the
+   device load on sparse and uniform-false simdgroups (12-34% faster than eager blending; causal
+   mask 13.6% faster) while costing nothing measurable on dense or 50%-divergent inputs (all
+   unresolved inside the paired control). The realistic pool kernel's [?:] lines, whose anchor (as
+   on CUDA) also holds the window loops' index guards, carry one branch on the guards' line.
+
+   So the zero-branch claim over loaded-arm selects skips on Metal citing [air_boundary], and the
+   loaded-arm AIR counts stay pinned on the Metal Toolchain versions they were counted on (an
+   environment skip on any other), while [bs_register_gate] runs the version-independent zero-branch
+   AIR claim directly whenever the Metal Toolchain is present. *)
+let air_boundary = "gh-ocannl-2400"
 let air_branches = 1
 let air_pinned_toolchains = [ "32023.922" ]
 let air_census_runs () = on_air && Result.is_ok (Lazy.force metal_toolchain)
@@ -434,7 +437,7 @@ let census_claim ~patterns ~gpu_patterns ~air_claim ~air_skip claim name =
       else
         match gpu_dialect with
         | Some Asm.Air ->
-            Verdict.skipped claim ~backend:(Printf.sprintf "metal (%s, %s)" air_skip air_divergence)
+            Verdict.skipped claim ~backend:(Printf.sprintf "metal (%s, %s)" air_skip air_boundary)
         | Some Asm.Amdgpu ->
             Verdict.in_leg ~leg:single_loaded_blend_leg claim (fun label ->
                 p_all label (gpu_census Asm.Amdgpu ~patterns:gpu_patterns name) ~f:branch_free)
@@ -447,7 +450,7 @@ let census_claim ~patterns ~gpu_patterns ~air_claim ~air_skip claim name =
               name backend_name;
             skipped claim);
   in_legf ~leg:air_pinned_leg "%s (pinned on Metal Toolchain %s; %s)" (air_claim air_branches)
-    (String.concat ~sep:", " air_pinned_toolchains) air_divergence (fun label ->
+    (String.concat ~sep:", " air_pinned_toolchains) air_boundary (fun label ->
       p_all label (Lazy.force air_readings) ~f:(fun r -> r.readable && r.branches = air_branches))
 
 (* === The value legs. === *)
@@ -712,7 +715,11 @@ let () =
   in_leg ~leg:single_blend_leg "register-only gradient gate: the emitter blends" (fun claim ->
       p claim (has (kernel_text name) blend_marker));
   in_leg ~leg:hip_leg "register-only gradient gate: HIP emits branch-free selection" (fun claim ->
-      p_all claim (gpu_census Asm.Amdgpu ~patterns:[ "ocannl_sel_" ] name) ~f:branch_free)
+      p_all claim (gpu_census Asm.Amdgpu ~patterns:[ "ocannl_sel_" ] name) ~f:branch_free);
+  in_leg ~leg:air_toolchain_leg
+    "register-only gradient gate: Metal's AIR compiles load-free [?:] branch-free (0 conditional \
+     branches)" (fun claim ->
+      p_all claim (gpu_census Asm.Air ~patterns:[ " ? " ] name) ~f:branch_free)
 
 let () =
   let prefix = (Context.backend_facts_of_name backend_name).Ir.Backend_intf.node_ident_prefix in

@@ -60,12 +60,26 @@ files.
 - Metal `Where` must stay a short-circuiting ternary: MSL `select` is a function call that
   evaluates BOTH branches, so any range guard's deliberately out-of-range read (clamped windows,
   inlined-concat component guards) would still be evaluated. Codegen pins:
-  `test_where_precision.metal.expected`, `test_metal_guarded_gather_codegen`. The cost, measured
-  by `branchless_select`'s AIR census (gh-ocannl-1828; Metal Toolchain 32023.922): a VALUE select
-  whose arm loads from device memory keeps its short-circuit as a `br i1` on the select's line in
-  AIR, one per hand-built census leg (the realistic pool kernel's selects none; its branch is on
-  the window guards' line) -- whether Apple's GPU compiler then predicates it is not visible
-  there. Blending value selects on Metal, or showing AGX predicates them, is gh-ocannl-2400.
+  `test_where_precision.metal.expected`, `test_metal_guarded_gather_codegen`. Value selects keep
+  `?:` on Metal too (`select_blend_policy = No_blend`, gh-ocannl-2400): MSL 3.1 rejects C++ lambda
+  expressions (`error: lambda expressions are not supported in Metal`), while MSL 3.1/3.2 accept
+  GNU statement expressions (`C_syntax.Blend_over_locals_stmt "auto"`, exposed through
+  `Metal_backend.with_select_rendering` for `select_blend_override` and `bench_metal_select`). In
+  AIR (Metal Toolchain 32023.922, `mac-studio` M4 Max), `?:` over a device load keeps `1 br i1`
+  per hand-built census leg (`branchless_select`, gh-ocannl-1828; the pool kernel's one branch is
+  on its window guards' line), `Blend_over_locals_stmt` removes that `br i1` (`0 br i1`, `1
+  select`), and a load-free arm (`bs_register_gate`) ALREADY compiles to `0 br i1` (`select`) under
+  plain `?:` -- so Metal needs neither eager nor load-free blending. Exclusive M4 Max measurements
+  (`bench_metal_select`, 6 paired rounds) show AGX does NOT predicate away loaded-arm branches:
+  keeping `?:` skips the device load on sparse and simdgroup-uniform-false inputs and is 12–34%
+  faster than eager blending (`where_zero/uniform_zero` 1.336x, `relu_gate/uniform_zero` 1.289x,
+  `where_eq/uniform_zero` 1.277x, `uniform_half` 1.116–1.156x, `sparse` 1.088–1.097x,
+  `causal_mask` 1.136x), while dense (`0.969–0.996x`), 50% divergent (`0.993–1.036x`), `reg_arm`
+  (`0.966–0.988x`) and `pool_backward` (`0.936 [0.832, 1.004]`) are all unresolved inside the
+  paired control. On the untuned `cifar_conv` `train_step`, blending's `-19.5%` delta (`508.11 ->
+  408.67 ms`) comes 95% from a single-threaded serial `volatile` bias-grad loop (`seg23`: `421.83
+  -> 327.78 ms`, hoisting the `volatile` load ahead of `?:`), whereas the parallel 44.3 ms `seg19`
+  is 7.8% slower under blend (`1.078 [1.021, 1.085]`).
 - HIP blends a speculable, load-free value select over `auto` locals in an
   immediately-invoked lambda, `[&]() { auto ocannl_sel_a__ = A; ...; return <the dialect's own
   ?:>; }()` (`Cuda_like_config`, `C_syntax.Over_locals`, gh-ocannl-1695):
@@ -81,14 +95,14 @@ files.
   no-NaNs fast math, so a NaN LITERAL bound to a local is the optimizer's to drop: a blended
   masked-attention fill `where mask s NAN` came back finite (`online_softmax*`), so
   `C_syntax.pp_scalar_op` leaves a select with a NaN-literal arm short-circuiting under
-  `Blend_over_locals` (`bs_nan_fill`). Metal keeps `?:`: its
-  offline compiler ships with full Xcode only and Apple's GPU ISA has no public disassembler, so no
-  census can say whether it branches.
+  `Blend_over_locals` / `Blend_over_locals_stmt` (`bs_nan_fill`). Metal keeps `?:` (gh-ocannl-2400
+  above).
 - `Low_level.select_arm_is_load_free` governs HIP's select profitability (gh-ocannl-2427). It
   visits evaluated operands and arm-local definitions, rejects plain, dynamic and merge-buffer
   reads, and admits already-bound scalar locals. The outer condition can load. The causal
   score load in approximate GPT-2 inference stays behind its mask, while a register-only
-  gradient gate blends. `branchless_select` pins both and runs the register gate's AMDGPU census.
+  gradient gate blends. `branchless_select` pins both and runs the register gate's AMDGPU census
+  (and on Metal, its zero-branch AIR census).
 - `Satur01_gate` passes its second operand only for `0 < x < 1` (gh-ocannl-1647). cc's
   ternary and branchless blend share an ordered range test over a single copy of the
   condition. The ternary still guards its payload and keeps the result in its arithmetic
