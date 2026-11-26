@@ -330,7 +330,12 @@ files.
   constraints at stage 6b. After an equality solves a row, its stored total can be emitted back
   into the worklist, so the pass also tracks totals emitted before the next closing. The staged
   stores pin both partition directions and put the row equality directly in the Stage6b worklist
-  to pin the emission. No store was found where the two `packed_minimum_demand` exclusions
+  to pin the emission. At `3475f89a5`, a trace of the `shape_program_sweep` entry `c[|2,5] + u`
+  showed its packed total re-emitted by `Row_eq` at Stage6a (gh-ocannl-2491). The sweep pins
+  the entry's shape and draw fill. Skipping guard tracking for all totals emitted by `Row_eq`
+  while still returning them to the worklist made the staged Stage6b exact-total check fail.
+  The sweep's listed shapes and draw fills agreed with and without tracking.
+  No store was found where the two `packed_minimum_demand` exclusions
   (`deferred_dims`, `in_param_bound_component`) change an outcome (staged attempts are refused on
   the base too). The same test pins both agreeing rules at two lane widths (9 single and 6 double
   cells, three blocks each, by constants and by minima; an f64 leg): forcing one coefficient on
