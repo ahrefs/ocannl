@@ -6,3 +6,4 @@ the seam refusal states which reads carry the obligation: true
 normal optimization virtualizes the producer: true
 normal optimization replaces the candidate read: true
 normal optimization decides the source read nested in the inlined body: true
+cleanup names the surviving virtual read and its placement: true

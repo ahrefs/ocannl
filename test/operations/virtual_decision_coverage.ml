@@ -46,4 +46,27 @@ let () =
   p "normal optimization virtualizes the producer" (Ll_test.known_virtual optimized candidate);
   p "normal optimization replaces the candidate read" (Ll_test.count_get optimized candidate = 0);
   p "normal optimization decides the source read nested in the inlined body"
-    (Ll_test.known_non_virtual optimized source && Ll_test.count_get optimized source = 1)
+    (Ll_test.known_non_virtual optimized source && Ll_test.count_get optimized source = 1);
+
+  (* Before cleanup, the candidate already has a virtual decision and its setter is gone. Inject the
+     surviving read at the post-virtualization boundary. *)
+  let committed = LL.empty_optimize_ctx () in
+  Ll_test.virtualize candidate;
+  let placement = Tn.Placements.debug committed.placements candidate in
+  let residual =
+    Ll_test.set_at output (Ll_test.fixed 0) (Ll_test.get candidate [| Ll_test.fixed 0 |])
+  in
+  let named_refusal =
+    match
+      LL.post_virtualization_pipeline committed.placements
+        (Hashtbl.create (module Tn))
+        ~input_scopes:(Set.empty (module LL.Scope_id))
+        ~static_indices:[] residual
+    with
+    | _ -> false
+    | exception Utils.User_error msg ->
+        String.is_substring msg ~substring:"survived inlining"
+        && String.is_substring msg ~substring:(Tn.debug_name candidate)
+        && String.is_substring msg ~substring:placement
+  in
+  p "cleanup names the surviving virtual read and its placement" named_refusal

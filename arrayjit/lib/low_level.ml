@@ -4475,6 +4475,14 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     Option.iter !capture ~f:(fun (owner, hits) ->
         ignore (Hashtbl.add hits ~key:owner ~data:hit : [ `Ok | `Duplicate ]))
   in
+  (* The direct read checks before footprint dispatch, whose retraction can leave it uninstantiated.
+     A nested replay checks at its own read site. *)
+  let capture_reads_inherited_merge tn =
+    if Option.is_some !capture && Hash_set.mem inherited_merge_tainted tn then (
+      record_hit (Capture_reads_merge tn);
+      true)
+    else false
+  in
   let owner_hit tn = Option.bind !capture ~f:(fun (_, hits) -> Hashtbl.find hits tn) in
   (* gh-ocannl-1620: outside a capture walk, a read of routine-local scratch that this routine's own
      writes cover executes where it stands, but a template holding it would carry it to every read
@@ -4652,16 +4660,12 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
   let written_here (traced : traced_array) = traced.has_assignment || traced.zeroed_out in
   let instantiate_read ~(traced : traced_array) indices ~enclosing ~id =
     let tn = traced.tn in
-    if Option.is_some !capture && Hash_set.mem inherited_merge_tainted tn then (
-      record_hit (Capture_reads_merge tn);
-      None)
-    else
-      let on_inherited_unservable =
-        Option.map !capture ~f:(fun _ code -> record_hit (Capture_read_uninlinable (tn, code)))
-      in
-      let call_range s = List.Assoc.find enclosing s ~equal:Indexing.equal_symbol in
-      inline_computation ~fresh_symbol ?on_inherited_unservable ~call_range ~id
-        ~inherited_merge_tainted ~inherited_tns optim_ctx traced static_indices indices
+    let on_inherited_unservable =
+      Option.map !capture ~f:(fun _ code -> record_hit (Capture_read_uninlinable (tn, code)))
+    in
+    let call_range s = List.Assoc.find enclosing s ~equal:Indexing.equal_symbol in
+    inline_computation ~fresh_symbol ?on_inherited_unservable ~call_range ~id
+      ~inherited_merge_tainted ~inherited_tns optim_ctx traced static_indices indices
   in
   let replay_scope id orig_indices body =
     Local_scope { id; body; orig_indices; mint = Inlined_computation }
@@ -4694,7 +4698,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
            && Tn.Placements.known_virtual plc tn
            && not (Set.mem process_for tn) -> (
         let traced = get_node traced_store tn in
-        if written_here traced then value
+        if written_here traced || capture_reads_inherited_merge tn then value
         else
           let id = fresh_scope tn in
           match instantiate_read ~traced indices ~enclosing ~id with
@@ -5214,7 +5218,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         (* [Get_local] will replace this [Get] during [inline_computation] if [tn] remains
            virtual. *)
         llsc
-    | Get (tn, indices) -> (
+    | Get (tn, indices) ->
         let traced = get_node traced_store tn in
         if Tn.Placements.known_non_virtual plc traced.tn then (
           (* Review round 13: [Local] is non-virtual yet does NOT persist across routines — a node
@@ -5237,17 +5241,10 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                    then record_local_dependent tn)
                  else raise (Utils.User_error (inherited_local_read_rejection tn)));
           llsc)
-        else
-          match !capture with
-          | Some _ when Hash_set.mem inherited_merge_tainted tn ->
-              (* gh-ocannl-1514: a hit, see [capture]. Ahead of the footprint arm too, which in a
-                 capture walk retracts an inherited node to [inline_get]. *)
-              record_hit (Capture_reads_merge tn);
-              llsc
-          | _ ->
-              if Hashtbl.mem footprint_scoped tn then
-                footprint_get ~opaque ~process_for ~footprint_ok traced indices ~enclosing
-              else inline_get ~opaque ~process_for traced indices ~enclosing)
+        else if capture_reads_inherited_merge tn then llsc
+        else if Hashtbl.mem footprint_scoped tn then
+          footprint_get ~opaque ~process_for ~footprint_ok traced indices ~enclosing
+        else inline_get ~opaque ~process_for traced indices ~enclosing
     | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, prec } ->
         (* Review round 12: a dynamically-indexed read cannot be served by recomputation (the gather
            index is only known at runtime), so a LOCAL table materializes — but an INHERITED table
