@@ -95,6 +95,17 @@ class Timing(NamedTuple):
     ms: float
 
 
+def uses_preset(plan, digest, label):
+    preset_plan = plan is not None and plan.startswith("F_preset[")
+    if label == "seeded":
+        return preset_plan
+    return label == "default" and (preset_plan or digest is not None)
+
+
+def uses_seeded_plan(plan, label):
+    return label == "seeded" and plan is not None and plan.startswith("F_seeded[")
+
+
 class StockTiming(NamedTuple):
     plan: str | None
     digest: str | None
@@ -102,15 +113,10 @@ class StockTiming(NamedTuple):
     preset: Timing | None
 
     def uses_preset(self, label):
-        preset_plan = self.plan is not None and self.plan.startswith("F_preset[")
-        if label == "seeded":
-            return preset_plan
-        return label == "default" and (preset_plan or self.digest is not None)
+        return uses_preset(self.plan, self.digest, label)
 
     def uses_seeded_plan(self, label):
-        return (label == "seeded"
-                and self.plan is not None
-                and self.plan.startswith("F_seeded["))
+        return uses_seeded_plan(self.plan, label)
 
 
 # The rank-site lines are read by bench_output's one reader of them (gh-ocannl-1767): fields by

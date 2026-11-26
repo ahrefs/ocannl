@@ -4,6 +4,7 @@
 Usage: gh1600_txn_fit.py CELL [CELL ...] [--band B] [--sector 32|64|128] [--rate R] [--show]
                          [--occupancy CAP,TPM] [--staged-rate R|sweep --listed-staged-rate L]
                          [--shared-rate R|sweep [--listed-shared-rate L]] [--pairs]
+                         [--census [CELL=]TIMING_STDERR ...]
 
   CELL      NAME=TSV,EXPLAIN: one site's stock timing rows (config autotune_calibration_file,
             every candidate timed by gh1253_cells.sh's `time` cell; pass the `.tsv.stock` snapshot
@@ -15,6 +16,17 @@ Usage: gh1600_txn_fit.py CELL [CELL ...] [--band B] [--sector 32|64|128] [--rate
             solely from the exact `# gh1253_cells: stock snapshot required` comment line: a marked
             TSV is refused (exit 2, `stock_snapshot_missing` on stderr, no stdout) so profile rows
             cannot enter a stock fit; pass `.tsv.stock` explicitly for older unmarked mixed TSVs.
+  --census  stderr of a stock timing cell (repeatable): `CELL=TIMING_STDERR`, or bare
+            `TIMING_STDERR` when a single CELL is given (refused with multiple cells). Reads only
+            `autotune-seeding: plan` and `autotune-seeding: preset-digest` records via
+            `gh1442_agreement.stock_attribution`, requiring agreement within and across logs per
+            cell; other stderr is ignored. Attributes `default` and a preset-plan `seeded`
+            (`F_preset[...]`) by `preset-digest` against positive 12-column stock rows, keeping
+            attributed replicates independent of same-label rows at other digests, and attributes
+            a census-selected `F_seeded[...]` by exact label. Missing attributed incumbents fail
+            closed (`preset_unmatched` / `seeded_plan_unmatched`, exit 2, no stdout). With
+            `--staged-rate`, the same cell's census applies to its `NOSTG_LISTING` reference too.
+            Without `--census`, retains the legacy `baseline` / unique `F_seeded[...]` lookup.
   --band    relative measured difference below which a pair counts as tied (default 0.10).
   --sector  the counting unit whose excess is priced (default 32: what the score counts).
   --rate    evaluate this one rate (sectors/s; `none`: no transaction term) instead of sweeping:
@@ -78,13 +90,38 @@ import argparse
 import math
 import statistics
 import sys
+from typing import NamedTuple
 
 import bench_output
-from gh1442_agreement import STOCK_SNAPSHOT_REQUIRED
+from gh1253_gate_compare import CALIBRATION_COLUMNS
+from gh1442_agreement import (STOCK_SNAPSHOT_REQUIRED, stock_attribution, uses_preset,
+                              uses_seeded_plan)
 
 
-def replicates(path):
+class PresetReplicates(NamedTuple):
+    label: str
+    times: list[float]
+
+
+class StockReplicates(NamedTuple):
+    plan: str | None
+    digest: str | None
+    times: dict[str, list[float]]
+    preset: PresetReplicates | None
+
+    def uses_preset(self, label):
+        return uses_preset(self.plan, self.digest, label)
+
+    def uses_seeded_plan(self, label):
+        return uses_seeded_plan(self.plan, label)
+
+
+def stock_replicates(path, census=()):
+    plan, digest = stock_attribution(census)
     times = {}
+    preset_times = []
+    preset_label = None
+    preset_min = float("inf")
     with open(path) as f:
         for line in f:
             line = line.rstrip("\n")
@@ -100,17 +137,80 @@ def replicates(path):
                 ms = float(cols[4])
             except ValueError:
                 continue
-            times.setdefault(cols[3], []).append(ms)
-    return times
+            label = cols[3]
+            times.setdefault(label, []).append(ms)
+            # A label can cover several digests. Keep the attributed replicates independently
+            # so a faster namesake cannot enter the preset's median or spread.
+            if digest is not None and len(cols) == CALIBRATION_COLUMNS \
+                    and cols[1] == digest and math.isfinite(ms) and ms > 0:
+                preset_times.append(ms)
+                if ms < preset_min:
+                    preset_min = ms
+                    preset_label = label
+    preset = PresetReplicates(preset_label, preset_times) if preset_times else None
+    return StockReplicates(plan, digest, times, preset)
 
 
-def row_label(label, times):
+def replicates(path):
+    return stock_replicates(path).times
+
+
+def row_replicates(label, stock, cell_name=None):
+    prefix = f"{cell_name}: " if cell_name else ""
+    if stock.uses_preset(label):
+        if stock.preset is None:
+            raise ValueError(
+                f"{prefix}preset_unmatched label={label!r}"
+                f" digest={stock.digest or 'unavailable'}")
+        return stock.preset.times, stock.preset.label
     if label == "default":
-        return "baseline" if "baseline" in times else None
-    if label == "seeded":
-        seeded = [t for t in times if t.startswith("F_seeded[")]
-        return seeded[0] if len(seeded) == 1 else None
-    return label if label in times else None
+        key = "baseline"
+    elif label == "seeded":
+        if stock.uses_seeded_plan(label):
+            if stock.plan not in stock.times:
+                raise ValueError(
+                    f"{prefix}seeded_plan_unmatched label={label!r} plan={stock.plan!r}")
+            key = stock.plan
+        else:
+            seeded = [t for t in stock.times if t.startswith("F_seeded[")]
+            if len(seeded) != 1:
+                return None
+            key = seeded[0]
+    else:
+        key = label
+    return (stock.times[key], None) if key in stock.times else None
+
+
+def parse_census_args(cell_specs, census_specs):
+    cell_names = []
+    for spec in cell_specs:
+        if "=" not in spec:
+            raise ValueError(f"expected NAME=TSV,EXPLAIN[,NOSTG], got {spec!r}")
+        name = spec.split("=", 1)[0]
+        if not name:
+            raise ValueError(f"expected NAME=TSV,EXPLAIN[,NOSTG], got {spec!r}")
+        cell_names.append(name)
+    by_cell = {name: [] for name in cell_names}
+    if not census_specs:
+        return by_cell
+    if len(by_cell) != len(cell_names):
+        raise ValueError("--census requires distinct cell names")
+    for spec in census_specs:
+        if "=" in spec:
+            cname, cpath = spec.split("=", 1)
+            if cname not in by_cell:
+                raise ValueError(f"--census names unknown cell {cname!r}")
+            if not cpath:
+                raise ValueError(f"--census for cell {cname!r} has an empty path")
+            by_cell[cname].append(cpath)
+        else:
+            if len(cell_names) != 1:
+                raise ValueError(
+                    "--census requires CELL=TIMING_STDERR when multiple cells are given")
+            if not spec:
+                raise ValueError("--census path must not be empty")
+            by_cell[cell_names[0]].append(spec)
+    return by_cell
 
 
 def parse_kernel(spec):
@@ -174,25 +274,28 @@ def rescore(kernels, rate, sector, occ=None, staged=None, shared=None):
     return total
 
 
-def load_cell(spec):
+def load_cell(spec, census=()):
     name, rest = spec.split("=", 1)
     tsv, explain = rest.split(",", 1)
     # gh-ocannl-1821: an optional third listing, the cell's `nostg` reference (--staged-rate).
     explain, _, reference = explain.partition(",")
-    reps = replicates(tsv)
+    stock = stock_replicates(tsv, census)
+    if not stock.times:
+        raise ValueError(f"{tsv}: no calibration rows")
     cands = {}
     bad = []
     for label, (rank, pos, adm, kernels) in listing(explain).items():
-        row = row_label(label, reps)
-        if row is None or kernels is None:
+        resolved = row_replicates(label, stock, name)
+        if resolved is None or kernels is None:
             continue
+        rep_times, timed_as = resolved
         offline = rescore(kernels, None, 32)
         # The kernel legs print at 1e-6 ms; their sum may round apart by a few units.
         if abs(offline - rank) > 1e-5 * max(1, len(kernels)) + 1e-9 * rank:
             bad.append((label, rank, offline))
-        cands[label] = {"times": reps[row], "median": statistics.median(reps[row]), "pos": pos,
+        cands[label] = {"times": rep_times, "median": statistics.median(rep_times), "pos": pos,
                         "admitted": adm, "kernels": kernels,
-                        "uncovered": sum(k["unc"] for k in kernels)}
+                        "uncovered": sum(k["unc"] for k in kernels), "timed_as": timed_as}
     return name, cands, bad, (tsv, reference) if reference else None
 
 
@@ -277,10 +380,17 @@ def main():
     ap.add_argument("--shared-rate", dest="shared_rate")
     ap.add_argument("--listed-shared-rate", dest="listed_shared_rate", type=float, default=0.0)
     ap.add_argument("--pairs", action="store_true")
+    ap.add_argument("--census", action="append", default=[], metavar="[CELL=]TIMING_STDERR",
+                    help="stock timing cell's stderr for preset attribution (repeatable)")
     args = ap.parse_args()
     if args.staged_rate is not None and not args.listed_staged_rate:
         print("gh1600_txn_fit: --staged-rate needs --listed-staged-rate (the rate the listing was"
               " scored at)", file=sys.stderr)
+        return 2
+    try:
+        census_by_cell = parse_census_args(args.cells, args.census)
+    except ValueError as e:
+        print(f"gh1600_txn_fit: {e}", file=sys.stderr)
         return 2
     occ = None
     if args.occupancy:
@@ -289,8 +399,9 @@ def main():
     cells = []
     summaries = []
     for spec in args.cells:
+        cell_census = census_by_cell[spec.split("=", 1)[0]]
         try:
-            name, cands, bad, reference = load_cell(spec)
+            name, cands, bad, reference = load_cell(spec, census=cell_census)
         except (OSError, ValueError) as e:
             print(f"gh1600_txn_fit: {e}", file=sys.stderr)
             return 2
@@ -327,7 +438,8 @@ def main():
                       " NAME=TSV,LISTING,NOSTG_LISTING", file=sys.stderr)
                 return 2
             try:
-                _, ref_cands, ref_bad, _ = load_cell(f"{name}={reference[0]},{reference[1]}")
+                _, ref_cands, ref_bad, _ = load_cell(
+                    f"{name}={reference[0]},{reference[1]}", census=cell_census)
             except (OSError, ValueError) as e:
                 print(f"gh1600_txn_fit: {e}", file=sys.stderr)
                 return 2
@@ -428,8 +540,9 @@ def main():
             if args.show:
                 for l in sorted(cands, key=lambda l: cands[l]["median"]):
                     c = cands[l]
+                    timed_as = f" timed_as={c['timed_as']!r}" if c["timed_as"] is not None else ""
                     print(f"  {name}: {l!r} median_ms={c['median']:.6f} rank_ms={ranks[l]:.6f}"
-                          f" admitted={str(c['admitted']).lower()} uncovered={c['uncovered']}")
+                          f" admitted={str(c['admitted']).lower()} uncovered={c['uncovered']}{timed_as}")
         return 0 if all(r[5] for r in rows) else 1
     grid = [10 ** (e / 10) for e in range(80, 141)]
     scored = []
