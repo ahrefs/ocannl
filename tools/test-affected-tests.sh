@@ -2034,6 +2034,12 @@ if harness_leg 'harness fixture and heredoc literals'; then
   fx_reach 'fail-closed: compound command redirected with 1<>/dev/fd/3 keeps inner printf scanned' tools/test-a.sh tools/test-c.sh
   twin_text 'emit() { printf '\''bash tools/sub.sh\n'\'' >"$TMP/f" 1<>/dev/fd/3; }' 'emit | bash'
   fx_reach 'fail-closed: 1<> after >file inside a function cancels safe-file stdout status' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 01<> >(bash)' 'printf '\''bash tools/sub.sh\n'\'''
+  fx_reach 'fail-closed: zero-padded exec 01<> >(bash) keeps subsequent printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'exec 02<> >(bash)' 'printf '\''bash tools/sub.sh\n'\'' >&02'
+  fx_reach 'fail-closed: zero-padded exec 02<> >(bash) with >&02 keeps printf scanned' tools/test-a.sh tools/test-c.sh
+  twin_text 'printf '\''bash tools/sub.sh\n'\'' 01<>/dev/fd/3'
+  fx_reach 'fail-closed: zero-padded 01<>/dev/fd/3 keeps printf scanned' tools/test-a.sh tools/test-c.sh
   twin_text 'code=$( # )' '  printf '\''bash tools/sub.sh\n'\''' ')' 'bash -c "$code"'
   fx_reach 'fail-closed: # ) comment inside $(...) does not close substitution early' tools/test-a.sh tools/test-c.sh
   twin_text 'code=$(# )' '  printf '\''bash tools/sub.sh\n'\''' ')' 'bash -c "$code"'
@@ -2050,6 +2056,10 @@ if harness_leg 'harness fixture and heredoc literals'; then
   fx_reach 'control: $# inside $(...) is not treated as a comment' tools/test-a.sh
   twin_text 'code=$(echo ${#foo})' 'printf '\''tools/sub.sh\n'\'''
   fx_reach 'control: ${#foo} inside $(...) is not treated as a comment' tools/test-a.sh
+  twin_text 'code=$(printf '\''%s'\'' foo\ #)' 'printf '\''tools/sub.sh\n'\'''
+  fx_reach 'control: escaped space before # inside $(...) stays in the same word' tools/test-a.sh
+  twin_text 'code=$(echo $(echo a)#)' 'printf '\''tools/sub.sh\n'\'''
+  fx_reach 'control: # immediately after nested $(...) stays in the same word' tools/test-a.sh
   twin_text 'code=$( # )' '  echo ok' ')' 'printf '\''tools/sub.sh\n'\'''
   fx_reach 'control: top-level printf after closed $( # ... ) remains excluded' tools/test-a.sh
   twin_text 'echo ok # comment \' 'alias cat=bash' 'cat <<'\''SH'\''' 'bash tools/sub.sh' 'SH'
@@ -2180,6 +2190,8 @@ if harness_leg 'harness python __file__ placement'; then
   py_twin_reach 'fail-closed: walrus binding on second line of backslash-continued f-string keeps every tied owner' "${twins[@]}"
   py_text 'import os' 's = "prefix \' 'os.path.join(os.path.dirname(__file__), '\''twin.py'\'') \' 'suffix"'
   py_twin_reach 'fail-closed: os.path.join inside a backslash-continued string keeps every tied owner' "${twins[@]}"
+  py_text 'import os' 'message = "hello\' '"; p = os.path.join(os.path.dirname(__file__), "twin.py")'
+  py_twin_reach 'path placement still applies to code after a backslash-continued string closes on the same line' tools/twin.py
   # Symlinked Python file: `.resolve()` / `os.path.realpath(__file__)` dereference
   # to the symlink target's directory (`data/`), while plain `dirname(__file__)`
   # stays at the symlink's own directory (`tools/`).
@@ -2301,11 +2313,13 @@ if harness_leg 'harness negative controls'; then
     --harnesses --files tools/sub.sh -- tools/test-a.sh tools/test-c.sh
   twin_text 'exec 1<> >(bash)' 'printf '\''bash tools/sub.sh\n'\'''
   hcontrol 'exec <> tracking keeps subsequent printf scanned' \
-    'if ($op =~ /\A\d*<>\z/) {' 'if (0 && $op =~ /\A\d*<>\z/) {' \
+    '|| ($it->[0] eq "redir_in" && $it->[1][3] =~ /\A\d*<>\z/)) {' \
+    '|| 0) {' \
     --harnesses --files tools/sub.sh -- tools/test-a.sh tools/test-c.sh
   twin_text 'code=$( # )' '  printf '\''bash tools/sub.sh\n'\''' ')' 'bash -c "$code"'
   hcontrol 'comment skipping inside sh_skip_balanced keeps # ) from closing $(...) early' \
-    'if (!$isq && !$idq && sh_is_comment_at($s, $j)) {' 'if (0 && !$isq && !$idq && sh_is_comment_at($s, $j)) {' \
+    'if (!$isq && !$idq && !$in_word && $c eq "#") {' \
+    'if (0 && !$isq && !$idq && !$in_word && $c eq "#") {' \
     --harnesses --files tools/sub.sh -- tools/test-a.sh tools/test-c.sh
   hc_restore
   py_harness_setup
