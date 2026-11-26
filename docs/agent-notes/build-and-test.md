@@ -6074,6 +6074,8 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   reads no record.
 - **Transport cleanup (gh-ocannl-2481).** `owed-run.sh` gives unattended Git transports a
   private process group whose leader holds its identity through TERM and KILL even if Git exits.
+  On macOS either side can get `EPERM` when both call `setpgid` for the same child. The
+  supervisor sets the group and releases the leader over the lifetime pipe before it forks Git.
   Scratch files keep the bound independent of transport pipe EOF. Manual terminal pushes keep
   Git's existing foreground timeout so its prompt can read the terminal. The shared benchmark
   runner already uses `cell_group` to cancel during the active wait and confirms the group is
