@@ -61,10 +61,19 @@
    Run on a Metal Mac:
 
    dune exec benchmarks/runners/ocannl/metal_bf16_tile_probe.exe -- [--sizes=1024,2048]
-   [--rounds=16] [--reps=3] [--check-only] [--print-source=N]
+   [--rounds=16] [--reps=3] [--check-only] [--print-source=N] [--f32-strides]
 
    [--check-only] runs the accumulation verdicts and no timing. [--print-source=N] prints the MSL
-   for an N x N x N GEMM and exits, for [xcrun metal -std=metal3.1 -S -emit-llvm] (the AIR). *)
+   for an N x N x N GEMM and exits, for [xcrun metal -std=metal3.1 -S -emit-llvm] (the AIR).
+
+   [--f32-strides] selects the gh-ocannl-2373 comparison. All rows retain the 32x32 output tile, the
+   same k order, and a float accumulator with a direct float store. The f32 stride rows change both
+   threadgroup operand tiles, their stores, and the fragment load strides together. Direct-device
+   rows remove the threadgroup operand tiles and their barriers, while retaining the same fragment
+   reuse and MMA calls. Unroll rows spell out literal fragment indices at the original stride. The
+   probe checks the outputs against an exact serial f32 reference, reports the compiled threadgroup
+   footprint, and pairs each time with the f32 stride-32 row. Its measurements characterize these
+   kernels on the selected Metal device. *)
 
 module Me = Metal
 
@@ -94,6 +103,7 @@ type table_form = Loop | Unroll_pragma | Constant_index
    destination and conversion, staged through a 64-float threadgroup scratch with
    [simdgroup_load]/[simdgroup_store], so no [thread_elements()] touches the accumulators. *)
 type boundary = Direct | Table of table_form | Scratch
+type operand_layout = Threadgroup of int | Device
 
 type staging = {
   name : string;
@@ -103,6 +113,8 @@ type staging = {
   acc : elt;  (** accumulator fragments *)
   out : elt;  (** the destination buffer *)
   boundary : boundary;
+  operand_layout : operand_layout;
+  unroll_fragments : bool;
   convert : bool;  (** load [frag] fragments, convert to float fragments *)
   mac : string;  (** the update of [acc[mi][ni]] from [af] and [bf[ni]] *)
   narrow_elt : elt;  (** the storage type the host models round to *)
@@ -122,7 +134,22 @@ let stagings =
   let s ?(convert = false) ?(mac = mac_plain) ?(narrow_elt = Bf16) ?(boundary = Direct) name input
       tile frag acc role note =
     let out = if boundary = Direct then acc else narrow_elt in
-    { name; input; tile; frag; acc; out; boundary; convert; mac; narrow_elt; role; note }
+    {
+      name;
+      input;
+      tile;
+      frag;
+      acc;
+      out;
+      boundary;
+      operand_layout = Threadgroup 32;
+      unroll_fragments = false;
+      convert;
+      mac;
+      narrow_elt;
+      role;
+      note;
+    }
   in
   [
     s ~boundary:(Table Loop) "wide-table" Bf16 Bf16 Bf16 F32 Baseline_wide
@@ -155,16 +182,57 @@ let stagings =
       "half8x8 accumulator";
   ]
 
+let stride_stagings =
+  let find name = List.find (fun st -> st.name = name) stagings in
+  let f32 = find "f32" and half = find "half-wide" in
+  let pad stride =
+    {
+      f32 with
+      name = Printf.sprintf "f32-stride%d" stride;
+      operand_layout = Threadgroup stride;
+      note = Printf.sprintf "f32 A/B staged with a stride of %d elements" stride;
+    }
+  in
+  let device st =
+    {
+      st with
+      name = st.name ^ "-device";
+      operand_layout = Device;
+      note = "load A/B fragments directly from device memory";
+    }
+  in
+  let unroll st =
+    {
+      st with
+      name = st.name ^ "-unroll";
+      unroll_fragments = true;
+      note = "stride 32 with literal fragment indices";
+    }
+  in
+  [
+    f32;
+    { f32 with name = "f32-dup"; note = "same source under a second name (drift control)" };
+    pad 33;
+    pad 36;
+    pad 40;
+    device f32;
+    unroll f32;
+    half;
+    device half;
+    unroll half;
+    find "wide";
+  ]
+
 let kernel_name st = "k_" ^ String.map (fun c -> if c = '-' then '_' else c) st.name
 
 let kernel ~n ~k st =
-  let load dst src =
+  let load dst src stride =
     if st.convert then
       Printf.sprintf
-        "{ simdgroup_%s8x8 raw; simdgroup_load(raw, %s, (ulong)32); for (int e = 0; e < ELTS; ++e) \
+        "{ simdgroup_%s8x8 raw; simdgroup_load(raw, %s, (ulong)%d); for (int e = 0; e < ELTS; ++e) \
          %s.thread_elements()[e] = (float)raw.thread_elements()[e]; }"
-        (msl st.tile) src dst
-    else Printf.sprintf "simdgroup_load(%s, %s, (ulong)32);" dst src
+        (msl st.tile) src stride dst
+    else Printf.sprintf "simdgroup_load(%s, %s, (ulong)%d);" dst src stride
   in
   let frag_at = Printf.sprintf "(dp + mi * 8 * %d + ni * 8)" n in
   let table_lines form dir =
@@ -226,15 +294,33 @@ let kernel ~n ~k st =
     Printf.sprintf "  for (int mi = 0; mi < 4; ++mi)\n    for (int ni = 0; ni < 4; ++ni)\n%s\n"
       lines
   in
+  let fragment_loop indent index form body =
+    if st.unroll_fragments then
+      let body = match form with `Inline -> indent ^ "  " ^ body | `Nested | `Block -> body in
+      List.init 4 (fun i ->
+          Printf.sprintf "%s{ const int %s = %d;\n%s%s}\n" indent index i body indent)
+      |> String.concat ""
+    else
+      let header = Printf.sprintf "%sfor (int %s = 0; %s < 4; ++%s)" indent index index index in
+      match form with
+      | `Inline -> header ^ " " ^ body
+      | `Nested -> header ^ "\n" ^ body
+      | `Block -> header ^ " {\n" ^ body ^ indent ^ "}\n"
+  in
   let init =
     match st.boundary with
     | Direct ->
-        Printf.sprintf
-          "  for (int mi = 0; mi < 4; ++mi)\n\
-          \    for (int ni = 0; ni < 4; ++ni) acc[mi][ni] = make_filled_simdgroup_matrix<%s, 8, \
-           8>(0);\n\
-          \  threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);\n"
-          (msl st.acc)
+        let barrier =
+          match st.operand_layout with
+          | Device -> ""
+          | Threadgroup _ ->
+              "  threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);\n"
+        in
+        fragment_loop "  " "mi" `Nested
+          (fragment_loop "    " "ni" `Inline
+             (Printf.sprintf "acc[mi][ni] = make_filled_simdgroup_matrix<%s, 8, 8>(0);\n"
+                (msl st.acc)))
+        ^ barrier
     | Table _ | Scratch ->
         Printf.sprintf
           "  device %s *dp = C + row0 * %d + col0;\n\
@@ -248,53 +334,65 @@ let kernel ~n ~k st =
   let store =
     match st.boundary with
     | Direct ->
-        Printf.sprintf
-          "  for (int mi = 0; mi < 4; ++mi)\n\
-          \    for (int ni = 0; ni < 4; ++ni)\n\
-          \      simdgroup_store(acc[mi][ni], C + (row0 + mi * 8) * %d + col0 + ni * 8, (ulong)%d);\n"
-          n n
+        fragment_loop "  " "mi" `Nested
+          (fragment_loop "    " "ni" `Nested
+             (Printf.sprintf
+                "      simdgroup_store(acc[mi][ni], C + (row0 + mi * 8) * %d + col0 + ni * 8, \
+                 (ulong)%d);\n"
+                n n))
     | Table _ | Scratch ->
         fragments
           ((match st.boundary with Table form -> table_lines form | _ -> scratch_lines) `Store)
+  in
+  let tiles, stage, a_load, b_load, finish_step =
+    match st.operand_layout with
+    | Threadgroup stride ->
+        let typ = msl st.tile and elems = 32 * stride in
+        ( Printf.sprintf "  threadgroup %s ta[%d];\n  threadgroup %s tb[%d];\n" typ elems typ elems,
+          Printf.sprintf
+            {|    for (int r = 0; r < 32; ++r) tb[r * %d + t] = (%s)B[(32 * kb + r) * %d + col0 + t];
+    for (int r = 0; r < 32; ++r) ta[r * %d + t] = (%s)A[(row0 + r) * %d + 32 * kb + t];
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+|}
+            stride typ n stride typ k,
+          load "af" (Printf.sprintf "ta + mi * 8 * %d + ki * 8" stride) stride,
+          load "bf[ni]" (Printf.sprintf "tb + ki * 8 * %d + ni * 8" stride) stride,
+          "    threadgroup_barrier(mem_flags::mem_threadgroup);\n" )
+    | Device ->
+        ( "",
+          "",
+          load "af" (Printf.sprintf "A + (row0 + mi * 8) * %d + 32 * kb + ki * 8" k) k,
+          load "bf[ni]" (Printf.sprintf "B + (32 * kb + ki * 8) * %d + col0 + ni * 8" n) n,
+          "" )
+  in
+  let fragment_type = "simdgroup_" ^ msl st.frag ^ "8x8" in
+  let update =
+    fragment_loop "    " "ki" `Block
+      (Printf.sprintf "      %s bf[4];\n" fragment_type
+      ^ fragment_loop "      " "ni" `Inline (b_load ^ "\n")
+      ^ fragment_loop "      " "mi" `Block
+          (Printf.sprintf "        %s af;\n        %s\n" fragment_type a_load
+          ^ fragment_loop "        " "ni" `Inline (st.mac ^ "\n")))
   in
   Printf.sprintf
     {|kernel void %s(
     device const %s* A [[buffer(0)]], device const %s* B [[buffer(1)]], device %s* C [[buffer(2)]],
     uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
-  threadgroup %s ta[1024];
-  threadgroup %s tb[1024];
-%s  const int row0 = 32 * (int)gid.y;
+%s%s  const int row0 = 32 * (int)gid.y;
   const int col0 = 32 * (int)gid.x;
   const int t = (int)lid.x;
   simdgroup_%s8x8 acc[4][4];
 %s  for (int kb = 0; kb < %d; ++kb) {
-    for (int r = 0; r < 32; ++r) tb[r * 32 + t] = (%s)B[(32 * kb + r) * %d + col0 + t];
-    for (int r = 0; r < 32; ++r) ta[r * 32 + t] = (%s)A[(row0 + r) * %d + 32 * kb + t];
-    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    for (int ki = 0; ki < 4; ++ki) {
-      simdgroup_%s8x8 bf[4];
-      for (int ni = 0; ni < 4; ++ni) %s
-      for (int mi = 0; mi < 4; ++mi) {
-        simdgroup_%s8x8 af;
-        %s
-        for (int ni = 0; ni < 4; ++ni) %s
-      }
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-  }
+%s%s%s  }
 %s}
 |}
-    (kernel_name st) (msl st.input) (msl st.input) (msl st.out) (msl st.tile) (msl st.tile) decls
-    (msl st.acc) init (k / 32) (msl st.tile) n (msl st.tile) k (msl st.frag)
-    (load "bf[ni]" "tb + ki * 8 * 32 + ni * 8")
-    (msl st.frag)
-    (load "af" "ta + mi * 8 * 32 + ki * 8")
-    st.mac store
+    (kernel_name st) (msl st.input) (msl st.input) (msl st.out) tiles decls (msl st.acc) init
+    (k / 32) stage update finish_step store
 
 (* [ELTS] is each thread's share of a fragment, spelled as the codegen's converted boundary spells
    it; the elementwise stagings rely on the float and narrow fragments sharing one thread layout,
    which the exact-premise verdicts check. *)
-let source ~n ~k =
+let source ~stagings ~n ~k =
   String.concat "\n"
     ("#include <metal_stdlib>\n\
       #include <metal_simdgroup_matrix>\n\
@@ -464,8 +562,8 @@ let poison g =
     p +@ i <-@ Unsigned.UInt8.of_int 0xff
   done
 
-let make_gemm device ~m ~n ~k =
-  let library = Me.Library.on_device device ~source:(source ~n ~k) (compile_options ()) in
+let make_gemm device ~stagings ~m ~n ~k =
+  let library = Me.Library.on_device device ~source:(source ~stagings ~n ~k) (compile_options ()) in
   let states = Hashtbl.create 16 in
   List.iter
     (fun st ->
@@ -492,6 +590,7 @@ let set_inputs g ?(elts = [ Bf16; F32; F16 ]) a b =
 
 let dispatch queue g st =
   let cb = Me.CommandBuffer.on_queue queue in
+  Me.CommandBuffer.set_label cb st.name;
   let enc = Me.ComputeCommandEncoder.on_buffer cb in
   Me.ComputeCommandEncoder.set_compute_pipeline_state enc (Hashtbl.find g.states st.name);
   let ba, bb = Hashtbl.find g.inputs st.input in
@@ -558,7 +657,7 @@ let checks device queue =
   Printf.printf "Accumulation verdicts (m = n = %d; outputs matched bitwise to host models):\n" m;
   List.iter
     (fun (k, signed) ->
-      let g = make_gemm device ~m ~n ~k in
+      let g = make_gemm device ~stagings ~m ~n ~k in
       let operands narrow = exact_operands ~top:(exact_top narrow) ~signed ~m ~n ~k in
       let a, b = operands Bf16 in
       set_inputs g ~elts:[ Bf16; F32 ] a b;
@@ -631,7 +730,7 @@ let checks device queue =
      kernel (today's tile) directly. A staging with a narrow destination is compared with the f32
      references rounded to that destination; the table kernel's output already has one. *)
   let k = 256 in
-  let g = make_gemm device ~m ~n ~k in
+  let g = make_gemm device ~stagings ~m ~n ~k in
   let a, b = inexact_operands ~m ~n ~k in
   set_inputs g ~elts:[ Bf16; F32 ] a b;
   let serial = serial_f32 ~m ~n ~k a b in
@@ -658,6 +757,29 @@ let checks device queue =
     stagings;
   !failures
 
+let check_strides device queue =
+  let m = 64 and n = 96 and k = 256 in
+  let g = make_gemm device ~stagings:stride_stagings ~m ~n ~k in
+  (* With a period coprime to the B row coefficient, none of the four fragment starts in a staged
+     tile aliases another. Products and partial sums remain exact in the f32 accumulator. *)
+  let a, b = exact_operands ~top:31 ~signed:true ~m ~n ~k in
+  set_inputs g a b;
+  let reference = serial_f32 ~m ~n ~k a b in
+  Printf.printf "Exact serial f32 reference (m = %d, n = %d, k = %d):\n" m n k;
+  let failures = ref 0 in
+  List.iter
+    (fun st ->
+      poison g;
+      ignore (dispatch queue g st : float);
+      let matched = count_equal (read_out g st.out) reference in
+      let pipeline = Hashtbl.find g.states st.name in
+      let bytes = Me.ComputePipelineState.get_static_threadgroup_memory_length pipeline in
+      Printf.printf "  %-16s %d/%d bitwise matches, %d static threadgroup bytes\n" st.name matched
+        (m * n) bytes;
+      if matched <> m * n then incr failures)
+    stride_stagings;
+  !failures
+
 (* -- timings --------------------------------------------------------------------------------- *)
 
 let median a =
@@ -673,17 +795,25 @@ let rotate r xs =
   let r = r mod len in
   List.filteri (fun i _ -> i >= r) xs @ List.filteri (fun i _ -> i < r) xs
 
-let timings device queue ~sizes ~rounds ~reps =
+let timings device queue ~f32_strides ~sizes ~rounds ~reps =
+  let stagings, base, control =
+    if f32_strides then (stride_stagings, "f32", "half-wide") else (stagings, "wide-table", "narrow")
+  in
   List.iter
     (fun size ->
-      let g = make_gemm device ~m:size ~n:size ~k:size in
+      let g = make_gemm device ~stagings ~m:size ~n:size ~k:size in
       let a, b = inexact_operands ~m:size ~n:size ~k:size in
       set_inputs g ~elts:[ Bf16; F32 ] a b;
-      (* Halved, the same values stay exact in half (operands down to 2^-8, normal; their products
-         reach 2^-16, below half's normal range). The half8x8 timing does not depend on this: with
-         unhalved operands, every product normal, it was unchanged (gh-ocannl-2322, 6.61 against
-         6.56 ms at n = 2048, a non-exclusive run). *)
-      set_inputs g ~elts:[ F16 ] (Array.map (fun x -> x /. 2.0) a) (Array.map (fun x -> x /. 2.0) b);
+      (* The stride comparison gives every input format the same exactly representable, unhalved
+         values. Its half products stay normal. *)
+      if f32_strides then set_inputs g ~elts:[ F16 ] a b
+      else
+        (* Keep the historical gh-ocannl-2322 timing inputs. Halving keeps the operands normal and
+           lets their products reach the half subnormal range. The half8x8 timing was unchanged with
+           unhalved inputs (6.61 against 6.56 ms at n = 2048, a non-exclusive run). *)
+        set_inputs g ~elts:[ F16 ]
+          (Array.map (fun x -> x /. 2.0) a)
+          (Array.map (fun x -> x /. 2.0) b);
       List.iter
         (fun st ->
           for _ = 1 to 3 do
@@ -706,15 +836,16 @@ let timings device queue ~sizes ~rounds ~reps =
         "\n\
          n = %d: GPU-clock ms, %d rotated rounds x median of %d dispatches; ratios paired per round\n"
         size rounds reps;
-      Printf.printf "  %-12s %8s %17s %8s %22s %22s\n" "staging" "median" "range" "GFLOP/s"
-        "/ today median (range)" "/ narrow median (range)";
+      Printf.printf "  %-16s %8s %17s %8s %24s %24s\n" "staging" "median" "range" "GFLOP/s"
+        (if f32_strides then "/ f32 median (range)" else "/ today median (range)")
+        (Printf.sprintf "/ %s median (range)" control);
       List.iter
         (fun st ->
           let t = get st.name in
           let lo, hi = range t in
-          let rw = ratio st.name "wide-table" and rn = ratio st.name "narrow" in
+          let rw = ratio st.name base and rn = ratio st.name control in
           let rwl, rwh = range rw and rnl, rnh = range rn in
-          Printf.printf "  %-12s %8.3f %8.3f-%-8.3f %8.0f %7.3f (%.3f-%.3f) %7.3f (%.3f-%.3f)  %s\n"
+          Printf.printf "  %-16s %8.3f %8.3f-%-8.3f %8.0f %7.3f (%.3f-%.3f) %7.3f (%.3f-%.3f)  %s\n"
             st.name (median t) lo hi
             (gflop /. (median t /. 1000.0))
             (median rw) rwl rwh (median rn) rnl rnh st.note)
@@ -725,11 +856,11 @@ let timings device queue ~sizes ~rounds ~reps =
 
 let () =
   let sizes = ref [ 1024; 2048 ] and rounds = ref 16 and reps = ref 3 in
-  let check_only = ref false and print_source = ref None in
+  let check_only = ref false and print_source = ref None and f32_strides = ref false in
   let usage () =
     prerr_endline
       "usage: metal_bf16_tile_probe [--sizes=N,...] [--rounds=R] [--reps=P] [--check-only] \
-       [--print-source=N]";
+       [--print-source=N] [--f32-strides]";
     exit 2
   in
   let pos s = match int_of_string_opt s with Some v when v > 0 -> v | _ -> usage () in
@@ -756,11 +887,16 @@ let () =
           let v = pos v in
           if v mod 32 <> 0 then usage ();
           print_source := Some v
-      | None, None, None, None -> if arg = "--check-only" then check_only := true else usage ())
+      | None, None, None, None -> (
+          match arg with
+          | "--check-only" -> check_only := true
+          | "--f32-strides" -> f32_strides := true
+          | _ -> usage ()))
     (List.tl (Array.to_list Sys.argv));
   (match !print_source with
   | Some s ->
-      print_string (source ~n:s ~k:s);
+      let stagings = if !f32_strides then stride_stagings else stagings in
+      print_string (source ~stagings ~n:s ~k:s);
       exit 0
   | None -> ());
   let device = Me.Device.create_system_default () in
@@ -768,11 +904,17 @@ let () =
   Printf.printf "device: %s; options: %s\n" (Me.Device.get_attributes device).name
     (Ir.Compiler_options.render_metal
        (Ir.Compiler_options.metal ~routine_logging:false ~math_api:(Metal_math_api_runtime.get ())));
-  let failures = checks device queue in
-  if not !check_only then timings device queue ~sizes:!sizes ~rounds:!rounds ~reps:!reps;
+  let failures = if !f32_strides then check_strides device queue else checks device queue in
+  if (failures = 0 || not !f32_strides) && not !check_only then
+    timings device queue ~f32_strides:!f32_strides ~sizes:!sizes ~rounds:!rounds ~reps:!reps;
   if failures = 0 then
-    Printf.printf "\nVERDICT: the models stayed distinct and every baseline accumulated as known\n"
+    Printf.printf "\nVERDICT: %s\n"
+      (if !f32_strides then "all stride probe kernels match the exact serial f32 reference"
+       else "the models stayed distinct and every baseline accumulated as known")
   else (
-    Printf.printf "\nVERDICT: %d contradiction(s): the probe cannot discriminate as claimed\n"
-      failures;
+    if !f32_strides then
+      Printf.printf "\nVERDICT: %d kernel(s) differ from the serial f32 reference\n" failures
+    else
+      Printf.printf "\nVERDICT: %d contradiction(s): the probe cannot discriminate as claimed\n"
+        failures;
     exit 1)

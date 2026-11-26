@@ -1327,6 +1327,21 @@ files.
   exact-premise verdict. The narrow models are confirmed: bfloat8x8 block-narrow, half8x8 serial-narrow. So the
   wide arm's tile cost is not inherent: a scratch boundary (per simdgroup) recovers the narrow
   tile's speed at wide values, for bf16 and f16 alike.
+- **Literal fragment indices remove the large Metal f32 MMA penalty** (gh-ocannl-2373,
+  `metal_bf16_tile_probe --f32-strides`). On mac-studio (M4 Max, macOS 27.2.1), a 2048³
+  `mm_mma_pd1` probe took 12.699 ms at stride 32, 11.938–12.647 ms at strides 33/36/40, and
+  5.831 ms with direct device loads (zero static threadgroup bytes). Literal fragment indices
+  kept stride 32 and the same 8192 threadgroup bytes and reduced the time to 1.711 ms
+  (paired ratio 0.134 [0.121–0.143]); half and bfloat inputs with f32 accumulation took about
+  1.28 ms. Instruments reported 4352 spill bytes for every timed and warmup dispatch of the
+  looped f32 rows, including the direct-device row, and no spill event for the literal f32,
+  half or bfloat controls. The f32 literal row removes the two fragment-array allocations in
+  AIR, and all rows match a serial f32 reference on exact operands. Production's
+  `Metal_mma.k_loop_lines` emits the runtime-indexed fragment loops that the probe mirrors.
+  The large gap persists with padding and without threadgroup operand tiles. The stride-36 median
+  improvement overlaps the duplicate-baseline ratio range at both measured sizes, so this probe
+  leaves production strides in place. Instruments exported no per-shader hardware counter
+  samples on this run.
 - **Per-simdgroup scratch recovers Metal wide MMA tile speed; `Bf16_auto` stays wide, `Fp16_auto`
   stays narrow on tuned training evidence** (gh-ocannl-2372, `Metal_backend.mma_d_boundary_lines`).
   Replacing `ocannl_mma_rc8`/`thread_elements()` with `simdgroup_load`/`simdgroup_store` through
