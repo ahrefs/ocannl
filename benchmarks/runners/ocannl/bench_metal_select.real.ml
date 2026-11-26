@@ -383,9 +383,11 @@ let measure (ctx, routine) =
 
 (* Each round times every arm once in {!Bench_design.orders}' spread mirrored rotation, so every
    pair of arms is exchanged equally often and position histograms equalize at exact multiples of
-   the arm count (e.g. multiples of 4 for the four-arm pointwise comparisons). [before k] runs ahead
-   of arm [k]'s timing, outside its clock. [ratios] name numerator and denominator arms by name. *)
-let compare_times ?(before = fun _ -> ()) ~calls ~label
+   the arm count (e.g. multiples of 4 for the four-arm comparisons). [measure_arm] defaults to
+   {!measure} ([Autotune.time_routine]); stateful training-step arms pass a single-step synchronized
+   sampler that restores the exact parameter snapshot before every launch. [ratios] name numerator
+   and denominator arms by name. *)
+let compare_times ?(measure_arm = measure) ~calls ~label
     ~(arms : (string * (Context.t * Context.routine)) list) ~ratios () =
   let n = List.length arms in
   let arms = Array.of_list arms in
@@ -393,9 +395,7 @@ let compare_times ?(before = fun _ -> ()) ~calls ~label
   let rows =
     Array.map orders ~f:(fun order ->
         let row = Array.create ~len:n None in
-        Array.iter order ~f:(fun k ->
-            before k;
-            row.(k) <- measure (snd arms.(k)));
+        Array.iter order ~f:(fun k -> row.(k) <- measure_arm (snd arms.(k)));
         row)
   in
   (* Treatment and control have to use the same rounds for their spreads to be comparable. *)
@@ -587,15 +587,23 @@ let compare_step ~dry ~step_segments ~calls step =
             (Array.length got) bitwise got.(0);
           Verdict.pass_fail_all2 (label ^ "/" ^ name ^ " step parity with short") got want ~f:close;
           if Verdict.any_failed () then failwith (label ^ ": step parity failed"));
-      let restore k =
-        let _, ((ctx, _), _) = List.nth_exn arms k in
-        ignore
-          (List.fold step.snapshot ~init:ctx ~f:(fun ctx (tn, values) ->
-               Context.set_values ctx tn values)
-            : Context.t)
+      (* Restore the exact parameter snapshot and synchronize before every single timed step so
+         parameters, ReLU masks, and pooling masks stay identical across every sample and arm. *)
+      let measure_step (ctx, routine) =
+        let ctx =
+          List.fold step.snapshot ~init:ctx ~f:(fun ctx (tn, values) ->
+              Context.set_values ctx tn values)
+        in
+        Context.sync ctx;
+        let t0 = Mtime_clock.counter () in
+        let ctx = Context.run ctx routine in
+        Context.sync ctx;
+        let ms = Mtime.Span.to_float_ns (Mtime_clock.count t0) /. 1e6 in
+        if Float.is_finite ms && Float.is_positive ms then Some ms else None
       in
       if not dry then (
-        compare_times ~before:restore ~calls ~label
+        List.iter arms ~f:(fun (_, (c, _)) -> ignore (measure_step c : float option));
+        compare_times ~measure_arm:measure_step ~calls ~label
           ~arms:(List.map arms ~f:(fun (name, (c, _)) -> (name, c)))
           ~ratios:
             [

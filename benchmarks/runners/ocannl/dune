@@ -180,6 +180,8 @@
   bench_harness
   bench_out
   bench_retime
+  mtime
+  mtime.clock.os
   ocannl
   arrayjit.autotune
   arrayjit.context

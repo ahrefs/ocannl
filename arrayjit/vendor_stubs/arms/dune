@@ -226,6 +226,8 @@
   bench_out
   bench_retime
   ll_test
+  mtime
+  mtime.clock.os
   ocannl
   arrayjit.autotune
   arrayjit.context
