@@ -487,6 +487,7 @@
   base
   pprint
   arrayjit.ir
+  arrayjit.builtins_cuda
   arrayjit.builtins_hip
   arrayjit.verdict
   arrayjit.utils))

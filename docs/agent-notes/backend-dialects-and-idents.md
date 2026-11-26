@@ -145,9 +145,9 @@ files.
   Metal, CUDA and HIP evaluate the condition once in a typed predicate. CUDA and HIP share
   `ocannl_sat01_open` and `ocannl_sat01_open_half`. The half helper has its own key so selecting
   the generic helper preserves CUDA's architecture floor. The ternary guards the payload and
-  determines the result type. `branchless_select` counts condition reads in the emitted kernels,
-  including an inlined integer expression. The base CUDA and HIP renderings each failed the
-  single-use check at all twelve emitted precisions.
+  determines the result type. `test_cuda_like_config` checks the PTX target after prelude
+  selection for f32 and f16. `branchless_select` counts condition reads in the emitted kernels,
+  including an inlined integer expression.
 - Metal has no `double`, and f64 stays rejected in `typ_of_prec` — a declared double buffer must
   fail rather than be silently degraded; only scalar expression casts render as `float`. So a
   backend-agnostic test must never reach for `double` just to have a second precision:

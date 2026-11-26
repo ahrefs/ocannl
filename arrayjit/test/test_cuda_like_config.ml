@@ -332,3 +332,17 @@ let () =
     ~f:(fun name ->
       String.equal (Cuda_syntax.kernel_ident name) name
       && String.equal (Hip_syntax.kernel_ident name) name)
+
+(* The floor policy reads the rendered predicate and the prelude it selects. *)
+let () =
+  let source prec =
+    let proc_doc = Cuda.binop_syntax prec Ops.Satur01_gate a b in
+    Cuda_syntax.filter_and_prepend_builtins ~routine_names:[] ~includes:""
+      ~builtins:Builtins_cuda.builtins ~proc_doc ()
+  in
+  let arch_options = Ir.Cuda_mma.gpu_arch_options ~target:Floor ~device_cc:70 in
+  let single = source Ops.single in
+  p_empty "CUDA f32 Satur01_gate keeps the default PTX target" ~over:[ single ]
+    (arch_options single);
+  p "CUDA f16 Satur01_gate selects the half arithmetic target"
+    (List.equal String.equal (arch_options (source Ops.half)) [ "--gpu-architecture=compute_70" ])
