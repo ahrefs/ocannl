@@ -884,6 +884,7 @@ DUNE
   printf '(** Interface note. *)\n' >>"$repo/lib/helper.mli"
   printf 'Edited Markdown.\n' >"$repo/docs/notes.md"
   git_q commit -qam comment-head || exit 2
+  comment_head=$(git_q rev-parse HEAD) || exit 2
   comment_alias=@comment_ranked/runtest-uses_1
   comment_train=@test/training/train-fixture
   comment_reason='library edits change only comments or blank lines. Compile and scans cover link-only reach.'
@@ -943,6 +944,33 @@ DUNE
   if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] && ! grep -q '^affected: comment-only reason:' "$err"; then
     report 0 'a blank line added inside a quoted extension keeps ordinary cross-cutting reach'
   else report 1 'a blank line added inside a quoted extension keeps ordinary cross-cutting reach' "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
+
+  git_q reset -q --hard "$comment_head" || exit 2
+  cat >>"$repo/lib/helper.ml" <<'ML'
+let render' c s = String.make 1 c ^ s
+let quoted = render' '"' "(*
+before
+*)"
+ML
+  git_q commit -qam apostrophe-base || exit 2
+  perl -pi -e 's/^before$/after/' "$repo/lib/helper.ml"
+  affected HEAD
+  trailer
+  if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] && ! grep -q '^affected: comment-only reason:' "$err"; then
+    report 0 'a primed identifier before a character literal still leaves the string payload as code'
+  else report 1 'a primed identifier before a character literal still leaves the string payload as code' "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
+
+  git_q reset -q --hard "$comment_head" &&
+    git_q config --local core.autocrlf true || exit 2
+  perl -pi -e 'binmode ARGVOUT; s/A note/A revised note/; s/\r?\n/\r\n/' "$repo/lib/helper.ml"
+  affected HEAD
+  trailer
+  if [ "$rc" = 0 ] && [ "$verdict" = ok ] &&
+     grep -qxF "affected: comment-only reason: $comment_reason" "$err" &&
+     grep -qxF "affected: link-only: $comment_alias" "$err"; then
+    report 0 'a comment change in a CRLF worktree matches the LF Git patch'
+  else report 1 'a comment change in a CRLF worktree matches the LF Git patch' "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
+  git_q config --local --unset core.autocrlf || exit 2
   git_q reset -q --hard "$comment_fixture_start" || exit 2
 fi
 

@@ -105,7 +105,9 @@
 # one existing, regular library `.ml` or `.mli` edited in place and optionally
 # `.md` paths. Every OCaml hunk must have only blank or comment lines on
 # both sides using the definition reader's lexical pass, with unchanged lines
-# still reading the same. Code inside literals, quoted extensions and
+# still reading the same. Both snapshots must match the patch's Git blob
+# IDs, with CRLF converted to LF when that matches Git's canonical content.
+# Code inside literals, quoted extensions and
 # non-ASCII quoted delimiters, added or deleted sources, mode changes,
 # unreadable hunks, unknown owners and `--files` keep ordinary reach.
 # Compiler output, source locations and Markdown contents are outside this
@@ -658,7 +660,7 @@ else
       cp -- "$f" "$tmp/new/$f" || die "cannot copy $f"
     fi
   done <"$tmp/changed"
-  git diff -U0 --no-color --no-renames --no-ext-diff --no-textconv "${revs[0]}" -- '*.ml' '*.mli' >"$tmp/ml-diff" ||
+  git diff -U0 --full-index --no-color --no-renames --no-ext-diff --no-textconv "${revs[0]}" -- '*.ml' '*.mli' >"$tmp/ml-diff" ||
     die "git diff ${revs[0]} failed"
 fi
 
@@ -3630,6 +3632,7 @@ listings
 
 cat >"$tmp/main.pl" <<'PERL'
 use strict; use warnings;
+use Digest::SHA qw(sha1_hex sha256_hex);
 my ($tmp, $referenced_only, $probe_ok, $qroot, $old_root, $gpu_gated, $for_prepush) = @ARGV;
 require "$tmp/dune-source.pl";
 # While a dune answer is being read, a refusal keeps a copy of it (see keep_raw).
@@ -5100,9 +5103,12 @@ sub code_of {   # OCaml text with every comment blanked, newlines kept; strings 
     my $piece;
     if ($s =~ /\G\(\*/gc) { $depth++; $piece = "  " }
     elsif ($depth && $s =~ /\G\*\)/gc) { $depth--; $piece = "  " }
+    # A trailing apostrophe belongs to the identifier. Treating it as a
+    # character opener can swallow the quote before a following literal.
+    elsif ($s =~ /\G([A-Za-z_\x80-\xff][A-Za-z_0-9'\x80-\xff]*)/gc) { $piece = $1 }
     elsif ($s =~ /\G("(?:[^"\\]++|\\.)*+")/gcs || $s =~ /\G(\{([a-z_]*)\|.*?\|\2\})/gcs
            || $s =~ /\G('(?:[^'\\\n]|\\(?:[\\'"ntbr ]|[0-9]{3}|x[0-9A-Fa-f]{2}|o[0-7]{3}))')/gc
-           || $s =~ /\G([^(*"{'\n]+|.)/gcs) {
+           || $s =~ /\G([^(*"{'\nA-Za-z_\x80-\xff]+|.)/gcs) {
       $piece = $1;
       $piece = $piece =~ s/[^\n]/S/gr =~ s/\n/\nS/gr if $mark && !$depth && $piece =~ /^["'{]./s;
     }
@@ -5369,11 +5375,22 @@ sub enclosing_def {   # -> [NAME...], or undef: the whole module
   }
   return undef;
 }
+sub canonical_blob {   # snapshot -> Git hunk bytes, or undef when neither reading matches
+  my ($text, $oid) = @_;
+  for my $bytes ($text, $text =~ s/\r\n/\n/gr) {
+    my $blob = "blob " . length($bytes) . "\0" . $bytes;
+    my $hash = length($oid) == 40 ? sha1_hex($blob) : sha256_hex($blob);
+    return $bytes if $hash eq $oid;
+  }
+  return undef;
+}
 if (-f "$tmp/ml-diff") {
   my (%hunks, %regular, $cur, $gone, $regular);
   for (split /\n/, slurp("$tmp/ml-diff")) {
-    if (/^diff /) { $cur = $gone = undef; $regular = 0; next }
-    if (/^index [0-9a-f]+\.\.[0-9a-f]+ 100(?:644|755)$/) { $regular = 1; next }
+    if (/^diff /) { $cur = $gone = $regular = undef; next }
+    if (/^index ([0-9a-f]{40}|[0-9a-f]{64})\.\.([0-9a-f]{40}|[0-9a-f]{64}) 100(?:644|755)$/) {
+      $regular = [$1, $2]; next;
+    }
     if (/^--- (?:a\/(.*)|\/dev\/null)$/) { $gone = $1; next }
     if (/^\+\+\+ (?:b\/(.*)|\/dev\/null)$/) { $cur = $1 // $gone; next }
     if (/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/ && defined $cur) {
@@ -5384,6 +5401,15 @@ if (-f "$tmp/ml-diff") {
   for my $p (keys %hunks) {
     my %defs;
     my %source = map { my $f = "$tmp/$_/$p"; ($_ => -f $f ? slurp($f) // "" : "") } qw(old new);
+    my $canonical = 0;
+    if (my $ids = $regular{$p}) {
+      my $old = canonical_blob($source{old}, $ids->[0]);
+      my $new = canonical_blob($source{new}, $ids->[1]);
+      if (defined $old && defined $new) {
+        @source{qw(old new)} = ($old, $new);
+        $canonical = 1;
+      }
+    }
     my %side = map { ($_ => [split /\n/, $source{$_}, -1]) } qw(old new);
     # A changed line holding no code -- blank, or comment only, outside every
     # literal -- changes no definition (gh-ocannl-1765: the blank line above an
@@ -5427,7 +5453,7 @@ if (-f "$tmp/ml-diff") {
     }
     # No definition at all: only comments or blank lines changed.
     $path_defs{$p} = $defs{"\0whole"} ? undef : \%defs;
-    $comment_only_module{$p} = 1 if $regular{$p} && $library_module{$p} && defined $path_defs{$p} && !$changed_code
+    $comment_only_module{$p} = 1 if $canonical && $library_module{$p} && defined $path_defs{$p} && !$changed_code
       && !grep { /$unsupported_quote/ } values %source;
   }
 }

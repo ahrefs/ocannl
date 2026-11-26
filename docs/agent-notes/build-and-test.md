@@ -4556,7 +4556,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     support, tools and docs, and refuses for a library code change.
     For comment-only library edits (gh-ocannl-2407), the Git hunks must show only comments or
     blank lines on both sides of existing, regular library `.ml` and `.mli` files, with unchanged
-    lines still reading the same. The other paths may be Markdown. The default `affected` report
+    lines still reading the same. Snapshot bytes must match the patch's blob IDs. A CRLF worktree
+    can match after conversion to LF. The other paths may be Markdown. The default `affected` report
     keeps its link-only list and explains why only the first tier counts toward CROSS-CUTTING.
     `prepush` leaves off the link-only aliases, including link-only training aliases. The merge
     build uses that plan with its compile and scans tier. First-tier readers keep their ordinary
