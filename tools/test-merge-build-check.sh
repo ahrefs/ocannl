@@ -74,24 +74,31 @@ export OCANNL_TOOL_MERGE_BUILD_REACH_CACHE=off
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
   GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
   GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
+# resolve_exec_path PATH: normalize a command path returned by `type -P` to an absolute path
+# using physical directory traversal (`cd -P`/`pwd -P`) so relative PATH entries crossing a
+# symlink before `..` resolve to the same directory as kernel execve.
+resolve_exec_path() {
+  local p=$1 pdir
+  case $p in
+    /*) printf '%s' "$p" ;;
+    *)
+      pdir=$(CDPATH= cd -P -- "$(dirname -- "$p")" && pwd -P) || return 2
+      printf '%s/%s' "$pdir" "${p##*/}" ;;
+  esac
+}
 # build_sys_path DIR: populate DIR with symlinks to the caller's active bash and awk (a two-tool
 # allowlist preserving tools/test-harnesses.sh's private Bash 3.2 + macOS mawk interpreter
 # directory across SYS_PATH resets without leaking dune, opam, ocamlc or git into isolated runs),
 # and set SYS_PATH to DIR:/usr/bin:/bin (or /usr/bin:/bin when neither resolved).
 build_sys_path() {
-  local dir=$1 tool p pdir any=0
+  local dir=$1 tool p any=0
   mkdir -p "$dir" || return 2
-  dir=$(CDPATH= cd -- "$dir" && pwd) || return 2
+  dir=$(CDPATH= cd -P -- "$dir" && pwd -P) || return 2
   rm -f "$dir/bash" "$dir/awk" || return 2
   for tool in bash awk; do
     p=$(type -P "$tool" 2>/dev/null || :)
     if [ -n "$p" ] && [ -f "$p" ] && [ -x "$p" ]; then
-      case $p in
-        /*) ;;
-        *)
-          pdir=$(CDPATH= cd -- "$(dirname -- "$p")" && pwd) || return 2
-          p=$pdir/${p##*/} ;;
-      esac
+      p=$(resolve_exec_path "$p") || return 2
       ln -s -- "$p" "$dir/$tool" || return 2
       any=1
     fi
@@ -2834,8 +2841,8 @@ if harness_leg 'without dune on PATH the opam switch supplies it #toolchain'; th
 fi
 
 sys_path_pin_leg() {
-  local outer_bash outer_awk outer_2244 run_out owed_out
-  local stub_dir mode got override_dir
+  local outer_bash outer_awk outer_2244 want_bash want_awk sys_dune sys_opam run_out owed_out
+  local stub_dir mode got override_dir phys_real phys_decoy
   real_exec() {
     perl -MCwd=realpath -e 'my $r = realpath($ARGV[0]); exit 1 unless defined $r; print $r' "$1"
   }
@@ -2844,6 +2851,26 @@ sys_path_pin_leg() {
   [ -n "$outer_bash" ] && outer_bash=$(real_exec "$outer_bash") || { harness_abandon 'could not resolve caller bash'; return; }
   [ -n "$outer_awk" ] && outer_awk=$(real_exec "$outer_awk") || { harness_abandon 'could not resolve caller awk'; return; }
   outer_2244=$(awk 'BEGIN { a["k"] = ("k" in a) ? a["k"] "; x" : "x"; print "got=[" a["k"] "]" }')
+  # Under MSYS default copy mode, `ln -s` copies rather than symlinks; accept a verified copy there
+  # while keeping strict canonical-path equality whenever pinbin holds real symlinks.
+  if [ -L "$TMP/pinbin/bash" ]; then
+    want_bash=$outer_bash
+  elif cmp -s "$TMP/pinbin/bash" "$outer_bash"; then
+    want_bash=$(real_exec "$TMP/pinbin/bash")
+  else
+    want_bash=$outer_bash
+  fi
+  if [ -L "$TMP/pinbin/awk" ]; then
+    want_awk=$outer_awk
+  elif cmp -s "$TMP/pinbin/awk" "$outer_awk"; then
+    want_awk=$(real_exec "$TMP/pinbin/awk")
+  else
+    want_awk=$outer_awk
+  fi
+  # SYS_PATH retains /usr/bin:/bin, so compare against whatever system dune/opam exist there
+  # rather than assuming /usr/bin has no opam.
+  sys_dune=$(PATH=/usr/bin:/bin type -P dune 2>/dev/null || :)
+  sys_opam=$(PATH=/usr/bin:/bin type -P opam 2>/dev/null || :)
 
   fixture sys-path-pin
   first x.ml && commit_on base
@@ -2877,31 +2904,31 @@ PROBE
   run_out=$TMP/pin-run.out
   rm -f "$run_out"
   FAKE_PIN_OUT=$run_out run "$TMP/dunebin"
-  if [ "$rc" = 0 ] &&
-     [ "$(cat "$run_out" 2>/dev/null)" = "shebang_bash=$outer_bash
-path_bash=$outer_bash
-path_awk=$outer_awk
+  if [ "$rc" = 0 ] && [ ! -e "$TMP/pinbin/dune" ] && [ ! -e "$TMP/pinbin/opam" ] &&
+     [ "$(cat "$run_out" 2>/dev/null)" = "shebang_bash=$want_bash
+path_bash=$want_bash
+path_awk=$want_awk
 awk_2244=$outer_2244
-has_opam=" ]; then
+has_opam=$sys_opam" ]; then
     report 0 'run() preserves active bash (including env shebang) and awk across SYS_PATH without leaking opam'
   else
     report 1 'run() preserves active bash (including env shebang) and awk across SYS_PATH without leaking opam' \
-      "exit $rc; want bash=$outer_bash awk=$outer_awk $outer_2244; got=$(cat "$run_out" 2>/dev/null); out=$(cat "$TMP/out")"
+      "exit $rc; want bash=$want_bash awk=$want_awk $outer_2244 opam=$sys_opam; got=$(cat "$run_out" 2>/dev/null); out=$(cat "$TMP/out")"
   fi
 
   owed_out=$TMP/pin-owed.out
   rm -f "$owed_out"
   FAKE_PIN_OUT=$owed_out owed "$OWED_EMPTY" url
   if [ "$orc" = 0 ] &&
-     [ "$(cat "$owed_out" 2>/dev/null)" = "path_bash=$outer_bash
-path_awk=$outer_awk
+     [ "$(cat "$owed_out" 2>/dev/null)" = "path_bash=$want_bash
+path_awk=$want_awk
 awk_2244=$outer_2244
-has_dune=
-has_opam=" ]; then
+has_dune=$sys_dune
+has_opam=$sys_opam" ]; then
     report 0 'owed() preserves active bash and awk across SYS_PATH without leaking dune or opam'
   else
     report 1 'owed() preserves active bash and awk across SYS_PATH without leaking dune or opam' \
-      "exit $orc; want bash=$outer_bash awk=$outer_awk $outer_2244; got=$(cat "$owed_out" 2>/dev/null); out=$(cat "$TMP/owed-out")"
+      "exit $orc; want bash=$want_bash awk=$want_awk $outer_2244 dune=$sys_dune opam=$sys_opam; got=$(cat "$owed_out" 2>/dev/null); out=$(cat "$TMP/owed-out")"
   fi
 
   stub_dir=$TMP/stub-pin
@@ -2914,13 +2941,16 @@ STUB
 #!/bin/sh
 STUB_BASH_SEEN=yes exec "$BASH" "\$@"
 STUB
+  printf '#!/bin/sh\necho LEAKED_DECOY\n' >"$stub_dir/ocannl_pin_decoy_tool"
   printf '#!/bin/sh\necho LEAKED_DUNE\n' >"$stub_dir/dune"
   printf '#!/bin/sh\necho LEAKED_OPAM\n' >"$stub_dir/opam"
-  chmod +x "$stub_dir/awk" "$stub_dir/bash" "$stub_dir/dune" "$stub_dir/opam"
+  chmod +x "$stub_dir/awk" "$stub_dir/bash" "$stub_dir/ocannl_pin_decoy_tool" "$stub_dir/dune" "$stub_dir/opam"
   cat >"$TMP/stub-shebang.sh" <<'PROBE'
 #!/usr/bin/env bash
-printf 'shebang=%s awk=%s dune=%s opam=%s\n' \
-  "${STUB_BASH_SEEN:-no}" "$(awk arg1)" "$(type -P dune 2>/dev/null || :)" "$(type -P opam 2>/dev/null || :)"
+printf 'shebang=%s awk=%s decoy=%s dune=%s opam=%s\n' \
+  "${STUB_BASH_SEEN:-no}" "$(awk arg1)" \
+  "$(type -P ocannl_pin_decoy_tool 2>/dev/null || :)" \
+  "$(type -P dune 2>/dev/null || :)" "$(type -P opam 2>/dev/null || :)"
 PROBE
   chmod +x "$TMP/stub-shebang.sh"
 
@@ -2936,12 +2966,37 @@ PROBE
       cd "$R" || exit 2
       STUB_BASH_SEEN= PATH="$TMP/gitbin:$SYS_PATH" "$TMP/stub-shebang.sh"
     )
-    if [ "$got" = 'shebang=yes awk=STUB_AWK:arg1 dune= opam=' ]; then
-      report 0 "build_sys_path preserves $mode-PATH bash and awk shims after cd without leaking dune or opam"
+    if [ "$got" = "shebang=yes awk=STUB_AWK:arg1 decoy= dune=$sys_dune opam=$sys_opam" ]; then
+      report 0 "build_sys_path preserves $mode-PATH bash and awk shims after cd without leaking sibling tools"
     else
-      report 1 "build_sys_path preserves $mode-PATH bash and awk shims after cd without leaking dune or opam" "got=$got"
+      report 1 "build_sys_path preserves $mode-PATH bash and awk shims after cd without leaking sibling tools" \
+        "want decoy= dune=$sys_dune opam=$sys_opam; got=$got"
     fi
   done
+
+  # Relative PATH entry crossing a symlink before `..`: physical traversal (`cd -P`) must match
+  # kernel execve rather than collapsing `sym/..` logically onto the decoy parent directory.
+  phys_real=$TMP/pin-phys-real
+  phys_decoy=$TMP/pin-phys-decoy
+  mkdir -p "$phys_real/sub" "$phys_decoy"
+  printf '#!/bin/sh\necho PHYS_AWK\n' >"$phys_real/awk"
+  printf '#!/bin/sh\necho LOGICAL_DECOY_AWK\n' >"$phys_decoy/awk"
+  chmod +x "$phys_real/awk" "$phys_decoy/awk"
+  ln -s -- "$phys_real/sub" "$phys_decoy/sym"
+  if [ -L "$phys_decoy/sym" ]; then
+    got=$(
+      cd "$phys_decoy" || exit 2
+      PATH="sym/..:/usr/bin:/bin"
+      build_sys_path "$TMP/test-pin-phys" || exit 2
+      cd "$R" || exit 2
+      PATH="$TMP/gitbin:$SYS_PATH" awk
+    )
+    if [ "$got" = PHYS_AWK ]; then
+      report 0 'build_sys_path resolves relative symlink/.. PATH entries physically'
+    else
+      report 1 'build_sys_path resolves relative symlink/.. PATH entries physically' "got=$got"
+    fi
+  fi
 
   override_dir=$TMP/pin-override
   mkdir -p "$override_dir"
@@ -2961,12 +3016,13 @@ PROBE
 harness_leg_run 'SYS_PATH resets preserve pinned bash and awk without leaking other tools #sys-path-pin' sys_path_pin_leg
 
 sys_path_mawk_leg() {
-  local host_mawk= cand mawk_pin got_pinned got_unpinned
+  local host_mawk= cand fallbacks mawk_pin got_pinned got_unpinned
   cand=$(type -P mawk 2>/dev/null || :)
   if [ -n "$cand" ] && [ -f "$cand" ] && [ -x "$cand" ]; then
-    host_mawk=$cand
+    host_mawk=$(resolve_exec_path "$cand") || { harness_abandon "could not normalize mawk path: $cand"; return; }
   else
-    for cand in /opt/homebrew/bin/mawk /usr/local/bin/mawk; do
+    fallbacks=$(sed -n 's/^darwin_mawk_fallbacks=(\(.*\))$/\1/p' "$HERE/test-harnesses.sh")
+    for cand in $fallbacks; do
       if [ -f "$cand" ] && [ -x "$cand" ]; then host_mawk=$cand; break; fi
     done
   fi
