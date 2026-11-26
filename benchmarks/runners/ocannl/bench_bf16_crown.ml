@@ -246,14 +246,33 @@ let () =
 
   let probe_ctx = Context.auto () in
   let backend = String.lowercase (Context.backend_name probe_ctx) in
+  if String.is_substring backend ~substring:"cuda" then
+    failwith
+      "bench_bf16_crown: CUDA's bf16 accumulators are structurally f32 under both policies, so \
+       bf16_arithmetic cannot differentiate wide vs narrow on CUDA";
   let ext =
     if String.is_substring backend ~substring:"metal" then ".metal"
-    else if String.is_substring backend ~substring:"cuda" then ".cu"
     else if String.is_substring backend ~substring:"hip" then ".hip"
-    else
-      failwith
-        (Printf.sprintf "bench_bf16_crown: requires a GPU backend (metal/cuda/hip), got %s" backend)
+    else failwith (Printf.sprintf "bench_bf16_crown: requires metal or hip backend, got %s" backend)
   in
+  if not (String.is_empty (Utils.get_global_arg ~default:"" ~arg_name:"build_files_prefix")) then
+    failwith
+      "bench_bf16_crown: leave build_files_prefix at its default (configured prefixes cannot be \
+       assumed process-private for generated-source capture)";
+  let f32_supports_mma =
+    Option.is_some
+      ((Context.codegen_capabilities probe_ctx).Ir.Backend_intf.mma_arm ~a_prec:Ir.Ops.single
+         ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single ~scope:Ir.Backend_intf.Mma_fragment_scope)
+  in
+  (match control_spec with
+  | Some v when String.is_prefix v ~prefix:"mma" && not f32_supports_mma ->
+      invalid_arg
+        (Printf.sprintf
+           "bench_bf16_crown: --control=%s requires f32 tensor-unit support, which backend %s does \
+            not advertise (use --control=regtile)"
+           v backend)
+  | _ -> ());
+  Context.release probe_ctx;
 
   (* Identical operand generator to bin/schedule_bench.ml. *)
   let a_levels, a_step = (48, 16) in
@@ -403,7 +422,12 @@ let () =
     else narrow_spec
   in
   let default_control =
-    if List.mem control_variants wide_variant ~equal:String.equal then wide_variant else "mma_pd1"
+    if
+      List.mem control_variants wide_variant ~equal:String.equal
+      && ((not (String.is_prefix wide_variant ~prefix:"mma")) || f32_supports_mma)
+    then wide_variant
+    else if f32_supports_mma then "mma_pd1"
+    else "regtile"
   in
   let control_variant = Option.value control_spec ~default:default_control in
 
@@ -412,13 +436,16 @@ let () =
     (Utils.get_global_arg ~arg_name:"autotune_timing" ~default:"queued")
     wide_variant narrow_variant control_variant dry_run;
 
-  (* Verify f32 capabilities are invariant across bf16 policies, then compile the identical
-     scheduled f32 IR under BOTH policies to prove byte-identical generated source without UID drift
-     from repeating [Sched.apply] in one process. *)
+  (* Verify f32 capabilities are invariant across bf16 policies, then run dedicated source-capture
+     proof compiles (released afterwards) so all four timed compiles share identical default debug
+     and compiler flags. *)
   let precs_for mode prec =
     set_arm ~mode ~prec;
-    let caps = Context.codegen_capabilities (Context.auto ()) in
-    (caps.accum_prec prec, caps.compute_prec prec)
+    let ctx = Context.auto () in
+    let caps = Context.codegen_capabilities ctx in
+    let res = (caps.accum_prec prec, caps.compute_prec prec) in
+    Context.release ctx;
+    res
   in
   let wide_f32_acc, wide_f32_cmp = precs_for Numerics.Bf16_wide Ir.Ops.single in
   let narrow_f32_acc, narrow_f32_cmp = precs_for Numerics.Bf16_narrow Ir.Ops.single in
@@ -431,17 +458,24 @@ let () =
     Stdlib.exit 1);
   let wide_bf16_acc, _ = precs_for Numerics.Bf16_wide Ir.Ops.bfloat16 in
   let narrow_bf16_acc, _ = precs_for Numerics.Bf16_narrow Ir.Ops.bfloat16 in
-  let ctrl_name = run_prefix ^ "ctrl_f32" in
-  let ma_f32, mb_f32, mc_f32, comp_f32 = build_problem ~name:ctrl_name ~prec:Ir.Ops.single in
-  let ctx_wf32, r_wf32, src_wf32, sched_f32 =
-    compile_with_sources ~mode:Numerics.Bf16_wide ~prec:Ir.Ops.single ~variant:control_variant
-      ~ma:ma_f32 ~mb:mb_f32 ~mc:mc_f32 ~comp:comp_f32 ~source_prefix:ctrl_name ~capture:true ()
+
+  (* Proof 1: f32 drift control byte-identity across bf16 policies (proof-only compiles). *)
+  let proof_ctrl_name = run_prefix ^ "proof_ctrl_f32" in
+  let ma_pf32, mb_pf32, mc_pf32, comp_pf32 =
+    build_problem ~name:proof_ctrl_name ~prec:Ir.Ops.single
   in
-  let ctx_nf32, r_nf32, src_nf32, _ =
-    compile_with_sources ~mode:Numerics.Bf16_narrow ~prec:Ir.Ops.single ~variant:control_variant
-      ~ma:ma_f32 ~mb:mb_f32 ~mc:mc_f32 ~comp:comp_f32 ?prebuilt:sched_f32 ~source_prefix:ctrl_name
+  let ctx_pwf32, _, src_wf32, sched_pf32 =
+    compile_with_sources ~mode:Numerics.Bf16_wide ~prec:Ir.Ops.single ~variant:control_variant
+      ~ma:ma_pf32 ~mb:mb_pf32 ~mc:mc_pf32 ~comp:comp_pf32 ~source_prefix:proof_ctrl_name
       ~capture:true ()
   in
+  Context.release ctx_pwf32;
+  let ctx_pnf32, _, src_nf32, _ =
+    compile_with_sources ~mode:Numerics.Bf16_narrow ~prec:Ir.Ops.single ~variant:control_variant
+      ~ma:ma_pf32 ~mb:mb_pf32 ~mc:mc_pf32 ~comp:comp_pf32 ?prebuilt:sched_pf32
+      ~source_prefix:proof_ctrl_name ~capture:true ()
+  in
+  Context.release ctx_pnf32;
   if List.is_empty src_wf32 || not (sources_equal src_wf32 src_nf32) then (
     p "INVALID: f32 drift control sources are not byte-identical (%d vs %d files)\n"
       (List.length src_wf32) (List.length src_nf32);
@@ -463,40 +497,27 @@ let () =
   p "drift control proof: %d generated f32 source(s) byte-identical across bf16 policies\n"
     (List.length src_wf32);
 
-  (* Compile both bf16 finalists under their policies. Prove BF16 policy reach holding the schedule
-     fixed (at [wide_variant]) so differing schedules can never masquerade as policy reach. *)
-  let trt_name = run_prefix ^ "trt_bf16" in
-  let ma_bf16, mb_bf16, mc_bf16, comp_bf16 = build_problem ~name:trt_name ~prec:Ir.Ops.bfloat16 in
-  let ctx_wbf16, r_wbf16, src_wbf16, sched_wbf16 =
-    compile_with_sources ~mode:Numerics.Bf16_wide ~prec:Ir.Ops.bfloat16 ~variant:wide_variant
-      ~ma:ma_bf16 ~mb:mb_bf16 ~mc:mc_bf16 ~comp:comp_bf16 ~source_prefix:trt_name ~capture:true ()
+  (* Proof 2: BF16 policy reach holding the schedule fixed at [wide_variant] (proof-only
+     compiles). *)
+  let proof_trt_name = run_prefix ^ "proof_trt_bf16" in
+  let ma_pbf16, mb_pbf16, mc_pbf16, comp_pbf16 =
+    build_problem ~name:proof_trt_name ~prec:Ir.Ops.bfloat16
   in
   let uses_privatize v = String.equal v "smem" || String.equal v "regtile" in
   let share_wide_sched = not (uses_privatize wide_variant) in
-  let ctx_nbf16, r_nbf16, src_reach_narrow =
-    if String.equal wide_variant narrow_variant then
-      let ctx, r, src, _ =
-        compile_with_sources ~mode:Numerics.Bf16_narrow ~prec:Ir.Ops.bfloat16
-          ~variant:narrow_variant ~ma:ma_bf16 ~mb:mb_bf16 ~mc:mc_bf16 ~comp:comp_bf16
-          ?prebuilt:(if share_wide_sched then sched_wbf16 else None)
-          ~source_prefix:trt_name ~capture:true ()
-      in
-      (ctx, r, src)
-    else
-      let ctx_probe, _, src_probe, _ =
-        compile_with_sources ~mode:Numerics.Bf16_narrow ~prec:Ir.Ops.bfloat16 ~variant:wide_variant
-          ~ma:ma_bf16 ~mb:mb_bf16 ~mc:mc_bf16 ~comp:comp_bf16
-          ?prebuilt:(if share_wide_sched then sched_wbf16 else None)
-          ~source_prefix:trt_name ~capture:true ()
-      in
-      Context.release ctx_probe;
-      let ctx, r, _, _ =
-        compile_with_sources ~mode:Numerics.Bf16_narrow ~prec:Ir.Ops.bfloat16
-          ~variant:narrow_variant ~ma:ma_bf16 ~mb:mb_bf16 ~mc:mc_bf16 ~comp:comp_bf16
-          ~source_prefix:trt_name ~capture:false ()
-      in
-      (ctx, r, src_probe)
+  let ctx_pwbf16, _, src_wbf16, sched_pbf16 =
+    compile_with_sources ~mode:Numerics.Bf16_wide ~prec:Ir.Ops.bfloat16 ~variant:wide_variant
+      ~ma:ma_pbf16 ~mb:mb_pbf16 ~mc:mc_pbf16 ~comp:comp_pbf16 ~source_prefix:proof_trt_name
+      ~capture:true ()
   in
+  Context.release ctx_pwbf16;
+  let ctx_pnbf16, _, src_reach_narrow, _ =
+    compile_with_sources ~mode:Numerics.Bf16_narrow ~prec:Ir.Ops.bfloat16 ~variant:wide_variant
+      ~ma:ma_pbf16 ~mb:mb_pbf16 ~mc:mc_pbf16 ~comp:comp_pbf16
+      ?prebuilt:(if share_wide_sched then sched_pbf16 else None)
+      ~source_prefix:proof_trt_name ~capture:true ()
+  in
+  Context.release ctx_pnbf16;
   if
     List.is_empty src_wbf16 || List.is_empty src_reach_narrow
     || sources_equal src_wbf16 src_reach_narrow
@@ -507,6 +528,32 @@ let () =
     Stdlib.exit 1);
   p "treatment reach proof: bf16 sources differ on fixed schedule %s (%d wide, %d narrow file(s))\n"
     wide_variant (List.length src_wbf16) (List.length src_reach_narrow);
+
+  (* Clean timed compiles: all four arms compile with identical default debug/compiler settings. *)
+  let ctrl_name = run_prefix ^ "ctrl_f32" in
+  let ma_f32, mb_f32, mc_f32, comp_f32 = build_problem ~name:ctrl_name ~prec:Ir.Ops.single in
+  let ctx_wf32, r_wf32, _, sched_f32 =
+    compile_with_sources ~mode:Numerics.Bf16_wide ~prec:Ir.Ops.single ~variant:control_variant
+      ~ma:ma_f32 ~mb:mb_f32 ~mc:mc_f32 ~comp:comp_f32 ~source_prefix:ctrl_name ~capture:false ()
+  in
+  let ctx_nf32, r_nf32, _, _ =
+    compile_with_sources ~mode:Numerics.Bf16_narrow ~prec:Ir.Ops.single ~variant:control_variant
+      ~ma:ma_f32 ~mb:mb_f32 ~mc:mc_f32 ~comp:comp_f32 ?prebuilt:sched_f32 ~source_prefix:ctrl_name
+      ~capture:false ()
+  in
+  let trt_name = run_prefix ^ "trt_bf16" in
+  let ma_bf16, mb_bf16, mc_bf16, comp_bf16 = build_problem ~name:trt_name ~prec:Ir.Ops.bfloat16 in
+  let ctx_wbf16, r_wbf16, _, sched_wbf16 =
+    compile_with_sources ~mode:Numerics.Bf16_wide ~prec:Ir.Ops.bfloat16 ~variant:wide_variant
+      ~ma:ma_bf16 ~mb:mb_bf16 ~mc:mc_bf16 ~comp:comp_bf16 ~source_prefix:trt_name ~capture:false ()
+  in
+  let ctx_nbf16, r_nbf16, _, _ =
+    compile_with_sources ~mode:Numerics.Bf16_narrow ~prec:Ir.Ops.bfloat16 ~variant:narrow_variant
+      ~ma:ma_bf16 ~mb:mb_bf16 ~mc:mc_bf16 ~comp:comp_bf16
+      ?prebuilt:
+        (if String.equal wide_variant narrow_variant && share_wide_sched then sched_wbf16 else None)
+      ~source_prefix:trt_name ~capture:false ()
+  in
 
   (* Tensorization census gate on every mma_* finalist. *)
   let check_census ~arm ~variant (routine : Context.routine) =
@@ -536,28 +583,74 @@ let () =
     (vals, Bench_checksum.whole_output ~row_stride:n vals)
   in
 
-  (* Pre-timing output validation. *)
+  (* Pre-timing cell-by-cell output validation + checksum fingerprints. *)
   let eval_arm ctx routine mc =
     let ctx = Context.run ctx routine in
     let vals = Context.get_values ctx mc in
     (ctx, vals, Bench_checksum.whole_output ~row_stride:n vals)
   in
-  let ctx_wf32, vals_wf32, chk_wf32_pre = eval_arm ctx_wf32 r_wf32 mc_f32 in
-  let ctx_nf32, vals_nf32, chk_nf32_pre = eval_arm ctx_nf32 r_nf32 mc_f32 in
-  (match Bench_checksum.first_difference ~reference:oracle_vals vals_wf32 with
+  let ctx_wf32, vals_wf32_pre, _chk_wf32_pre = eval_arm ctx_wf32 r_wf32 mc_f32 in
+  let ctx_nf32, vals_nf32_pre, _chk_nf32_pre = eval_arm ctx_nf32 r_nf32 mc_f32 in
+  (match Bench_checksum.first_difference ~reference:oracle_vals vals_wf32_pre with
   | None -> ()
   | Some d ->
       p "INVALID: wide-f32 control disagrees with unscheduled oracle: %s\n"
         (Bench_checksum.render_agreement ~name:"oracle-f32" (Some d));
       Stdlib.exit 1);
-  (match Bench_checksum.first_difference ~reference:oracle_vals vals_nf32 with
+  (match Bench_checksum.first_difference ~reference:oracle_vals vals_nf32_pre with
   | None -> ()
   | Some d ->
       p "INVALID: narrow-f32 control disagrees with unscheduled oracle: %s\n"
         (Bench_checksum.render_agreement ~name:"oracle-f32" (Some d));
       Stdlib.exit 1);
-  let ctx_wbf16, _vals_wbf16, chk_wbf16_pre = eval_arm ctx_wbf16 r_wbf16 mc_bf16 in
-  let ctx_nbf16, _vals_nbf16, chk_nbf16_pre = eval_arm ctx_nbf16 r_nbf16 mc_bf16 in
+  let ctx_wbf16, vals_wbf16_pre, chk_wbf16_pre = eval_arm ctx_wbf16 r_wbf16 mc_bf16 in
+  let ctx_nbf16, vals_nbf16_pre, chk_nbf16_pre = eval_arm ctx_nbf16 r_nbf16 mc_bf16 in
+  let check_wide_cells ~reference vals =
+    if Array.length reference <> Array.length vals then (
+      p "INVALID: wide-bf16 length %d <> oracle %d\n" (Array.length vals) (Array.length reference);
+      Stdlib.exit 1);
+    (* Wide bf16 accumulates exact products in f32 and rounds once to bf16 (1 ulp <= 2^-7 ~ 0.0078);
+       allow 2.5 ulps relative (or 0.05 absolute near zero) to catch any corrupted cell. *)
+    let worst_rel = ref 0.0 in
+    Array.iteri vals ~f:(fun t v ->
+        let r = reference.(t) in
+        let diff = Float.abs (v -. r) in
+        let limit = Float.max (0.02 *. Float.abs r) 0.05 in
+        if (not (Float.is_finite v)) || Float.(diff > limit) then (
+          p
+            "INVALID: wide-bf16 cell [%d] = %.10g outside bound vs oracle %.10g (|diff|=%.4g > %.4g)\n"
+            t v r diff limit;
+          Stdlib.exit 1);
+        if Float.(Float.abs r > 0.0) then worst_rel := Float.max !worst_rel (diff /. Float.abs r));
+    !worst_rel
+  in
+  let check_narrow_cells ~reference vals =
+    if Array.length reference <> Array.length vals then (
+      p "INVALID: narrow-bf16 length %d <> oracle %d\n" (Array.length vals) (Array.length reference);
+      Stdlib.exit 1);
+    let max_ref = ref 0.0 and max_got = ref 0.0 and big = ref 0 and same_sign = ref 0 in
+    Array.iteri vals ~f:(fun t v ->
+        if not (Float.is_finite v) then (
+          p "INVALID: narrow-bf16 cell [%d] is non-finite (%g)\n" t v;
+          Stdlib.exit 1);
+        let r = reference.(t) in
+        max_ref := Float.max !max_ref (Float.abs r);
+        max_got := Float.max !max_got (Float.abs v);
+        if Float.(Float.abs r > 1.0) then (
+          Int.incr big;
+          if Float.(v *. r > 0.0) then Int.incr same_sign));
+    if
+      Float.(!max_got < 0.1 *. !max_ref)
+      || (!big > 0 && Float.(Float.of_int !same_sign < 0.5 *. Float.of_int !big))
+    then (
+      p
+        "INVALID: narrow-bf16 output degenerate cell-wise (max |got|=%.4g vs max |ref|=%.4g, \
+         sign-match %d/%d)\n"
+        !max_got !max_ref !same_sign !big;
+      Stdlib.exit 1)
+  in
+  let wide_max_cell_rel = check_wide_cells ~reference:oracle_vals vals_wbf16_pre in
+  check_narrow_cells ~reference:oracle_vals vals_nbf16_pre;
   let rel_bound = 0.25 in
   let err_wbf16 = rel_err chk_wbf16_pre exact_chk in
   let err_nbf16 = rel_err chk_nbf16_pre exact_chk in
@@ -569,10 +662,12 @@ let () =
       (Bench_checksum.render chk_nbf16_pre)
       (Bench_checksum.render exact_chk);
     Stdlib.exit 1);
-  p "checksums (pre): exact-f32=%s wide-bf16=%s (err=%.3g) narrow-bf16=%s (err=%.3g)\n"
+  p
+    "checksums (pre): exact-f32=%s wide-bf16=%s (err=%.3g, max-cell-rel=%.3g) narrow-bf16=%s \
+     (err=%.3g)\n"
     (Bench_checksum.render exact_chk)
     (Bench_checksum.render chk_wbf16_pre)
-    err_wbf16
+    err_wbf16 wide_max_cell_rel
     (Bench_checksum.render chk_nbf16_pre)
     err_nbf16;
 
@@ -585,21 +680,28 @@ let () =
     match readings with [ a; b; c; d ] -> (a, b, c, d) | _ -> assert false
   in
 
-  (* Post-timing determinism check. *)
-  let _, _, chk_wf32_post = eval_arm ctx_wf32 r_wf32 mc_f32 in
-  let _, _, chk_nf32_post = eval_arm ctx_nf32 r_nf32 mc_f32 in
-  let _, _, chk_wbf16_post = eval_arm ctx_wbf16 r_wbf16 mc_bf16 in
-  let _, _, chk_nbf16_post = eval_arm ctx_nbf16 r_nbf16 mc_bf16 in
-  let chk_eq = List.equal Float.equal in
-  if
-    not
-      (chk_eq chk_wf32_pre chk_wf32_post && chk_eq chk_nf32_pre chk_nf32_post
-      && chk_eq chk_wbf16_pre chk_wbf16_post
-      && chk_eq chk_nbf16_pre chk_nbf16_post)
-  then (
-    p "INVALID: post-timing checksums changed (non-deterministic output)\n";
-    Stdlib.exit 1);
-  p "checksums (post): deterministic across all 4 arms\n";
+  (* Post-timing cell-by-cell determinism check across all 4 arms. *)
+  let ctx_wf32, vals_wf32_post, _ = eval_arm ctx_wf32 r_wf32 mc_f32 in
+  let ctx_nf32, vals_nf32_post, _ = eval_arm ctx_nf32 r_nf32 mc_f32 in
+  let ctx_wbf16, vals_wbf16_post, _ = eval_arm ctx_wbf16 r_wbf16 mc_bf16 in
+  let ctx_nbf16, vals_nbf16_post, _ = eval_arm ctx_nbf16 r_nbf16 mc_bf16 in
+  let check_deterministic ~arm pre post =
+    match Bench_checksum.first_difference ~reference:pre post with
+    | None -> ()
+    | Some d ->
+        p "INVALID: %s non-deterministic post-timing: %s\n" arm
+          (Bench_checksum.render_agreement ~name:"pre-timing" (Some d));
+        Stdlib.exit 1
+  in
+  check_deterministic ~arm:"wide-f32" vals_wf32_pre vals_wf32_post;
+  check_deterministic ~arm:"narrow-f32" vals_nf32_pre vals_nf32_post;
+  check_deterministic ~arm:"wide-bf16" vals_wbf16_pre vals_wbf16_post;
+  check_deterministic ~arm:"narrow-bf16" vals_nbf16_pre vals_nbf16_post;
+  Context.release ctx_wf32;
+  Context.release ctx_nf32;
+  Context.release ctx_wbf16;
+  Context.release ctx_nbf16;
+  p "outputs (post): cell-for-cell deterministic across all 4 arms\n";
 
   let s_wbf16 = Bench_retime.spread_of r_wbf16_ms in
   let s_nbf16 = Bench_retime.spread_of r_nbf16_ms in

@@ -321,6 +321,21 @@ for prec in single half; do
 done
 prove train bench_gpt
 if [ "$TUNED" = 1 ]; then
+  # Also prove fp16_arithmetic reaches bench_gpt codegen holding the schedule fixed (untuned),
+  # so a schedule difference between two independent cold searches cannot masquerade as policy reach.
+  for arm in false true; do
+    identity_run train_fixed half "$arm" "" "${TRAIN_ENV[@]}" BENCH_TUNE=0 \
+      BENCH_PRECISION=f16 "$GPT" "${TRAIN_ARGS[@]}" --ocannl_autotune_search=false
+  done
+  n_fix_w=$(n_sources "$OUT/identity_train_fixed_half_false")
+  n_fix_n=$(n_sources "$OUT/identity_train_fixed_half_true")
+  v_fix=$(compare_sources "$OUT/identity_train_fixed_half_false" "$OUT/identity_train_fixed_half_true")
+  if [ "$v_fix" != differ ]; then
+    echo "TREATMENT UNREACHED (bench_gpt fixed-schedule): the f16 generated .$EXT across arms: $v_fix ($n_fix_w and $n_fix_n files)"
+    exit 1
+  fi
+  n_fix_diff=$(diff -rq "$OUT/identity_train_fixed_half_false" "$OUT/identity_train_fixed_half_true" | wc -l | tr -d ' ')
+  echo "treatment reach (bench_gpt fixed-schedule): $n_fix_diff of $n_fix_w generated f16 sources differ across arms"
   [ "$FAIL" -eq 0 ] || exit "$FAIL"
   python3 "$HERE/gh1051_cells.py" tuned-proof "$OUT" "$LABEL" half || exit $?
 fi
