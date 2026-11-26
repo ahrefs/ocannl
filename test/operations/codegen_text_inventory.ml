@@ -68,10 +68,12 @@
 
     {1 Slow HIP batches}
 
-    The batch recipes take aliases from the already-derived text and kernel-execution lists. The
-    timing table is a closed set of exact aliases for HIP scratch tuning and the widened oracle and
-    scope-generator runs on minix-amd-linux. Its estimates describe test actions on unified memory
-    and come from run records, independent of the census.
+    The batch recipes cover the [slow-*] aliases in the derived text and kernel-execution lists. A
+    Dune alias with exactly one stanza running a single direct [run], optionally wrapped in one
+    [setenv OCANNL_BACKEND], can be excluded by {!Test_scan.Dune_stanza_scan.backend_pins} if it
+    fixes a backend other than HIP. Other action forms stay eligible. The Metal watchdog probe has a
+    named exclusion because its Metal gate is in OCaml. Each remaining alias needs an estimate of
+    test action time on minix-amd-linux with unified memory.
 
     {1 The tests calling a backend's compiler themselves}
 
@@ -106,15 +108,46 @@ module Floors = Test_scan.Scan_floors
 module Attempt = Test_scan.Scan_attempt
 module Rerun = Test_scan.Rerun_aliases
 module Exec = Test_scan.Kernel_exec_scan
+module Dune = Test_scan.Dune_stanza_scan
+module Refusals = Test_scan.Refusal_control_manifest
 
-let hip_batch_alias ~fail ~aliases name =
-  let alias = Rerun.at "test/operations" name in
-  if List.mem aliases alias ~equal:String.equal then Some alias
-  else (
-    fail (Printf.sprintf "%s has a HIP estimate but is absent from the inventory" alias);
-    None)
+let hip_slow_aliases stanzas aliases =
+  let single_run = function
+    | Some [ Sexp.List (Sexp.Atom "run" :: _) ] -> true
+    | Some [ Sexp.List [ Sexp.Atom "setenv"; Sexp.Atom env; _; Sexp.List (Sexp.Atom "run" :: _) ] ]
+      ->
+        Dune.reads_as_backend env
+    | _ -> false
+  in
+  let pinned_elsewhere alias =
+    match
+      List.filter stanzas ~f:(fun (s : Rerun.stanza) ->
+          Dune.aliases_of s.stanza @ Option.to_list (Dune.alias_stanza_name s.stanza)
+          |> List.exists ~f:(fun name -> String.equal (Rerun.at s.dir name) alias))
+    with
+    | [ s ] when single_run (Dune.field s.stanza "action") -> (
+        match Dune.backend_pins s.stanza with
+        | [ Dune.Pinned_backend { pin_backend; _ } ] ->
+            List.mem Rerun.backends pin_backend ~equal:String.equal
+            && not (String.equal pin_backend "hip")
+        | _ -> false)
+    | _ -> false
+  in
+  List.filter aliases ~f:(fun alias ->
+      String.is_prefix (Stdlib.Filename.basename alias) ~prefix:"slow-"
+      && not (pinned_elsewhere alias))
+  |> Set.of_list (module String)
 
-let print_hip_slow_batches ~aliases =
+let check_hip_batch_coverage ~fail:(module F : Refusals.FAIL) ~aliases ~estimated ~excluded =
+  let required = Set.diff aliases excluded in
+  Set.iter (Set.diff excluded aliases) ~f:(fun alias ->
+      F.fail "%s has a HIP batch exclusion but is absent from the eligible inventory" alias);
+  Set.iter (Set.diff estimated required) ~f:(fun alias ->
+      F.fail "%s has a HIP estimate but is absent from the required inventory" alias);
+  Set.iter (Set.diff required estimated) ~f:(fun alias ->
+      F.fail "%s is missing a HIP batch estimate" alias)
+
+let print_hip_slow_batches ~stanzas ~aliases =
   let estimates =
     [
       ("slow-hip_scratch_tune_survives", "about thirty seconds");
@@ -124,19 +157,31 @@ let print_hip_slow_batches ~aliases =
       ("slow-virtual_inliner_oracle-widen-3", "about four to five minutes");
       ("slow-where_scope_generator-widen", "about two to three minutes");
     ]
+    |> List.map ~f:(fun (name, estimate) -> (Rerun.at "test/operations" name, estimate))
   in
+  let aliases = hip_slow_aliases stanzas aliases in
+  (* The watchdog and its recovery assertions only run inside the Metal leg of this executable. *)
+  let excluded =
+    Set.singleton (module String) (Rerun.at "test/operations" "slow-metal_gpu_hang_failure")
+  in
+  let estimated = Set.of_list (module String) (List.map estimates ~f:fst) in
+  let fail =
+    (module struct
+      let fail fmt = Printf.ksprintf Verdict.fail fmt
+    end : Refusals.FAIL)
+  in
+  check_hip_batch_coverage ~fail ~aliases ~estimated ~excluded;
   printf
     "\n\
      == slow HIP batches on minix-amd-linux ==\n\
      Run each command as its own batch on minix-amd-linux (unified memory). Omit these aliases\n\
      from combined HIP batches. The comments estimate test action time. Allow extra time for\n\
      compilation and slot acquisition. Each runner invocation has its own cap.\n";
-  List.iter estimates ~f:(fun (name, estimate) ->
-      Option.iter (hip_batch_alias ~fail:Verdict.fail ~aliases name) ~f:(fun alias ->
-          printf
-            "env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build %s \
-             -j 4 # %s\n"
-            alias estimate))
+  List.iter estimates ~f:(fun (alias, estimate) ->
+      printf
+        "env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build %s -j 4 \
+         # %s\n"
+        alias estimate)
 
 (** Lower bounds per scanned root, well below the census of the day they were written. See
     {!Test_scan.Scan_floors}: a glob that breaks goes to zero, a member added moves nothing. *)
@@ -204,8 +249,6 @@ let after_marker_exempt =
   ]
 
 let read path = Stdlib.In_channel.with_open_bin path Stdlib.In_channel.input_all
-
-module Dune = Test_scan.Dune_stanza_scan
 
 let stale_exclusions ~excluded ~handed_over =
   List.filter excluded ~f:(fun (path, _) -> not (List.mem handed_over path ~equal:String.equal))
@@ -319,19 +362,39 @@ let refuse_stale_after_marker_exemptions ~fail stale =
 
 let refusal_control ~wrapper =
   let source = "test/operations/codegen_text_inventory.ml" in
-  let refused_estimate = ref false in
-  let fail _message =
-    refused_estimate := true;
-    Test_scan.Refusal_control_manifest.observe_failure ~source
-      ~format:"%s has a HIP estimate but is absent from the inventory"
+  let stanzas =
+    Rerun.stanzas_of
+      [
+        ( "t",
+          "(rule (alias slow-pinned) (action (setenv OCANNL_BACKEND cc (run %{dep:p.exe}))))\n\
+           (rule (alias slow-unestimated) (action (run %{dep:q.exe})))" );
+      ]
   in
-  let known_alias = "@test/operations/slow-kept" in
-  let aliases = [ known_alias ] in
-  let found = hip_batch_alias ~fail ~aliases "slow-kept" in
-  let kept = Option.equal String.equal found (Some known_alias) && not !refused_estimate in
-  let missing = hip_batch_alias ~fail ~aliases "slow-missing" in
-  Verdict.p "a HIP estimate must name an alias in the inventory"
-    (kept && Option.is_none missing && !refused_estimate);
+  let aliases =
+    hip_slow_aliases stanzas [ "@t/runtest-regular"; "@t/slow-pinned"; "@t/slow-unestimated" ]
+  in
+  let one name = Set.singleton (module String) name in
+  let accepted =
+    Refusals.accepted (fun ~fail ->
+        check_hip_batch_coverage ~fail ~aliases ~estimated:(one "@t/slow-unestimated")
+          ~excluded:(Set.empty (module String)))
+  in
+  let (), refusals =
+    Refusals.collect_refusals (fun ~fail ->
+        check_hip_batch_coverage ~fail ~aliases ~estimated:(one "@t/slow-pinned")
+          ~excluded:(one "@t/slow-gone"))
+  in
+  let refused =
+    Refusals.check_failures ~source refusals
+      ~formats:
+        [
+          "%s has a HIP batch exclusion but is absent from the eligible inventory";
+          "%s has a HIP estimate but is absent from the required inventory";
+          "%s is missing a HIP batch estimate";
+        ]
+  in
+  Verdict.p "HIP timings cover every eligible slow alias and stale entries are refused"
+    (accepted && refused);
   let refused = ref false in
   let fail _message =
     refused := true;
@@ -985,7 +1048,7 @@ let () =
     |> List.dedup_and_sort ~compare:String.compare
   in
   List.iter kernel_aliases ~f:print_endline;
-  print_hip_slow_batches ~aliases:(text_aliases @ kernel_aliases);
+  print_hip_slow_batches ~stanzas ~aliases:(text_aliases @ kernel_aliases);
   printf
     "\n\
      == tests calling a backend's compiler with source of their own ==\n\
