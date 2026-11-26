@@ -630,7 +630,9 @@ val copy : ?into_merge_buffer:Ir.Backend_intf.merge_buffer_use -> src:t -> dst:t
     invalidates their old transfer dependency so they cannot silently re-run against new bytes. A
     cross-backend copy falls back to a host round-trip ([Copy] raises). Nodes absent from [src]'s
     device buffers fall back to the host round-trip as well, serving host-init literals and
-    recomputable virtual nodes ({!to_host}).
+    recomputable virtual nodes ({!to_host}). For a [Virtual] source with a device buffer, the
+    transfer copies the buffer, including a host seed. Use {!to_host} to read the node's value
+    according to its placement.
 
     A copy into a node that a routine of [dst]'s lineage fetch-defines (a [Tensor.term_init] or
     literal with at most [limit_constant_fill_size] values, a range, an embedded symbol: every run
@@ -713,7 +715,7 @@ val mem : t -> Ir.Tnode.t -> bool
 (** Whether a host read of a node can be served from a context, and if not, why (gh-ocannl-777). *)
 type observability =
   | Stored  (** A read transfers the node's observable device buffer. *)
-  | Host_init  (** No buffer, but registered host initialization data; a read copies it. *)
+  | Host_init  (** A read copies the node's registered host initialization data. *)
   | Recomputable
       (** [Virtual], and every node one replay of its stored computations reads is present
           (materialized with a buffer here, or host-initialized) or itself recomputable; a read
@@ -748,17 +750,17 @@ type observability =
 val observability : t -> Ir.Tnode.t -> observability
 (** Classifies a host read of the node from this context without compiling, from the lineage's
     {!placements}, the context's buffers, the host initialization registry and the stored
-    computations. A [Virtual] node is classified from its stored computations even when a host
-    upload allocated a device buffer for it. The walk follows each stored computation exactly as a
-    replay would read it — the statements the inliner keeps, every operand — into other virtual
-    nodes, and stops at materialized ones. A path ends at the first offending node in program order;
-    when several reasons apply, [Unobservable_local] is reported over [Unobservable_aliased], over
-    [Unobservable_merge], over [Launch_bound], over [Needs_context]. Pure: no placement is decided,
-    nothing is compiled. A [Recomputable] answer describes structure and availability; the
-    recompute's own compile and run keep their checks (e.g. an input no routine of the lineage wrote
-    is refused by {!run}). Refuses a {!release}d context and a discarded node like {!to_host}.
-    Raises [Failure] (an internal error) if a stored computation reads a node this lineage left
-    undecided. *)
+    computations. A [Virtual] node is classified from its stored computations or its immutable
+    host-init data, even when a host upload allocated a device buffer for it. The walk follows each
+    stored computation exactly as a replay would read it — the statements the inliner keeps, every
+    operand — into other virtual nodes, and stops at materialized ones. A path ends at the first
+    offending node in program order; when several reasons apply, [Unobservable_local] is reported
+    over [Unobservable_aliased], over [Unobservable_merge], over [Launch_bound], over
+    [Needs_context]. Pure: no placement is decided, nothing is compiled. A [Recomputable] answer
+    describes structure and availability; the recompute's own compile and run keep their checks
+    (e.g. an input no routine of the lineage wrote is refused by {!run}). Refuses a {!release}d
+    context and a discarded node like {!to_host}. Raises [Failure] (an internal error) if a stored
+    computation reads a node this lineage left undecided. *)
 
 val observability_tag : observability -> string option
 (** A short placeholder for printers, such as [<unobservable: reads Local #7 h>]; [None] for the

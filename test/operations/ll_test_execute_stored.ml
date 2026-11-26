@@ -10,14 +10,15 @@
 
    Seeded Virtual: the upload creates a device buffer. [Context.observability] reports
    [Recomputable] and raw [Context.get_values] reads the computation.
-   [Exact_sums.get_stored_values], [execute_with_census], and [execute] refuse.
+   [Exact_sums.get_stored_values], [execute_with_census], and [execute] refuse. Explicit copies
+   transfer the device buffer to the active backend or cc.
 
    Host_init: a node with registered host-init data and no context buffer is refused instead of
-   handing back a copy of its host-init array.
+   handing back a copy of its host-init array. A virtual literal keeps its registered value.
 
    Local and unreadable Virtual: preserves [Context.get_values]'s [User_error] diagnostics
    ([Ll_test.refused_as_local] for a [Local] node, and the dependency path for a [Virtual] node
-   reading [Local]).
+   reading [Local], including through a seeded virtual dependency).
 
    Positive controls: materialized [out], the same program re-optimized with [~materialized:[ v ]],
    and an empty [~read:[]] all succeed and match exact cell-by-cell expected values. *)
@@ -163,6 +164,13 @@ let () =
     (match Context.observability seeded_ctx v with Context.Recomputable -> true | _ -> false);
   p_all2 "raw Context.get_values recomputes the seeded virtual node to its exact values"
     (Context.get_values seeded_ctx v) v_expected ~f:Float.equal;
+  let copy_to dst = Context.get_values (Context.copy ~src:seeded_ctx ~dst v) v in
+  p_all2 "Context.copy to the active backend transfers the seeded buffer"
+    (copy_to (Context.auto ()))
+    (L.blank n) ~f:Float.equal;
+  p_all2 "Context.copy to cc transfers the seeded buffer"
+    (copy_to (Context.cpu ()))
+    (L.blank n) ~f:Float.equal;
   p "Exact_sums.get_stored_values refuses a seeded Virtual node"
     (match Exact_sums.get_stored_values seeded_ctx v with
     | _ -> false
@@ -197,6 +205,15 @@ let () =
          L.execute_with_census ~ctx:(Context.auto ()) ~name:"les_host_census" o
            ~seed:[ (x, xv) ]
            ~read:[ host_only ]));
+  Tn.set_host_constant host_only;
+  L.virtualize host_only;
+  p "an uncompiled Virtual literal is Host_init"
+    (Tn.Placements.known_virtual (Context.placements raw_ctx) host_only
+    && match Context.observability raw_ctx host_only with Context.Host_init -> true | _ -> false);
+  p "reading the Virtual literal recovers its registered cells"
+    (match Context.get_values raw_ctx host_only with
+    | values -> Array.equal Float.equal values host_values
+    | exception Utils.User_error _ -> false);
 
   (* --- Local and unreadable-Virtual refusal controls: keep Context.get_values's User_error --- *)
   let loc, v_loc, _loc_out, loc_llc = make_local_program () in
@@ -218,6 +235,25 @@ let () =
   p "execute preserves User_error dependency path for an unreadable Virtual node reading Local"
     (user_error_with ~substrings:[ "les_v_loc ->"; "les_loc"; "placed Local" ] (fun () ->
          L.execute ~ctx:(Context.auto ()) ~name:"les_v_local_exec" o_loc ~seed:[] ~read:[ v_loc ]));
+
+  (* Model the ordinary [Get] that a shared-loop capture can retain (gh-ocannl-2493). Install the
+     reader after the run to hold the replay shape fixed for the query. *)
+  let v_reader = node "les_v_reader" in
+  L.virtualize v_reader;
+  let i = L.sym () in
+  let component =
+    L.loop ~upto:(n - 1) i (L.set_at v_reader (L.iter i) (L.get v_loc [| L.iter i |]))
+  in
+  Hashtbl.set o_loc.Ir.Low_level.optimize_ctx.computations ~key:v_reader ~data:[ (None, component) ];
+  let has_local_path ctx =
+    match Context.observability ctx v_reader with
+    | Context.Unobservable_local path -> List.equal Tn.equal path [ v_reader; v_loc; loc ]
+    | _ -> false
+  in
+  p "the reader retains a virtual dependency that reads Local" (has_local_path loc_ctx);
+  let loc_seeded = Context.set_values loc_ctx v_loc (L.blank n) in
+  p "a seeded virtual dependency keeps the path to Local"
+    (Context.mem loc_seeded v_loc && has_local_path loc_seeded);
 
   (* --- Positive controls: stored readbacks succeed --- *)
   let got_out, _census =
