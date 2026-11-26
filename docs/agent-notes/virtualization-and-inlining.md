@@ -1236,7 +1236,13 @@ files.
   dropped) and visits every operand -- never `evaluation_reads_of_proc`, the cost collector, which
   skips merge reads and charges one `Where` arm. A new statement or scalar constructor, or a change to
   what instantiation keeps, must update `replay_facts` too: its match arms are exhaustive for that
-  reason. A materialized node with a buffer ends the walk (it shields a `Local` dependency behind
+  reason. A shared-loop capture can retain an ordinary read of a later candidate (gh-ocannl-2493).
+  On an inherited splice, `virtual_llc` serves these reads at the substituted indices when both
+  nodes' components come entirely from earlier routines. Scopes that retract to a materialized
+  buffer shield their bodies. Cleanup refuses a surviving virtual buffer read with its provenance.
+  `buffer_aliasing` checks the virtual dependency chain and the materialized shield against one
+  materialized run.
+  A materialized node with a buffer ends the walk (it shields a `Local` dependency behind
   it); answers rank `Unobservable_local` > `Unobservable_aliased` (a buffer the `buffer_aliasing`
   planner shares, which `to_host` and linking refuse) > `Unobservable_merge` > `Launch_bound` >
   `Needs_context`.
