@@ -58,27 +58,13 @@ let has_operand_annotation line ~operand ~want =
       let j = skip_parens (i + op_len) in
       String.is_substring_at line ~pos:j ~substring:needle)
 
-let has_where_line lines ~prefix ~want_stored ~operands =
+let has_logged_value ?(operands = []) lines ~prefix ~want =
   let ok =
     List.exists lines ~f:(fun line ->
         String.is_prefix line ~prefix
-        && Option.equal String.equal (stored_value line) (Some want_stored)
-        && List.for_all operands ~f:(fun (operand, want) ->
-            has_operand_annotation line ~operand ~want))
-  in
-  (if not ok then
-     let sample =
-       List.filter lines ~f:(String.is_prefix ~prefix) |> fun l ->
-       List.take l 3 |> String.concat ~sep:" | "
-     in
-     Stdio.eprintf "missing guarded Where log prefix=%S want=%S (sample: %s)\n%!" prefix want_stored
-       sample);
-  ok
-
-let has_logged_value lines ~prefix ~want =
-  let ok =
-    List.exists lines ~f:(fun line ->
-        String.is_prefix line ~prefix && Option.equal String.equal (stored_value line) (Some want))
+        && Option.equal String.equal (stored_value line) (Some want)
+        && List.for_all operands ~f:(fun (operand, want_op) ->
+            has_operand_annotation line ~operand ~want:want_op))
   in
   (if not ok then
      let sample =
@@ -168,9 +154,9 @@ let check_where ctx ~uniform ~mode_tag ~first_id (prec_tag, prec) =
   let val_1_5 = expected_text ~uniform ~scaled:"1500e-3" ~plain:"1.5" in
   let val_3 = expected_text ~uniform ~scaled:"3000e-3" ~plain:"3" in
   let log_ok =
-    has_where_line lines ~prefix:(out_name ^ "[0]{") ~want_stored:val_1_5
+    has_logged_value lines ~prefix:(out_name ^ "[0]{") ~want:val_1_5
       ~operands:[ (a_name ^ "[0]", val_1_5); (b_name ^ "[0]", zero) ]
-    && has_where_line lines ~prefix:(out_name ^ "[3]{") ~want_stored:val_3
+    && has_logged_value lines ~prefix:(out_name ^ "[3]{") ~want:val_3
          ~operands:[ (a_name ^ "[3]", zero); (b_name ^ "[3]", val_3) ]
   in
   values_ok && log_ok
@@ -271,34 +257,18 @@ let () =
     fail "this test runs under --ocannl_debug_log_from_routines=true (see its dune rule)";
   Stdio.eprintf "routine_log_narrow_floats: backend %s (not part of the golden)\n%!" backend_name;
   let ctx = ref (Context.auto ()) in
+  let shapes =
+    [
+      ("Set", check_set, 0);
+      ("bounds-guarded Where", check_where, 300);
+      ("Set_local", check_set_local, 600);
+      ("Set_from_vec", check_set_from_vec, 900);
+    ]
+  in
   List.iteri modes ~f:(fun mi (mode_tag, uniform) ->
-      let base_id = 2472000 + (mi * 1000) in
-      p_all
-        (Printf.sprintf "%s: narrow-float Set compiles, executes, and logs numeric values" mode_tag)
-        precisions ~f:(fun p_item ->
-          let idx =
-            List.findi_exn precisions ~f:(fun _ (t, _) -> String.equal t (fst p_item)) |> fst
-          in
-          check_set ctx ~uniform ~mode_tag ~first_id:(base_id + (idx * 100)) p_item);
-      p_all
-        (Printf.sprintf
-           "%s: narrow-float bounds-guarded Where compiles, executes, and logs numeric values"
-           mode_tag) precisions ~f:(fun p_item ->
-          let idx =
-            List.findi_exn precisions ~f:(fun _ (t, _) -> String.equal t (fst p_item)) |> fst
-          in
-          check_where ctx ~uniform ~mode_tag ~first_id:(base_id + 300 + (idx * 100)) p_item);
-      p_all
-        (Printf.sprintf "%s: narrow-float Set_local compiles, executes, and logs numeric values"
-           mode_tag) precisions ~f:(fun p_item ->
-          let idx =
-            List.findi_exn precisions ~f:(fun _ (t, _) -> String.equal t (fst p_item)) |> fst
-          in
-          check_set_local ctx ~uniform ~mode_tag ~first_id:(base_id + 600 + (idx * 100)) p_item);
-      p_all
-        (Printf.sprintf "%s: narrow-float Set_from_vec compiles, executes, and logs numeric values"
-           mode_tag) precisions ~f:(fun p_item ->
-          let idx =
-            List.findi_exn precisions ~f:(fun _ (t, _) -> String.equal t (fst p_item)) |> fst
-          in
-          check_set_from_vec ctx ~uniform ~mode_tag ~first_id:(base_id + 900 + (idx * 100)) p_item))
+      let base_id = 2472000 + (mi * 2000) in
+      List.iter shapes ~f:(fun (shape, check, offset) ->
+          p_alli ~min:3
+            (Printf.sprintf "%s: narrow-float %s compiles, executes, and logs numeric values"
+               mode_tag shape) precisions ~f:(fun idx p_item ->
+              check ctx ~uniform ~mode_tag ~first_id:(base_id + offset + (idx * 100)) p_item)))
