@@ -3213,7 +3213,7 @@ fi
 if harness_leg 'backend-default markers'; then
   saved_repo=$repo
   repo=$TMP/backend-default-project
-  mkdir -p "$repo/tools" "$repo/lib" "$repo/tests" || exit 2
+  mkdir -p "$repo/tools" "$repo/lib" "$repo/other_lib" "$repo/tests" || exit 2
   cp "$HERE/affected-tests.sh" "$repo/tools/" || exit 2
   printf '(lang dune 3.20)\n' >"$repo/dune-project"
   cat >"$repo/lib/dune" <<'DUNE'
@@ -3224,12 +3224,19 @@ if harness_leg 'backend-default markers'; then
  (modules gpu_core))
 DUNE
   printf 'let gate = 1\nlet used = 2\n' >"$repo/lib/gpu_core.ml"
+  cat >"$repo/other_lib/dune" <<'DUNE'
+(library
+ (name other_core)
+ (modules gpu_core))
+DUNE
+  printf 'let gate = 100\nlet other_used = 200\n' >"$repo/other_lib/gpu_core.ml"
   cat >"$repo/tests/dune" <<'DUNE'
-(test
- ; ocannl-backend-default: plan -- reads GPU default plan without a GPU source gate
+(
+ ; ocannl-backend-default: plan -- marker immediately after opening paren, before head atom
+ test
  (name declared)
  (modules declared)
- (libraries gpu_core))
+ (libraries gpu_core other_core))
 (test
  (name undeclared)
  (modules undeclared)
@@ -3253,7 +3260,7 @@ DUNE
  (modules variant_owner)
  (libraries gpu_core))
 (rule
- ; ocannl-backend: cc -- CPU-only variant does not inherit GPU default marker
+ ; CPU variant: ocannl-backend: cc -- prose-prefixed CPU-only override does not inherit GPU default marker
  (target variant_owner-cc.actual)
  (action (with-stdout-to %{target} (run %{exe:variant_owner.exe}))))
 (rule
@@ -3307,6 +3314,11 @@ DUNE
   affected --gpu-gated --referenced-only HEAD
   expect 'a comment-only diff routes no backend-default reader' 0
   git_q checkout -q -- lib/gpu_core.ml || exit 2
+  # 7b. Same-named module in another library (`other_lib/gpu_core.ml`): must NOT route `lib`'s default.
+  printf 'let gate = 999\nlet other_used = 200\n' >"$repo/other_lib/gpu_core.ml"
+  affected --gpu-gated --referenced-only HEAD
+  expect 'a same-named module edit in another library routes no reader of the declaring library default' 0
+  git_q checkout -q -- other_lib/gpu_core.ml || exit 2
   # 8. Whole-module --files: conservatively covers every definition of Gpu_core.
   affected --gpu-gated --referenced-only --files lib/gpu_core.ml
   expect 'a whole-module --files change routes declared GPU readers and still excludes undeclared and cc-only' 0 \

@@ -2326,18 +2326,29 @@ let main () =
                  "%s spells `%s` %d times and only %d of them are in a comment -- a \
                   backend-default marker outside a comment declares nothing"
                  dune_file Scan.default_marker_sentinel in_text in_comments));
-      let backend_reach_of_stanza sexp =
+      let backend_reach_of_marked_contract m =
+        match Scan.backend_rule_of m with
+        | Scan.Declares_variable -> `Any
+        | Scan.Names_backend (_, body) | Scan.Declares_and_names (_, body) ->
+            `Fixed (String.split body.Scan.backend ~on:',')
+        | Scan.Runs_nothing | Scan.Names_twice _ | Scan.Names_neither -> `Fixed []
+      in
+      let backend_reach_of_location ~subdir ~line =
         match
           List.find marker_contract.Scan.contract_stanzas ~f:(fun m ->
-              Sexp.equal m.Scan.marker_stanza.Scan.marked_sexp sexp)
+              String.equal m.Scan.marker_stanza.Scan.marked_subdir subdir
+              && Int.equal m.Scan.marker_stanza.Scan.marked_line line)
         with
         | None -> `Fixed []
-        | Some m -> (
-            match Scan.backend_rule_of m with
-            | Scan.Declares_variable -> `Any
-            | Scan.Names_backend (_, body) | Scan.Declares_and_names (_, body) ->
-                `Fixed (String.split body.Scan.backend ~on:',')
-            | Scan.Runs_nothing | Scan.Names_twice _ | Scan.Names_neither -> `Fixed [])
+        | Some m -> backend_reach_of_marked_contract m
+      in
+      let backend_reach_of_runner runner =
+        match
+          List.find marker_contract.Scan.contract_stanzas ~f:(fun m ->
+              phys_equal m.Scan.marker_stanza.Scan.marked_sexp runner)
+        with
+        | None -> `Fixed []
+        | Some m -> backend_reach_of_marked_contract m
       in
       let merge_reach a b =
         match (a, b) with
@@ -2380,8 +2391,10 @@ let main () =
                             |> List.concat_map ~f:snd |> List.map ~f:fst
                           in
                           List.fold runners ~init:(`Fixed []) ~f:(fun acc runner ->
-                              merge_reach acc (backend_reach_of_stanza runner))
-                      | _ -> backend_reach_of_stanza stanza.Scan.marked_sexp
+                              merge_reach acc (backend_reach_of_runner runner))
+                      | _ ->
+                          backend_reach_of_location ~subdir:stanza.Scan.marked_subdir
+                            ~line:stanza.Scan.marked_line
                     in
                     backend_default_readers :=
                       ( default_name,
@@ -7582,6 +7595,39 @@ let backend_default_marker_control () =
 |dune}
           ()
       in
+      let subdir_disambiguation =
+        run ~lib_dune:valid_lib_dune ~lib_ml:valid_lib_ml
+          ~extra_files:[ ("t/a/probe.ml", "let () = ()\n"); ("t/b/probe.ml", "let () = ()\n") ]
+          ~test_dune:
+            {dune|(subdir a
+ (rule
+  ; ocannl-backend: none -- subdir a gate.
+  (alias runtest-gate)
+  (deps ocannl_config (universe))
+  (action (run %{dep:../gate.exe})))
+ (alias (name runtest) (deps (alias runtest-gate)))
+ (test
+  ; ocannl-backend: cuda -- subdir a runs on CUDA
+  ; ocannl-backend-default: seeded-plan -- valid CUDA reader
+  (name probe)
+  (deps ocannl_config)
+  (modules probe)))
+(subdir b
+ (rule
+  ; ocannl-backend: none -- subdir b gate.
+  (alias runtest-gate)
+  (deps ocannl_config (universe))
+  (action (run %{dep:../gate.exe})))
+ (alias (name runtest) (deps (alias runtest-gate)))
+ (test
+  ; ocannl-backend: cc -- subdir b runs on CPU only
+  ; ocannl-backend-default: seeded-plan -- must be refused despite identical sexp in subdir a
+  (name probe)
+  (deps ocannl_config)
+  (modules probe)))
+|dune}
+          ()
+      in
       let checks =
         [
           ("valid test reader with env_var OCANNL_BACKEND passes", exited 0 valid_test, valid_test);
@@ -7630,6 +7676,10 @@ let backend_default_marker_control () =
             exited 1 incompatible_backend
             && says "does not overlap the backends it can run on" incompatible_backend,
             incompatible_backend );
+          ( "identical stanza sexps in different subdirs check their own backend markers",
+            exited 1 subdir_disambiguation
+            && says "does not overlap the backends it can run on" subdir_disambiguation,
+            subdir_disambiguation );
         ]
       in
       printf "\nSynthetic controls: `; ocannl-backend-default:` markers.\n";

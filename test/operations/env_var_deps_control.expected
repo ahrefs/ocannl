@@ -270,6 +270,7 @@ backend-default definition naming an unparseable module is refused: true
 backend-default definition naming a missing top-level definition is refused: true
 backend-default reader naming an undefined default is refused: true
 backend-default reader whose backends do not overlap the default is refused: true
+identical stanza sexps in different subdirs check their own backend markers: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:57263e03b8b032365fbd586bbd2705a3] stderr from Verdict-linked
