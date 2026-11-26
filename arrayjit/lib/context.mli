@@ -712,7 +712,7 @@ val mem : t -> Ir.Tnode.t -> bool
 
 (** Whether a host read of a node can be served from a context, and if not, why (gh-ocannl-777). *)
 type observability =
-  | Stored  (** The node has a buffer in the context; a read transfers it. *)
+  | Stored  (** A read transfers the node's observable device buffer. *)
   | Host_init  (** No buffer, but registered host initialization data; a read copies it. *)
   | Recomputable
       (** [Virtual], and every node one replay of its stored computations reads is present
@@ -741,17 +741,18 @@ type observability =
           producer's write index, but the value it stands for is a launch's, not the read's. *)
   | Slice_view of Ir.Tnode.t  (** An [\@|] slice view of the given parent: read the parent. *)
   | Not_computed
-      (** No buffer, no host initialization data, and no computation stored by any routine of this
-          context's lineage (e.g. the context does not descend from the compile that computes it).
-      *)
+      (** No readable buffer or host initialization data, and no computation stored by any routine
+          of this context's lineage (e.g. the context does not descend from the compile that
+          computes it). *)
 
 val observability : t -> Ir.Tnode.t -> observability
 (** Classifies a host read of the node from this context without compiling, from the lineage's
     {!placements}, the context's buffers, the host initialization registry and the stored
-    computations. For a [Virtual] node the walk follows each stored computation exactly as a replay
-    would read it — the statements the inliner keeps, every operand — into other virtual nodes, and
-    stops at materialized ones. A path ends at the first offending node in program order; when
-    several reasons apply, [Unobservable_local] is reported over [Unobservable_aliased], over
+    computations. A [Virtual] node is classified from its stored computations even when a host
+    upload allocated a device buffer for it. The walk follows each stored computation exactly as a
+    replay would read it — the statements the inliner keeps, every operand — into other virtual
+    nodes, and stops at materialized ones. A path ends at the first offending node in program order;
+    when several reasons apply, [Unobservable_local] is reported over [Unobservable_aliased], over
     [Unobservable_merge], over [Launch_bound], over [Needs_context]. Pure: no placement is decided,
     nothing is compiled. A [Recomputable] answer describes structure and availability; the
     recompute's own compile and run keep their checks (e.g. an input no routine of the lineage wrote

@@ -2178,28 +2178,26 @@ let observability ctx (tn : Tn.t) : observability =
   match Tn.slice_of tn with
   | Some (parent, _) -> Slice_view parent
   | None -> (
-      let plc = placements ctx in
-      match Tn.Placements.get plc tn with
+      let replay () =
+        match walk_virtual ctx tn with
+        | W_ok -> Recomputable
+        | W_local path -> Unobservable_local path
+        | W_aliased path -> Unobservable_aliased path
+        | W_merge path -> Unobservable_merge path
+        | W_launch (path, syms) -> Launch_bound (path, syms)
+        | W_missing leaves -> Needs_context (Set.to_list leaves)
+      in
+      match Tn.Placements.get (placements ctx) tn with
       | Some (Tn.Local, _) -> Unobservable_local [ tn ]
-      | placement -> (
-          if aliased ctx tn then Unobservable_aliased [ tn ]
-          else if mem ctx tn then Stored
-          else if Ir.Host_inits.mem tn then Host_init
-          else
-            match placement with
-            | Some ((Tn.Virtual | Tn.Effectively_constant), _)
-              when Hashtbl.mem (computations ctx) tn -> (
-                match walk_virtual ctx tn with
-                | W_ok -> Recomputable
-                | W_local path -> Unobservable_local path
-                | W_aliased path -> Unobservable_aliased path
-                | W_merge path -> Unobservable_merge path
-                | W_launch (path, syms) -> Launch_bound (path, syms)
-                | W_missing leaves -> Needs_context (Set.to_list leaves))
-            | Some (Tn.On_device, _) -> Needs_context [ tn ]
-            | Some ((Tn.Virtual | Tn.Effectively_constant | Tn.Never_virtual | Tn.Local), _) | None
-              ->
-                Not_computed))
+      | Some (Tn.Virtual, _) ->
+          (* A host upload can allocate a buffer that the virtual producer never writes. *)
+          if inherits_computation ctx tn then replay () else Not_computed
+      | _ when aliased ctx tn -> Unobservable_aliased [ tn ]
+      | _ when mem ctx tn -> Stored
+      | _ when Ir.Host_inits.mem tn -> Host_init
+      | Some (Tn.Effectively_constant, _) when inherits_computation ctx tn -> replay ()
+      | Some (Tn.On_device, _) -> Needs_context [ tn ]
+      | Some ((Tn.Effectively_constant | Tn.Never_virtual), _) | None -> Not_computed)
 
 let path_to_string path =
   String.concat ~sep:" -> "

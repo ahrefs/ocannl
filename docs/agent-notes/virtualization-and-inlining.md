@@ -1245,7 +1245,11 @@ files.
   `buffer_aliasing` checks the virtual dependency chain and the materialized shield against one
   materialized run.
   A materialized node with a buffer ends the walk (it shields a `Local` dependency behind
-  it); answers rank `Unobservable_local` > `Unobservable_aliased` (a buffer the `buffer_aliasing`
+  it). At the node being classified, lineage placement takes precedence over an uploaded
+  buffer for a `Virtual` node (gh-ocannl-2475). `Context.mem` still reports the allocation.
+  Host readback follows the stored computation and stored-only helpers refuse the node.
+  `ll_test_execute_stored` seeds a distinct sentinel and pins both behaviors. Answers rank
+  `Unobservable_local` > `Unobservable_aliased` (a buffer the `buffer_aliasing`
   planner shares, which `to_host` and linking refuse) > `Unobservable_merge` > `Launch_bound` >
   `Needs_context`.
   `Launch_bound` exists because `check_and_store_virtual` walks with `env_dom = static_indices`, so a

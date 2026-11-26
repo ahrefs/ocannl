@@ -3617,10 +3617,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   recognized forward output or a node declared materialized before compile (gh-ocannl-2391).
   Where compile provenance is opaque,
   `Exact_sums.get_stored_values` checks `Context.observability` before reading the reference.
-  `Ll_test.execute_with_census` (and `Ll_test.execute` built on it) enforces a stricter stored
-  readback directly — refusing `Virtual` (both `Recomputable` and externally seeded `Stored`
-  buffers) and `Host_init` nodes (gh-ocannl-2452) — so `Premise_scan`'s trust in `Ll_test.execute`
-  cannot observe a recomputed node or a seeded buffer a routine never wrote.
+  `Ll_test.execute_with_census` (and `Ll_test.execute` built on it) also requires `Stored`
+  readback, refusing `Recomputable` and `Host_init` nodes (gh-ocannl-2452). Both helpers rely on
+  `Context.observability` to classify a `Virtual` node from its stored computation even after a
+  host upload (gh-ocannl-2475).
   Unknown forms stay debt; a row is not a diagnosis of a wrong premise. Convert when next touched and
   lower its row in the same commit; stale rows and new uncovered sites both fail.
 - `ll_test_ratchet` prints an adopted-but-still-hand-building census (gh-ocannl-1090): the same

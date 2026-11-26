@@ -8,9 +8,9 @@
    Virtual (Recomputable): raw [Context.get_values] recomputes the exact values, while
    [execute_with_census], [execute], [optimize_and_execute], and mixed [~read:[ out; v ]] refuse.
 
-   Seeded Virtual: seeding a Virtual node gives [Context.observability] a [Stored] answer backed
-   only by the uploaded sentinel; raw [Context.get_values] hands back the sentinel while
-   [execute_with_census] and [execute] still refuse.
+   Seeded Virtual: the upload creates a device buffer. [Context.observability] reports
+   [Recomputable] and raw [Context.get_values] reads the computation.
+   [Exact_sums.get_stored_values], [execute_with_census], and [execute] refuse.
 
    Host_init: a node with registered host-init data and no context buffer is refused instead of
    handing back a copy of its host-init array.
@@ -158,10 +158,16 @@ let () =
   let seeded_ctx =
     L.run ~ctx:(Context.auto ()) ~name:"les_seeded_raw" o ~seed:[ (x, xv); (v, L.blank n) ]
   in
-  p "seeding a virtual node makes Context.observability report Stored"
-    (match Context.observability seeded_ctx v with Context.Stored -> true | _ -> false);
-  p_all2 "raw Context.get_values on a seeded virtual node returns the uploaded sentinel"
-    (Context.get_values seeded_ctx v) (L.blank n) ~f:Float.equal;
+  p "the seeded virtual node has a device buffer" (Context.mem seeded_ctx v);
+  p "Context.observability still classifies the seeded virtual node as Recomputable"
+    (match Context.observability seeded_ctx v with Context.Recomputable -> true | _ -> false);
+  p_all2 "raw Context.get_values recomputes the seeded virtual node to its exact values"
+    (Context.get_values seeded_ctx v) v_expected ~f:Float.equal;
+  p "Exact_sums.get_stored_values refuses a seeded Virtual node"
+    (match Exact_sums.get_stored_values seeded_ctx v with
+    | _ -> false
+    | exception Failure msg ->
+        String.is_prefix msg ~prefix:"premise reference has no stored value for ");
   p "execute_with_census refuses reading a seeded Virtual node"
     (refused_with ~substrings:[ "Ll_test.execute_with_census"; "Virtual" ] (fun () ->
          L.execute_with_census ~ctx:(Context.auto ()) ~name:"les_seeded_census" o
@@ -220,6 +226,9 @@ let () =
       ~read:[ out ]
   in
   p_all2 "reading the materialized output of the virtualized program succeeds" (List.hd_exn got_out)
+    out_expected ~f:Float.equal;
+  p_all2 "Exact_sums.get_stored_values reads the materialized output of the seeded program"
+    (Exact_sums.get_stored_values seeded_ctx out)
     out_expected ~f:Float.equal;
   let xm, vm, outm, llcm = make_program ~suffix:"mat" in
   let o_mat =

@@ -5,8 +5,10 @@ execute_with_census refuses reading a Virtual (Recomputable) node: true
 execute refuses reading a Virtual (Recomputable) node: true
 optimize_and_execute refuses reading a Virtual (Recomputable) node: true
 execute_with_census refuses when any node in ~read is Virtual alongside a stored node: true
-seeding a virtual node makes Context.observability report Stored: true
-raw Context.get_values on a seeded virtual node returns the uploaded sentinel: true
+the seeded virtual node has a device buffer: true
+Context.observability still classifies the seeded virtual node as Recomputable: true
+raw Context.get_values recomputes the seeded virtual node to its exact values: true
+Exact_sums.get_stored_values refuses a seeded Virtual node: true
 execute_with_census refuses reading a seeded Virtual node: true
 execute refuses reading a seeded Virtual node: true
 raw Context.observability classifies an uncompiled host-init node as Host_init: true
@@ -19,6 +21,7 @@ raw Context.observability classifies the virtual reader as Unobservable_local wi
 execute preserves refused_as_local for a Local node: true
 execute preserves User_error dependency path for an unreadable Virtual node reading Local: true
 reading the materialized output of the virtualized program succeeds: true
+Exact_sums.get_stored_values reads the materialized output of the seeded program: true
 re-optimizing with ~materialized:[ v ] leaves v non-virtual: true
 materialized v reads back its exact computed values: true
 materialized out reads back its exact computed values: true
