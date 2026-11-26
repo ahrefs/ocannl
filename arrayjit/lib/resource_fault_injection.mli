@@ -16,7 +16,8 @@
 
 type point =
   | Delta_pool_before_allocate
-      (** Inside the allocation's refusal handler, before a pool exists or enters the census. *)
+      (** Immediately before a delta pool's allocation, under the same refusal handler as the
+          allocation itself. The census records the pool after the allocation succeeds. *)
   | Delta_pool_allocated
   | Delta_unwind_before_free
   | Link_after_delta
