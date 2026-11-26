@@ -329,8 +329,12 @@ if [ "$TUNED" = 1 ]; then
     identity_run train_fixed half "$arm" "" "${TRAIN_ENV[@]}" BENCH_TUNE=0 \
       BENCH_PRECISION=f16 "$GPT" "${TRAIN_ARGS[@]}" --ocannl_schedule_fission=false \
       --ocannl_autotune_search=false
-    if grep -q "seeded_default:" "$OUT/identity_run_train_fixed_half_$arm/stderr" 2>/dev/null; then
-      echo "TREATMENT REACH INVALID (bench_gpt fixed-schedule): seeded_default ran on $arm despite schedule_fission=false"
+    if ! python3 -c 'import pathlib, sys
+sys.path.insert(0, sys.argv[1])
+import bench_output
+derived, census = bench_output.seeded_default(pathlib.Path(sys.argv[2]).read_text())
+sys.exit(1 if (derived or census) else 0)' "$HERE" "$OUT/identity_run_train_fixed_half_$arm/stderr"; then
+      echo "TREATMENT REACH INVALID (bench_gpt fixed-schedule): seeded plan ran on $arm despite schedule_fission=false"
       exit 1
     fi
   done
