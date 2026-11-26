@@ -3101,6 +3101,12 @@ files.
   against a spinner-generated load ladder (`_build/default/test/operations/`, `OCANNL_BACKEND=...`
   pinned) yields the distribution directly — and CPU-backend depths sit at the 200 cap, Metal's at
   31-80, HIP's at 200-750 and CUDA's at ~1700, so one box cannot stand in for the fleet.
+- **Discrete HIP `gfx1102` sequential candidate timing can misrank 32-WG-multiple grids**
+  (gh-ocannl-2384). Because in-process `Autotune.tune` candidates share one HSA AQL hardware queue,
+  a candidate whose grid is a multiple of 32 workgroups locks into the per-WGP SIMD-pair phase left
+  by prior non-32-WG-multiple candidates and can read ~20-40% slower than its phase-0 timing,
+  misranking the crowned choice. See `training-and-performance.md` (gh-ocannl-2384) for the
+  mechanism, the `GPU_MAX_HW_QUEUES` separate-stream control, and surviving reading methods.
 ## Cache regimes and placement replay
 - The schedule-cache directory carries one key-regime stamp, independent of the serialized entry's
   `entry_version` (gh-ocannl-835). Bump `Schedule_cache.cache_regime_version` whenever
