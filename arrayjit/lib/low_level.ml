@@ -13774,23 +13774,28 @@ let validate_lane_bounds ?(site = "Low_level.validate_lane_bounds") ?comp_prec (
    Fail-closed allowlist, per maximal perfect serial chain (each level ONE statement, every loop
    [Serial], starting at 0, not dead, distinct loop symbols), with a [Set] leaf: - the target's
    storage precision is a narrow float ([Ops.is_narrow_float]); f32, f64 and integer targets keep
-   their lowered order (a perf trade on the CPU and Metal defaults, not a residency question); - the
-   leaf reads its target, and only at its own cell (no other cell, no [Get_dynamic], no
-   [Local_scope] body mentioning it), so no step observes another cell's progress; - cell loops are
-   plain iterators, or belong to independent positive two-iterator affine axes (gh-ocannl-2423,
-   gh-ocannl-2464) with pairwise-distinct write symbols across all axes. Each overlapping pair is
-   reparametrized by residue and owner so the outer cell loops own all windows and the entire
-   reduction can stay at [accum_prec]. The update must be an ordinary accumulation with remappable
-   indices. Coupled affine pairs sharing an iterator, other affine forms, concatenation, residue
-   products past the code-size cap and unproved bounds decline. Injective pairs keep both iterators
-   as outer cell loops after the separation proof; - guards between levels are [pure_index_guard]s;
-   each moves to just inside the innermost (new order) chain loop it mentions, or above the chain if
-   it mentions none -- a pure guard filters tuples, so where it sits below its own loops changes
-   neither which tuples run nor their order. [Set_dynamic] scatters, [Tile_mma], scans, sibling
-   statements and every other leaf are left alone (narrow-float [Set_dynamic] add-scatters are
-   widened by {!widen_narrow_scatters} in {!specialize_proc}). Runs after
-   [rewrite_one_hot_reductions], whose scatter match wants the vocabulary loop innermost as lowered
-   (gh-ocannl-466). *)
+   their lowered order. Kept narrow-only after paired exclusive [mac-studio] (Apple M4 Max) f32
+   untuned backward A/Bs (gh-ocannl-2422; paired timings and spreads in
+   [docs/agent-notes/backend-precision-and-simd.md]): ungating regressed cc on [gpt2_mini_train] and
+   [cifar_resnet] (both plain-cell and overlapping-window sinking hurt CPU backward), while Metal
+   gained on those two yet regressed on [lenet] under overlapping-window sinking. Because the
+   optimizer is backend-independent, one ungated pass cannot replace the narrow-only gate plus the
+   GPU schedule-time sink ([Autotune.reduction_sink]); - the leaf reads its target, and only at its
+   own cell (no other cell, no [Get_dynamic], no [Local_scope] body mentioning it), so no step
+   observes another cell's progress; - cell loops are plain iterators, or belong to independent
+   positive two-iterator affine axes (gh-ocannl-2423, gh-ocannl-2464) with pairwise-distinct write
+   symbols across all axes. Each overlapping pair is reparametrized by residue and owner so the
+   outer cell loops own all windows and the entire reduction can stay at [accum_prec]. The update
+   must be an ordinary accumulation with remappable indices. Coupled affine pairs sharing an
+   iterator, other affine forms, concatenation, residue products past the code-size cap and unproved
+   bounds decline. Injective pairs keep both iterators as outer cell loops after the separation
+   proof; - guards between levels are [pure_index_guard]s; each moves to just inside the innermost
+   (new order) chain loop it mentions, or above the chain if it mentions none -- a pure guard
+   filters tuples, so where it sits below its own loops changes neither which tuples run nor their
+   order. [Set_dynamic] scatters, [Tile_mma], scans, sibling statements and every other leaf are
+   left alone (narrow-float [Set_dynamic] add-scatters are widened by {!widen_narrow_scatters} in
+   {!specialize_proc}). Runs after [rewrite_one_hot_reductions], whose scatter match wants the
+   vocabulary loop innermost as lowered (gh-ocannl-466). *)
 let sink_narrow_reduction_loops (llc : t) : t =
   let only_self_reads d di =
     let rec go (s : scalar_t) =

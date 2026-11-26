@@ -10,3 +10,4 @@ the bf16 window input gradient lowers over the forward window and channel loops:
 the optimized bf16 window input gradient opens its cell loop before all reductions: true
 the bf16 two-dimensional window input gradient lowers over the forward window and channel loops: true
 the optimized bf16 two-dimensional window input gradient opens both cell loops before all reductions: true
+an f32 two-dimensional window input gradient preserves its lowered reduction-outer loop order in the optimized routine: true
