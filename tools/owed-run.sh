@@ -74,6 +74,9 @@
 # Detached helpers and uninterruptible kernel waits require separate operator recovery.
 # A manual push with terminal prompts enabled retains its foreground group and direct Git alarm
 # so Git or SSH can read the controlling terminal. Set GIT_TERMINAL_PROMPT=0 for group cleanup.
+# Reads always run in the private group. A transport that opens the controlling terminal
+# itself, such as SSH asking for a passphrase or host-key confirmation, can be stopped by
+# job control until FETCH_CAP. Provide credentials and host keys for unattended reads.
 # `check` does not retry transport failures. Callers decide whether to fail closed (the main
 # merge build) or withhold a verdict (`--plan-merge`).
 # Writer and source are informational. The writer identifies the publication path. Anyone with
