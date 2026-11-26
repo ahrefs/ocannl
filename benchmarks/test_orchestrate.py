@@ -4558,6 +4558,51 @@ class Gh1161SitesTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("two logs", err)
 
+    def test_budgeted_and_uncapped_tuned_logs_stay_distinct(self):
+        kernels = [("0/1", 2.0, ["kernel_s1c2.grad"])]
+        base = {
+            "framework": "ocannl",
+            "workload": "cifar_resnet",
+            "backend": "metal",
+            "variant": "tuned",
+            "profile": "approximate",
+            "step_ms": {"p50": 80.0},
+            "tune": {"arms": [{"arm": "A", "call_budget_s": None}]},
+        }
+        budgeted = {
+            **base,
+            "step_ms": {"p50": 160.0},
+            "tune": {"arms": [{"arm": "A", "call_budget_s": 1800}, {"arm": "B", "call_budget_s": 1800}]},
+        }
+        for lbl, row in (
+            ("cifar_resnet ocannl/metal/tuned [approximate]", base),
+            (
+                "cifar_resnet ocannl/metal/tuned [approximate] +tune_call_budget_seconds=1800",
+                budgeted,
+            ),
+        ):
+            lines = [
+                f"bench: kernel {i} {ms:.4f} ms grid=[1;1;1] block=[1;1;1] mma:not-requested w: {' '.join(w)}"
+                for i, ms, w in kernels
+            ] + [json.dumps(row, separators=(",", ":"))]
+            (self.dir / orchestrate.cell_log_name(lbl)).write_text("\n".join(lines) + "\n")
+
+        code, out, err = self.run_sites()
+
+        self.assertEqual(code, 0, err)
+        rows = self.rows(out)
+        self.assertEqual(
+            set(rows),
+            {
+                "cifar_resnet/metal/tuned/approximate",
+                "cifar_resnet/metal/tuned/approximate +call_budget=1800s",
+            },
+        )
+        self.assertEqual(rows["cifar_resnet/metal/tuned/approximate"][1], "80.000")
+        self.assertEqual(
+            rows["cifar_resnet/metal/tuned/approximate +call_budget=1800s"][1], "160.000"
+        )
+
 
 class CellTimeoutTest(unittest.TestCase):
     """gh-ocannl-760: a cell that stops making progress costs the cell, not the sweep."""
@@ -8692,6 +8737,222 @@ class OcannlFlagSweepTest(unittest.TestCase):
         self.assertNotIn("regime_mismatch", row)
         self.assertIn("| default +tune_inline_flips=16 |", report_text)
         self.assertNotIn("ambient OCANNL_* variables outranked", report_text)
+
+
+class CellSearchBudgetTest(unittest.TestCase):
+    """Per-cell default search budgets (`CELL_SEARCH_BUDGETS_S`, gh-ocannl-2430)."""
+
+    def test_builtin_table_entries_are_well_formed(self):
+        ref_keys, _ = orchestrate.config_reference()
+        self.assertIn("tune_call_budget_seconds", ref_keys)
+        self.assertNotIn("tune_call_budget_seconds", orchestrate.sweep_owned_keys())
+        workloads = {p.stem for p in (HERE / "workloads").glob("*.json")}
+        self.assertGreater(len(orchestrate.CELL_SEARCH_BUDGETS_S), 0)
+        for (workload, backend, variant, regime), budget in (
+            orchestrate.CELL_SEARCH_BUDGETS_S.items()
+        ):
+            self.assertIn(workload, workloads)
+            self.assertIn(backend, orchestrate.SWEEP_BACKENDS)
+            self.assertEqual(variant, "tuned")
+            self.assertIn(regime, orchestrate.REGIMES)
+            self.assertIsInstance(budget, (int, float))
+            self.assertFalse(isinstance(budget, bool))
+            self.assertTrue(orchestrate.finite(budget) and budget > 0)
+
+    def test_builtin_budget_is_omitted_when_measured_checkout_lacks_the_key(self):
+        target = ("cifar_resnet", "metal", "tuned", "f32")
+        keys, payloads = orchestrate.config_reference()
+        older = (keys - {"tune_call_budget_seconds"}, payloads)
+        with unittest.mock.patch.object(orchestrate, "config_reference", return_value=older):
+            self.assertEqual(orchestrate.cell_flags([], target, regime="approximate"), [])
+
+    def test_cifar_resnet_metal_tuned_approximate_gets_the_default_budget_and_others_do_not(self):
+        target = ("cifar_resnet", "metal", "tuned", "f32")
+        self.assertEqual(
+            orchestrate.cell_flags([], target, regime="approximate"),
+            [("tune_call_budget_seconds", "1800")],
+        )
+        # Other regimes, backends, variants, and workloads stay uncapped.
+        for cell_key, regime in (
+            (target, "exact"),
+            (target, None),
+            (("cifar_resnet", "cuda", "tuned", "f32"), "approximate"),
+            (("cifar_resnet", "hip", "tuned", "f32"), "approximate"),
+            (("cifar_resnet", "cc", "tuned", "f32"), "approximate"),
+            (("cifar_resnet", "metal", "default", "f32"), "approximate"),
+            (("cifar_resnet", "metal", "materialized", "f32"), "approximate"),
+            (("cifar_resnet_b1", "metal", "tuned", "f32"), "approximate"),
+        ):
+            with self.subTest(cell_key=cell_key, regime=regime):
+                self.assertEqual(orchestrate.cell_flags([], cell_key, regime=regime), [])
+
+    def test_explicit_cell_flag_overrides_or_composes_with_builtin_budget(self):
+        target = ("cifar_resnet", "metal", "tuned", "f32")
+        override = [
+            orchestrate.cell_flag_arg("cifar_resnet/metal/tuned:tune_call_budget_seconds=900")
+        ]
+        uncapped = [
+            orchestrate.cell_flag_arg("cifar_resnet/metal/tuned:tune_call_budget_seconds=0")
+        ]
+        other = [orchestrate.cell_flag_arg("cifar_resnet/metal/tuned:schedule_fission=false")]
+
+        self.assertEqual(
+            orchestrate.cell_flags(override, target, regime="approximate"),
+            [("tune_call_budget_seconds", "900")],
+        )
+        self.assertEqual(
+            orchestrate.cell_flags(uncapped, target, regime="approximate"),
+            [("tune_call_budget_seconds", "0")],
+        )
+        self.assertEqual(
+            orchestrate.cell_flags(other, target, regime="approximate"),
+            [("tune_call_budget_seconds", "1800"), ("schedule_fission", "false")],
+        )
+
+    def test_sweep_applies_budget_to_both_passes_and_shadows_ambient_env(self):
+        tmp = Path(tempfile.mkdtemp())
+        fixtures = tmp / "fixtures"
+        fixtures.mkdir()
+        (fixtures / fixture_digest.DIGEST_FILE).write_bytes(
+            (HERE / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes()
+        )
+        header = json.dumps({"__metadata__": {"model": "conv", "mode": "train"}}).encode()
+        (fixtures / "cifar_resnet.safetensors").write_bytes(
+            len(header).to_bytes(8, "little") + header
+        )
+
+        dispatched = []
+
+        def fake_cell(label, cmd, env=None, **_):
+            dispatched.append((label, list(cmd)))
+            settings = orchestrate.cmdline_settings(cmd[1:])
+            is_pass1 = label.endswith("(search pass)")
+            ambient_resolved = {}
+            if (env or {}).get("OCANNL_TUNE_CALL_BUDGET_SECONDS"):
+                if "tune_call_budget_seconds" in settings:
+                    ambient_resolved["OCANNL_TUNE_CALL_BUDGET_SECONDS"] = {
+                        "key": "tune_call_budget_seconds",
+                        "value": settings["tune_call_budget_seconds"].split("=", 1)[1],
+                        "source": "commandline",
+                    }
+                else:
+                    ambient_resolved["OCANNL_TUNE_CALL_BUDGET_SECONDS"] = {
+                        "key": "tune_call_budget_seconds",
+                        "value": env["OCANNL_TUNE_CALL_BUDGET_SECONDS"],
+                        "source": "environment",
+                    }
+            row = cell("ocannl", "metal", "tuned", [2.3026, 2.3010, 2.3000])
+            row.update(
+                workload="cifar_resnet",
+                profile="approximate" if "profile" in settings else None,
+                regime_knobs={},
+                ambient_ocannl_resolved=ambient_resolved,
+                searched=is_pass1,
+                tune={
+                    "shipped": "B",
+                    "searches": 4 if is_pass1 else 0,
+                    "replays": 0 if is_pass1 else 4,
+                    "no_searches": 0,
+                    "arms": [
+                        {
+                            "arm": "B",
+                            "budget_cut": (
+                                "tune_call_budget_seconds" in settings
+                                and settings["tune_call_budget_seconds"]
+                                != "--ocannl_tune_call_budget_seconds=0"
+                            ),
+                        }
+                    ],
+                },
+            )
+            return row, None
+
+        def run_sweep(*extra_argv, env=None):
+            dispatched.clear()
+            environ = {k: v for k, v in os.environ.items() if not k.startswith("OCANNL_")}
+            environ.update(env or {})
+            out = io.StringIO()
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(unittest.mock.patch.dict(os.environ, environ, clear=True))
+                stack.enter_context(unittest.mock.patch.object(orchestrate, "HERE", tmp))
+                stack.enter_context(
+                    unittest.mock.patch.object(orchestrate, "RESULTS_DIR", tmp / "results")
+                )
+                stack.enter_context(
+                    unittest.mock.patch.object(orchestrate, "run_cell", fake_cell)
+                )
+                stack.enter_context(
+                    unittest.mock.patch.object(
+                        orchestrate, "install_termination_handler", lambda: None
+                    )
+                )
+                stack.enter_context(
+                    unittest.mock.patch.object(
+                        sys,
+                        "argv",
+                        [
+                            "orchestrate.py",
+                            "--only", "ocannl",
+                            "--gpu", "metal",
+                            "--workloads", "cifar_resnet",
+                            "--profile", "exact", "approximate",
+                            "--tuned",
+                            "--skip-cell", "cifar_resnet/cc/default",
+                            "--skip-cell", "cifar_resnet/cc/tuned",
+                            "--skip-cell", "cifar_resnet/metal/default",
+                            "--skip-build",
+                            "--no-fixture-digest-check",
+                            "--skip-box-check",
+                            *extra_argv,
+                        ],
+                    )
+                )
+                stack.enter_context(contextlib.redirect_stdout(out))
+                orchestrate.main()
+            rows = [
+                json.loads(line)
+                for line in (tmp / "results" / "results.jsonl").read_text().splitlines()
+            ]
+            return out.getvalue(), rows, (tmp / "results" / "report.md").read_text()
+
+        stdout, rows, report_text = run_sweep(env={"OCANNL_TUNE_CALL_BUDGET_SECONDS": "600"})
+
+        self.assertEqual(len(dispatched), 4)
+        exact_p1, exact_p2, approx_p1, approx_p2 = dispatched
+        for _, cmd in (exact_p1, exact_p2):
+            self.assertNotIn("--ocannl_tune_call_budget_seconds=1800", cmd)
+        for label, cmd in (approx_p1, approx_p2):
+            self.assertIn("--ocannl_tune_call_budget_seconds=1800", cmd)
+            self.assertIn("+tune_call_budget_seconds=1800", label)
+
+        self.assertIn(
+            "OCANNL_TUNE_CALL_BUDGET_SECONDS (by --ocannl_tune_call_budget_seconds=1800)",
+            stdout,
+        )
+        exact_row, approx_row = rows
+        self.assertEqual(exact_row["ocannl_flags"], [])
+        self.assertEqual(exact_row["ambient_ocannl_shadowed"], {})
+        self.assertEqual(approx_row["ocannl_flags"], ["--ocannl_tune_call_budget_seconds=1800"])
+        self.assertEqual(
+            approx_row["ambient_ocannl_shadowed"],
+            {"OCANNL_TUNE_CALL_BUDGET_SECONDS": "--ocannl_tune_call_budget_seconds=1800"},
+        )
+        self.assertIn("| tuned +tune_call_budget_seconds=1800 |", report_text)
+        self.assertIn("CELL_SEARCH_BUDGETS_S", report_text)
+        self.assertIn("**budget-bounded**", report_text)
+
+        # Operator override (=0 for uncapped) replaces the built-in budget with no duplicate flag.
+        _, rows_uncapped, report_uncapped = run_sweep(
+            "--cell-flag", "cifar_resnet/metal/tuned:tune_call_budget_seconds=0"
+        )
+        for _, cmd in dispatched:
+            budget_args = [a for a in cmd if a.startswith("--ocannl_tune_call_budget_seconds=")]
+            self.assertEqual(budget_args, ["--ocannl_tune_call_budget_seconds=0"])
+        self.assertEqual(
+            rows_uncapped[1]["ocannl_flags"], ["--ocannl_tune_call_budget_seconds=0"]
+        )
+        self.assertIn("| tuned +tune_call_budget_seconds=0 |", report_uncapped)
+        self.assertNotIn("**budget-bounded**", report_uncapped)
 
 
 def markdown_tables(text):

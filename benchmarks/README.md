@@ -497,7 +497,21 @@ single-threaded segments that sum to the serial step
   `+KEY=VALUE`, and the regime gate accepts it as declared where the runner reports that value
   from the commandline. The key must be one `ocannl_config.reference` documents and not one the
   sweep sets itself — `backend`, `profile`, `autotune_progress` — and a selector naming no cell, or
-  two entries setting one key on one cell, are refused; gh-ocannl-1273),
+  two entries setting one key on one cell, are refused; gh-ocannl-1273).
+  `orchestrate.py` also carries built-in per-cell search budgets (`CELL_SEARCH_BUDGETS_S`,
+  `tune_call_budget_seconds`), currently `cifar_resnet/metal/tuned/approximate` at 1,800 s
+  (gh-ocannl-2430: uncapped, its four approximate searches — two placement arms plus two inline
+  flips over Winograd's transformed sites — missed the 3,600 s cap on m4-max; like uncapped
+  `exact`, it is sized for `--cell-timeout 3600` rather than the 1,800 s default cap, leaving
+  headroom for timed steps and the 600 s dominant-kernel instrument). Because the budget stops
+  each of the four searches before the `F_split` seeds at the end of `phase=seeds` (160.6 ms on
+  m4-max against uncapped `exact`'s 79.8 ms in 3,155 s), this row is **budget-bounded** and is
+  not directly comparable with uncapped `exact`; `report.md` notes this whenever any tuned row
+  reports `budget_cut: true`. Built-in budgets are applied
+  only when the measured checkout's `ocannl_config.reference` supports `tune_call_budget_seconds`,
+  travel as `ocannl_flags`, appear as `+tune_call_budget_seconds=1800` in cell labels and report
+  rows (and `+call_budget=1800s` in `gh1161_sites.py`), and yield to an explicit `--cell-flag`
+  setting `tune_call_budget_seconds` for that cell (pass `=0` to run uncapped),
   `--gpu metal|cuda|hip|none` (the GPU column of the matrix — OCANNL backend, PyTorch device,
   tinygrad device together; defaults to metal on macOS and cuda elsewhere, `none` runs a
   CPU-only matrix), `--no-fixture-digest-check` (measure fixtures that do not match
