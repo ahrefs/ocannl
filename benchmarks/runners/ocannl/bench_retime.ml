@@ -35,11 +35,11 @@ open Base
 
 let min_readings = 4
 
-(** [calls_of_env ()]: [BENCH_RETIME_CALLS] (default 6), the timing calls per routine. Even, because
-    {!Bench_design} mirrors every batch, and at least {!min_readings}. *)
-let calls_of_env () =
+(** [calls_of_env ()]: [BENCH_RETIME_CALLS] (defaults to 6), the timing calls per routine. Even,
+    because {!Bench_design} mirrors every batch, and at least {!min_readings}. *)
+let calls_of_env ?(default = 6) () =
   match Stdlib.Sys.getenv_opt "BENCH_RETIME_CALLS" with
-  | None -> 6
+  | None -> default
   | Some s -> (
       match Int.of_string_opt (String.strip s) with
       | Some n when n >= min_readings && n % 2 = 0 -> n
@@ -122,6 +122,49 @@ let paired_ratio ~(num : float option array) ~(den : float option array) =
     resolved = (stated && Float.(ratio_hi < 1. || ratio_lo > 1.));
   }
 
+type controlled_ratio = {
+  treatment : ratio;
+  base_control : ratio;
+  variant_control : ratio;
+  effect_lo : float;
+  effect_hi : float;
+  control_factor : float;
+}
+
+(** Compare two variants with one repeat each. The caller discards incomplete rounds from all four
+    columns. Either linked copy can carry a bias, so every cross pairing has to clear the repeat
+    envelope in the same direction. *)
+let controlled_ratio ~base ~base_repeat ~variant ~variant_repeat =
+  let treatment = paired_ratio ~num:variant ~den:base in
+  let base_control = paired_ratio ~num:base_repeat ~den:base in
+  let variant_control = paired_ratio ~num:variant_repeat ~den:variant in
+  let cross =
+    [
+      treatment;
+      paired_ratio ~num:variant ~den:base_repeat;
+      paired_ratio ~num:variant_repeat ~den:base;
+      paired_ratio ~num:variant_repeat ~den:base_repeat;
+    ]
+  in
+  let effect_lo = List.fold cross ~init:Float.infinity ~f:(fun lo r -> Float.min lo r.ratio_lo) in
+  let effect_hi =
+    List.fold cross ~init:Float.neg_infinity ~f:(fun hi r -> Float.max hi r.ratio_hi)
+  in
+  let factor r = Float.max r.ratio_hi (1. /. r.ratio_lo) in
+  let control_factor = Float.max 1. (Float.max (factor base_control) (factor variant_control)) in
+  let resolved =
+    treatment.pairs >= min_readings
+    && Float.(effect_hi < 1. /. control_factor || effect_lo > control_factor)
+  in
+  {
+    treatment = { treatment with resolved };
+    base_control;
+    variant_control;
+    effect_lo;
+    effect_hi;
+    control_factor;
+  }
+
 (** [bounds_fields ~name s]: [name_lo=<ms> name_hi=<ms> name_retimed=<admitted>/<calls>], for a line
     that prints the median [name=<ms>] elsewhere. *)
 let bounds_fields ~name s =
@@ -174,7 +217,7 @@ let read_once ?(timing = configured_timing ()) ((ctx, routine) : Context.t * Con
     (Autotune.time_routine ~timing ~repeats:(configured_repeats ()) ctx routine)
 
 let retime ?calls (routines : (Context.t * Context.routine) list) =
-  let calls = Option.value_or_thunk calls ~default:calls_of_env in
+  let calls = Option.value_or_thunk calls ~default:(fun () -> calls_of_env ()) in
   let timing = configured_timing () in
   let routines = Array.of_list routines in
   let arms = Array.length routines in
