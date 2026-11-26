@@ -99,7 +99,9 @@ files.
   (8.35 GB) still allocated, and at its second on tuf's 8 GiB card, and the free bytes read as 8.6
   GB and 3.9 GB "resident after arm A", while arm A (6.9 GB) gives back everything it allocated. The
   refusal's detail now names the pool's position, the group's total and the bytes the earlier pools
-  held. Before blaming a
+  held. The CPU leg of `resource_fault_injection` lowers the cap with `with_pool_cap` and injects
+  the driver's typed refusal at `Delta_pool_before_allocate`. The handling still sees the first
+  pool live, and the caller sees the annotated refusal after the unwind frees it. Before blaming a
   leak, score the footprint, and compare the `working_bytes` (census) and `device_free` (driver)
   fields of `Train.tune_placements`' progress lines across the arm boundaries: equal working bytes
   with a falling `device_free` is memory no pool table accounts for.

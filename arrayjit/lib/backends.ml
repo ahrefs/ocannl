@@ -230,7 +230,9 @@ let plan_alias_spans ~(name : string) ~(limits : hardware_limits) ~(lowered : Lo
    program order, the per-node plan items, and the per-pool cap. *)
 
 (* The per-pool ceiling: 4 GB for uint32 offsets unless [large_models] lifts it. *)
-let pool_cap () = if Utils.settings.large_models then Int.max_value else 0x1_0000_0000
+let pool_cap () =
+  Resource_fault_injection.pool_cap
+    ~default:(if Utils.settings.large_models then Int.max_value else 0x1_0000_0000)
 
 (* gh-ocannl-489 follow-up: with the liveness planner on, sink whole-node initializations toward
    their first use so live spans start there instead of at an up-front zeroing block (which nests
@@ -1612,7 +1614,9 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
     let group_bytes = List.sum (module Int) pools ~f:fst in
     List.iteri pools ~f:(fun index (size_in_bytes, alignment) ->
         let pool_id = pool_ids.(index) in
-        (try alloc_pool device ~pool_id ~size_in_bytes ~alignment
+        (try
+           Resource_fault_injection.hit Delta_pool_before_allocate;
+           alloc_pool device ~pool_id ~size_in_bytes ~alignment
          with Schedule_outcome.Device_memory_exhausted r when count > 1 || !(tx.held) > 0 ->
            let backtrace = Stdlib.Printexc.get_raw_backtrace () in
            Stdlib.Printexc.raise_with_backtrace
