@@ -4741,10 +4741,30 @@ class CellTimeoutTest(unittest.TestCase):
 
         self.assertIsNone(result)
         self.assertIn("TIMED OUT after 1s", note)
-        self.assertIn("--cell-timeout", note)
+        self.assertIn("killed the cell's whole process group", note)
         self.assertIn("wedged", log)
         # It checkpointed nothing, so the note names no checkpoint (gh-ocannl-1209).
         self.assertNotIn("checkpoint", note)
+
+    def test_tagline_shortens_the_rog_cuda_beam_cell_cap(self):
+        import gh1181_cells
+
+        for box, backend, requested, expected in (
+            ("rog-nv-linux", "cuda", 1800, 600),
+            ("rog-nv", "cuda", 3600, 600),
+            ("rog-nv", "cuda", 240, 240),
+            ("rog-nv", "cuda", 0, 0),
+            ("rog-nv", "hip", 1800, 1800),
+            ("minix", "hip", 1800, 1800),
+        ):
+            with self.subTest(box=box, backend=backend, requested=requested):
+                args = gh1181_cells.parse_args([
+                    "--box", box, "--backend", backend, "--out", str(self.dir / "tagline"),
+                    "--arms", "tinygrad-beam2", "tinygrad-jit", "--cell-timeout", str(requested),
+                ])
+                self.assertEqual(gh1181_cells.arm_timeout(args, "tinygrad-beam2"), expected)
+                self.assertEqual(gh1181_cells.arm_timeout(args, "tinygrad-jit"), requested)
+                self.assertEqual(gh1181_cells.arm_timeout(args, "reference"), requested)
 
     def golden_checkpoint(self, name):
         """A checkpoint line as the OCaml emitter built it (see CheckpointLineTest)."""

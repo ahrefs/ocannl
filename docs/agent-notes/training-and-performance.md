@@ -934,6 +934,11 @@ files.
   searched, and a pass reports SEARCHED whenever ANY arm searched, so the mixed retry's compile cost
   wears a from-scratch label. Wipe it before quoting a search timing.
 
+- Serial BEAM can also stall. The November 2026 tagline window on rog left a CUDA BEAM=2 cell
+  with an empty log at the cap, with successful cold searches taking up to 334 s
+  (`benchmarks/report-tagline-gpt2-20261120.md`). The tagline driver bounds the loss with the
+  arm cap documented in `benchmarks/README.md` (gh-ocannl-2431).
+
 - A direct TERM to a gh1002 cell's group does not reach the driver, which owns a separate
   session (`gh1002_cells.run_in_own_group`; gh-ocannl-2001). After the cell exits its wait returns;
   cleanup has two grace phases, a final reap and group observations, with no wait on the cell's

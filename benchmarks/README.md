@@ -593,6 +593,12 @@ single-threaded segments that sum to the serial step
   opt into parallel search, pass `--beam-parallel <mask size>`; a wedge is bounded by the cap
   either way.
 
+  The tagline driver `gh1181_cells.py` caps CUDA tinygrad BEAM=2 cells on rog at 600 s
+  (gh-ocannl-2431). A lower `--cell-timeout` or a shorter remaining sweep budget still applies.
+  `--cell-timeout 0` disables the cell caps and leaves the sweep budget in force.
+  The driver records the arm caps before the sweep budget is applied in `env.json` as
+  `arm_timeout_s`.
+
   **An OCANNL cell is a (scheduling variant, storage precision) pair** (gh-ocannl-539). The two
   are independent axes and the matrix is their product: `--tuned --precision bf16` measures
   *tuned bf16*, which on RDNA3/3.5 is the only route to a tensor-core candidate at all (WMMA has
