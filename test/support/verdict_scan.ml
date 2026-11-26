@@ -8272,7 +8272,15 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                           | Pexp_function _ | Pexp_lazy _ | Pexp_ident _ -> ek
                           | _ -> v.lg_eval_kind
                       in
-                      find ~in_inline_fn:(in_inline_fn && v.lg_is_call_arg) ~ek:next_ek rhs_env rhs)
+                      let next_in_inline =
+                        in_inline_fn
+                        && (v.lg_is_call_arg
+                           ||
+                           match (strip rhs).pexp_desc with
+                           | Pexp_lazy _ | Pexp_ident _ -> true
+                           | _ -> false)
+                      in
+                      find ~in_inline_fn:next_in_inline ~ek:next_ek rhs_env rhs)
               | _ -> None)
           | Pexp_apply _ -> (
               match resolve_external_chain env expr with
@@ -8292,12 +8300,21 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                       Exn.protect
                         ~finally:(fun () -> Hash_set.remove active_fns fn_id)
                         ~f:(fun () ->
+                          let whole_ids = ref [] in
+                          let selected_defaults = ref [] in
+                          let call_env, _ =
+                            self#bind_local_call
+                              ~on_whole_arg:(fun aexpr id -> whole_ids := (aexpr, id) :: !whole_ids)
+                              ~on_selected_default:(fun d d_env ->
+                                selected_defaults :=
+                                  (Ppxlib.Asttypes.Nolabel, d, d_env, None) :: !selected_defaults)
+                              fn_env params all_args
+                          in
                           if in_inline_fn then
-                            List.iter all_args ~f:(fun (_, aexpr, aenv, aeval) ->
-                                record_exec ~in_inline_fn ~ek:(Option.value aeval ~default:ek) aenv
-                                  aexpr);
-                          let call_env, _ = self#bind_local_call fn_env params all_args in
-                          find ~in_inline_fn:false ~ek call_env body)
+                            eager_inline_args :=
+                              (ek, all_args @ List.rev !selected_defaults, !whole_ids, None)
+                              :: !eager_inline_args;
+                          find ~in_inline_fn ~ek call_env body)
                   | _ -> (
                       match resolve_inline_fn_apply env expr with
                       | Some (params, body, all_args) -> (
@@ -9507,7 +9524,14 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                                 | Pexp_function _ | Pexp_lazy _ | Pexp_ident _ -> eval_kind
                                 | _ -> v.lg_eval_kind
                             in
-                            let next_siblings = walk_eager_siblings && v.lg_is_call_arg in
+                            let next_siblings =
+                              walk_eager_siblings
+                              && (v.lg_is_call_arg
+                                 ||
+                                 match (strip rhs).pexp_desc with
+                                 | Pexp_lazy _ | Pexp_ident _ -> true
+                                 | _ -> false)
+                            in
                             walk_projected ~walk_eager_siblings:next_siblings
                               ~eval_kind:rhs_eval_kind ~in_explicit_policy rhs_env
                               (v.lg_proj @ proj) rhs
@@ -9525,9 +9549,23 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                         Exn.protect
                           ~finally:(fun () -> Hash_set.remove active_fn_calls fn_id)
                           ~f:(fun () ->
-                            let call_env, _ = self#bind_local_call fn_env params all_args in
-                            walk_projected ~walk_eager_siblings:false ~eval_kind ~in_explicit_policy
-                              call_env proj body))
+                            let whole_arg_ids = ref [] in
+                            let selected_defaults = ref [] in
+                            let call_env, _ =
+                              self#bind_local_call
+                                ~on_whole_arg:(fun aexpr id ->
+                                  whole_arg_ids := (aexpr, id) :: !whole_arg_ids)
+                                ~on_selected_default:(fun d d_env ->
+                                  selected_defaults :=
+                                    (Ppxlib.Asttypes.Nolabel, d, d_env, None) :: !selected_defaults)
+                                fn_env params all_args
+                            in
+                            walk_projected ~walk_eager_siblings ~eval_kind ~in_explicit_policy
+                              call_env proj body;
+                            if walk_eager_siblings then
+                              scan_unused_inline_args ~eval_kind ~in_explicit_policy
+                                (all_args @ List.rev !selected_defaults)
+                                [] !whole_arg_ids None))
                   | None -> (
                       match resolve_inline_fn_apply env expr with
                       | Some (params, body, all_args) ->
