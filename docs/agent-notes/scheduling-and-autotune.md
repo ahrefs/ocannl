@@ -14,6 +14,30 @@ files.
   The prelude runs after seeded split-reduce and before deriving or replaying fission. The packet
   buffer carries its own placement intent, so a refused replay leaves no entry for it in the
   caller's placement table.
+  **Metal keeps one workgroup by measured boundary** (gh-ocannl-2494). On `mac-studio` (Apple M4
+  Max, Metal, untuned bf16 `gpt2_mini_train`, fixture `content-v1` SHA-256 `2c2458fd`, base
+  `10a4895994`, exclusive fleet window), all 198 baseline segments admitted 4/4 `queued`
+  `Bench_retime` calls: the single-workgroup serial scatter (`seg174`, `grid=[1;1;1]`,
+  `block=[256;1;1]`, 1 volatile RMW read) ranked 18th of 198 at `0.6091 ms` (`[0.5500, 0.6247]`),
+  3.0× faster than the top-3 untuned FFN weight-gradient kernels (`1.8185–1.8389 ms`) and behind
+  four single-workgroup LayerNorm `gamma`/`beta` gradient reductions (`0.6813–0.7497 ms`). In the
+  same exclusive window, an isolated Metal treatment (gating `Schedule.scatter_packets_enabled` on
+  `Backend_intf.binds_hardware_grid` while keeping `metal_facts.seeds_untuned_default = false`,
+  tested beside `10a4895994`) passed bitwise parity (verified on `macbook-pro` M4 Pro and
+  `mac-studio` M4 Max) and cut the displaced scatter-region sum from `0.8308 ms`
+  (`widen 0.1131 + serial scatter 0.6091 + narrow 0.1086`) to `0.4627 ms`
+  (`widen 0.1187 + mask 0.1017 + row-apply 0.1321 + narrow 0.1102`), while the 3-repeat untraced
+  step moved within repeat spread: synced p50 `47.40 -> 47.18 ms` (`0.995×`, repeats
+  `47.37/47.49/47.40` vs `46.93/47.49/47.18`), queued `38.93 -> 38.60 ms` (`39.03/38.93/38.51` vs
+  `38.93/38.28/38.60`), identical losses across all 6 runs. Metal has no in-step hardware tracer,
+  so per-kernel ranking uses `Bench_retime` `queued` medians paired with untraced step times.
+  Metal therefore stays on one workgroup (`metal_facts.seeds_untuned_default = false`, avoiding a
+  `Schedule_cache.entry_version` bump for <1% step movement). Re-open if the scatter enters the
+  step's three slowest kernels (for example once Metal seeds/tunes matmuls or at larger
+  `seq_len × batch`): to isolate scatter packetization alone, gate
+  `Schedule.scatter_packets_enabled` on `Backend_intf.binds_hardware_grid`; flipping
+  `metal_facts.seeds_untuned_default` enables both matmul/conv seeding and `packetize_scatter`
+  together.
 - Small leading GPU axes can starve the default schedule even when later axes have ample work
   (gh-ocannl-995). `gpu_parallel_suffix` chooses a better-populated pair before
   `analyze_parallel_chains` proves ownership, with the original selection as a conservative
