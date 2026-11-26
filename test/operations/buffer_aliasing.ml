@@ -337,8 +337,8 @@ let () =
     && exact (Context.get_values launch_ref launch_ref_out) (expected 314.))
 
 (* The shared loop captures [tap] before its sibling [dep], so the stored tap retains a read of
-   [dep]. The first loop already defines the dependency; the sibling store writes the same values. A
-   late gather makes [dep] a materialized shield while leaving its stored component in the
+   [dep]. The two stores of [dep] differ to distinguish a materialized tap's snapshot from a fresh
+   read. A late gather makes [dep] a materialized shield while leaving its stored component in the
    lineage. *)
 let () =
   let open Ll_test in
@@ -349,6 +349,7 @@ let () =
     Unix.putenv "OCANNL_BUFFER_ALIASING" (Bool.to_string aliasing);
     let early = mk "early" and dep = mk "dep" and tap = mk "tap" in
     let forward = mk "forward" and late = mk "late" and out = mk "out" in
+    let tap_at_read = mk "tap_at_read" in
     Tn.set_observable tap;
     materialize out;
     let at tn i = get tn [| iter i |] in
@@ -368,16 +369,19 @@ let () =
     let i = sym () in
     let llc =
       LL.unflat_lines
-        [
-          write early tick;
-          write dep (plus early 5.);
-          loop_n i width (seq (set tap (plus dep 10.) i) (set dep (plus early 5.) i));
-          write forward forward_value;
-          write late (plus forward 100.);
-          write out (plus late 40.);
-        ]
+      @@ [
+           write early tick;
+           write dep (plus early 5.);
+           loop_n i width (seq (set tap (plus dep 10.) i) (set dep (plus early 6.) i));
+           write forward forward_value;
+           write late (plus forward 100.);
+           write out (plus late 40.);
+         ]
+      @ if stored then [ write tap_at_read (plus dep 10.) ] else []
     in
-    let materialized = [ early; forward; late ] @ if stored then [ dep; tap ] else [] in
+    let materialized =
+      [ early; forward; late ] @ if stored then [ dep; tap; tap_at_read ] else []
+    in
     let lowered = optimize ~name ~materialized llc in
     let placements = lowered.LL.optimize_ctx.placements in
     let reads self source =
@@ -398,18 +402,20 @@ let () =
       Context.compile ~name ~prelowered:lowered ~lowered_transform (Context.auto ())
         Asgns.empty_comp Idx.Empty
     in
-    (Context.run ctx routine, early, dep, tap, out)
+    (Context.run ctx routine, early, dep, tap, out, tap_at_read)
   in
-  let ref_ctx, _, _, ref_tap, ref_out =
+  let ref_ctx, _, _, ref_snapshot, ref_out, ref_tap =
     run_case ~name:"buffer_alias_components_reference" ~aliasing:false ~shield:false ~stored:true
   in
   let ref_tap = Context.get_values ref_ctx ref_tap
   and ref_out = Context.get_values ref_ctx ref_out in
   let exact = Array.equal Float.equal in
   let expected bias = Array.init width ~f:(fun i -> Float.of_int i +. bias) in
-  p "components: the materialized taps and outputs match their closed forms"
-    (exact ref_tap (expected 16.)
-    && exact ref_out (Array.init width ~f:(fun i -> Float.of_int ((2 * i) + 167))));
+  p "components: the materialized snapshot keeps the earlier dependency value"
+    (exact (Context.get_values ref_ctx ref_snapshot) (expected 16.));
+  p "components: the materialized read-time tap and output match their closed forms"
+    (exact ref_tap (expected 17.)
+    && exact ref_out (Array.init width ~f:(fun i -> Float.of_int ((2 * i) + 168))));
   List.iter
     [
       ("buffer_alias_components", true, false);
@@ -418,7 +424,7 @@ let () =
       ("buffer_alias_shield_no_alias", false, true);
     ]
     ~f:(fun (name, aliasing, shield) ->
-      let ctx, early, dep, tap, out = run_case ~name ~aliasing ~shield ~stored:false in
+      let ctx, early, dep, tap, out, _ = run_case ~name ~aliasing ~shield ~stored:false in
       p
         (name ^ ": the upstream buffer has the expected aliasing")
         (match Context.observability ctx early with
@@ -440,7 +446,7 @@ let () =
               (Option.value (Context.explain_observability ctx tap status) ~default:"readable");
             false);
       p
-        (name ^ ": the host replay matches the materialized tap")
+        (name ^ ": the host replay matches the materialized read-time tap")
         (match Context.get_values ctx tap with
         | values -> exact values ref_tap
         | exception Utils.User_error msg ->

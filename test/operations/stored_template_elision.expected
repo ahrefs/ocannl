@@ -49,6 +49,9 @@ consumer kept loop: executed values are the reduction's: true
 consumer kept loop: the deferred reading agrees with the materialized one: true
 write index: w is deferred: true
 write index: its loop decides nothing in the stored template: true
+nested replay: the tap retains the separately stored merge dependency: true
+nested replay: the dead arm leaves the live cell value: true
+nested replay: the live arm refuses the cross-routine merge splice: true
 consumer where 0 x v (v live): routine A defers v, its template reading the merge buffer: true
 consumer where 0 x v (v live): routine B is refused for the cross-routine merge splice: true
 consumer where (i < 2) x v (undecided): routine A defers v, its template reading the merge buffer: true

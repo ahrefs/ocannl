@@ -28,7 +28,8 @@ replay: the host read matches the materialized reader: true
 launch-bound replay: the virtual tap needs a launch index: true
 launch-bound replay: the early buffer can still alias: true
 launch-bound replay: the forward result matches the closed form with aliasing on and off: true
-components: the materialized taps and outputs match their closed forms: true
+components: the materialized snapshot keeps the earlier dependency value: true
+components: the materialized read-time tap and output match their closed forms: true
 buffer_alias_components: the tap is virtual: true
 buffer_alias_components: stored replay reads dep: true
 buffer_alias_components: the dependency is virtual: true
@@ -36,7 +37,7 @@ buffer_alias_components: stored replay reads early: true
 buffer_alias_components: the upstream buffer has the expected aliasing: true
 buffer_alias_components: the forward output matches the materialized run: true
 buffer_alias_components: the virtual tap is recomputable: true
-buffer_alias_components: the host replay matches the materialized tap: true
+buffer_alias_components: the host replay matches the materialized read-time tap: true
 buffer_alias_components_no_alias: the tap is virtual: true
 buffer_alias_components_no_alias: stored replay reads dep: true
 buffer_alias_components_no_alias: the dependency is virtual: true
@@ -44,7 +45,7 @@ buffer_alias_components_no_alias: stored replay reads early: true
 buffer_alias_components_no_alias: the upstream buffer has the expected aliasing: true
 buffer_alias_components_no_alias: the forward output matches the materialized run: true
 buffer_alias_components_no_alias: the virtual tap is recomputable: true
-buffer_alias_components_no_alias: the host replay matches the materialized tap: true
+buffer_alias_components_no_alias: the host replay matches the materialized read-time tap: true
 buffer_alias_shield: the tap is virtual: true
 buffer_alias_shield: stored replay reads dep: true
 buffer_alias_shield: stored replay reads early: true
@@ -52,7 +53,7 @@ buffer_alias_shield: the upstream buffer has the expected aliasing: true
 buffer_alias_shield: the shield is stored: true
 buffer_alias_shield: the forward output matches the materialized run: true
 buffer_alias_shield: the virtual tap is recomputable: true
-buffer_alias_shield: the host replay matches the materialized tap: true
+buffer_alias_shield: the host replay matches the materialized read-time tap: true
 buffer_alias_shield_no_alias: the tap is virtual: true
 buffer_alias_shield_no_alias: stored replay reads dep: true
 buffer_alias_shield_no_alias: stored replay reads early: true
@@ -60,4 +61,4 @@ buffer_alias_shield_no_alias: the upstream buffer has the expected aliasing: tru
 buffer_alias_shield_no_alias: the shield is stored: true
 buffer_alias_shield_no_alias: the forward output matches the materialized run: true
 buffer_alias_shield_no_alias: the virtual tap is recomputable: true
-buffer_alias_shield_no_alias: the host replay matches the materialized tap: true
+buffer_alias_shield_no_alias: the host replay matches the materialized read-time tap: true
