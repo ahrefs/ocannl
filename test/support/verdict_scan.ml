@@ -10084,6 +10084,13 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
         in
         go expr
 
+      method! module_expr env me =
+        match me.pmod_desc with
+        | Pmod_functor _ -> self#with_saved_lazy (fun () -> super#module_expr env me)
+        | _ -> super#module_expr env me
+
+      method! class_expr env ce = self#with_saved_lazy (fun () -> super#class_expr env ce)
+
       method! expression env expr =
         (* Track [x := e] and [x.contents <- e] writes on the underlying root binding so aliased ref
            mutations ([let alias = ready in alias := ...]) associate with the shared ref target. *)

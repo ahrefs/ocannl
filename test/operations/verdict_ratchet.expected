@@ -896,6 +896,7 @@ refuses a disallowed call in a sequence prefix inside an immediately applied ano
 refuses a disallowed call in a forced lazy sequence prefix inside an immediately applied anonymous function whose record field is projected: true
 refuses a disallowed call in a named helper invoked inside an immediately applied anonymous function whose record field is projected: true
 refuses an eager ambient read passed to an immediately applied anonymous function that consumes it inside an explicit Ll_test.advertised policy: true
+refuses a lazy policy-wrapper force after an uninstantiated functor force and an unwrapped claim: true
 refuses a non-allowlisted leg-gate call, an ambient-policy mismatch, a stale leg-gate exemption, and a leg-gate reader that raised: true
 a claim reader's exception on a source that parses reaches the scanner-defect refusal, not the parse one: true
 a syntax matrix cell whose reader raises reads as a reader defect, not a parse failure: true
