@@ -252,6 +252,7 @@ an unpinned search in a non-default select arm is refused: true
 a pinned search in a non-default select arm passes: true
 an inline test in a non-default select arm requires a per-module alias: true
 a default-module-set stanza discovers a select target and checks its arms: true
+a vector-file key literal in a sibling's non-default select arm invalidates an initialization pin: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:57263e03b8b032365fbd586bbd2705a3] stderr from Verdict-linked
@@ -473,6 +474,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:f1f5e5ad4613c408d71f8a02b4462be9] non-default select arm
   [scanner-refusal:4112d0c301944346aa5b2b228db48361] non-default select arm
   [scanner-refusal:c32893cb68f676d5b920e664ddd544a1] default-module-set stanza discovers
+  [scanner-refusal:cc3f3f4d2c2871eaf60a3bbe9f670f42] invalidates an initialization
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
   [scanner-refusal:f11c09a8318b3a7863444256973f57d4] running an executable
   [scanner-refusal:941a9fb77d867c7b1576a0f19ee5db3b] declares

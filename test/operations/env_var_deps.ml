@@ -7062,6 +7062,23 @@ let select_arm_control () =
         in
         run_checker ~root ~exe ("." :: paths)
       in
+      let sibling_reset_arm =
+        write_file (Stdlib.Filename.concat root "t/dune") default_set_dune;
+        write_file (Stdlib.Filename.concat root "t/gate.ml") "let () = ()\n";
+        write_file
+          (Stdlib.Filename.concat root "t/probe.ml")
+          "let () = Fissioned_chain.small_menu ()\nlet _ = Autotune.tune ()\n";
+        write_file (Stdlib.Filename.concat root "t/helper.ml") "let () = ()\n";
+        write_file
+          (Stdlib.Filename.concat root "t/helper.real.ml")
+          (Printf.sprintf "let reset () = Utils.state_config ~key:%S ~data:\"-1\"\n" width_key);
+        write_file (Stdlib.Filename.concat root "t/helper.missing.ml") "let () = ()\n";
+        let paths =
+          "t/dune" :: "t/gate.ml" :: "t/probe.ml" :: "t/helper.ml" :: "t/helper.real.ml"
+          :: "t/helper.missing.ml" :: context_paths
+        in
+        run_checker ~root ~exe ("." :: paths)
+      in
       let clean_ok = exited 0 clean in
       let gate_ok =
         exited 1 gate_arm
@@ -7075,6 +7092,9 @@ let select_arm_control () =
       let pinned_ok = exited 0 pinned_search_arm in
       let inline_ok = exited 1 inline_arm && says "`probe.ml` holds inline tests" inline_arm in
       let default_set_ok = exited 1 default_set_arm && says "starts a search" default_set_arm in
+      let sibling_reset_ok =
+        exited 1 sibling_reset_arm && says "starts a search" sibling_reset_arm
+      in
       List.iter
         [
           ("clean", clean_ok, clean);
@@ -7084,6 +7104,7 @@ let select_arm_control () =
           ("pinned_search", pinned_ok, pinned_search_arm);
           ("inline", inline_ok, inline_arm);
           ("default_set", default_set_ok, default_set_arm);
+          ("sibling_reset", sibling_reset_ok, sibling_reset_arm);
         ]
         ~f:(fun (label, ok, (status, text)) ->
           if not ok then
@@ -7099,7 +7120,11 @@ let select_arm_control () =
       Verdict.p "a pinned search in a non-default select arm passes" pinned_ok;
       Verdict.p "an inline test in a non-default select arm requires a per-module alias" inline_ok;
       Verdict.p "a default-module-set stanza discovers a select target and checks its arms"
-        default_set_ok)
+        default_set_ok;
+      Verdict.p
+        "a vector-file key literal in a sibling's non-default select arm invalidates an \
+         initialization pin"
+        sibling_reset_ok)
 
 let () =
   match Array.to_list argv with

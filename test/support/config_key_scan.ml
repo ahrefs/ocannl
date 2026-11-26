@@ -1715,7 +1715,7 @@ let initialization_items content =
     Three kinds of argument are therefore not sources. Anything that is not a [.ml] file: the config
     file the rule depends on, the reference file, the executable itself. Dune's preprocessed twin
     [x.pp.ml] of an [x.ml] that is in the list — those are the ppx expansion of a file already
-    scanned, so they would double every census, and they exist only where the library that owns it
+    scanned, so they would double every census, and they exist only where the library that owns them
     is built, which is what would make the census differ between a machine with the CUDA toolchain
     and one without; a twin is dropped only when its original is present, so a source genuinely
     named [x.pp.ml] is not silently lost. And the generated target [d/t.ml] of a Dune [(select)]
@@ -1735,14 +1735,8 @@ let select_target_of_arm path =
   match String.chop_suffix path ~suffix:".ml" with
   | None -> None
   | Some without_ext -> (
-      let split_at =
-        String.rfindi without_ext ~f:(fun _ c -> Char.equal c '/' || Char.equal c '\\')
-      in
-      let prefix, base =
-        match split_at with
-        | None -> ("", without_ext)
-        | Some i -> (String.prefix without_ext (i + 1), String.drop_prefix without_ext (i + 1))
-      in
+      let base = Stdlib.Filename.basename without_ext in
+      let prefix = String.drop_suffix without_ext (String.length base) in
       match String.lsplit2 base ~on:'.' with
       | Some (stem, variant)
         when (not (String.is_empty stem))
