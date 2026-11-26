@@ -1041,20 +1041,48 @@ else
   rm -f "$matrix_document"
 fi
 
+# Declared Mac peer boxes (gh-ocannl-1832): derived from benchmarks/check-box.sh's
+# box_profile (`mps metal-sdk`) rather than restated as a second box list here.
+# Whichever recognized Mac owns LOCAL_BOX has its peer Macs exempted from UNITS;
+# a misconfigured LOCAL_BOX or any non-Mac box missing from UNITS still fails
+# loudly at startup, and any exempted box is passed to aggregate-skips.sh via
+# --unswept-box so completeness is stated over the required sweep boxes rather
+# than every declared box.
+unswept_measurement_box() {
+  local check_box=$SWEEP_TOOLS/../benchmarks/check-box.sh local_prof peer_prof
+  [ -r "$check_box" ] || return 1
+  local_prof=$(bash "$check_box" --profile "$LOCAL_BOX" 2>/dev/null) || return 1
+  [ "$local_prof" = "mps metal-sdk" ] || return 1
+  peer_prof=$(bash "$check_box" --profile "$1" 2>/dev/null) || return 1
+  [ "$peer_prof" = "mps metal-sdk" ]
+}
+
 # The declaration owns which boxes constitute completeness; UNITS owns how to
 # reach them. Relate the two so adding or renaming a declared box cannot leave a
 # matrix member that no sweep unit can ever satisfy. Units absent from a historical
 # target's declaration still contribute backend evidence but not environment evidence.
+unswept_boxes=()
 if [ ${#known_boxes[@]} -gt 0 ]; then
   scheduled_boxes=()
   for unit in "${UNITS[@]}"; do
     IFS=: read -r box _ <<<"$unit"
     contains "$box" "${scheduled_boxes[@]:-}" || scheduled_boxes+=("$box")
   done
+  swept_known_boxes=()
   for box in "${known_boxes[@]}"; do
-    contains "$box" "${scheduled_boxes[@]}" ||
+    if contains "$box" "${scheduled_boxes[@]}"; then
+      swept_known_boxes+=("$box")
+    elif unswept_measurement_box "$box"; then
+      unswept_boxes+=("$box")
+    else
       die "declared measurement box '$box' has no sweep unit"
+    fi
   done
+  if [ ${#swept_known_boxes[@]} -gt 0 ]; then
+    known_boxes=("${swept_known_boxes[@]}")
+  else
+    known_boxes=()
+  fi
 fi
 
 # Where a unit's per-action verdict records live: beside the worktree, like its
@@ -3328,6 +3356,9 @@ if [ "$FORCE" = 1 ] && [ -z "$TARGET" ]; then
   done <<<"$known_backends"
   for box in "${known_boxes[@]:-}"; do
     [ -n "$box" ] && aggregate_args+=(--known-box "$box")
+  done
+  for box in "${unswept_boxes[@]:-}"; do
+    [ -n "$box" ] && aggregate_args+=(--unswept-box "$box")
   done
   for ((i = 0; i < ${#SKIP_RUN_BACKENDS[@]}; i++)); do
     aggregate_args+=(--run "${SKIP_RUN_BACKENDS[$i]}" "${SKIP_RUN_BOXES[$i]}" \

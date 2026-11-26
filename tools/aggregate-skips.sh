@@ -27,8 +27,16 @@
 #   tools/aggregate-skips.sh \
 #     --known cc --known multidev_cc --known metal --known cuda --known hip \
 #     --known-box m4-max --known-box minix --known-box rog-nv \
+#     [--unswept-box m4-pro] \
 #     --run cc m4-max /path/to/cc.verdict-records \
 #     --run metal m4-max /path/to/metal.verdict-records
+#
+# `--unswept-box BOX` (repeatable) names a declared measurement box excluded from
+# the sweep's required matrix (for example, a Mac peer covered by the local macOS
+# lane): the report prints `unswept declared boxes (excluded from required matrix)`,
+# scopes its environment completeness and FAIL/PASS wording from "declared boxes"
+# to "required sweep boxes", and refuses a box passed as both `--known-box` and
+# `--unswept-box` (exit 2).
 #
 # An outside-sweep record (`Verdict.skipped ~aggregation:(`Outside_sweep owner)`)
 # carries a fourth field, its owner -- `ci-step:<workflow>:<alias>:<step>` or
@@ -47,6 +55,7 @@ set -uo pipefail
 
 known=()
 known_boxes=()
+unswept_boxes=()
 run_backends=()
 run_boxes=()
 run_records=()
@@ -70,6 +79,11 @@ while [ $# -gt 0 ]; do
     --known-box)
       [ $# -ge 2 ] || die "--known-box needs a box"
       known_boxes+=("$2")
+      shift 2
+      ;;
+    --unswept-box)
+      [ $# -ge 2 ] || die "--unswept-box needs a box"
+      unswept_boxes+=("$2")
       shift 2
       ;;
     --run)
@@ -114,6 +128,24 @@ for ((i = 0; i < ${#known_boxes[@]}; i++)); do
   done
 done
 
+for ((i = 0; i < ${#unswept_boxes[@]}; i++)); do
+  for ((j = i + 1; j < ${#unswept_boxes[@]}; j++)); do
+    [ "${unswept_boxes[$i]}" != "${unswept_boxes[$j]}" ] ||
+      die "duplicate unswept box '${unswept_boxes[$i]}'"
+  done
+  if [ ${#known_boxes[@]} -gt 0 ] && contains "${unswept_boxes[$i]}" "${known_boxes[@]}"; then
+    die "box '${unswept_boxes[$i]}' cannot be both known and unswept"
+  fi
+done
+
+if [ ${#unswept_boxes[@]} -gt 0 ]; then
+  box_plural="required sweep boxes"
+  box_every="every required sweep box"
+else
+  box_plural="declared boxes"
+  box_every="every declared box"
+fi
+
 for ((i = 0; i < ${#run_backends[@]}; i++)); do
   backend=${run_backends[$i]}
   box=${run_boxes[$i]}
@@ -136,7 +168,10 @@ if [ ${#run_backends[@]} -eq 0 ]; then
   else
     report_line "completed boxes: <none>"
     report_line "missing boxes: $(join_by_comma "${known_boxes[@]}")"
-    report_line "environment status: insufficient (0 of ${#known_boxes[@]} declared boxes completed; need at least 2)"
+    if [ ${#unswept_boxes[@]} -gt 0 ]; then
+      report_line "unswept declared boxes (excluded from required matrix): $(join_by_comma "${unswept_boxes[@]}")"
+    fi
+    report_line "environment status: insufficient (0 of ${#known_boxes[@]} $box_plural completed; need at least 2)"
   fi
   report_line "environment result: NOT AGGREGATED"
   exit 0
@@ -170,6 +205,7 @@ if [ ${#known_boxes[@]} -gt 0 ]; then
   environment_records=("${run_records[@]}")
   for box in "${run_boxes[@]}"; do
     contains "$box" "${known_boxes[@]}" && continue
+    [ ${#unswept_boxes[@]} -gt 0 ] && contains "$box" "${unswept_boxes[@]}" && continue
     contains "$box" "${undeclared_boxes[@]:-}" || undeclared_boxes+=("$box")
   done
 fi
@@ -332,6 +368,9 @@ else
   else
     report_line "missing boxes: $(join_by_comma "${missing_boxes[@]}")"
   fi
+  if [ ${#unswept_boxes[@]} -gt 0 ]; then
+    report_line "unswept declared boxes (excluded from required matrix): $(join_by_comma "${unswept_boxes[@]}")"
+  fi
   if [ ${#undeclared_boxes[@]} -gt 0 ]; then
     report_line "undeclared boxes (their executions count, their absence does not): $(join_by_comma "${undeclared_boxes[@]}")"
   fi
@@ -339,24 +378,24 @@ else
   if [ ${#missing_boxes[@]} -eq 0 ]; then
     environment_count=$(wc -l <"$tmp/common-environment" | tr -d ' ') ||
       die "cannot count common environment skip records"
-    report_line "environment status: complete (${#completed_boxes[@]} of ${#known_boxes[@]} declared boxes completed)"
+    report_line "environment status: complete (${#completed_boxes[@]} of ${#known_boxes[@]} $box_plural completed)"
     if [ "$environment_count" -eq 0 ]; then
-      report_line "environment result: PASS -- no claim was skipped on every declared box"
+      report_line "environment result: PASS -- no claim was skipped on $box_every"
     else
-      report_line "environment result: FAIL -- $environment_count claim(s) skipped on every declared box"
+      report_line "environment result: FAIL -- $environment_count claim(s) skipped on $box_every"
       while IFS=$'\t' read -r test_id claim; do
-        printf 'FAIL: skipped on every declared box: %s: %s\n' "$test_id" "$claim" ||
+        printf 'FAIL: skipped on %s: %s: %s\n' "$box_every" "$test_id" "$claim" ||
           die "cannot write report"
       done <"$tmp/common-environment"
       failed=1
     fi
   elif [ ${#completed_boxes[@]} -lt 2 ]; then
-    report_line "environment status: insufficient (${#completed_boxes[@]} of ${#known_boxes[@]} declared boxes completed; need at least 2 unless the matrix is complete)"
+    report_line "environment status: insufficient (${#completed_boxes[@]} of ${#known_boxes[@]} $box_plural completed; need at least 2 unless the matrix is complete)"
     report_line "environment result: NOT AGGREGATED"
   else
     environment_count=$(wc -l <"$tmp/common-environment" | tr -d ' ') ||
       die "cannot count common environment skip records"
-    report_line "environment status: partial (${#completed_boxes[@]} of ${#known_boxes[@]} declared boxes completed)"
+    report_line "environment status: partial (${#completed_boxes[@]} of ${#known_boxes[@]} $box_plural completed)"
     if [ "$environment_count" -eq 0 ]; then
       report_line "environment result: CLEAR across completed boxes -- absent boxes remain unknown"
     else

@@ -16791,6 +16791,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
+  ../../benchmarks/check-box.sh
   ../../benchmarks/fixture_digest.py
   ../../bin/dune
   ../../tools/aggregate-skips.sh

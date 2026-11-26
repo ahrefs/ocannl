@@ -14,7 +14,7 @@
 # gh-ocannl-1433: a fresh worktree's drivers find the box's shared venv (route named, and its
 # absence still a GAP), and the fleet's names for the boxes are taken -- pinned against wake-lab.sh's
 # endpoint map and FLEET_BOXES where this host can read them; a fleet box that measures nothing
-# (macbook-pro) is on that roster and is refused by name.
+# (mapped to `-` in fleet_row) is refused by name.
 # Usage: benchmarks/test-check-box.sh [--keep|--only REGEX|--help]
 #
 # The subject runs in place against a scratch venv (python3 -m venv, so it has a sys.prefix of
@@ -112,8 +112,8 @@ rc  linux-image-7.0.0-31-generic  7.0.0-31.31    amd64        Signed kernel imag
 DPKG
 
 # One tiny valid safetensors file under a real workload's name, recorded as rog-nv's bytes in a
-# scratch DIGESTS that declares the real file's boxes, and as minix's and m4-max's copies of them --
-# so tuf is the declared box with no row for it (the by-name check's gap).
+# scratch DIGESTS that declares the real file's boxes, and as minix's, m4-max's and m4-pro's copies
+# of them -- so tuf is the declared box with no row for it (the by-name check's gap).
 python3 - "$TMP/fixtures/mlp_small.safetensors" <<'PY' || exit 2
 import json, struct, sys
 head = json.dumps({"w": {"dtype": "F32", "shape": [1], "data_offsets": [0, 4]},
@@ -125,7 +125,7 @@ python3 "$here/fixture_digest.py" --record --origin rog-nv --digests "$TMP/DIGES
   "$TMP/fixtures/mlp_small.safetensors" >/dev/null || exit 2
 # rog-nv's row alone, for the leg whose DIGESTS stops declaring minix.
 cp "$TMP/DIGESTS.txt" "$TMP/DIGESTS-rog-only.txt"
-for b in minix m4-max; do
+for b in minix m4-max m4-pro; do
   python3 "$here/fixture_digest.py" --record-matching --origin "$b" --digests "$TMP/DIGESTS.txt" \
     "$TMP/fixtures/mlp_small.safetensors" >/dev/null || exit 2
 done
@@ -277,6 +277,18 @@ if harness_leg 'device: hip and mps profiles'; then
   if [ "$rc" = 0 ] && grep -q '^check-box: toolchain: ok -- macOS SDK /fake/MacOSX.sdk' "$TMP/runs/mps"; then
     report 0 'an mps box reads the macOS SDK as its toolchain'
   else report 1 'an mps box reads the macOS SDK as its toolchain' "rc=$rc"; fi
+  FAKE_TORCH=mps check mps-pro --box m4-pro --fixture mlp_small
+  if [ "$rc" = 0 ] && grep -q '^check-box: toolchain: ok -- macOS SDK /fake/MacOSX.sdk' "$TMP/runs/mps-pro"; then
+    report 0 'm4-pro uses the mps and macOS SDK profile'
+  else report 1 'm4-pro uses the mps and macOS SDK profile' "rc=$rc"; fi
+  got=$("$SUBJECT" --profile m4-max),$("$SUBJECT" --profile m4-pro),$("$SUBJECT" --profile rog-nv),$("$SUBJECT" --profile minix)
+  [ "$got" = "mps metal-sdk,mps metal-sdk,cuda nvcc,hip hipcc" ]
+  report $? '--profile reports each box profile as data' "got $got"
+  rc=0; "$SUBJECT" --profile unknown-box >"$TMP/runs/profile-unknown" 2>&1 || rc=$?
+  [ "$rc" = 1 ] && [ ! -s "$TMP/runs/profile-unknown" ]
+  report $? '--profile exits 1 silently for an unknown box' "rc=$rc"
+  rc=0; "$SUBJECT" --profile >"$TMP/runs/profile-missing" 2>&1 || rc=$?
+  usage_leg '--profile without a value exits 2' profile-missing '--profile takes one box ID'
 fi
 if harness_leg 'gap: python headers'; then
   FAKE_INCLUDEPY=$TMP/absent check headers --box rog-nv
@@ -529,14 +541,35 @@ if harness_leg 'fleet names'; then
   FAKE_TORCH=hip check fleet-minix --box minix-amd-linux --fixture mlp_small
   [ "$rc" = 0 ] && tail -n 1 "$TMP/runs/fleet-minix" | grep -qx 'check-box: minix: READY (10 items)'
   report $? "minix-amd-linux is minix, a hip box" "rc=$rc"
-  check fleet-macbook --box macbook-pro
-  usage_leg 'a fleet box that measures nothing is refused by name, as no measurement box' fleet-macbook \
-    "^check-box: 'macbook-pro' is a fleet box that measures nothing, so not a measurement box: there is nothing to check"
-  ! grep -q '^check-box: [a-z-]*: \(ok\|GAP\|skip\) -- ' "$TMP/runs/fleet-macbook"
-  report $? 'and nothing is judged for it'
+  FAKE_TORCH=mps check fleet-macbook --box macbook-pro --fixture mlp_small
+  if [ "$rc" = 0 ] && head -n 1 "$TMP/runs/fleet-macbook" |
+       grep -qx "check-box: --box macbook-pro is the fleet's name for measurement box m4-pro" &&
+     tail -n 1 "$TMP/runs/fleet-macbook" | grep -qx 'check-box: m4-pro: READY (10 items)'; then
+    report 0 "macbook-pro is m4-pro, an mps box"
+  else
+    report 1 "macbook-pro is m4-pro, an mps box" "rc=$rc"
+    sed 's/^/      | /' "$TMP/runs/fleet-macbook"
+  fi
   got=$("$SUBJECT" --canonical-box macbook-pro)
+  [ "$got" = m4-pro ]
+  report $? 'a driver given macbook-pro records m4-pro' "got $got"
+  # A fleet box mapped to `-` in fleet_row is still refused by name (exercised on a scratch copy
+  # now that every current fleet box measures).
+  non_meas=$TMP/non-measuring/benchmarks
+  mkdir -p "$non_meas"
+  cp "$here/bench_venv.py" "$here/fixture_digest.py" "$non_meas/"
+  sed 's/macbook-pro) echo m4-pro ;;/macbook-pro) echo - ;;/' "$SUBJECT" >"$non_meas/check-box.sh"
+  chmod +x "$non_meas/check-box.sh"
+  rc=0
+  "$non_meas/check-box.sh" --venv "$venv" --fixture-dir "$TMP/fixtures" --digests "$TMP/DIGESTS.txt" \
+    --box macbook-pro >"$TMP/runs/fleet-non-measuring" 2>&1 || rc=$?
+  usage_leg 'a fleet box mapped to - is refused by name, as no measurement box' fleet-non-measuring \
+    "^check-box: 'macbook-pro' is a fleet box that measures nothing, so not a measurement box: there is nothing to check"
+  ! grep -q '^check-box: [a-z-]*: \(ok\|GAP\|skip\) -- ' "$TMP/runs/fleet-non-measuring"
+  report $? 'and nothing is judged for it'
+  got=$("$non_meas/check-box.sh" --canonical-box macbook-pro)
   [ "$got" = macbook-pro ]
-  report $? 'a driver given it records the name it was given, which check-box refuses' "got $got"
+  report $? 'a driver given a non-measuring fleet box records the name it was given, which check-box refuses' "got $got"
   check fleet-wsl --box rog-nv-wsl
   usage_leg 'a WSL alias is no measurement box, and the refusal lists the fleet names' fleet-wsl \
     "nor the fleet's name for one \(mac-studio rog-nv-linux"
