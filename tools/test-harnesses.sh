@@ -792,6 +792,10 @@ serial_member() { # SCRIPT STDOUT STDERR [ARGS...] (STDOUT empty unless --ci-rea
       2>"$error" || rc=$?
   fi
   member_elapsed=$((SECONDS - started_at))
+  # Record observed exit status and elapsed time before draining relays so an
+  # interruption during relay drain still reports this member in --timings;
+  # member_ended updates ended[i] if verdict checks change the final status.
+  [ -z "${serial_running_idx:-}" ] || ended[$serial_running_idx]=$rc member_times[$serial_running_idx]=$member_elapsed
   serial_running_idx=
   case $rc in
     # A descendant may outlive the interrupted member with stderr or stdout open.
