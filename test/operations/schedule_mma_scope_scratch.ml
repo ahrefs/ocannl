@@ -28,6 +28,8 @@
    The scratch size is never restated here: it is read off the capability the emitter derives it
    from. Only Metal converts at a threadgroup-resident boundary; elsewhere the legs are skipped. *)
 
+(* cc-fp-contract: not-cc -- every device bitwise claim is in a Metal-only leg; on cc it skips *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -233,7 +235,7 @@ let () =
     {
       Ir.Backend_intf.no_codegen_capabilities with
       mma_kernel_workgroup_bytes =
-        (fun ~triples ->
+        (fun ~workgroup_threads:_ ~triples ->
           List.count triples ~f:(fun (d_prec, a_prec, b_prec) ->
               List.for_all [ d_prec; a_prec; b_prec ] ~f:(Ir.Ops.equal_prec Ir.Ops.half)));
     }
@@ -247,7 +249,8 @@ let () =
   let charging =
     {
       Ir.Backend_intf.no_codegen_capabilities with
-      mma_kernel_workgroup_bytes = (fun ~triples -> if List.is_empty triples then 0 else 256);
+      mma_kernel_workgroup_bytes =
+        (fun ~workgroup_threads:_ ~triples -> if List.is_empty triples then 0 else 256);
       workgroup_allocation_alignment = 4;
     }
   in
@@ -317,15 +320,25 @@ let () =
              (Context.codegen_capabilities (Context.auto ())).mma_kernel_workgroup_bytes
            in
            let h = Ir.Ops.half in
-           (bytes ~triples:[ (h, h, h) ], bytes ~triples:[ (h, h, h); (h, h, h) ]))
+           ( bytes ~workgroup_threads:simd_width ~triples:[ (h, h, h) ],
+             bytes ~workgroup_threads:simd_width ~triples:[ (h, h, h); (h, h, h) ],
+             bytes ~workgroup_threads:(2 * simd_width) ~triples:[ (h, h, h) ] ))
          ~finally:(fun () -> Numerics.set_policy saved))
   in
-  let scratch () = fst (Lazy.force scratches) in
+  let scratch () =
+    let s, _, _ = Lazy.force scratches in
+    s
+  in
   in_leg ~leg
     "the converted half boundary charges a positive scratch, once per kernel however many scopes"
     (fun label ->
-      let scratch, scratch_twice = Lazy.force scratches in
+      let scratch, scratch_twice, _ = Lazy.force scratches in
       p label (scratch > 0 && scratch_twice = scratch));
+  in_leg ~leg
+    "the converted half boundary scales its per-kernel scratch with the threadgroup's simdgroup \
+     count" (fun label ->
+      let scratch, _, scratch_2sg = Lazy.force scratches in
+      p label (scratch > 0 && scratch_2sg = 2 * scratch));
   (* R: [bk] so that the unpadded tiles total exactly [limit]. F: one k block narrower, the A tile's
      stride padded until the tiles total [limit - scratch]. *)
   let tile_row = half_bytes * (bm + n) in
@@ -375,7 +388,8 @@ let () =
         && Option.value_map r_values ~default:false ~f:(fun got ->
             Array.equal Float.equal got expected)));
   in_leg ~leg:shapes_leg
-    "R control: the unconverted kernel is tensorized and declares no coordinate table" (fun label ->
+    "R control: the unconverted kernel is tensorized and declares no conversion scratch"
+    (fun label ->
       let r_auto = Lazy.force r_auto in
       (* Without the intrinsic census a scalar-fallback rendering would also lack the table. *)
       let tensorized =
@@ -389,7 +403,7 @@ let () =
       p label
         (Option.is_some (Lazy.force r_values)
         && tensorized
-        && not (String.is_substring (Generated.read r_auto.routine) ~substring:"ocannl_mma_rc8")));
+        && not (String.is_substring (Generated.read r_auto.routine) ~substring:"ocannl_mma_dscr")));
   in_leg ~leg:shapes_leg
     "R wide: the same tiles plus the scope scratch are refused at Hardware_limits, requesting \
      exactly tiles + scratch" (fun label ->
@@ -435,7 +449,7 @@ let () =
       p label
         (Option.value_map (Lazy.force f_values) ~default:false ~f:(fun got ->
              Array.equal Float.equal got expected)));
-  in_leg ~leg:shapes_leg "F wide: the source declares one table for its two converted scopes"
+  in_leg ~leg:shapes_leg "F wide: the source declares one scratch for its two converted scopes"
     (fun label ->
       let f_wide = Lazy.force f_wide in
       p label
@@ -443,6 +457,106 @@ let () =
         &&
         let src = Generated.read f_wide.routine in
         let count pattern = List.length (String.substr_index_all src ~may_overlap:false ~pattern) in
-        count "threadgroup float ocannl_mma_rc8[" = 1
+        count "threadgroup float ocannl_mma_dscr[" = 1
         && count "{ /* simdgroup fragment " = 2
-        && scratch () = f_wide.estimate - staged_bytes ~bk:(bk_f ()) ~a_ld:(bk_f () + a_pad ())))
+        && scratch () = f_wide.estimate - staged_bytes ~bk:(bk_f ()) ~a_ld:(bk_f () + a_pad ())));
+  (* gh-ocannl-2372: two simdgroups (64 threads: 32 x 2) in one threadgroup concurrently running a
+     converted wide-bf16 [Tile_mma] on disjoint 16x32 row halves of a 32x32 output. Discriminating
+     inputs (varying with both indices, exact in f32) catch any cross-simdgroup scratch clobbering,
+     and the compiled kernel's [staticThreadgroupMemoryLength] must equal the 2-simdgroup charge
+     (512 B). *)
+  let multi_sg =
+    lazy
+      (let ms_n = 32 and ms_k = 32 and ms_bm = 16 in
+       let fa =
+         Ll_test.weighted ~weights:[| 37; 11 |] ~modulus:255 ~offset:(-127.) ~stride:(1. /. 32.)
+       in
+       let fb =
+         Ll_test.weighted ~weights:[| 29; 53 |] ~modulus:251 ~offset:(-125.) ~stride:(1. /. 32.)
+       in
+       let make_mm tag =
+         let a =
+           NTDSL.init ~l:(tag ^ "_a") ~prec:Ir.Ops.bfloat16 ~i:[ ms_k ] ~o:[ ms_n ] ~f:fa ()
+         in
+         let b =
+           NTDSL.init ~l:(tag ^ "_b") ~prec:Ir.Ops.bfloat16 ~i:[ ms_n ] ~o:[ ms_k ] ~f:fb ()
+         in
+         let%op c = a * b in
+         Tn.update_prec c.Tensor.value Ir.Ops.bfloat16;
+         c
+       in
+       let saved = Numerics.get () in
+       Numerics.set_policy { saved with bf16_arithmetic = Numerics.Bf16_wide };
+       Exn.protect
+         ~finally:(fun () -> Numerics.set_policy saved)
+         ~f:(fun () ->
+           let c_ser = make_mm "msg_ser" in
+           let ctx_s, rt_s =
+             Context.compile (Context.auto ())
+               (named "scratch_msg_ser" (Train.forward c_ser))
+               Ir.Indexing.Empty
+           in
+           let ser_vals = Context.get_values (Context.run ctx_s rt_s) c_ser.Tensor.value in
+           let c_mma = make_mm "msg_mma" in
+           let ctx_m = Context.auto () in
+           let caps = Context.codegen_capabilities ctx_m in
+           let est = ref (-1) in
+           let transform (opt : LL.optimized) =
+             let i, j, k =
+               match
+                 List.find_exn (Ll_test.nest_paths opt.LL.llc) ~f:(fun p -> List.length p = 3)
+               with
+               | [ i; j; k ] -> (i, j, k)
+               | _ -> assert false
+             in
+             let ez, zsyms = Sched.expand_zero ~tn:c_mma.Tensor.value in
+             let zi, zj = match zsyms with [ zi; zj ] -> (zi, zj) | _ -> assert false in
+             let sp_zi, _, _ =
+               Sched.split ~axis:zi ~factor:ms_bm ~outer:LL.Workgroup ~inner:LL.Serial
+             in
+             let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
+             let sp_i, _, i_i =
+               Sched.split ~axis:i ~factor:ms_bm ~outer:LL.Workgroup ~inner:LL.Serial
+             in
+             let tz, _lane = Sched.tensorize ~i:i_i ~j ~k ~simd_width () in
+             let o = Sched.apply [ ez; sp_zi; rz; sp_i; tz ] opt in
+             est := Sched.workgroup_memory_bytes ~capabilities:caps o;
+             o
+           in
+           let (ctx_m, rt_m), compiled =
+             Ir.Compiled_kernels.with_census (fun () ->
+                 Context.compile
+                   ~lowered_transform:(fun o -> [ transform o ])
+                   ctx_m
+                   (named "scratch_msg_mma" (Train.forward c_mma))
+                   Ir.Indexing.Empty)
+           in
+           let prefill = Array.init (ms_n * ms_n) ~f:(fun idx -> Float.of_int (-4096 - idx)) in
+           let ctx_m = Context.run (Context.set_values ctx_m c_mma.Tensor.value prefill) rt_m in
+           let mma_vals = Context.get_values ctx_m c_mma.Tensor.value in
+           let census = List.map rt_m.Context.mma.Ir.C_syntax.renderings ~f:snd in
+           let compiled_bytes =
+             match compiled with [ r ] -> r.Ir.Compiled_kernels.static_workgroup_bytes | _ -> -1
+           in
+           let src = Generated.read "scratch_msg_mma" in
+           (ser_vals, mma_vals, census, !est, compiled_bytes, src)))
+  in
+  in_leg ~leg
+    "two-simdgroup converted bf16 tile-MMA allocates 2x scratch, matches static bytes, and equals \
+     the serial twin bitwise" (fun label ->
+      let ser_vals, mma_vals, census, est, compiled_bytes, src = Lazy.force multi_sg in
+      let want_bytes = 2 * scratch () in
+      let want_elems = want_bytes / Ir.Ops.prec_in_bytes Ir.Ops.single in
+      Stdio.eprintf
+        "schedule_mma_scope_scratch: 2-simdgroup est=%d compiled=%d want=%d mismatches=%d (not \
+         part of the golden)\n\
+         %!"
+        est compiled_bytes want_bytes
+        (Array.foldi ser_vals ~init:0 ~f:(fun i acc x ->
+             if Float.equal x mma_vals.(i) then acc else acc + 1));
+      p label
+        (Ll_test.all_rendered ~what:"2-simdgroup bf16" Ir.C_syntax.Mma_intrinsics census
+        && est = want_bytes && compiled_bytes = want_bytes
+        && String.is_substring src
+             ~substring:(Printf.sprintf "threadgroup float ocannl_mma_dscr[%d];" want_elems)
+        && Array.equal Float.equal ser_vals mma_vals))

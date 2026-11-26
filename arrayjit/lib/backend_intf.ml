@@ -228,9 +228,10 @@ type mma_capability = {
           addressed by a coordinate table (wmma's element order is unspecified, so no fragment-to-
           fragment copy). HIP advertises both scopes since gh-ocannl-789 (rocWMMA's
           [(f16, f16, f32)] fragments and converted boundary), and Metal advertises both since
-          gh-ocannl-837 (mixed-type [simdgroup_multiply_accumulate] plus a [thread_elements()]
-          boundary copy). Withholding only the unsupported scope preserves legal tensorized
-          schedules without letting an outer [k] split introduce extra f16 narrowing boundaries. *)
+          gh-ocannl-837 (mixed-type [simdgroup_multiply_accumulate] plus a converted destination
+          boundary, staged through per-simdgroup threadgroup scratch since gh-ocannl-2372).
+          Withholding only the unsupported scope preserves legal tensorized schedules without
+          letting an outer [k] split introduce extra f16 narrowing boundaries. *)
   mma_f16_auto_wide : bool;
       (** Whether {!Numerics.Fp16_auto} resolves wide on this backend — the backend's own
           [fp16_auto_wide] constant, which its [accum_prec] and mma arm table read through the same
@@ -256,8 +257,8 @@ type mma_capability = {
           f16 arm); CUDA sm_80+ both (its inline-PTX [m16n8k16] arm, whose accumulate is f32 in
           hardware, per statement, and since gh-ocannl-1063 that arm's per-lane registers held
           across the outer reduction); Metal both (a [simdgroup_float8x8] accumulator over bfloat
-          operand fragments behind the wide-f16 arm's [thread_elements()] boundary, gh-ocannl-923).
-      *)
+          operand fragments behind the wide-f16 arm's converted destination boundary, gh-ocannl-923,
+          gh-ocannl-2372). *)
   mma_staged_layouts :
     ((mma_input_format * mma_input_format * mma_input_format) * mma_staged_layout) list;
       (** Format triples whose cooperatively staged operand tiles the backend can read in a
@@ -879,14 +880,17 @@ type codegen_capabilities = {
           for every tile of the other's free axis (gh-ocannl-1254). The arm's own description, read
           by the cost model's operand-load count, which has no count where this is [None]: no arm,
           or a backend that does not describe its emission (the default). *)
-  mma_kernel_workgroup_bytes : triples:(Ops.prec * Ops.prec * Ops.prec) list -> int;
+  mma_kernel_workgroup_bytes :
+    workgroup_threads:int -> triples:(Ops.prec * Ops.prec * Ops.prec) list -> int;
       (** Static workgroup-shared bytes a kernel declares beyond the staged tiles for its tile-MMA
-          emission scopes, given their [(d, a, b)] storage triples: the backend's
-          [C_syntax_config.mma_kernel_workgroup_bytes], which it derives from the same predicate as
-          the kernel-scope declaration ([C_syntax_config.mma_kernel_prologue]). A per-KERNEL term,
-          not a per-scope one: non-zero only for Metal's converted destination boundary, whose
-          coordinate table is declared once per kernel however many scopes read it (gh-ocannl-1205,
-          gh-ocannl-1255). [Schedule.check_hardware_limits_classified] adds it once to the staged
+          emission scopes, given the launch's workgroup thread count and the scopes' [(d, a, b)]
+          storage triples: the backend's [C_syntax_config.mma_kernel_workgroup_bytes], which it
+          derives from the same predicate as the kernel-scope declaration
+          ([C_syntax_config.mma_kernel_prologue]). A per-KERNEL term, not a per-scope one, scaling
+          with the number of hardware simdgroups in the workgroup: non-zero only for Metal's
+          converted destination boundary, whose per-simdgroup 64-float staging scratch is declared
+          once per kernel however many scopes reuse it (gh-ocannl-1205, gh-ocannl-1255,
+          gh-ocannl-2372). [Schedule.check_hardware_limits_classified] adds it once to the staged
           tiles. *)
   workgroup_allocation_alignment : int;
       (** The granule the device's allocator rounds each workgroup-shared array up to, in bytes: the
@@ -969,7 +973,7 @@ let no_codegen_capabilities =
         ~b:_
       -> false);
     mma_operand_fragments = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
-    mma_kernel_workgroup_bytes = (fun ~triples:_ -> 0);
+    mma_kernel_workgroup_bytes = (fun ~workgroup_threads:_ ~triples:_ -> 0);
     workgroup_allocation_alignment = 1;
     workgroup_start_alignment = 1;
     workgroup_reporting_granule = 1;

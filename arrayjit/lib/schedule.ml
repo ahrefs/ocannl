@@ -10425,11 +10425,13 @@ let workgroup_allocation_bytes ~(capabilities : Backend_intf.codegen_capabilitie
   (bytes + align - 1) / align * align
 
 (* The gate and the seeding predictions lay out the same allocations, including the backend's
-   tile-MMA scratch once per kernel (gh-ocannl-1255). *)
-let kernel_workgroup_bytes ~(capabilities : Backend_intf.codegen_capabilities) ~arrays ~mma_triples
-    =
+   tile-MMA scratch once per kernel (gh-ocannl-1255, gh-ocannl-2372). *)
+let kernel_workgroup_bytes ~(capabilities : Backend_intf.codegen_capabilities) ~workgroup_threads
+    ~arrays ~mma_triples =
   let alloc = workgroup_allocation_bytes ~capabilities in
-  let scratch = capabilities.Backend_intf.mma_kernel_workgroup_bytes ~triples:mma_triples in
+  let scratch =
+    capabilities.Backend_intf.mma_kernel_workgroup_bytes ~workgroup_threads ~triples:mma_triples
+  in
   let align = capabilities.Backend_intf.workgroup_start_alignment in
   if align <= 1 then List.sum (module Int) arrays ~f:alloc + alloc scratch
   else
@@ -10491,7 +10493,8 @@ let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
         capabilities.Backend_intf.warp_reduce_workgroup_bytes ~extent:site.Low_level.wrc_extent
           ~prec:(capabilities.accum_prec (prec site.wrc_cell)))
   in
-  kernel_workgroup_bytes ~capabilities
+  let workgroup_threads = Low_level.launch_block_threads (Low_level.launch_dims opt.llc) in
+  kernel_workgroup_bytes ~capabilities ~workgroup_threads
     ~arrays:(staged @ partials @ warp_partials)
     ~mma_triples:(List.map (mma_emission_scopes opt) ~f:(fun (d, a, b) -> (prec d, prec a, prec b)))
 
@@ -10528,8 +10531,7 @@ let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limi
     (opt : Low_level.optimized) : unit =
   let capabilities = (Stdlib.Domain.DLS.get gate_capabilities_seam) capabilities in
   Option.iter limits.max_threads_per_workgroup ~f:(fun max_threads ->
-      let block = (Low_level.launch_dims opt.llc).block in
-      let block_product = Array.fold block ~init:1 ~f:( * ) in
+      let block_product = Low_level.launch_block_threads (Low_level.launch_dims opt.llc) in
       if block_product > max_threads then
         let detail =
           [%string

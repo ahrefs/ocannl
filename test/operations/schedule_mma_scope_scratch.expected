@@ -3,9 +3,11 @@ a duplicated fragment region hands the per-kernel term one triple per copy: true
 the matmul family keeps every staged tensorized seed at a limit of its gate estimate, scratch included: true
 the matmul family refutes every staged tensorized seed one byte below its gate estimate, and a tiles-only family does not: true
 the converted half boundary charges a positive scratch, once per kernel however many scopes: true
+the converted half boundary scales its per-kernel scratch with the threadgroup's simdgroup count: true
 R control: tiles of exactly the limit, no converted boundary, compile and run: true
-R control: the unconverted kernel is tensorized and declares no coordinate table: true
+R control: the unconverted kernel is tensorized and declares no conversion scratch: true
 R wide: the same tiles plus the scope scratch are refused at Hardware_limits, requesting exactly tiles + scratch: true
 F wide: tiles of limit - scratch with two converted scopes make the estimate exactly the limit: true
 F wide: the at-limit estimate compiles, links and runs, computing the product: true
-F wide: the source declares one table for its two converted scopes: true
+F wide: the source declares one scratch for its two converted scopes: true
+two-simdgroup converted bf16 tile-MMA allocates 2x scratch, matches static bytes, and equals the serial twin bitwise: true

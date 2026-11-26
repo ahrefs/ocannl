@@ -1327,6 +1327,48 @@ files.
   exact-premise verdict. The narrow models are confirmed: bfloat8x8 block-narrow, half8x8 serial-narrow. So the
   wide arm's tile cost is not inherent: a scratch boundary (per simdgroup) recovers the narrow
   tile's speed at wide values, for bf16 and f16 alike.
+- **Per-simdgroup scratch recovers Metal wide MMA tile speed; `Bf16_auto` stays wide, `Fp16_auto`
+  stays narrow on tuned training evidence** (gh-ocannl-2372, `Metal_backend.mma_d_boundary_lines`).
+  Replacing `ocannl_mma_rc8`/`thread_elements()` with `simdgroup_load`/`simdgroup_store` through
+  a per-simdgroup 64-float slice (`ocannl_mma_dscr[64 * simdgroups]`, 256 B/simdgroup via
+  `[[simdgroup_index_in_threadgroup]]` / `[[thread_index_in_simdgroup]]`) preserves bitwise wide
+  output (`mma_bf16_seed_parity` 0/1024 mismatches, plus a 2-simdgroup `[32, 2, 1]` converted bf16
+  parity + 512 B `staticThreadgroupMemoryLength` check in `schedule_mma_scope_scratch`).
+  Measured on the M4 Max (`mac-studio`, 40-core GPU), macOS 27.2.1 (26B131), exclusive Metal
+  windows, all ratios paired wide/narrow (median and range), f32 drift controls source-proven
+  byte-identical:
+  - **bf16 GEMM (`gh1051_bf16_ab.sh --repeats 50`, 16 rounds)**: at `n = 2048`, wide `mma_pd1`
+    drops from ~9 ms to `1.695 (1.644-1.867)` ms vs narrow `1.839 (1.808-1.884)` ms, paired
+    `0.924 (0.894-1.029)` (f32 control `0.999 [0.997-1.013]`); `mma_pd2` `2.149` vs `1.930` ms,
+    paired `1.120 (1.013-1.270)` (control `1.001`). Both arms now crown `mma_pd1`, so the
+    fastest-variant cost drops from `1.24x` to `0.924 (0.894-1.029)` with 24x smaller checksum
+    error (`0.00027` wide vs `0.0065` narrow). At `n = 1024`, wide `mma_pd1` `0.467` vs narrow
+    `0.536` ms, paired `0.920 (0.622-1.231)` (control `1.013`).
+  - **bf16 n = 1024 / 2048 in-process mirrored finalists (`bench_bf16_crown.exe`, 16 calls in one
+    process via `Bench_retime.retime`)**: resolves gh-ocannl-2321's noisy cross-process `n = 1024`
+    reading (`1.128 [0.898-1.717]`). At `n = 1024`, both policies crown `mma_pd1` (`0.298
+    [0.294-0.308]` ms wide vs `0.303 [0.278-0.310]` ms narrow, paired `0.984 [0.957-1.069]`, f32
+    control `0.998 [0.943-1.033]`; direct `mma_pd1/mma_pd1` confirmation `0.978 [0.938-1.080]`,
+    control `0.999 [0.960-1.038]`). At `n = 2048`, wide `mma_pd1` `1.503 (1.482-1.577)` vs narrow
+    `1.659 (1.637-1.727)` ms, paired `0.911 (0.872-0.954)` resolved across all 16 pairs (f32
+    control `1.000 [0.974-1.009]`).
+  - **f16 GEMM (`gh2195_f16_ab.sh --repeats 50`, 12 rounds)**: at `n = 2048`, wide `mma_pd1`
+    `1.738 (1.632-1.766)` vs narrow `7.267 (7.212-7.310)` ms, paired `0.238 (0.226-0.243)` (4.2x
+    faster; f32 control `0.998 [0.981-1.012]`); `mma_pd2` `2.101` vs `6.857` ms, paired `0.306
+    (0.292-0.319)`. Fastest variant per arm (wide `mma_pd1` vs narrow `regtile` `2.013` ms): paired
+    `0.864 (0.802-0.899)` (control `0.987 [0.960-1.016]`), with 11x smaller checksum error
+    (`0.00018` across all 5 wide variants vs `0.00192` narrow). At `n = 1024`, wide `mma_pd1`
+    `0.520` vs narrow `1.187` ms (`0.436 [0.331-0.518]`, control `0.998`); fastest-per-arm wide
+    `mma_pd1` vs narrow `regtile` (`0.551` ms) `0.872 (0.720-1.282)` (control `1.018`).
+  - **Tuned f16 `gpt2_mini_train` (`gh2195_f16_ab.sh --tuned-training`, 12 mirrored rounds, cold
+    searches `4460 s` wide / `4589 s` narrow, 0 contended timings, 0 scalar fallbacks)**: wide
+    shipped placement A (`F_saved[204 segs]`, 17 MMA statements) at `88.416 ms` p50 vs narrow
+    placement A (`F_saved[203 segs]`, 25 MMA statements) at `87.531 ms` p50, paired wide/narrow
+    `1.011 (0.989-1.040)` (wide slower in 8 of 12 rounds) against untuned f32 drift control
+    `0.998 (0.992-1.006)` (`66.760` vs `66.872` ms, 5 of 12). Because tuned `gpt2_mini_train` f16
+    training does not gain (and Metal's `simdgroup_half8x8` already matches serial `half` FMA
+    bitwise), `Metal_mma.fp16_auto_wide` stays `false`; explicit `fp16_arithmetic=false`
+    (`Fp16_wide`) provides the fast wide tile on Metal.
 - **The f16 tensor-unit narrowing census is measured per backend and family** (gh-ocannl-2151),
   in `test/operations/mma_bf16_seed_parity`. The narrow arm (`Fp16_narrow`) is compared with three
   exact host predictions: rounding per k step, per native intrinsic block, or once at the final
@@ -1712,20 +1754,23 @@ files.
   storage-format table** (gh-ocannl-837, `arrayjit/lib/metal_backend.ml`'s
   `mma_d_boundary_lines`). A standalone `MTLDevice.makeLibrary(source:)` probe on an Apple M4 Max
   (40-core GPU, Metal 4, macOS 26.6.2 build 25G83, Swift 6.3.3) compiled and ran half A/B fragments
-  with a `simdgroup_float8x8` accumulator. Since gh-ocannl-1075 the converted boundary loads
-  `ocannl_mma_rc8` into a float fragment, then widens/narrows each scalar cell at the coordinate
-  that fragment names (the coordinate-table principle above); no half/bfloat staging fragment
-  remains. MSL 4.1 section 6.8.1 accepts only device/threadgroup pointers for `simdgroup_load`, so
-  `mma_kernel_prologue` initializes a 64-float threadgroup table with a single writer (`lid == 0`
-  in every dimension) at kernel scope, once per kernel (gh-ocannl-1255), ahead of every converted
-  scope's opening barrier. This costs 256 static bytes per kernel; `link_proc` checks the compiled
-  kernel's actual allocation.
-  The per-lane count derives from the float fragment's `storage_type` divided by the advertised
-  32-thread width; `sizeof(thread_elements())` counts pointer bytes, not elements. Both scopes
-  keep the old `(float)`, `(half)` and `(bfloat)` casts, preserving conversion rounding.
-  `schedule_mma_matmul`'s `metal_table_boundary` pins the accumulator-typed table load and the
-  absence of cross-type copies in both wide arms/scopes: against the former emitter all four
-  structure claims fail, even while the value discriminators pass. The k=144 probe/test makes the
+  with a `simdgroup_float8x8` accumulator. Since gh-ocannl-2372 (replacing gh-ocannl-1075's
+  `ocannl_mma_rc8` coordinate-table `thread_elements()` loop, which cost ~6x on Apple M4 Max by
+  forcing accumulator fragments out of registers), the converted boundary stages each 8x8 tile
+  through a per-simdgroup 64-float slice of `threadgroup float ocannl_mma_dscr[64 * simdgroups]`
+  addressed by MSL's `[[simdgroup_index_in_threadgroup]]` and `[[thread_index_in_simdgroup]]`:
+  load widens `d` into the slice, `simdgroup_barrier(mem_flags::mem_threadgroup)`,
+  `simdgroup_load`, barrier; store reverses the order. No `thread_elements()` touches the
+  accumulator and no half/bfloat staging fragment remains. `mma_kernel_prologue` declares the
+  uninitialized scratch and per-simdgroup pointer once per kernel, costing `256 * ceil(workgroup_threads / 32)`
+  static threadgroup bytes (256 B for a 1-simdgroup kernel); `link_proc` checks the compiled
+  kernel's actual allocation. Both scopes
+  keep the old `(float)`, `(half)` and `(bfloat)` casts, preserving conversion rounding bitwise.
+  `schedule_mma_matmul`'s `metal_scratch_boundary` pins the scratch-staged `simdgroup_load`/
+  `simdgroup_store` and forbids `thread_elements()`, `ocannl_mma_rc8` and cross-type copies in both
+  wide arms/scopes; `schedule_mma_scope_scratch` pins the 256 B/simdgroup scaling and executes a
+  2-simdgroup (`block = [32, 2, 1]`) converted bf16 `Tile_mma` parity check (`staticThreadgroupMemoryLength = 512`).
+  The k=144 probe/test makes the
   first 16-wide block contribute 2048 and
   each of the remaining eight contribute 1: residency across the reduction returns 2056, whereas
   narrowing at each block boundary returns 2048. The default policy still uses

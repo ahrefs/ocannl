@@ -1960,21 +1960,21 @@ type residency_markers = {
   barrier : string;  (** The update step's trailing barrier, releasing the staged tiles. *)
 }
 
-(** The markers of [backend_name]'s fragment scope. [converted_d] names the wide-f16 arms (HIP:
-    gh-ocannl-789; Metal: gh-ocannl-837; CUDA: gh-ocannl-925), where the accumulator array's element
-    type is not the destination's: each element crosses the boundary at the coordinate an
-    accumulator-typed fragment loaded from the coordinate table names. Metal keeps the fragment
-    first in its store; the wmma backends put the destination pointer first. *)
+(** The markers of [backend_name]'s fragment scope. [converted_d] names the wide-f16/wide-bf16 arms
+    (HIP: gh-ocannl-789; Metal: gh-ocannl-837, staged through per-simdgroup scratch since
+    gh-ocannl-2372; CUDA: gh-ocannl-925), where the accumulator array's element type is not the
+    destination's. Metal keeps the fragment first in its store; the wmma backends put the
+    destination pointer first. *)
 let residency_markers ?(converted_d = false) ~backend_name () =
   let on name = String.is_substring backend_name ~substring:name in
   if on "metal" then
     {
       frag_load =
-        (if converted_d then ".thread_elements()[__ei] = (float)(__mma_dp"
+        (if converted_d then "__mma_dscr[__e] = (float)(__mma_dp"
          else "simdgroup_load(__mma_fragment_");
       body_begin = "/* simdgroup fragment reduction body begins */";
       body_end = "/* simdgroup fragment reduction body ends */";
-      frag_store = (if converted_d then "(__rc & 7)] = (" else "simdgroup_store(__mma_fragment_");
+      frag_store = (if converted_d then "(__e & 7)] = (" else "simdgroup_store(__mma_fragment_");
       barrier = "threadgroup_barrier(mem_flags::mem_threadgroup);";
     }
   else if on "hip" then

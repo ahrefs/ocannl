@@ -401,14 +401,15 @@ def ab(out, label, prec="bfloat16"):
 STORAGE_LABEL = {"bfloat16": "bf16", "half": "f16", "single": "f32"}
 
 
-def training_crown(rec, *, replay):
+def training_crown(rec, *, replay, prec="bfloat16"):
     """The shipped placement, problem digest, actual MMA census and reported schedule label.
 
     Check the seed-only bench_gpt result schema. The cached form's label can differ from the
     search label, so only replay cells are compared on the label.
     """
-    if rec["variant"] != "tuned" or rec["storage_precision"] != "bf16":
-        raise ValueError("expected a tuned bf16 training result")
+    want_storage = STORAGE_LABEL[prec]
+    if rec["variant"] != "tuned" or rec["storage_precision"] != want_storage:
+        raise ValueError(f"expected a tuned {want_storage} training result")
     tune = rec["tune"]
     arms = tune["arms"]
     placement = tune["shipped"]
@@ -434,43 +435,45 @@ def training_crown(rec, *, replay):
     return placement, digest, mma, schedule
 
 
-def read_training_crown(path, *, replay):
+def read_training_crown(path, *, replay, prec="bfloat16"):
     try:
-        return training_crown(bench_output.only_result_record(path.read_text()), replay=replay)
+        return training_crown(bench_output.only_result_record(path.read_text()),
+                              replay=replay, prec=prec)
     except (OSError, KeyError, TypeError, ValueError) as e:
         raise ValueError(f"{path.parent.name}: {e}") from e
 
 
-def tuned_references(out, label=None):
+def tuned_references(out, label=None, prec="bfloat16"):
     """Validate the cold searches and their source-proof replays before timing."""
+    storage = STORAGE_LABEL[prec]
     references = {}
     for flag, policy in (("false", "wide"), ("true", "narrow")):
         cold = out / f"search_{flag}" / "stdout"
-        proof = out / f"identity_run_train_bfloat16_{flag}" / "stdout"
-        searched = read_training_crown(cold, replay=False)
-        replayed = read_training_crown(proof, replay=True)
+        proof = out / f"identity_run_train_{prec}_{flag}" / "stdout"
+        searched = read_training_crown(cold, replay=False, prec=prec)
+        replayed = read_training_crown(proof, replay=True, prec=prec)
         if searched[:3] != replayed[:3]:
-            raise ValueError(f"{policy} bf16 source-proof replay differs from its cold crown")
+            raise ValueError(f"{policy} {storage} source-proof replay differs from its cold crown")
         references[flag] = replayed
         if label is not None:
             placement, _, (tensorization, statements, fallbacks), schedule = searched
             print(log_line(
-                f"{display_value(label)} tuned {policy} bf16: placement {placement} shipped "
+                f"{display_value(label)} tuned {policy} {storage}: placement {placement} shipped "
                 f"{display_value(schedule)} (replay {display_value(replayed[3])}); "
                 f"shipped MMA {display_value(tensorization)}, {statements} statements, "
                 f"{fallbacks} scalar fallbacks"))
     return references
 
 
-def tuned_result(reference, arm, stdout):
+def tuned_result(reference, arm, stdout, prec="bfloat16"):
     """Admit a timed record only under the provenance for its planned arm."""
-    flag, _, prec = arm.partition("-")
-    if flag not in reference or prec not in ("single", "bfloat16"):
+    flag, _, arm_prec = arm.partition("-")
+    if flag not in reference or arm_prec not in ("single", prec):
         raise ValueError("unknown tuned training arm")
     rec = bench_output.only_result_record(stdout)
     try:
-        if prec == "bfloat16":
-            if training_crown(rec, replay=True) != reference[flag]:
+        if arm_prec == prec:
+            if training_crown(rec, replay=True, prec=prec) != reference[flag]:
                 raise ValueError("timed replay differs from the source-proof replay")
         elif (rec["storage_precision"] != "f32" or rec["variant"] != "default"
               or rec["searched"] is not False or rec.get("tune") is not None):
@@ -487,7 +490,7 @@ def training(run, label, fixture, prec, *, tuned=False):
     mode = "tuned" if tuned else "untuned"
     try:
         manifest, records = cell_runner.read_run(run)
-        reference = tuned_references(Path(run).parent) if tuned else {}
+        reference = tuned_references(Path(run).parent, prec=prec) if tuned else {}
     except (OSError, ValueError) as e:
         return [f"{mode}: invalid training run ({display_value(str(e))})"]
     planned = sum(len(order) for order in manifest["orders"])
@@ -507,7 +510,7 @@ def training(run, label, fixture, prec, *, tuned=False):
             continue
         try:
             stdout = cell_runner.cell_stream(run, r, "stdout")
-            rec = (tuned_result(reference, r["arm"], stdout) if tuned
+            rec = (tuned_result(reference, r["arm"], stdout, prec=prec) if tuned
                    else bench_output.result_record(stdout))
             got = bench_output.field(rec, "storage_precision")
             step = bench_output.field(rec, "step_ms.p50")
@@ -561,7 +564,7 @@ def training(run, label, fixture, prec, *, tuned=False):
                      paired(w, n), f"{slower} of {len(common)}"))
     print()
     print("\n".join(table_lines(
-        ["memory", "tuned bf16 / untuned f32 (bench_gpt)" if tuned else "untuned default (bench_gpt)",
+        ["memory", f"tuned {STORAGE_LABEL[prec]} / untuned f32 (bench_gpt)" if tuned else "untuned default (bench_gpt)",
          "prec", "narrow (true) step p50 ms",
          "wide (false) step p50 ms", "paired wide/narrow (range)", "rounds wide slower"], rows)))
     print(f"(paired sign tests and parity losses: {display_value(run)}/report.md)")
@@ -609,27 +612,40 @@ if __name__ == "__main__":
     if mode in ("tuned-search", "tuned-cells"):
         try:
             if mode == "tuned-search":
-                read_training_crown(Path(out) / "stdout", replay=False)
+                prec = sys.argv[3] if len(sys.argv) > 3 else "bfloat16"
+                if prec not in NARROW_PRECS or len(sys.argv) > 4:
+                    sys.exit(f"usage: gh1051_cells.py tuned-search DIR [{'|'.join(NARROW_PRECS)}]")
+                read_training_crown(Path(out) / "stdout", replay=False, prec=prec)
                 sys.exit(0)
-            references = tuned_references(Path(out))
+            if len(sys.argv) >= 5 and sys.argv[3] == "--prec":
+                prec = sys.argv[4]
+                if prec not in NARROW_PRECS:
+                    sys.exit(f"usage: gh1051_cells.py tuned-cells OUT [--prec {'|'.join(NARROW_PRECS)}] ...")
+                rest = sys.argv[5:]
+            else:
+                prec = "bfloat16"
+                rest = sys.argv[3:]
+            references = tuned_references(Path(out), prec=prec)
         except ValueError as e:
             sys.exit(log_line(f"INVALID: {display_value(str(e))}"))
         import bin_cells
 
-        sys.exit(bin_cells.main(sys.argv[3:],
-                                validate_cell=lambda arm, stdout: tuned_result(references, arm, stdout)))
+        sys.exit(bin_cells.main(rest,
+                                validate_cell=lambda arm, stdout: tuned_result(references, arm, stdout, prec=prec)))
     label = sys.argv[3]
     if mode == "tuned-proof":
+        prec = sys.argv[4] if len(sys.argv) > 4 else "bfloat16"
+        if prec not in NARROW_PRECS or len(sys.argv) > 5:
+            sys.exit(f"usage: gh1051_cells.py tuned-proof OUT LABEL [{'|'.join(NARROW_PRECS)}]")
         try:
-            tuned_references(Path(out), label)
+            tuned_references(Path(out), label, prec=prec)
         except ValueError as e:
             sys.exit(log_line(f"INVALID: {display_value(str(e))}"))
         sys.exit(0)
     if mode in ("untuned", "tuned"):
         # One bin_cells run of bench_gpt's step metric.
-        precisions = ("bfloat16",) if mode == "tuned" else NARROW_PRECS
-        if len(sys.argv) != 6 or sys.argv[5] not in precisions:
-            sys.exit(f"usage: gh1051_cells.py {mode} RUN LABEL FIXTURE {'|'.join(precisions)}")
+        if len(sys.argv) != 6 or sys.argv[5] not in NARROW_PRECS:
+            sys.exit(f"usage: gh1051_cells.py {mode} RUN LABEL FIXTURE {'|'.join(NARROW_PRECS)}")
         problems = training(out, label, sys.argv[4], sys.argv[5], tuned=mode == "tuned")
         for p in problems:
             print(log_line(f"INVALID: {p}"))

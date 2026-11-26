@@ -17,11 +17,12 @@
    pipelining) and the pooled-buffer prologue; every row is the same schedule with a different
    staging.
 
-   Stagings (the [stagings] list). [wide-table]: today's wide tile. [table-dup]: the same source
-   under another name, the session's drift control. [table-pragma]/[table-const]: the table boundary
-   with its per-lane element loop unrolled, by pragma or with literal indices (the [Table]'s AIR
-   indexes the accumulator's [<64 x float>] storage with the loop's runtime index; these say whether
-   that indexing is the cost). [wide-scratch]: the same accumulation with the boundary through a
+   Stagings (the [stagings] list). [wide-table]: the former wide tile (before gh-ocannl-2372), with
+   the [ocannl_mma_rc8] table boundary. [table-dup]: the same source under another name, the
+   session's drift control. [table-pragma]/[table-const]: the table boundary with its per-lane
+   element loop unrolled, by pragma or with literal indices (the [Table]'s AIR indexes the
+   accumulator's [<64 x float>] storage with the loop's runtime index; these say whether that
+   indexing is the cost). [wide-scratch]: the same accumulation with the boundary through a
    threadgroup scratch. [wide]: the same with no boundary (zero fragments, an f32 store). [convert]:
    bfloat fragments converted elementwise into float fragments per k block, then a float x float
    multiply-accumulate. [f32-stage]: bf16 device operands widened to float while staging into
@@ -125,7 +126,7 @@ let stagings =
   in
   [
     s ~boundary:(Table Loop) "wide-table" Bf16 Bf16 Bf16 F32 Baseline_wide
-      "today's Bf16_auto tile, with the codegen's table boundary";
+      "the former Bf16_auto tile, with the table boundary";
     s ~boundary:(Table Loop) "table-dup" Bf16 Bf16 Bf16 F32 Reference
       "the same source again: drift control";
     s ~boundary:(Table Unroll_pragma) "table-pragma" Bf16 Bf16 Bf16 F32 Candidate

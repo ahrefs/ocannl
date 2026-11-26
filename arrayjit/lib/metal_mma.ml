@@ -22,11 +22,16 @@ let bf16_accum_wide () =
   | Numerics.Bf16_auto | Numerics.Bf16_wide -> true
   | Numerics.Bf16_narrow -> false
 
-(* Whether [Numerics.Fp16_auto] resolves wide on this backend: no (gh-ocannl-2195). The
-   storage-width [simdgroup_half8x8] accumulate and the half serial loop are both per-step half FMAs
-   on the M4 Max (gh-ocannl-2151's census), bitwise equal, so the narrow auto is schedule-uniform
-   here; CUDA and HIP, whose f16-accumulate tensor units narrow at other points, resolve it wide.
-   Published to seeding as [capability.mma_f16_auto_wide]. *)
+(* Whether [Numerics.Fp16_auto] resolves wide on this backend: no (gh-ocannl-2195, reaffirmed by
+   gh-ocannl-2372). The storage-width [simdgroup_half8x8] accumulate and the half serial loop are
+   both per-step half FMAs on the M4 Max (gh-ocannl-2151's census), bitwise equal, so the narrow
+   auto is schedule-uniform here; CUDA and HIP, whose f16-accumulate tensor units narrow at other
+   points, resolve it wide. Even after gh-ocannl-2372's per-simdgroup scratch boundary made wide f16
+   n=2048 GEMM tiles 4.2x faster than narrow tiles (0.864x vs narrow's fastest regtile), tuned
+   [gpt2_mini_train] f16 training on M4 Max (mac-studio, macOS 27.2.1) showed no gain (88.416 ms
+   wide vs 87.531 ms narrow, paired 1.011 [0.989-1.040], f32 control 0.998 [0.992-1.006]), so
+   [Fp16_auto] stays narrow while explicit [Fp16_wide] carries the fast wide tile. Published to
+   seeding as [capability.mma_f16_auto_wide]. *)
 let fp16_auto_wide = false
 
 (* Whether this backend floors [Numerics.Fp16_prefer_narrow] (the profiles' request) to its auto: no
@@ -63,10 +68,10 @@ let mma_accumulator ~d_prec ~a_prec ~b_prec =
      on Metal): [simdgroup_multiply_accumulate] is generic over its operand element type, and bfloat
      operands into a float accumulator compile and execute on Apple silicon (schedule_mma_matmul's
      bf32 and [Bf16_wide] legs, M4 Max). The f32-storage arm needs no conversion; the wide arm
-     converts at the bfloat destination through the coordinate table exactly as the wide-f16 one
-     does. Since gh-ocannl-2029 the wide arm is [Bf16_auto]'s too ([bf16_accum_wide]); only
-     [Bf16_narrow] reaches the bfloat accumulator, whose 8-deep blocks narrow differently from the
-     per-step serial loop. *)
+     converts at the bfloat destination through the per-simdgroup threadgroup scratch exactly as the
+     wide-f16 one does (gh-ocannl-2372). Since gh-ocannl-2029 the wide arm is [Bf16_auto]'s too
+     ([bf16_accum_wide]); only [Bf16_narrow] reaches the bfloat accumulator, whose 8-deep blocks
+     narrow differently from the per-step serial loop. *)
   | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ -> Some Ops.single
   | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ when bf16_accum_wide () ->
       Some Ops.single

@@ -15239,13 +15239,16 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; gh-ocannl-1205: the shared-memory estimate counts Metal's converted-boundary coordinate table.
+; gh-ocannl-1205, gh-ocannl-2372: the shared-memory estimate counts Metal's converted-boundary
+; per-simdgroup staging scratch.
 
 (test
  (name schedule_mma_scope_scratch)
  (package neural_nets_lib)
  (deps
   ocannl_config
+  ; gh-ocannl-1308: judges the mma census; the forced-decline leg reruns it.
+  (env_var OCANNL_TOOL_TEST_FORCE_TILE_MMA_DECLINE)
   (env_var OCANNL_BACKEND))
  (modules schedule_mma_scope_scratch)
  (libraries

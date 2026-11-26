@@ -151,6 +151,7 @@ test/operations/schedule_contraction_nest.ml -- exact-operands: half-integer tim
 test/operations/schedule_conv_gemm.ml -- exact-operands: small integer inputs, kernels and bias make every product and sum exact
 test/operations/schedule_epilogue_fusion.ml -- exact-operands: quarter-step and integer operands make every product and sum exact
 test/operations/schedule_mma_matmul.ml -- exact-operands: dyadic or derived-exact operands; the full-mantissa leg has an explicit fma on both sides
+test/operations/schedule_mma_scope_scratch.ml -- not-cc: every device bitwise claim is in a Metal-only leg; on cc it skips
 test/operations/schedule_pack_mma_matmul.ml -- exact-operands: dyadic cycles times integers make every product and sum exact
 test/operations/schedule_pad.ml -- gated: the non-dyadic serial-twin claim reads the kernel flags and the FMA ISA first
 test/operations/schedule_pipelined_matmul.ml -- not-cc: the bitwise legs need shared placement, which the C backends refuse
