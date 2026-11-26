@@ -7236,6 +7236,31 @@ let () =
     (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
     (fun () -> in_leg ~leg:second "inside" (fun label -> p label true))|ocaml},
       [] );
+    ( "refuses a disallowed call in an eager argument when projecting a field from an immediately \
+       applied anonymous function",
+      {ocaml|open Verdict.Claims
+type box = { ok : bool }
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:(((fun _ -> { ok = true }) (Option.is_some (Autotune.detect_conv llc))).ok)
+    ()
+let () = in_leg ~leg "projected inline arg" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses a lazy policy-wrapper force after an iterator callback force over an unknown \
+       collection and an unwrapped claim",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let run =
+  lazy
+    (Test_utils.with_policy
+       (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+       (fun () -> in_leg ~leg:sub "tf32 iter" (fun label -> p label true)))
+let () =
+  List.iter flags ~f:(fun _ -> Lazy.force run);
+  in_leg ~leg:sub "outside" (fun label -> p label true);
+  Lazy.force run|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
   ]
 
 let run_leg_gate_controls () =
