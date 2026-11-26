@@ -1615,13 +1615,25 @@ leg_125() {
   local path="$TMP/leg record" other_path="$TMP/other leg" target=@test/training/train-receipt
   local link="$TMP/leg-receipt-link" gpu_link="$TMP/leg-receipt-link-gpu"
   local foreign_link="$TMP/leg-receipt-link-foreign" plain_link="$TMP/leg-receipt-link-plain"
-  local local_link="$TMP/leg-receipt-link-local" cc_dir gpu_dir
-  local FLEET_LEG_RUN_RECORD FLEET_LEG_RECEIPT_LINK
+  local local_link="$TMP/leg-receipt-link-local" dirty_link="$TMP/leg-receipt-link-dirty" cc_dir gpu_dir
+  local env_bin="$TMP/leg125-env-bin" env_out="$TMP/leg125-child-env" saved_repeat_bin=$repeat_bin
+  local FLEET_LEG_RUN_RECORD FLEET_LEG_RECEIPT_LINK FLEET_LEG_RECEIPT_DIR
   cp "$HERE/owed-run.sh" "$repeat_root/tools/owed-run.sh" || { report 1 'stage owed-run.sh for leg 125'; return; }
-  rm -f "$link" "$gpu_link" "$foreign_link" "$plain_link" "$local_link"
+  rm -f "$link" "$gpu_link" "$foreign_link" "$plain_link" "$local_link" "$dirty_link" "$env_out"
+  mkdir -p "$env_bin"
+  cat >"$env_bin/dune" <<EOF
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "\${FLEET_LEG_RUN_RECORD-unset}" "\${FLEET_LEG_RECEIPT_LINK-unset}" "\${FLEET_LEG_RECEIPT_DIR-unset}" >"$env_out"
+exec "$saved_repeat_bin/dune" "\$@"
+EOF
+  chmod +x "$env_bin/dune"
   export FLEET_LEG_RUN_RECORD="$path"
   export FLEET_LEG_RECEIPT_LINK="$link"
+  export FLEET_LEG_RECEIPT_DIR="$TMP/inherited-receipt-dir"
+  repeat_bin=$env_bin
   argv_probe owed-receipt run --expect-backend cc build "$target" -j 1
+  repeat_bin=$saved_repeat_bin
+  unset FLEET_LEG_RECEIPT_DIR
   cc_dir=$argv_dir
   if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
      [ "$argv_calls" = "build --no-buffer $target -j 1" ] &&
@@ -1632,6 +1644,27 @@ leg_125() {
   else
     report 1 'the fleet receipt saves the exact path, raw request, and receipt symlink' \
       "exit $argv_rc; receipt: $argv_dir; link: $(readlink "$link" 2>/dev/null || echo absent); Dune: $argv_calls; stderr: $argv_err"
+  fi
+  if [ "$(cat "$env_out" 2>/dev/null)" = 'unset|unset|unset' ]; then
+    report 0 'child Dune processes do not inherit FLEET_LEG_RUN_RECORD, FLEET_LEG_RECEIPT_LINK, or FLEET_LEG_RECEIPT_DIR'
+  else
+    report 1 'child Dune processes do not inherit FLEET_LEG_RUN_RECORD, FLEET_LEG_RECEIPT_LINK, or FLEET_LEG_RECEIPT_DIR' \
+      "child saw: $(cat "$env_out" 2>/dev/null || echo absent)"
+  fi
+
+  # A dirty receipt does not qualify, so a following clean run in the same leg replaces its symlink.
+  ln -s "$cc_dir" "$dirty_link"
+  printf ' M x.ml\n' >"$cc_dir/dirty"
+  export FLEET_LEG_RECEIPT_LINK="$dirty_link"
+  argv_probe owed-receipt-replace-dirty run --expect-backend cc build @test/operations/runtest-focused -j 1
+  : >"$cc_dir/dirty"
+  export FLEET_LEG_RECEIPT_LINK="$link"
+  if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
+     [ -L "$dirty_link" ] && [ "$(readlink "$dirty_link")" = "$argv_dir" ]; then
+    report 0 'a dirty receipt does not qualify and is replaced by a later clean run in the same leg'
+  else
+    report 1 'a dirty receipt does not qualify and is replaced by a later clean run in the same leg' \
+      "exit $argv_rc; receipt: $argv_dir; link: $(readlink "$dirty_link" 2>/dev/null || echo absent)"
   fi
 
   # A trailing focused cc run in the same leg must not overwrite a passing qualifying receipt symlink.

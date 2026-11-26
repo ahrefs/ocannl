@@ -589,6 +589,7 @@ case $verb in
   qualifies-receipt)
     [ $# = 1 ] && [ -d "$1" ] || exit 1
     [ -f "$1/exit" ] && [ "$(cat "$1/exit" 2>/dev/null)" = 0 ] || exit 1
+    [ -f "$1/dirty" ] && [ ! -s "$1/dirty" ] || exit 1
     [ "$(cat "$1/expect-backend" 2>/dev/null)" = cc ] || exit 1
     [ -f "$1/fleet-leg-command" ] || exit 1
     req_cmd=$(cat "$1/fleet-leg-command" 2>/dev/null) || exit 1
