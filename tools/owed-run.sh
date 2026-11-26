@@ -99,6 +99,10 @@
 # Exit status: 0 done or admitted, 1 record refused (`check`), 2 usage or write/certification error,
 #              3 transport unreadable (`check`).
 set -u
+# Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462, gh-ocannl-2484):
+# with neither LANG nor LC_ALL set, Homebrew Bash's libintl calls CoreFoundation when tearing
+# down a local or temporary locale assignment, which can SIGSEGV inside forked subshells.
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
 me=owed-run
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 # The repository the records live in: the PR repository (AGENTS.md, Pull Requests).
@@ -132,7 +136,7 @@ rgit() { LC_ALL=C GIT_TERMINAL_PROMPT=0 bounded git -C "$root" "$@"; }
 is_auth_failure() {
   local lc l
   [ -n "$1" ] || return 1
-  lc=$(printf '%s\n' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+  lc=$(printf '%s\n' "$1" | env LC_ALL=C tr '[:upper:]' '[:lower:]')
   while IFS= read -r l; do
     case $l in
       *'authentication failed'* | \

@@ -734,6 +734,50 @@ if harness_leg 'a changed job or step closes the block without a completion mark
     fi
   done
 fi
+if harness_leg 'unset or empty LANG/LC_ALL exports LANG=C and reads BOM logs cleanly #canned'; then
+  printf '\357\273\277File "fixture/y.ml", line 4, characters 8-9:\n4 | let z = w\n            ^\nError: Unbound value w\n' >"$TMP/bom.log"
+  printf 'host-probe\n' >"$TMP/host.txt"
+  want='host-probe
+Failed dune rules (1), in the order dune reported them:
+  fixture/y.ml:4  compile error
+      Error: Unbound value w'
+  loc_bin="$TMP/cfr-locale-bin"
+  mkdir -p "$loc_bin"
+  real_cat=$(command -v cat)
+  cat >"$loc_bin/cat" <<EOF
+#!/bin/sh
+if [ -n "\${CFR_LOCALE_OUT:-}" ] && [ ! -e "\$CFR_LOCALE_OUT" ]; then
+  printf 'LANG=%s LC_ALL=%s LC_CTYPE=%s\n' "\${LANG-<unset>}" "\${LC_ALL-<unset>}" "\${LC_CTYPE-<unset>}" >"\$CFR_LOCALE_OUT"
+fi
+exec "$real_cat" "\$@"
+EOF
+  chmod +x "$loc_bin/cat"
+  run_cfr_locale() { # ENV_ARGS... --
+    local env_args=()
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do env_args+=("$1"); shift; done
+    shift
+    rc=0
+    rm -f "$TMP/cfr-locale-seen"
+    out=$(cd "$TMP" && env ${env_args[@]+"${env_args[@]}"} PATH="$loc_bin:$PATH" \
+      CFR_LOCALE_OUT="$TMP/cfr-locale-seen" bash "$SRC" --host host.txt bom.log 2>&1) || rc=$?
+  }
+  run_cfr_locale -u LANG -u LC_ALL LC_CTYPE=UTF-8 --
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want" ] && [ "$(cat "$TMP/cfr-locale-seen" 2>/dev/null)" = 'LANG=C LC_ALL=<unset> LC_CTYPE=UTF-8' ]; echo $?)" \
+    'unset LANG/LC_ALL exports LANG=C while preserving LC_CTYPE and reading BOM log' \
+    "exit $rc; locale=$(cat "$TMP/cfr-locale-seen" 2>/dev/null); $out"
+  run_cfr_locale LANG= LC_ALL= LC_CTYPE=UTF-8 --
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want" ] && [ "$(cat "$TMP/cfr-locale-seen" 2>/dev/null)" = 'LANG=C LC_ALL= LC_CTYPE=UTF-8' ]; echo $?)" \
+    'empty LANG/LC_ALL exports LANG=C while preserving LC_CTYPE and reading BOM log' \
+    "exit $rc; locale=$(cat "$TMP/cfr-locale-seen" 2>/dev/null); $out"
+  run_cfr_locale -u LC_ALL LANG=en_US.UTF-8 LC_CTYPE=UTF-8 --
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want" ] && [ "$(cat "$TMP/cfr-locale-seen" 2>/dev/null)" = 'LANG=en_US.UTF-8 LC_ALL=<unset> LC_CTYPE=UTF-8' ]; echo $?)" \
+    'caller-supplied LANG is preserved untouched' \
+    "exit $rc; locale=$(cat "$TMP/cfr-locale-seen" 2>/dev/null); $out"
+  run_cfr_locale -u LANG LC_ALL=POSIX LC_CTYPE=UTF-8 --
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want" ] && [ "$(cat "$TMP/cfr-locale-seen" 2>/dev/null)" = 'LANG=<unset> LC_ALL=POSIX LC_CTYPE=UTF-8' ]; echo $?)" \
+    'caller-supplied LC_ALL is preserved untouched' \
+    "exit $rc; locale=$(cat "$TMP/cfr-locale-seen" 2>/dev/null); $out"
+fi
 if harness_leg 'the green build prints nothing #dune'; then
   write_fixture 0
   build "$TMP/green.log" @runtest; brc=$?

@@ -87,6 +87,8 @@
 # Exit 0 after reading the log, 2 for a usage error or an unreadable LOG.
 
 set -u
+# Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462, gh-ocannl-2484).
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
 
 github=0
 host=

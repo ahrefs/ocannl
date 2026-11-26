@@ -23,6 +23,10 @@ cp "$here/harness-legs-alone.sh" "$here/harness-legs-alone-impl.sh" "$fixture/to
   cp "$here/../scripts/harness-support.sh" "$here/../scripts/process-group.sh" "$fixture/scripts/" || exit 2
 cat >"$fixture/tools/test-harnesses.sh" <<'STUB'
 #!/usr/bin/env bash
+if [ -n "${FAKE_LOCALE_OUT:-}" ]; then
+  printf 'LANG=%s LC_ALL=%s LC_CTYPE=%s\n' \
+    "${LANG-<unset>}" "${LC_ALL-<unset>}" "${LC_CTYPE-<unset>}" >"$FAKE_LOCALE_OUT"
+fi
 [ "$*" = --list ] || exit 2
 if [ "${DISCOVERY:-0}" = list ]; then
   printf '%s\n' fixtures/list-d.sh fixtures/commented.sh fixtures/list-b.sh fixtures/list-c.sh fixtures/list-a.sh
@@ -410,7 +414,50 @@ leg_list() {
   fi
 }
 
+leg_locale() {
+  local seen=$TMP/hla-locale
+  run_locale() { # ENV_ARGS... -- SUBJECT_ARGS...
+    local env_args=()
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do env_args+=("$1"); shift; done
+    shift
+    rc=0
+    rm -f "$seen"
+    (cd "$TMP" && env ${env_args[@]+"${env_args[@]}"} FAKE_LOCALE_OUT="$seen" "$subject" "$@") >"$TMP/out" 2>&1 || rc=$?
+  }
+  run_locale -u LANG -u LC_ALL LC_CTYPE=UTF-8 --
+  if [ "$rc" = 0 ] &&
+     has 'harness-legs-alone: 1 harness(es) checked; 0 red full run(s), 0 failed listing(s), 0 finding(s) run alone' &&
+     [ "$(cat "$seen" 2>/dev/null)" = 'LANG=C LC_ALL=<unset> LC_CTYPE=UTF-8' ]; then
+    report 0 'unset LANG/LC_ALL exports LANG=C while keeping LC_CTYPE and passing full+alone checks'
+  else
+    report 1 'unset LANG/LC_ALL exports LANG=C while keeping LC_CTYPE and passing full+alone checks' \
+      "exit $rc; locale=$(cat "$seen" 2>/dev/null); $(cat "$TMP/out")"
+  fi
+  run_locale LANG= LC_ALL= LC_CTYPE=UTF-8 -- --list
+  if [ "$rc" = 0 ] && [ "$(cat "$seen" 2>/dev/null)" = 'LANG=C LC_ALL= LC_CTYPE=UTF-8' ]; then
+    report 0 'empty LANG/LC_ALL exports LANG=C while keeping LC_CTYPE'
+  else
+    report 1 'empty LANG/LC_ALL exports LANG=C while keeping LC_CTYPE' \
+      "exit $rc; locale=$(cat "$seen" 2>/dev/null); $(cat "$TMP/out")"
+  fi
+  run_locale -u LC_ALL LANG=en_US.UTF-8 LC_CTYPE=UTF-8 -- --list
+  if [ "$rc" = 0 ] && [ "$(cat "$seen" 2>/dev/null)" = 'LANG=en_US.UTF-8 LC_ALL=<unset> LC_CTYPE=UTF-8' ]; then
+    report 0 'caller-supplied LANG is preserved untouched'
+  else
+    report 1 'caller-supplied LANG is preserved untouched' \
+      "exit $rc; locale=$(cat "$seen" 2>/dev/null); $(cat "$TMP/out")"
+  fi
+  run_locale -u LANG LC_ALL=POSIX LC_CTYPE=UTF-8 -- --list
+  if [ "$rc" = 0 ] && [ "$(cat "$seen" 2>/dev/null)" = 'LANG=<unset> LC_ALL=POSIX LC_CTYPE=UTF-8' ]; then
+    report 0 'caller-supplied LC_ALL is preserved untouched'
+  else
+    report 1 'caller-supplied LC_ALL is preserved untouched' \
+      "exit $rc; locale=$(cat "$seen" 2>/dev/null); $(cat "$TMP/out")"
+  fi
+}
+
 harness_leg_run 'leg isolation controls' leg_isolation
 harness_leg_run 'shard membership and dealing' leg_shards
 harness_leg_run 'list candidates and shards without running members' leg_list
+harness_leg_run 'unset-locale startup guard' leg_locale
 finish

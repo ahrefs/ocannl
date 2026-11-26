@@ -36,6 +36,8 @@
 # Exit status: 0 every requested target passed, 1/nonzero a target failed or was interrupted,
 #              2 usage, host or setup refusal (no passing receipt written).
 set -u
+# Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462, gh-ocannl-2484).
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
 me=linux-shell-leg
 die() { echo "$me: $*" >&2; exit 2; }
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P) || die "cannot resolve repository root"
@@ -152,7 +154,7 @@ fi
 for a in ${dune_targets[@]+"${dune_targets[@]}"}; do
   raw_targets+=("$a")
 done
-canonical_targets=$(printf '%s\n' "${raw_targets[@]}" | LC_ALL=C sort -u | tr '\n' ',')
+canonical_targets=$(printf '%s\n' "${raw_targets[@]}" | env LC_ALL=C sort -u | tr '\n' ',')
 canonical_targets=${canonical_targets%,}
 
 # Read checkout head and dirty state with repository-local Git env vars cleared.
