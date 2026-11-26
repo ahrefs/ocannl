@@ -26,10 +26,12 @@ files.
   ≈ correct/batch_size), and gh-ocannl-731 showed that codegen's replacement scope-local
   accumulator can instead diverge by a data-independent additive constant.
   `volatile_serial_accumulation` in `arrayjit/lib/c_syntax.ml` (Metal sets it) therefore renders
-  device reads inside the accumulating update and its controlling guards through expression-level
-  `volatile` pointer casts; accumulator declarations, opening reads, vectorized/packed paths and MMA
-  reads stay plain (gh-ocannl-820). The volatility census (`Context.routine.volatility`) reports per
-  routine which localized sites and device-memory RMWs received that form. Standalone repros:
+  device reads inside the accumulating update (`Set_local`, `Set`, and `Set_dynamic` RMWs whose
+  static axes are invariant across an enclosing serial loop, gh-ocannl-2474) and their controlling
+  `If` guards inside that serial loop through expression-level `volatile` pointer casts;
+  accumulator declarations, opening reads, vectorized/packed paths and MMA reads stay plain
+  (gh-ocannl-820). The volatility census (`Context.routine.volatility`) reports per routine which
+  localized sites and device-memory RMWs received that form. Standalone repros:
   `bench_metal_bug.ml` (RMW form) and `bench_metal_bug_local.ml` (localized form, plus a
   one-factor-at-a-time matrix and the tax measurement) under `benchmarks/runners/ocannl/`; executed
   guards: `scalar_rmw_accumulation.ml`, `reduction_accumulator_residency.ml`, and `rope_test.ml`.
