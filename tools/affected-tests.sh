@@ -1712,7 +1712,7 @@ sub sh_scan_overrides {
       my $args = $1;
       $funcs_ref->{$1} = 1 while $args =~ /(?:^|\s)['"]?(echo|printf|cat|tee)=/g;
     }
-    $funcs_ref->{"\0exec_stdout"} = 1 if $line =~ /(?:^|[;&|({])\s*exec\s+(?:&>>?|0*1?(?:>>?|>\||>&)|0*1<>)/;
+    $funcs_ref->{"\0exec_stdout"} = 1 if $line =~ /(?:^|[;&|({])\s*exec\s+(?:&>>?|(?:0*1)?(?:>>?|>\||>&)|0*1<>)/;
     $funcs_ref->{"\0exec_stderr"} = 1 if $line =~ /(?:^|[;&|({])\s*exec\s+(?:&>>?|0*2(?:>>?|>\||>&|<>))/;
     $funcs_ref->{"\0exec_any_fd"} = 1 if $line =~ /(?:^|[;&|({])\s*exec\s+(?:\{[A-Za-z_]\w*\}(?:>>?|<>)|&>>?|\d*(?:>>?|>&|<>))/;
   }

@@ -2514,11 +2514,13 @@ if harness_leg 'source-only reach'; then
     if [ "$rc" = 0 ] && cmp -s "$TMP/want" "$out"; then report 0 "$path alone selects only the harnesses reading it"
     else report 1 "$path alone selects only the harnesses reading it" "exit $rc; got [$(tr '\n' '|' <"$out")]"; fi
   done <"$TMP/source-only"
-  # gh-ocannl-2380 / gh-ocannl-2432: printf fixture strings and output-redirected
-  # fixture/stub writers stop reaching the named source paths (including the
-  # wave-20261122-ocannl fixture cases: #2295's private dispatcher manifest and
-  # #2303's fixture lib/dune + test/operations/dune writes), while variable
-  # assignments and non-fixture calls keep their conservative reach.
+  # gh-ocannl-2380 / gh-ocannl-2432: printf fixture strings and direct
+  # truncating output-redirected fixture/stub writers stop reaching the named
+  # source paths (covering direct-redirect forms of #2303's fixture lib/dune +
+  # test/operations/dune writes and an inline-redirect rewrite of #2295's
+  # dispatcher manifest), while variable assignments (#2295's actual
+  # `local manifest=$target/tools/test-harnesses.sh` form) and non-fixture calls
+  # intentionally stay fail-closed.
   od=test/operations'/dune' th=tools/test-'harnesses.sh'
   stem=${sj##*/} stem=${stem%.ml}
   mkdir -p "$hrepo/${ld%/*}" "$hrepo/${bd%/*}" "$hrepo/${rw%/*}" "$hrepo/${sj%/*}" "$hrepo/${od%/*}" || exit 2
@@ -2526,9 +2528,9 @@ if harness_leg 'source-only reach'; then
   for form in \
     "$ld|a quoted diagnostic location|printf 'File \"$ld\", line 3, characters 1-20:\\n'" \
     "$ld|a fixture repository's file under a variable prefix|cat >\"\$repo/$ld\" <<'DUNE'" \
-    "$ld|a printf-redirected fixture library dune (#2303)|printf '(library (name gate))\\n' >\"\$real_co/$ld\"" \
-    "$od|a printf-redirected fixture operations dune (#2303)|printf '(alias (name scans))\\n' >\"\$real_co/$od\"" \
-    "$th|a printf-redirected fixture dispatcher manifest (#2295)|printf 'printf \"%%s\\\\n\" tools/first.sh\\n' >\"\$target/$th\"" \
+    "$ld|a direct-redirect fixture library dune (#2303)|printf '(library (name gate))\\n' >\"\$real_co/$ld\"" \
+    "$od|a direct-redirect fixture operations dune (#2303)|printf '(alias (name scans))\\n' >\"\$real_co/$od\"" \
+    "$th|an inline-redirect fixture dispatcher manifest (inline form of #2295)|printf 'printf \"%%s\\\\n\" tools/first.sh\\n' >\"\$target/$th\"" \
     "$rw|a trace location|printf 'debug solve_row_ineq begin \"$rw\":4164:31:\\n'" \
     "$sj|a bare basename|printf '(diff? $stem.ml $stem.ml.corrected)\\n'" \
     "$bd|a PATH stub|cat >\"\$TMP/$bd\" <<'SH'"; do
@@ -2544,7 +2546,7 @@ if harness_leg 'source-only reach'; then
     "local manifest=\$target/$th" \
     'printf '\''printf "%%s\\n" tools/first.sh\n'\'' >"$manifest"' >"$hrepo/tools/test-c.sh"
   haffected --harnesses --files "$th"
-  hexpect "fail-closed: a variable assignment holding a fixture manifest path still reaches its harness ($th)" 0 tools/test-c.sh
+  hexpect "fail-closed: #2295's variable-assigned manifest path still reaches its harness ($th)" 0 tools/test-c.sh
   printf '%s\n' '#!/usr/bin/env bash' "finish('./$stem.exe', b + 'test', 6, [])" >"$hrepo/tools/test-c.sh"
   haffected --harnesses --files "$sj"
   hexpect "the module's executable in a non-fixture call still reaches its harness ($sj)" 0 tools/test-c.sh
