@@ -51,7 +51,9 @@
 # one-parent HEAD, and usage refusals with incompatible flags). The #compile-only-real leg runs
 # `--compile-only` through real Dune on a minimal OCaml project modelled on staging #2170 x #2173:
 # a compatible moved base passes without running the other tiers, while an incompatible union
-# fails `@check` and its base alone passes.
+# fails `@check` and its base alone passes. The #sys-path-pin legs (gh-ocannl-2496) verify that
+# SYS_PATH resets preserve the caller's active `bash` and `awk` shims (a two-tool allowlist
+# carrying tools/test-harnesses.sh's Bash 3.2 and macOS mawk pin) without leaking other tools.
 # affected-reads: benchmarks/dune benchmarks/*.py benchmarks/test/*.py benchmarks/runners/*.py benchmarks/runners/*/*.py benchmarks/ocannl_config --only '#compile-output'
 # affected-reads: tools/owed-run.sh
 # affected-reads: .github/fleet-leg tools/owed-run-report.sh --only '#owed-record|#linux-shell'
@@ -72,7 +74,35 @@ export OCANNL_TOOL_MERGE_BUILD_REACH_CACHE=off
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
   GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
   GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
-SYS_PATH=/usr/bin:/bin
+# build_sys_path DIR: populate DIR with symlinks to the caller's active bash and awk (a two-tool
+# allowlist preserving tools/test-harnesses.sh's private Bash 3.2 + macOS mawk interpreter
+# directory across SYS_PATH resets without leaking dune, opam, ocamlc or git into isolated runs),
+# and set SYS_PATH to DIR:/usr/bin:/bin (or /usr/bin:/bin when neither resolved).
+build_sys_path() {
+  local dir=$1 tool p pdir any=0
+  mkdir -p "$dir" || return 2
+  dir=$(CDPATH= cd -- "$dir" && pwd) || return 2
+  rm -f "$dir/bash" "$dir/awk" || return 2
+  for tool in bash awk; do
+    p=$(type -P "$tool" 2>/dev/null || :)
+    if [ -n "$p" ] && [ -f "$p" ] && [ -x "$p" ]; then
+      case $p in
+        /*) ;;
+        *)
+          pdir=$(CDPATH= cd -- "$(dirname -- "$p")" && pwd) || return 2
+          p=$pdir/${p##*/} ;;
+      esac
+      ln -s -- "$p" "$dir/$tool" || return 2
+      any=1
+    fi
+  done
+  if [ "$any" = 1 ]; then
+    SYS_PATH=$dir:/usr/bin:/bin
+  else
+    SYS_PATH=/usr/bin:/bin
+  fi
+}
+build_sys_path "$TMP/pinbin" || exit 2
 GIT=$(command -v git)
 
 cleanup_fixture() {
@@ -2176,7 +2206,7 @@ if harness_leg 'hand-run shell markers preserve harness scope #hand-run'; then
   # one-member manifest and no Dune. Keep fixture marker syntax out of the
   # hosting harness's own comment header.
   cat >"$R/tools/test-harnesses.sh" <<'FAKE'
-#!/bin/bash
+#!/usr/bin/env bash
 if [ "$*" = --list ]; then
   printf '%s\n' tools/test-one.sh
 elif [ "$1" = --affected ]; then
@@ -2802,6 +2832,173 @@ if harness_leg 'without dune on PATH the opam switch supplies it #toolchain'; th
     report 0 'a switch without dune exits 1, building nothing'
   else report 1 'a switch without dune exits 1, building nothing' "exit $rc; $(cat "$TMP/out")"; fi
 fi
+
+sys_path_pin_leg() {
+  local outer_bash outer_awk outer_2244 run_out owed_out
+  local stub_dir mode got override_dir
+  real_exec() {
+    perl -MCwd=realpath -e 'my $r = realpath($ARGV[0]); exit 1 unless defined $r; print $r' "$1"
+  }
+  outer_bash=$(type -P bash 2>/dev/null || :)
+  outer_awk=$(type -P awk 2>/dev/null || :)
+  [ -n "$outer_bash" ] && outer_bash=$(real_exec "$outer_bash") || { harness_abandon 'could not resolve caller bash'; return; }
+  [ -n "$outer_awk" ] && outer_awk=$(real_exec "$outer_awk") || { harness_abandon 'could not resolve caller awk'; return; }
+  outer_2244=$(awk 'BEGIN { a["k"] = ("k" in a) ? a["k"] "; x" : "x"; print "got=[" a["k"] "]" }')
+
+  fixture sys-path-pin
+  first x.ml && commit_on base
+  git -C "$R" checkout -q side && last x.ml && commit_on side && merge_side
+  cat >"$R/tools/fmt-check.sh" <<'PROBE'
+#!/usr/bin/env bash
+real_exec() { perl -MCwd=realpath -e 'my $r = realpath($ARGV[0]); exit 1 unless defined $r; print $r' "$1"; }
+{
+  printf 'shebang_bash=%s\n' "$(real_exec "$BASH")"
+  printf 'path_bash=%s\n' "$(real_exec "$(type -P bash)")"
+  printf 'path_awk=%s\n' "$(real_exec "$(type -P awk)")"
+  printf 'awk_2244=%s\n' "$(awk 'BEGIN { a["k"] = ("k" in a) ? a["k"] "; x" : "x"; print "got=[" a["k"] "]" }')"
+  printf 'has_opam=%s\n' "$(type -P opam 2>/dev/null || :)"
+} >"$FAKE_PIN_OUT"
+exit 0
+PROBE
+  cat >"$R/tools/owed-run.sh" <<'PROBE'
+#!/usr/bin/env bash
+real_exec() { perl -MCwd=realpath -e 'my $r = realpath($ARGV[0]); exit 1 unless defined $r; print $r' "$1"; }
+{
+  printf 'path_bash=%s\n' "$(real_exec "$(type -P bash)")"
+  printf 'path_awk=%s\n' "$(real_exec "$(type -P awk)")"
+  printf 'awk_2244=%s\n' "$(awk 'BEGIN { a["k"] = ("k" in a) ? a["k"] "; x" : "x"; print "got=[" a["k"] "]" }')"
+  printf 'has_dune=%s\n' "$(type -P dune 2>/dev/null || :)"
+  printf 'has_opam=%s\n' "$(type -P opam 2>/dev/null || :)"
+} >"$FAKE_PIN_OUT"
+exit 0
+PROBE
+  chmod +x "$R/tools/fmt-check.sh" "$R/tools/owed-run.sh"
+
+  run_out=$TMP/pin-run.out
+  rm -f "$run_out"
+  FAKE_PIN_OUT=$run_out run "$TMP/dunebin"
+  if [ "$rc" = 0 ] &&
+     [ "$(cat "$run_out" 2>/dev/null)" = "shebang_bash=$outer_bash
+path_bash=$outer_bash
+path_awk=$outer_awk
+awk_2244=$outer_2244
+has_opam=" ]; then
+    report 0 'run() preserves active bash (including env shebang) and awk across SYS_PATH without leaking opam'
+  else
+    report 1 'run() preserves active bash (including env shebang) and awk across SYS_PATH without leaking opam' \
+      "exit $rc; want bash=$outer_bash awk=$outer_awk $outer_2244; got=$(cat "$run_out" 2>/dev/null); out=$(cat "$TMP/out")"
+  fi
+
+  owed_out=$TMP/pin-owed.out
+  rm -f "$owed_out"
+  FAKE_PIN_OUT=$owed_out owed "$OWED_EMPTY" url
+  if [ "$orc" = 0 ] &&
+     [ "$(cat "$owed_out" 2>/dev/null)" = "path_bash=$outer_bash
+path_awk=$outer_awk
+awk_2244=$outer_2244
+has_dune=
+has_opam=" ]; then
+    report 0 'owed() preserves active bash and awk across SYS_PATH without leaking dune or opam'
+  else
+    report 1 'owed() preserves active bash and awk across SYS_PATH without leaking dune or opam' \
+      "exit $orc; want bash=$outer_bash awk=$outer_awk $outer_2244; got=$(cat "$owed_out" 2>/dev/null); out=$(cat "$TMP/owed-out")"
+  fi
+
+  stub_dir=$TMP/stub-pin
+  mkdir -p "$stub_dir"
+  cat >"$stub_dir/awk" <<'STUB'
+#!/bin/sh
+printf 'STUB_AWK:%s\n' "$*"
+STUB
+  cat >"$stub_dir/bash" <<STUB
+#!/bin/sh
+STUB_BASH_SEEN=yes exec "$BASH" "\$@"
+STUB
+  printf '#!/bin/sh\necho LEAKED_DUNE\n' >"$stub_dir/dune"
+  printf '#!/bin/sh\necho LEAKED_OPAM\n' >"$stub_dir/opam"
+  chmod +x "$stub_dir/awk" "$stub_dir/bash" "$stub_dir/dune" "$stub_dir/opam"
+  cat >"$TMP/stub-shebang.sh" <<'PROBE'
+#!/usr/bin/env bash
+printf 'shebang=%s awk=%s dune=%s opam=%s\n' \
+  "${STUB_BASH_SEEN:-no}" "$(awk arg1)" "$(type -P dune 2>/dev/null || :)" "$(type -P opam 2>/dev/null || :)"
+PROBE
+  chmod +x "$TMP/stub-shebang.sh"
+
+  for mode in abs rel; do
+    got=$(
+      if [ "$mode" = abs ]; then
+        PATH="$stub_dir:/usr/bin:/bin"
+      else
+        cd "$TMP" || exit 2
+        PATH="stub-pin:/usr/bin:/bin"
+      fi
+      build_sys_path "$TMP/test-pin-$mode" || exit 2
+      cd "$R" || exit 2
+      STUB_BASH_SEEN= PATH="$TMP/gitbin:$SYS_PATH" "$TMP/stub-shebang.sh"
+    )
+    if [ "$got" = 'shebang=yes awk=STUB_AWK:arg1 dune= opam=' ]; then
+      report 0 "build_sys_path preserves $mode-PATH bash and awk shims after cd without leaking dune or opam"
+    else
+      report 1 "build_sys_path preserves $mode-PATH bash and awk shims after cd without leaking dune or opam" "got=$got"
+    fi
+  done
+
+  override_dir=$TMP/pin-override
+  mkdir -p "$override_dir"
+  printf '#!/bin/sh\necho PREFIX_AWK\n' >"$override_dir/awk"
+  chmod +x "$override_dir/awk"
+  got=$(
+    PATH="$stub_dir:/usr/bin:/bin"
+    build_sys_path "$TMP/test-pin-override" || exit 2
+    PATH="$override_dir:$TMP/gitbin:$SYS_PATH" awk
+  )
+  if [ "$got" = PREFIX_AWK ]; then
+    report 0 'a leg-specific prefix ahead of SYS_PATH still overrides pinned shims'
+  else
+    report 1 'a leg-specific prefix ahead of SYS_PATH still overrides pinned shims' "got=$got"
+  fi
+}
+harness_leg_run 'SYS_PATH resets preserve pinned bash and awk without leaking other tools #sys-path-pin' sys_path_pin_leg
+
+sys_path_mawk_leg() {
+  local host_mawk= cand mawk_pin got_pinned got_unpinned
+  cand=$(type -P mawk 2>/dev/null || :)
+  if [ -n "$cand" ] && [ -f "$cand" ] && [ -x "$cand" ]; then
+    host_mawk=$cand
+  else
+    for cand in /opt/homebrew/bin/mawk /usr/local/bin/mawk; do
+      if [ -f "$cand" ] && [ -x "$cand" ]; then host_mawk=$cand; break; fi
+    done
+  fi
+  if [ -z "$host_mawk" ]; then
+    harness_not_applicable 'no real mawk installed on this host for the #2244 SYS_PATH control'
+    return
+  fi
+  mawk_pin=$TMP/real-mawk-pin
+  mkdir -p "$mawk_pin"
+  ln -sf -- "$host_mawk" "$mawk_pin/awk"
+  got_pinned=$(
+    PATH="$mawk_pin:/usr/bin:/bin"
+    build_sys_path "$TMP/test-pin-mawk" || exit 2
+    PATH="$TMP/dunebin:$TMP/gitbin:$SYS_PATH" \
+      awk 'BEGIN { a["k"] = ("k" in a) ? a["k"] "; x" : "x"; print "got=[" a["k"] "]" }'
+  )
+  if [ "$got_pinned" = 'got=[; x]' ]; then
+    report 0 'SYS_PATH preserves real mawk pin for #2244 in-inside-assignment (got=[; x])'
+  else
+    report 1 'SYS_PATH preserves real mawk pin for #2244 in-inside-assignment (got=[; x])' "got=$got_pinned"
+  fi
+  if [ "$(uname -s 2>/dev/null)" = Darwin ] && [ -x /usr/bin/awk ]; then
+    got_unpinned=$(PATH="$TMP/dunebin:$TMP/gitbin:/usr/bin:/bin" \
+      awk 'BEGIN { a["k"] = ("k" in a) ? a["k"] "; x" : "x"; print "got=[" a["k"] "]" }')
+    if [ "$got_unpinned" = 'got=[x]' ]; then
+      report 0 'unpinned /usr/bin:/bin on macOS falls back to BWK awk (got=[x])'
+    else
+      report 1 'unpinned /usr/bin:/bin on macOS falls back to BWK awk (got=[x])' "got=$got_unpinned"
+    fi
+  fi
+}
+harness_leg_run 'SYS_PATH resets keep real mawk semantics for #2244 in-inside-assignment #sys-path-pin' sys_path_mawk_leg
 
 if harness_leg '--compile-only runs only the Dune setup and compile tier #compile-only'; then
   # On BOTH_SCRIPT a full run would run format, compile, tests and the whole harness tier;
