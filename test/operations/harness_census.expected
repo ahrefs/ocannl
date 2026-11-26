@@ -292,6 +292,21 @@ tools/test-promotion-record.sh	tools/per-test-cap.sh
 tools/test-promotion-record.sh	tools/promote.sh
 tools/test-promotion-record.sh	tools/test-promotion-record.sh
 tools/test-promotion-record.sh	tools/test-run.sh
+tools/test-real-dune-registrations.sh	benchmarks/test-*.sh	declares	--only '^1:'
+tools/test-real-dune-registrations.sh	scripts/harness-support.sh
+tools/test-real-dune-registrations.sh	scripts/test-*.sh	declares	--only '^1:'
+tools/test-real-dune-registrations.sh	test/operations/apt_fallback.sh	declares	--only '^1:'
+tools/test-real-dune-registrations.sh	test/operations/ci_matrix.sh	declares	--only '^1:'
+tools/test-real-dune-registrations.sh	tools/fleet-worker-candidates.sh
+tools/test-real-dune-registrations.sh	tools/harness-skips-ci-shell-dune.txt
+tools/test-real-dune-registrations.sh	tools/opam-env.sh
+tools/test-real-dune-registrations.sh	tools/test-*.sh	declares	--only '^1:'
+tools/test-real-dune-registrations.sh	tools/test-harnesses.sh
+tools/test-real-dune-registrations.sh	tools/test-merge-build-check.sh	declares	--only '^2:'
+tools/test-real-dune-registrations.sh	tools/test-real-dune-registrations.sh
+tools/test-real-dune-registrations.sh	tools/test-test-run-bisect.sh	declares	--only '^2:'
+tools/test-real-dune-registrations.sh	tools/test-test-run-digest.sh	declares	--only '^2:'
+tools/test-real-dune-registrations.sh	tools/test-test-run-options.sh	declares	--only '^2:'
 tools/test-refusal-manifest-sync.sh	scripts/harness-support.sh
 tools/test-refusal-manifest-sync.sh	scripts/process-group.sh
 tools/test-refusal-manifest-sync.sh	tools/batch-backends.sh
