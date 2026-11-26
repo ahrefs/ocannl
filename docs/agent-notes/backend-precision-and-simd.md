@@ -1336,10 +1336,12 @@ files.
   1.28 ms. Instruments reported 4352 spill bytes for every timed and warmup dispatch of the
   looped f32 rows, including the direct-device row, and no spill event for the literal f32,
   half or bfloat controls. The f32 literal row removes the two fragment-array allocations in
-  AIR, and all rows match a serial f32 reference on exact operands. The large gap persists
-  with padding and without threadgroup operand tiles. The stride-36 median improvement overlaps
-  the duplicate-baseline ratio range at both measured sizes, so this probe leaves production
-  strides in place. Instruments exported no per-shader hardware counter samples on this run.
+  AIR, and all rows match a serial f32 reference on exact operands. Production's
+  `Metal_mma.k_loop_lines` emits the runtime-indexed fragment loops that the probe mirrors.
+  The large gap persists with padding and without threadgroup operand tiles. The stride-36 median
+  improvement overlaps the duplicate-baseline ratio range at both measured sizes, so this probe
+  leaves production strides in place. Instruments exported no per-shader hardware counter
+  samples on this run.
 - **Per-simdgroup scratch recovers Metal wide MMA tile speed; `Bf16_auto` stays wide, `Fp16_auto`
   stays narrow on tuned training evidence** (gh-ocannl-2372, `Metal_backend.mma_d_boundary_lines`).
   Replacing `ocannl_mma_rc8`/`thread_elements()` with `simdgroup_load`/`simdgroup_store` through

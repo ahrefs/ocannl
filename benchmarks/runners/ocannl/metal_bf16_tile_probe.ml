@@ -804,12 +804,13 @@ let timings device queue ~f32_strides ~sizes ~rounds ~reps =
       let g = make_gemm device ~stagings ~m:size ~n:size ~k:size in
       let a, b = inexact_operands ~m:size ~n:size ~k:size in
       set_inputs g ~elts:[ Bf16; F32 ] a b;
-      (* Halved, the same values stay exact in half (operands down to 2^-8, normal; their products
-         reach 2^-16, below half's normal range). The half8x8 timing does not depend on this: with
-         unhalved operands, every product normal, it was unchanged (gh-ocannl-2322, 6.61 against
-         6.56 ms at n = 2048, a non-exclusive run). *)
+      (* The stride comparison gives every input format the same exactly representable, unhalved
+         values. Its half products stay normal. *)
       if f32_strides then set_inputs g ~elts:[ F16 ] a b
       else
+        (* Keep the historical gh-ocannl-2322 timing inputs. Halving keeps the operands normal and
+           lets their products reach the half subnormal range. The half8x8 timing was unchanged with
+           unhalved inputs (6.61 against 6.56 ms at n = 2048, a non-exclusive run). *)
         set_inputs g ~elts:[ F16 ]
           (Array.map (fun x -> x /. 2.0) a)
           (Array.map (fun x -> x /. 2.0) b);
