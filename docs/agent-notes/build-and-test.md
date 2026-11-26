@@ -6182,7 +6182,10 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `/usr/local/bin/mawk`. Missing `mawk` on macOS refuses (exit 2) with `brew install mawk` before
   taking a fleet slot or running any member, and never falls back to macOS's BWK `/usr/bin/awk`
   (which hides Linux mawk constructs such as `in`-inside-assignment). Non-Darwin hosts are
-  unaffected.
+  unaffected. Harnesses that reset `PATH` to system directories (such as
+  `tools/test-merge-build-check.sh`'s `SYS_PATH`) carry the caller's active `bash` and `awk`
+  shims in a private two-tool directory so isolated sub-calls stay under those pins without
+  leaking toolchain binaries (gh-ocannl-2496).
 - The gate is witnessed only locally: the nightly `ci` run reads master, where there is no PR head.
 
 ## The cross-machine sweep
