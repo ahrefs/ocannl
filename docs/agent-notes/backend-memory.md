@@ -101,7 +101,8 @@ files.
   refusal's detail now names the pool's position, the group's total and the bytes the earlier pools
   held. The CPU leg of `resource_fault_injection` lowers the cap with `with_pool_cap` and injects
   the driver's typed refusal at `Delta_pool_before_allocate`. The handling still sees the first
-  pool live, and the caller sees the annotated refusal after the unwind frees it. Before blaming a
+  pool live, and the caller sees the annotated refusal after the unwind frees it. A test cap must
+  be a positive power of two to preserve the link floor for page-rounded allocations. Before blaming a
   leak, score the footprint, and compare the `working_bytes` (census) and `device_free` (driver)
   fields of `Train.tune_placements`' progress lines across the arm boundaries: equal working bytes
   with a falling `device_free` is memory no pool table accounts for.

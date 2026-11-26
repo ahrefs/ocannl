@@ -39,6 +39,8 @@ let pool_cap_override = Stdlib.Domain.DLS.new_key (fun () -> Int.max_value)
 let pool_cap ~default = Int.min default (Stdlib.Domain.DLS.get pool_cap_override)
 
 let with_pool_cap cap ~f =
+  if cap <= 0 || not (Int.is_pow2 cap) then
+    invalid_arg "Resource_fault_injection.with_pool_cap: expected a positive power of two";
   let prior = Stdlib.Domain.DLS.get pool_cap_override in
   Stdlib.Domain.DLS.set pool_cap_override (Int.min prior cap);
   Exn.protect ~f ~finally:(fun () -> Stdlib.Domain.DLS.set pool_cap_override prior)

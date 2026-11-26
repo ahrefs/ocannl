@@ -10,6 +10,7 @@ two-pool unwind: both pools were allocated, and a free was attempted for each: t
 two-pool unwind: the pool after the refused free was still freed: true
 two-pool unwind control allocates one working and one constant pool: true
 two-pool unwind control computes the reference: true
+the test pool cap must be a positive power of two: true
 the second working pool was refused while exactly one pool of its group was live: true
 the link refusal preserves the device-memory cause and identifies its group and earlier pool: true
 the refusal freed exactly the one pool it held: true

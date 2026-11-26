@@ -183,6 +183,11 @@ let () =
     expected ~tol;
   Context.release unwind_ctx;
 
+  p_all "the test pool cap must be a positive power of two" [ -64; 0; 4097 ] ~f:(fun cap ->
+      match FI.with_pool_cap cap ~f:(fun () -> ()) with
+      | () -> false
+      | exception Invalid_argument _ -> true);
+
   (* Independent observable outputs belong to the same working group, and each fits in one small
      pool. *)
   let elements = 16 in
