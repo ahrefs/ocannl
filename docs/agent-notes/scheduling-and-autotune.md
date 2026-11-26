@@ -149,6 +149,12 @@ files.
   written in the routine, no sliding window (matmuls, 1x1 convs).
   `test/operations/cpu_fork_join_chains` (direct and pipeline legs, each against the serial
   compile), `cost_model_fork_join_updates`.
+- **Winograd bypasses the CPU channel-vector schedule** (gh-ocannl-2429). The `approximate` profile
+  enables `winograd_conv`. Its transformed-domain contractions lack the sliding-window index the
+  direct schedule requires. In the untuned cc batch-64 `cifar_resnet` cell on rog-nv-linux (AVX2),
+  all seven padded 3×3 forward sites packed and emitted SIMD with `--ocannl_winograd_conv=false`.
+  In two pass orders the override took step p50 from 141.5–142.6 ms to 107.4–112.2 ms
+  (exact 108.7–109.8 ms). [Issue and evidence](https://github.com/ahrefs/ocannl/issues/2429).
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
   (gh-ocannl-1003). The presets' chain is the single-child loop path, which stops at the
   online-softmax hoist's preamble (`for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } }`);
