@@ -138,7 +138,7 @@ tab=$(printf '\t')
 bom=$(printf '\357\273\277')
 # Bytes, not characters: under a UTF-8 locale an awk may read the BOM as one
 # character, or refuse a log's invalid UTF-8.
-env LC_ALL=C awk -v esc="$esc" -v tab="$tab" -v bom="$bom" -v github="$github" -v names="$names" '
+LC_ALL=C awk -v esc="$esc" -v tab="$tab" -v bom="$bom" -v github="$github" -v names="$names" '
 function clean(s, prefix) {
   log_step = ""
   if (index(s, bom) == 1) s = substr(s, length(bom) + 1)

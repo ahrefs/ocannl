@@ -1927,16 +1927,49 @@ exec 8<&-
 grep -q '^aggregate-skips: cannot write report$' "$tmp/report-write.err"
 
 # Standalone unset-locale guard (gh-ocannl-2484): aggregate-skips.sh runs
-# sort/comm in subshells and pipelines; unset or empty LANG/LC_ALL with
-# LC_CTYPE=UTF-8 must succeed with identical output.
-unset_locale_report=$(env -u LANG -u LC_ALL LC_CTYPE=UTF-8 "$aggregate" \
+# sort/comm in subshells and pipelines. Verify via an awk PATH stub that unset
+# or empty LANG/LC_ALL exports LANG=C while preserving LC_CTYPE, caller-supplied
+# LANG/LC_ALL, and identical output.
+agg_locale_bin="$tmp/agg-locale-bin"
+mkdir -p "$agg_locale_bin"
+real_awk=$(command -v awk)
+cat >"$agg_locale_bin/awk" <<EOF
+#!/bin/sh
+if [ -n "\${AGG_LOCALE_OUT:-}" ] && [ ! -e "\$AGG_LOCALE_OUT" ]; then
+  printf 'LANG=%s LC_ALL=%s LC_CTYPE=%s\n' "\${LANG-<unset>}" "\${LC_ALL-<unset>}" "\${LC_CTYPE-<unset>}" >"\$AGG_LOCALE_OUT"
+fi
+exec "$real_awk" "\$@"
+EOF
+chmod +x "$agg_locale_bin/awk"
+agg_locale_out="$tmp/agg-locale-seen"
+rm -f "$agg_locale_out"
+unset_locale_report=$(env -u LANG -u LC_ALL LC_CTYPE=UTF-8 PATH="$agg_locale_bin:$PATH" \
+  AGG_LOCALE_OUT="$agg_locale_out" "$aggregate" \
   --known cc --known metal \
   --run cc m4-max "$tmp/future-cc.records" --run metal m4-max "$tmp/identity-metal.log")
 [ "$unset_locale_report" = "$future_kind" ]
-empty_locale_report=$(env LANG= LC_ALL= LC_CTYPE=UTF-8 "$aggregate" \
+[ "$(cat "$agg_locale_out" 2>/dev/null)" = 'LANG=C LC_ALL=<unset> LC_CTYPE=UTF-8' ]
+rm -f "$agg_locale_out"
+empty_locale_report=$(env LANG= LC_ALL= LC_CTYPE=UTF-8 PATH="$agg_locale_bin:$PATH" \
+  AGG_LOCALE_OUT="$agg_locale_out" "$aggregate" \
   --known cc --known metal \
   --run cc m4-max "$tmp/future-cc.records" --run metal m4-max "$tmp/identity-metal.log")
 [ "$empty_locale_report" = "$future_kind" ]
+[ "$(cat "$agg_locale_out" 2>/dev/null)" = 'LANG=C LC_ALL= LC_CTYPE=UTF-8' ]
+rm -f "$agg_locale_out"
+lang_locale_report=$(env -u LC_ALL LANG=en_US.UTF-8 LC_CTYPE=UTF-8 PATH="$agg_locale_bin:$PATH" \
+  AGG_LOCALE_OUT="$agg_locale_out" "$aggregate" \
+  --known cc --known metal \
+  --run cc m4-max "$tmp/future-cc.records" --run metal m4-max "$tmp/identity-metal.log")
+[ "$lang_locale_report" = "$future_kind" ]
+[ "$(cat "$agg_locale_out" 2>/dev/null)" = 'LANG=en_US.UTF-8 LC_ALL=<unset> LC_CTYPE=UTF-8' ]
+rm -f "$agg_locale_out"
+lcall_locale_report=$(env -u LANG LC_ALL=POSIX LC_CTYPE=UTF-8 PATH="$agg_locale_bin:$PATH" \
+  AGG_LOCALE_OUT="$agg_locale_out" "$aggregate" \
+  --known cc --known metal \
+  --run cc m4-max "$tmp/future-cc.records" --run metal m4-max "$tmp/identity-metal.log")
+[ "$lcall_locale_report" = "$future_kind" ]
+[ "$(cat "$agg_locale_out" 2>/dev/null)" = 'LANG=<unset> LC_ALL=POSIX LC_CTYPE=UTF-8' ]
 
 # Hold one run after it owns the worktree lock, then replace its history with
 # the old schema. A competing launch must refuse at the lock without migrating

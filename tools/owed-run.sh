@@ -130,7 +130,7 @@ is_sha() { case $1 in *[!0-9a-f]* | '') return 1 ;; esac; [ "${#1}" = 40 ]; }
 # bounded CMD...: CMD under FETCH_CAP (macOS has no timeout(1); perl's alarm survives exec).
 bounded() { perl -e 'alarm shift; exec @ARGV or exit 127' "$FETCH_CAP" "$@"; }
 # A read never prompts, reads no ambient credential helper's prompt, and keeps English diagnostics.
-rgit() { bounded env LC_ALL=C GIT_TERMINAL_PROMPT=0 git -C "$root" "$@"; }
+rgit() { LC_ALL=C GIT_TERMINAL_PROMPT=0 bounded git -C "$root" "$@"; }
 
 # is_auth_failure STDERR: true when any line matches the closed auth/authorization denylist.
 is_auth_failure() {
@@ -406,7 +406,7 @@ publish() {
       if [ "$rc" = 0 ]; then
         msg+=$line
         commit=$(printf '%s\n' "$msg" | git -C "$root" commit-tree "$tree" -p "$h") || die "could not write the record commit"
-        bounded env LC_ALL=C git -C "$root" push --quiet --force-with-lease="$ref:$old" "$OWED_RUN_URL" "$commit:$ref" >"$_owed_scratch/err" 2>&1 || rc=$?
+        LC_ALL=C bounded git -C "$root" push --quiet --force-with-lease="$ref:$old" "$OWED_RUN_URL" "$commit:$ref" >"$_owed_scratch/err" 2>&1 || rc=$?
         if [ "$rc" != 0 ]; then
           err=$(cat "$_owed_scratch/err" 2>/dev/null)
           step="push $ref to $OWED_RUN_URL"

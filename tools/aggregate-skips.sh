@@ -256,7 +256,7 @@ intersect_claims() {
   for ((i = 1; i < ${#runs[@]}; i++)); do
     extract_claims "$scope" "${runs[$i]}" >"$tmp/next-$scope" ||
       die "cannot extract compatible skip records from ${runs[$i]}"
-    env LC_ALL=C comm -12 "$destination" "$tmp/next-$scope" >"$tmp/intersection-$scope" ||
+    LC_ALL=C comm -12 "$destination" "$tmp/next-$scope" >"$tmp/intersection-$scope" ||
       die "cannot intersect skip records"
     mv "$tmp/intersection-$scope" "$destination" || die "cannot advance skip intersection"
   done
@@ -274,10 +274,10 @@ if [ ${#environment_records[@]} -gt 0 ]; then
     extract_claims environment "$records" >>"$tmp/environment-owned-unsorted" ||
       die "cannot extract compatible skip records from $records"
   done
-  env LC_ALL=C sort -u "$tmp/environment-owned-unsorted" >"$tmp/environment-owned" ||
+  LC_ALL=C sort -u "$tmp/environment-owned-unsorted" >"$tmp/environment-owned" ||
     die "cannot collect environment-owned claims"
   intersect_claims sweep "$tmp/common-sweep" "${environment_records[@]}"
-  env LC_ALL=C comm -12 "$tmp/environment-owned" "$tmp/common-sweep" \
+  LC_ALL=C comm -12 "$tmp/environment-owned" "$tmp/common-sweep" \
     >"$tmp/common-environment" || die "cannot select environment-owned skip records"
 else
   : >"$tmp/common-environment"
@@ -377,7 +377,7 @@ for records in "${run_records[@]}"; do
   extract_claims outside-sweep "$records" >>"$tmp/outside-unsorted" ||
     die "cannot extract compatible skip records from $records"
 done
-env LC_ALL=C sort -u "$tmp/outside-unsorted" >"$tmp/outside" ||
+LC_ALL=C sort -u "$tmp/outside-unsorted" >"$tmp/outside" ||
   die "cannot collect outside-sweep skip records"
 while IFS=$'\t' read -r test_id claim owner; do
   if [ -n "$owner" ]; then

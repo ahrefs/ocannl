@@ -4235,7 +4235,7 @@ prepush_scan_alert() { # run dir; at most one notice per queried run
 }
 
 failure_diagnostics() {
-  env LC_ALL=C awk '
+  LC_ALL=C awk '
     BEGIN {
       sgr = sprintf("%c", 27) "\\[[0-9;]*m"
       sq = sprintf("%c", 39)

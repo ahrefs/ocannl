@@ -245,7 +245,7 @@ for script in "${harnesses[@]}"; do
   full=$rc
   # Each skip as LEG<TAB>LABEL: a label one leg skips in the full run says
   # nothing about another leg skipping it alone.
-  env LC_ALL=C sort -u "$logs/$slug/full.skips" -o "$logs/$slug/full.skips"
+  LC_ALL=C sort -u "$logs/$slug/full.skips" -o "$logs/$slug/full.skips"
   if [ "$full" = 0 ]; then
     printf '  full run: PASS (%s check(s) skipped)\n' "$(wc -l <"$logs/$slug/full.skips" | tr -d ' ')"
     verdict='passes in the full run'
