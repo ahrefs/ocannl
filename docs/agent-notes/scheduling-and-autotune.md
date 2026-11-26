@@ -3467,6 +3467,19 @@ files.
   (`Autotune.call_budget_elapsed` for the call, `budget_elapsed` per search, a search's first
   attempt being its `baseline`); per-search, no non-floor attempt may start at an index at or past
   the cut.
+- **Built-in per-cell search budgets in `benchmarks/orchestrate.py`** (`CELL_SEARCH_BUDGETS_S`,
+  gh-ocannl-2430). `cifar_resnet/metal/tuned/approximate` defaults to `tune_call_budget_seconds=1800`
+  (applied only when the measured checkout supports `tune_call_budget_seconds`, overridable via
+  `--cell-flag`, `=0` for uncapped; sized for `--cell-timeout 3600` like uncapped `exact`, not the
+  1,800 s default cap): uncapped, its four approximate searches (two
+  placement arms plus `tune_inline_flips=2` over Winograd's transformed sites) hit the 3,600 s cap
+  on m4-max on 2026-10-30 and 2026-11-20. In an exclusive `mac-studio` (Apple M4 Max) Metal window
+  with `BENCH_KERNEL_TABLE=1`, the 1,800 s budget completed in 1,799.93 s search + 336 s pass-2
+  replay (`REPLAY`, 4 replays, no ship substitution), reporting step p50 160.636 ms (p10-p90
+  160.291-161.411 ms, queued 153.570 ms, parity PASS `7.3e-07`, within exact envelope), dominant
+  kernel `k129/152 15.093 ms (queued) kernel_s1c2.grad n155.grad conv2d_s1c1.grad` (the budget cuts
+  each search before the `F_split` seeds at the end of `phase=seeds`, whereas uncapped `exact`
+  reaches 79.8 ms in 3,155 s).
 - **A deferred cache hit ships its validated code relinked** (gh-ocannl-1440).
   `Context.compile_outcome ?retain` keeps a successful compile's code, censuses and pre-link
   context (`Context.retained`, no working pools: those are a link's), and

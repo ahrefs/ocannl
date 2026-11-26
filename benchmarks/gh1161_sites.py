@@ -27,6 +27,7 @@ Usage: gh1161_sites.py <cell-log-dir> [--per-site]
 """
 
 import argparse
+import math
 import re
 import sys
 from pathlib import Path
@@ -106,10 +107,31 @@ def attribute(kernels):
     return sites, families, unattributed
 
 
+def call_budget_note(result):
+    """Distinguish budgeted tuned cells from uncapped ones by their resolved `call_budget_s`."""
+    arms = (result.get("tune") or {}).get("arms") or []
+    budgets = sorted(
+        {
+            a["call_budget_s"]
+            for a in arms
+            if isinstance(a.get("call_budget_s"), (int, float))
+            and not isinstance(a.get("call_budget_s"), bool)
+            and math.isfinite(a["call_budget_s"])
+            and a["call_budget_s"] > 0
+        }
+    )
+    if not budgets:
+        return ""
+    return " +call_budget=" + ",".join(f"{b:g}s" for b in budgets)
+
+
 def label(result):
     """The cell as its row names it; the workload is the fixture's own name, shown."""
     regime = result.get("profile") or "exact"
-    return f"{display_value(str(result['workload']))}/{result['backend']}/{result['variant']}/{regime}"
+    return (
+        f"{display_value(str(result['workload']))}/{result['backend']}/{result['variant']}/{regime}"
+        f"{call_budget_note(result)}"
+    )
 
 
 def main(argv=None):
