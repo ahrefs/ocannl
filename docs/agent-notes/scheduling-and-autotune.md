@@ -2773,6 +2773,11 @@ files.
   Depth 256 won only on CUDA's 16-row small-output site (1.43x), where the search's crown was
   the split of the merged k (partials plus combine, 0.0096 ms) instead.
 ## Timing objectives and calibration
+- CUDA value-select segment comparisons use byte-identical repeats for each rendering and a common
+  device output (gh-ocannl-2385). Independent output allocations can split same-source readings
+  even when the readings visit both orders. The row requires balanced admitted rounds and a
+  treatment range beyond the repeat envelope. See the [value-select benchmark](../../benchmarks/README.md#cuda-value-select-benchmark)
+  for the measured floor and the controls that vary output sharing and link order.
 - **What the tuner's numbers are a measurement OF is a config choice, and the two objectives do not
   crown the same candidate** (gh-ocannl-755). `Autotune.time_routine` takes a `timing_mode`, from
   config `autotune_timing`: `isolated` is the historical one launch plus one host sync — a lone
