@@ -769,9 +769,25 @@ files.
   judged on widens, and values move only where the backend widens (towards the exact sum). Gated on
   the node's storage precision, not the backend's `accum_prec` (where nothing widens a localized
   accumulator is the RMW exactly, so no backend fact is needed, and the optimizer stays
-  backend-independent), and not applied to f32: there it is bitwise neutral but trades the untuned
-  CPU and Metal backward's streaming rank-1 updates for strided dot products, a perf question of its
-  own. The allowlist is fail-closed (perfect serial chain, the target read only at its own cell,
+  backend-independent), and kept narrow-only rather than ungated for f32 (gh-ocannl-2422). Paired
+  6-round exclusive `mac-studio` (Apple M4 Max) f32 untuned backward A/Bs (`bin_cells.py --box
+  m4-max`, `step_ms.p50`, all 6/6 sign-test `p = 0.0312` except `lenet` cc `ungated/plain`
+  `p = 0.688`; Metal parity losses bitwise identical, cc within 3.1e-6 from FMA contraction):
+  ungating regressed `cc` on `gpt2_mini_train` (952.3 [925.8-969.3] -> 1163 [1157-1193] ms,
+  1.242x [1.193-1.254]; queued 950.9 -> 1171 ms, 1.243x) and `cifar_resnet` (72.15 [71.07-72.60]
+  -> plain 113.5 [112.1-114.0] ms, 1.571x [1.549-1.600] -> ungated 138.0 [135.4-139.8] ms, 1.911x
+  [1.866-1.960]; overlapping-window `ungated/plain` 1.222x [1.202-1.227]; queued 72.22 -> 113.8 ->
+  139.0 ms), with only tiny `lenet` slightly faster (6.937 [6.839-7.196] -> plain 6.500 -> ungated
+  6.608 [6.453-6.674] ms, 0.944x [0.916-0.976]; `ungated/plain` 1.022x). On Metal, ungating won on
+  `gpt2_mini_train` (66.17 [65.71-66.51] -> 46.74 [46.66-47.17] ms, 0.710x [0.702-0.711]; queued
+  57.42 -> 38.31 ms, 0.667x) and `cifar_resnet` (382.9 [375.6-398.8] -> 244.6 [243.9-256.2] ms,
+  0.644x [0.637-0.652]; queued 378.4 -> 247.0 ms, 0.661x), while `lenet` gained on plain-only
+  (40.93 [40.91-40.96] -> 33.22 [33.18-33.25] ms, 0.811x [0.810-0.812]) and regressed under the
+  overlapping-window sink (42.74 [42.73-42.78] ms, 1.044x [1.044-1.045]; `ungated/plain` 1.287x
+  [1.285-1.289]). Because the optimizer is backend-independent and both plain-cell and
+  overlapping-window sinking severely regress untuned CPU backward (trading streaming rank-1
+  updates for strided dot products and guarded affine scans), the narrow-float gate stays and the
+  GPU schedule-time sink (`Autotune.reduction_sink`) stays separate. The allowlist is fail-closed (perfect serial chain, the target read only at its own cell,
   pure index guards that move with the loop they mention). Plain cell loops interchange.
   A cell with independent supported positive affine pairs, one per axis (gh-ocannl-2423,
   gh-ocannl-2464), is reparametrized per overlapping axis by owner and residue while preserving
