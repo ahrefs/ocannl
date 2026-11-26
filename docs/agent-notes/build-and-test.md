@@ -6043,6 +6043,16 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   Scratch Dune queries are advisory. The real merge build still owns readiness. A CROSS-CUTTING
   banner comes first in `affected` diagnostics, with the widest observed contributors, and
   the merge build carries those contributors into its missing-record refusal.
+- **Test-reach cache across repeated plans and merge builds (gh-ocannl-2488).** Successful
+  `read_tests` answers are cached under
+  `${OCANNL_TOOL_MERGE_BUILD_REACH_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/ocannl/merge-build-reach}`
+  (`""`, `off` or `0` disables caching) so repeated `--plan --base`, `--plan-merge`, and full merge
+  builds reuse reach when the clean merge candidate, ignored probe-file set, and Dune inputs match.
+  Plan-to-merge-build reuse applies across clean scratch checkouts that share the same ignored-file
+  set (such as ship-pr's merge checkout and `--plan --base`), and intentionally misses in a
+  worktree carrying an ignored `dune-workspace` or `/ocannl_config`. The published owed-run record
+  (`tools/owed-run.sh check`) and failures (`tests=unread`) are never cached. `tools/merge-build-check.sh`'s
+  header owns the fail-closed cache-key allowlist, post-query revalidation, and atomic storage boundary.
 - **Training reach.** `prepush` prints each omitted training alias on stderr as
   `test-run: prepush: train: ALIAS`, beside the `slow:` lines, including `--list`
   and before a CROSS-CUTTING refusal (first-tier names are the full list's). The merge build reads

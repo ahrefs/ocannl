@@ -150,6 +150,43 @@
 # refresh (ship-pr re-runs `plan` before `recheck`, advisory on no-verdict fallback). Cannot be
 # combined with `--plan`, `--plan-merge`, `--base` or `--all` (exit 2).
 #
+# Test-reach cache (gh-ocannl-2488): successful `read_tests` answers (the test alias list, verdict,
+# owed flags/reasons, training/Linux reach needs, `CROSS-CUTTING reason:` lines, and literal-
+# dependency coverage lines) may be reused across `--plan --base`, `--plan-merge` and full merge
+# builds for the same clean merge candidate and Dune inputs. Failures (`tests=unread`), owed-run
+# record checks (`tools/owed-run.sh check`), builds and harnesses are never cached: the published
+# owed-run record is always checked afresh.
+# Cache location: `OCANNL_TOOL_MERGE_BUILD_REACH_CACHE` when set (`""`, `off` or `0` disables
+# caching; a relative path resolves against the caller's initial working directory), otherwise
+# `$XDG_CACHE_HOME/ocannl/merge-build-reach` (when `XDG_CACHE_HOME` is absolute) or
+# `$HOME/.cache/ocannl/merge-build-reach` (when `HOME` is absolute); disabled if neither is set.
+# Cache-key allowlist (fail-closed): schema version (`merge-build-reach-v1`), `TESTS_MAX`, two-
+# parent `HEAD` (`HEAD^1`, `HEAD^2`, no `HEAD^3`), `merge-base`, `HEAD^{tree}`, clean working tree
+# (`git status --porcelain -z --untracked-files=normal` empty and `git ls-files -v -z` showing only
+# `H ` entries so `assume-unchanged`/`skip-worktree` and dirty/untracked files bypass both read
+# and write), hashes of all gitignored non-directory files that `affected-tests.sh` copies into its
+# probe (regular readable files only; any symlink or non-regular ignored file bypasses the cache),
+# `uname -s`/`uname -m`, resolved `dune` and `ocamlc` executables (`realpath`, stat metadata, plus
+# content hash when `<= 65536` bytes), active opam switch state (`.opam-switch/{switch-state,
+# switch-config,environment}` and content hashes of `lib` `dune-package`/`META`/`META.*` and
+# `findlib.conf`), `OCAMLPATH` and `findlib.conf` `path` package metadata hashes, `OCAMLFIND_CONF`,
+# `DUNE_WORKSPACE` and user Dune config (`${XDG_CONFIG_HOME:-$HOME/.config}/dune/config`) file
+# contents, relevant environment variables (`DUNE_*` excluding `DUNE_BUILD_DIR`, `DUNE_ROOT`,
+# `DUNE_TRACE` and `DUNE_CACHE*`; `OCANNL_*` excluding `OCANNL_TOOL_*`, plus
+# `OCANNL_TOOL_AFFECTED_PROBE` and `OCANNL_TOOL_AFFECTED_ARGS`; `OPAM_SWITCH_PREFIX`, `OPAMSWITCH`,
+# `OPAMROOT`, `OCAMLFIND_CONF`, `OCAMLPATH`, `CAML_LD_LIBRARY_PATH`, `OCAMLPARAM`, `INSIDE_DUNE`),
+# and `select_tiers`'s Linux-scope inputs (`linux_scope_err`, `linux_harness_all`, `scripts`,
+# `renamed_scripts`, `linux_harness_members`).
+# Storage boundary: keys are revalidated after `read_tests` completes so mid-query mutations never
+# publish under a stale key. Entries are written atomically (`0600`) as `reach-<key>.v1` (via
+# `.ocannl-reach-tmp.<key>.<pid>.<6-digits>` staging files) with an embedded key and `end` trailer;
+# retention prunes only owner-matching files in those two exact shapes. Symlinks, wrong ownership,
+# group/world-writable files, malformed entries, key mismatches or unwritable cache directories are
+# treated as cache misses / skipped writes and never fail a run.
+# On `--plan-merge`/`--plan --base`, a cache hit prints `merge-build-check: tests plan: reused cached reach`;
+# on full merge builds, live output up to `passed` is unchanged for ship-pr's base-alone log
+# comparison, and `merge-build-check: tests reach: reused cached result` joins the exit summary.
+#
 # Toolchain: a non-interactive shell can lack the profile that puts the opam switch on PATH
 # (on mac-studio `zsh -c` resolves opam but not dune). When `dune` does not resolve, this sources
 # tools/opam-env.sh, first adding Homebrew's prefix when `opam` does not resolve either.
@@ -164,6 +201,7 @@ set -u
 # locale assignment, which segfaults inside a forked subshell or under concurrent runs.
 # LANG=C matches unset LANG in POSIX while letting caller-set categories (LC_CTYPE) win.
 [ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
+caller_pwd=$(pwd -P) || exit 2
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 me=merge-build-check
 plan=0 all=0 plan_base= plan_merge=0 compile_only=0
@@ -193,6 +231,7 @@ fi
   { echo "$me: --base requires --plan" >&2; exit 2; }
 SHELL_GLOB='*.sh'
 host_os=$(uname -s 2>/dev/null || echo unknown)
+host_arch=$(uname -m 2>/dev/null || echo unknown)
 # The harness tier's members run this many at once (tools/test-harnesses.sh --jobs): the width
 # of the `-j 4` build the slot this runs in is sized for, and what the bound was measured at.
 SHELL_JOBS=4
@@ -853,7 +892,597 @@ run_compile_tier() {
   finish_tier compile "$started"
 }
 
+# resolve_reach_cache_dir sets `reach_cache_dir` (empty when disabled) and `reach_cache_implicit`
+# (1 when derived from XDG_CACHE_HOME/HOME, 0 when explicitly supplied via env).
+resolve_reach_cache_dir() {
+  reach_cache_dir= reach_cache_implicit=0
+  if [ -n "${OCANNL_TOOL_MERGE_BUILD_REACH_CACHE+x}" ]; then
+    case $OCANNL_TOOL_MERGE_BUILD_REACH_CACHE in
+      '' | off | 0) return 0 ;;
+      /*) reach_cache_dir=$OCANNL_TOOL_MERGE_BUILD_REACH_CACHE ;;
+      *) reach_cache_dir=$caller_pwd/$OCANNL_TOOL_MERGE_BUILD_REACH_CACHE ;;
+    esac
+    return 0
+  fi
+  case ${XDG_CACHE_HOME:-} in
+    /*)
+      reach_cache_dir=$XDG_CACHE_HOME/ocannl/merge-build-reach
+      reach_cache_implicit=1
+      return 0 ;;
+  esac
+  case ${HOME:-} in
+    /*)
+      reach_cache_dir=$HOME/.cache/ocannl/merge-build-reach
+      reach_cache_implicit=1 ;;
+  esac
+}
+
+# reach_cache_key prints a 64-hex SHA-256 key for the current clean merge candidate and Dune
+# inputs, or returns 1 to bypass the cache (disabled, non-merge, dirty checkout, unreadable
+# external input, or missing dune).
+reach_cache_key() {
+  local dune_bin= ocamlc_bin=
+  [ -n "$reach_cache_dir" ] && [ -n "$base" ] && [ -n "$head" ] && [ -n "$mb" ] || return 1
+  dune_bin=$(command -v dune 2>/dev/null || true)
+  [ -n "$dune_bin" ] || return 1
+  ocamlc_bin=$(command -v ocamlc 2>/dev/null || true)
+  perl -e '
+    use strict; use warnings;
+    use Cwd qw(realpath);
+    use Digest::SHA ();
+    use File::Basename qw(dirname);
+
+    my ($root, $base, $head, $mb, $tests_max, $host_os, $host_arch,
+        $dune_bin, $ocamlc_bin, $linux_scope_err, $linux_harness_all, @rest) = @ARGV;
+
+    sub take_list {
+      my $n = shift @rest;
+      exit 1 unless defined $n && $n =~ /\A[0-9]+\z/ && @rest >= $n;
+      return splice @rest, 0, $n;
+    }
+    my @scripts = take_list();
+    my @renamed_scripts = take_list();
+    my @linux_members = take_list();
+    exit 1 if @rest;
+
+    sub git_capture {
+      my (@args) = @_;
+      open my $fh, "-|", "git", "-C", $root, @args or exit 1;
+      binmode $fh;
+      local $/;
+      my $out = <$fh>;
+      close $fh or return (0, "");
+      return (1, defined $out ? $out : "");
+    }
+
+    my ($ok_tree, $tree) = git_capture("rev-parse", "--verify", "--quiet", "HEAD^{tree}");
+    exit 1 unless $ok_tree;
+    $tree =~ s/\r?\n\z//;
+    exit 1 unless $tree =~ /\A[0-9a-f]{40}\z/;
+
+    # Refuse octopus merges (more than two parents).
+    my ($has_p3) = git_capture("rev-parse", "--verify", "--quiet", "HEAD^3^{commit}");
+    exit 1 if $has_p3;
+
+    # Working tree and index must match HEAD^{tree} cleanly (no staged, modified, or untracked
+    # non-ignored files, and no assume-unchanged/skip-worktree index flags that hide edits).
+    my ($ok_st, $st_out) = git_capture("status", "--porcelain", "-z", "--untracked-files=normal");
+    exit 1 unless $ok_st && length($st_out) == 0;
+    my ($ok_ls, $ls_out) = git_capture("ls-files", "-v", "-z");
+    exit 1 unless $ok_ls;
+    for my $ent (split /\0/, $ls_out) {
+      next unless length($ent);
+      exit 1 unless $ent =~ /\AH /;
+    }
+
+    # Ignored non-directory files that affected-tests.sh copies into its probe (e.g.
+    # dune-workspace, /ocannl_config). Any symlink or non-regular/unreadable ignored file bypasses.
+    my ($ok_ig, $ig_out) = git_capture("ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory");
+    exit 1 unless $ok_ig;
+    my @ig_files = sort grep { length($_) && !m{/\z} } split /\0/, $ig_out;
+
+    my $sha = Digest::SHA->new(256);
+    sub feed { $sha->add(join("\0", @_), "\n"); }
+    sub hash_file_bytes {
+      my ($path) = @_;
+      open my $fh, "<", $path or exit 1;
+      binmode $fh;
+      my $fsha = Digest::SHA->new(256);
+      $fsha->addfile($fh);
+      close $fh or exit 1;
+      return $fsha->hexdigest;
+    }
+
+    feed("schema", "merge-build-reach-v1");
+    feed("tests_max", $tests_max);
+    feed("base", $base);
+    feed("head", $head);
+    feed("mb", $mb);
+    feed("tree", $tree);
+    feed("host_os", $host_os);
+    feed("host_arch", $host_arch);
+    feed("linux_scope_err", $linux_scope_err);
+    feed("linux_harness_all", $linux_harness_all);
+    feed("scripts", scalar(@scripts), @scripts);
+    feed("renamed_scripts", scalar(@renamed_scripts), @renamed_scripts);
+    feed("linux_members", scalar(@linux_members), @linux_members);
+
+    for my $rel (@ig_files) {
+      my $p = "$root/$rel";
+      my @lst = lstat($p);
+      exit 1 unless @lst && -f _ && !-l _ && -r $p;
+      feed("ignored", $rel, hash_file_bytes($p));
+    }
+
+    my %prefixes;
+    sub add_prefix {
+      my ($dir) = @_;
+      return unless defined $dir && length($dir) && -d $dir;
+      my $rp = realpath($dir);
+      $prefixes{$rp} = 1 if defined $rp && length($rp);
+    }
+
+    sub fingerprint_tool {
+      my ($tag, $bin) = @_;
+      if (!defined $bin || !length($bin)) {
+        feed("tool", $tag, "absent");
+        return;
+      }
+      my $rp = realpath($bin);
+      exit 1 unless defined $rp && -f $rp && -r $rp;
+      my @st = stat($rp);
+      exit 1 unless @st;
+      my $content = $st[7] <= 65536 ? hash_file_bytes($rp) : "-";
+      feed("tool", $tag, $rp, $st[0], $st[1], $st[7], $st[9], $content);
+      if ($rp =~ m{\A(.+)/bin/[^/]+\z}) {
+        my $cand = $1;
+        add_prefix($cand) if -d "$cand/.opam-switch" || -d "$cand/lib";
+      }
+    }
+
+    fingerprint_tool("dune", $dune_bin);
+    fingerprint_tool("ocamlc", $ocamlc_bin);
+    add_prefix($ENV{OPAM_SWITCH_PREFIX}) if defined $ENV{OPAM_SWITCH_PREFIX};
+
+    sub fingerprint_ext_file {
+      my ($tag, $path) = @_;
+      if (!defined $path || !length($path)) {
+        feed("ext", $tag, "unset");
+        return;
+      }
+      if (!-e $path && !-l $path) {
+        feed("ext", $tag, "absent");
+        return;
+      }
+      exit 1 unless -f $path && -r $path;
+      feed("ext", $tag, hash_file_bytes($path));
+    }
+
+    my %scanned_lib_dirs;
+    sub scan_lib_dir {
+      my ($tag, $dir) = @_;
+      if (!-d $dir) {
+        feed("libdir", $tag, $dir, "absent");
+        return;
+      }
+      my $rp = realpath($dir);
+      exit 1 unless defined $rp;
+      if ($scanned_lib_dirs{$rp}++) {
+        feed("libdir_dup", $tag, $rp);
+        return;
+      }
+      opendir my $dh, $rp or exit 1;
+      my @entries = sort grep { $_ ne "." && $_ ne ".." } readdir($dh);
+      closedir $dh;
+      feed("libdir", $tag, $rp, scalar(@entries));
+      for my $e (@entries) {
+        my $ep = "$rp/$e";
+        if ($e eq "dune-package" || $e eq "findlib.conf" || $e =~ /\AMETA(?:\..+)?\z/) {
+          exit 1 unless -f $ep && -r $ep;
+          feed("pkgflat", $tag, $e, hash_file_bytes($ep));
+          next;
+        }
+        next unless -d $ep;
+        for my $name ("dune-package", "META") {
+          my $f = "$ep/$name";
+          next unless -e $f || -l $f;
+          exit 1 unless -f $f && -r $f;
+          feed("pkgmeta", $tag, $e, $name, hash_file_bytes($f));
+        }
+      }
+    }
+
+    sub scan_findlib_conf {
+      my ($tag, $path) = @_;
+      fingerprint_ext_file($tag, $path);
+      return unless defined $path && length($path) && -f $path && -r $path;
+      my $conf_rp = realpath($path);
+      exit 1 unless defined $conf_rp;
+      my $conf_dir = dirname($conf_rp);
+      open my $fh, "<", $conf_rp or exit 1;
+      binmode $fh;
+      local $/;
+      my $body = <$fh>;
+      close $fh or exit 1;
+      return unless defined $body;
+      my $i = 0;
+      while ($body =~ /^\s*path\s*=\s*"([^"]*)"/mg) {
+        for my $d (split /:/, $1, -1) {
+          $i++;
+          next unless length($d);
+          $d = "$conf_dir/$d" unless $d =~ m{\A/};
+          scan_lib_dir("$tag:path:$i", $d);
+        }
+      }
+    }
+
+    for my $pref (sort keys %prefixes) {
+      feed("switch_prefix", $pref);
+      for my $sf ("switch-state", "switch-config", "environment") {
+        fingerprint_ext_file("opam:$pref:$sf", "$pref/.opam-switch/$sf");
+      }
+      scan_lib_dir("switch:$pref", "$pref/lib");
+      scan_findlib_conf("switch_findlib:$pref", "$pref/lib/findlib.conf") if -e "$pref/lib/findlib.conf" || -l "$pref/lib/findlib.conf";
+    }
+
+    if (defined $ENV{OCAMLPATH} && length($ENV{OCAMLPATH})) {
+      my $i = 0;
+      for my $dir (split /:/, $ENV{OCAMLPATH}, -1) {
+        $i++;
+        next unless length($dir);
+        scan_lib_dir("ocamlpath:$i", $dir);
+      }
+    }
+
+    scan_findlib_conf("ocamlfind_conf", $ENV{OCAMLFIND_CONF});
+    if (defined $ENV{DUNE_WORKSPACE} && length($ENV{DUNE_WORKSPACE})) {
+      my $ws = $ENV{DUNE_WORKSPACE};
+      $ws = "$root/$ws" unless $ws =~ m{\A/};
+      fingerprint_ext_file("dune_workspace_env", $ws);
+    } else {
+      feed("ext", "dune_workspace_env", "unset");
+    }
+
+    my $dune_user_cfg;
+    if (defined $ENV{XDG_CONFIG_HOME} && $ENV{XDG_CONFIG_HOME} =~ m{\A/}) {
+      $dune_user_cfg = "$ENV{XDG_CONFIG_HOME}/dune/config";
+    } elsif (defined $ENV{HOME} && $ENV{HOME} =~ m{\A/}) {
+      $dune_user_cfg = "$ENV{HOME}/.config/dune/config";
+    }
+    fingerprint_ext_file("dune_user_config", $dune_user_cfg);
+
+    my %keep_exact = map { $_ => 1 } qw(
+      OPAM_SWITCH_PREFIX OPAMSWITCH OPAMROOT OCAMLFIND_CONF OCAMLPATH
+      CAML_LD_LIBRARY_PATH OCAMLPARAM INSIDE_DUNE
+      OCANNL_TOOL_AFFECTED_PROBE OCANNL_TOOL_AFFECTED_ARGS
+    );
+    my %skip_dune = map { $_ => 1 } qw(
+      DUNE_BUILD_DIR DUNE_ROOT DUNE_TRACE
+      DUNE_CACHE DUNE_CACHE_ROOT DUNE_CACHE_STORAGE_MODE DUNE_CACHE_TRANSPORT
+    );
+    for my $k (sort keys %ENV) {
+      my $keep = 0;
+      if ($keep_exact{$k}) {
+        $keep = 1;
+      } elsif ($k =~ /\ADUNE_/ && !$skip_dune{$k}) {
+        $keep = 1;
+      } elsif ($k =~ /\AOCANNL_/ && $k !~ /\AOCANNL_TOOL_/) {
+        $keep = 1;
+      }
+      feed("env", $k, $ENV{$k}) if $keep;
+    }
+
+    print $sha->hexdigest, "\n";
+  ' "$root" "$base" "$head" "$mb" "$TESTS_MAX" "$host_os" "$host_arch" \
+    "$dune_bin" "$ocamlc_bin" "${linux_scope_err:-}" "$linux_harness_all" \
+    "${#scripts[@]}" ${scripts[@]+"${scripts[@]}"} \
+    "${#renamed_scripts[@]}" ${renamed_scripts[@]+"${renamed_scripts[@]}"} \
+    "${#linux_harness_members[@]}" ${linux_harness_members[@]+"${linux_harness_members[@]}"} \
+    2>/dev/null
+}
+
+# reach_cache_io MODE ARGS... owns the single entry grammar, cache-directory check and atomic
+# read/write logic for both `load` and `store` so their validation rules cannot drift apart.
+reach_cache_io() {
+  perl -e '
+    use strict; use warnings;
+    use Fcntl qw(O_RDONLY O_WRONLY O_CREAT O_EXCL);
+    use File::Path qw(make_path);
+
+    my ($mode, $cache_dir, $implicit, $key, $tests_dir, @rest) = @ARGV;
+    my $fail_rc = ($mode eq "load") ? 1 : 0;
+    sub bail { exit $fail_rc; }
+
+    my %scalar_tags = map { $_ => 1 } qw(
+      tests tests_verdict tests_incomplete has_ask_first
+      tests_owed train_why linux_why linux_leg_args
+    );
+    my %valid_tests = map { $_ => 1 } qw(list owed);
+    my %valid_verdict = map { $_ => 1 } ("ok", "incomplete", "cross-cutting", "cross-cutting,incomplete");
+    my %valid_bit = map { $_ => 1 } qw(0 1);
+
+    sub valid_need {
+      my ($v) = @_;
+      return defined $v && (
+        $v eq "runtest" || $v eq "train" || $v eq "linux:harnesses"
+        || $v =~ m{\A@[^\s]+/train-[^\s]+\z}
+        || $v =~ m{\Alinux:member:[^\s]+\z}
+        || $v =~ m{\Alinux:@[^\s]+\z}
+      );
+    }
+    sub valid_list  { my ($v) = @_; return defined $v && $v =~ m{\A@[^\s]+\z}; }
+    sub valid_cross { my ($v) = @_; return defined $v && index($v, "affected: CROSS-CUTTING reason: ") == 0; }
+    sub valid_dep   { my ($v) = @_; return defined $v && $v =~ m{\Aaffected: .+: named as a dependency by the rule of @[^\s]+\z}; }
+    sub valid_dir {
+      my @dst = lstat($cache_dir);
+      return 0 unless @dst;
+      return $implicit
+        ? (-d _ && !-l _ && $dst[4] == $< && (($dst[2] & 0022) == 0))
+        : (-d $cache_dir);
+    }
+
+    bail() unless defined $key && $key =~ /\A[0-9a-f]{64}\z/;
+    my $entry = "$cache_dir/reach-$key.v1";
+
+    if ($mode eq "load") {
+      bail() unless valid_dir();
+      my @lst = lstat($entry);
+      bail() unless @lst && -f _ && !-l _ && $lst[4] == $< && (($lst[2] & 0022) == 0);
+
+      my $flags = O_RDONLY;
+      my $nofollow = eval { Fcntl::O_NOFOLLOW() };
+      $flags |= $nofollow if defined $nofollow;
+      sysopen(my $fh, $entry, $flags) or bail();
+      binmode $fh;
+      my @fst = stat($fh);
+      bail() unless @fst && -f _ && $fst[0] == $lst[0] && $fst[1] == $lst[1]
+                 && $fst[4] == $< && (($fst[2] & 0022) == 0);
+
+      local $/;
+      my $raw = <$fh>;
+      close $fh or bail();
+      bail() unless defined $raw && length($raw) > 0 && index($raw, "\0") < 0 && $raw =~ /\n\z/;
+
+      my @lines = split /\n/, $raw, -1;
+      pop @lines;
+      bail() unless @lines >= 3 && $lines[0] eq "schema\tv1" && $lines[1] eq "key\t$key"
+                 && $lines[-1] eq "end\tv1";
+
+      my (%scalars, @needs, @list, @cross, @deps);
+      for my $i (2 .. $#lines - 1) {
+        my $ln = $lines[$i];
+        my $tab = index($ln, "\t");
+        bail() if $tab < 1;
+        my $tag = substr($ln, 0, $tab);
+        my $val = substr($ln, $tab + 1);
+        if ($scalar_tags{$tag}) {
+          bail() if exists $scalars{$tag};
+          $scalars{$tag} = $val;
+        } elsif ($tag eq "need") {
+          bail() unless valid_need($val);
+          push @needs, $val;
+        } elsif ($tag eq "list") {
+          bail() unless valid_list($val);
+          push @list, $val;
+        } elsif ($tag eq "cross_line") {
+          bail() unless valid_cross($val);
+          push @cross, $val;
+        } elsif ($tag eq "dep") {
+          bail() unless valid_dep($val);
+          push @deps, $val;
+        } else {
+          bail();
+        }
+      }
+
+      for my $req (keys %scalar_tags) { bail() unless exists $scalars{$req}; }
+      bail() unless $valid_tests{$scalars{tests}} && $valid_verdict{$scalars{tests_verdict}}
+                 && $valid_bit{$scalars{tests_incomplete}} && $valid_bit{$scalars{has_ask_first}};
+
+      sub write_lines {
+        my ($path, $arr) = @_;
+        open my $oh, ">", $path or bail();
+        binmode $oh;
+        for my $x (@$arr) { print $oh $x, "\n" or bail(); }
+        close $oh or bail();
+      }
+
+      write_lines("$tests_dir/list", \@list);
+      if ($scalars{has_ask_first} eq "1") {
+        write_lines("$tests_dir/ask", \@cross);
+        write_lines("$tests_dir/ask-first", \@deps);
+      } else {
+        unlink "$tests_dir/ask-first";
+        write_lines("$tests_dir/ask", [@cross, @deps]);
+      }
+
+      open my $mh, ">", "$tests_dir/cache-meta" or bail();
+      binmode $mh;
+      for my $k (qw(tests tests_verdict tests_incomplete tests_owed train_why linux_why linux_leg_args)) {
+        print $mh "$k=$scalars{$k}\n" or bail();
+      }
+      for my $n (@needs) { print $mh "need=$n\n" or bail(); }
+      close $mh or bail();
+
+      # Best-effort LRU touch so actively reused entries stay fresh.
+      utime(undef, undef, $entry);
+      exit 0;
+    }
+
+    bail() unless $mode eq "store";
+    my ($has_ask_first, $tests, $tests_verdict, $tests_incomplete,
+        $tests_owed, $train_why, $linux_why, $linux_leg_args, @needs) = @rest;
+
+    bail() unless $valid_tests{$tests} && $valid_verdict{$tests_verdict}
+               && $valid_bit{$tests_incomplete} && $valid_bit{$has_ask_first};
+    for my $s ($tests_owed, $train_why, $linux_why, $linux_leg_args, @needs) {
+      bail() if !defined $s || index($s, "\n") >= 0 || index($s, "\0") >= 0;
+    }
+    for my $n (@needs) { bail() unless valid_need($n); }
+
+    my @list;
+    if (-f "$tests_dir/list") {
+      open my $lh, "<", "$tests_dir/list" or bail();
+      binmode $lh;
+      while (my $ln = <$lh>) {
+        $ln =~ s/\r?\n\z//;
+        next unless length($ln);
+        bail() if index($ln, "\0") >= 0 || !valid_list($ln);
+        push @list, $ln;
+      }
+      close $lh;
+    }
+
+    my @cross;
+    if (-f "$tests_dir/ask") {
+      open my $ah, "<", "$tests_dir/ask" or bail();
+      binmode $ah;
+      while (my $ln = <$ah>) {
+        $ln =~ s/\r?\n\z//;
+        next unless valid_cross($ln);
+        bail() if index($ln, "\0") >= 0;
+        push @cross, $ln;
+      }
+      close $ah;
+    }
+
+    my @deps;
+    my $dep_file = $has_ask_first eq "1" ? "$tests_dir/ask-first" : "$tests_dir/ask";
+    if (-f $dep_file) {
+      open my $dh, "<", $dep_file or bail();
+      binmode $dh;
+      while (my $ln = <$dh>) {
+        $ln =~ s/\r?\n\z//;
+        next unless valid_dep($ln);
+        bail() if index($ln, "\0") >= 0;
+        push @deps, $ln;
+      }
+      close $dh;
+    }
+
+    # Ensure cache_dir exists; newly created directories get 0700.
+    umask 0077;
+    if (!-e $cache_dir) {
+      eval { make_path($cache_dir, { mode => 0700 }) };
+      bail() if $@;
+    }
+    bail() unless valid_dir();
+
+    my ($fh, $tmp_path);
+    for my $try (1 .. 16) {
+      my $cand = sprintf("%s/.ocannl-reach-tmp.%s.%d.%06d", $cache_dir, $key, $$, int(rand(1000000)));
+      if (sysopen($fh, $cand, O_WRONLY | O_CREAT | O_EXCL, 0600)) {
+        $tmp_path = $cand;
+        last;
+      }
+    }
+    bail() unless defined $tmp_path;
+    binmode $fh;
+    my $ok = 1;
+    $ok &&= print $fh "schema\tv1\n";
+    $ok &&= print $fh "key\t$key\n";
+    $ok &&= print $fh "tests\t$tests\n";
+    $ok &&= print $fh "tests_verdict\t$tests_verdict\n";
+    $ok &&= print $fh "tests_incomplete\t$tests_incomplete\n";
+    $ok &&= print $fh "has_ask_first\t$has_ask_first\n";
+    $ok &&= print $fh "tests_owed\t$tests_owed\n";
+    $ok &&= print $fh "train_why\t$train_why\n";
+    $ok &&= print $fh "linux_why\t$linux_why\n";
+    $ok &&= print $fh "linux_leg_args\t$linux_leg_args\n";
+    for my $n (@needs) { $ok &&= print $fh "need\t$n\n"; }
+    for my $l (@list) { $ok &&= print $fh "list\t$l\n"; }
+    for my $c (@cross) { $ok &&= print $fh "cross_line\t$c\n"; }
+    for my $d (@deps) { $ok &&= print $fh "dep\t$d\n"; }
+    $ok &&= print $fh "end\tv1\n";
+    $ok &&= close $fh;
+    if (!$ok || !rename($tmp_path, $entry)) {
+      unlink $tmp_path;
+      bail();
+    }
+
+    # Best-effort retention: prune only owner-matching files in this tool'\''s exact staging and
+    # entry filename formats (stale staging >1h, entries >14d, cap at 256 entries).
+    if (opendir my $cdh, $cache_dir) {
+      my $now = time();
+      my @entries;
+      while (my $name = readdir($cdh)) {
+        if ($name =~ /\A\.ocannl-reach-tmp\.[0-9a-f]{64}\.[0-9]+\.[0-9]{6}\z/) {
+          my @st = lstat("$cache_dir/$name");
+          unlink "$cache_dir/$name" if @st && -f _ && !-l _ && $st[4] == $< && ($now - $st[9]) > 3600;
+        } elsif ($name =~ /\Areach-[0-9a-f]{64}\.v1\z/) {
+          my @st = lstat("$cache_dir/$name");
+          next unless @st && -f _ && !-l _ && $st[4] == $<;
+          if (($now - $st[9]) > 14 * 86400) {
+            unlink "$cache_dir/$name";
+          } else {
+            push @entries, [$st[9], $name];
+          }
+        }
+      }
+      closedir $cdh;
+      if (@entries > 256) {
+        @entries = sort { $b->[0] <=> $a->[0] } @entries;
+        for my $i (256 .. $#entries) {
+          unlink "$cache_dir/$entries[$i][1]";
+        }
+      }
+    }
+  ' "$@" 2>/dev/null
+}
+
+# reach_cache_load KEY restores a validated cached `read_tests` result into `$tests_dir` and the
+# shell state variables, returning 0 on a valid hit and 1 on any miss, permission/symlink refusal,
+# key mismatch or format violation.
+reach_cache_load() {
+  local key=$1 line tag val
+  [ -n "$reach_cache_dir" ] || return 1
+  reach_cache_io load "$reach_cache_dir" "$reach_cache_implicit" "$key" "$tests_dir" || {
+    rm -f "$tests_dir/list" "$tests_dir/ask" "$tests_dir/ask-first" "$tests_dir/cache-meta"
+    return 1
+  }
+  tests= tests_verdict= tests_owed= tests_why= tests_incomplete=0
+  needs=() train_why= linux_why= linux_leg_args=
+  while IFS= read -r line; do
+    tag=${line%%=*}
+    val=${line#*=}
+    case $tag in
+      tests) tests=$val ;;
+      tests_verdict) tests_verdict=$val ;;
+      tests_incomplete) tests_incomplete=$val ;;
+      tests_owed) tests_owed=$val ;;
+      train_why) train_why=$val ;;
+      linux_why) linux_why=$val ;;
+      linux_leg_args) linux_leg_args=$val ;;
+      need) needs+=("$val") ;;
+      *)
+        rm -f "$tests_dir/list" "$tests_dir/ask" "$tests_dir/ask-first" "$tests_dir/cache-meta"
+        return 1 ;;
+    esac
+  done <"$tests_dir/cache-meta"
+  rm -f "$tests_dir/cache-meta"
+}
+
+# reach_cache_store KEY atomically writes the successful `read_tests` result to the cache and
+# best-effort prunes expired/excess entries. Any error is ignored so caching never fails a run.
+reach_cache_store() {
+  local key=$1 has_ask_first=0
+  [ -n "$reach_cache_dir" ] || return 0
+  [ ! -f "$tests_dir/ask-first" ] || has_ask_first=1
+  reach_cache_io store "$reach_cache_dir" "$reach_cache_implicit" "$key" "$tests_dir" "$has_ask_first" \
+    "$tests" "$tests_verdict" "$tests_incomplete" "$tests_owed" \
+    "$train_why" "$linux_why" "$linux_leg_args" ${needs[@]+"${needs[@]}"} || true
+}
+
 read_tests() {
+  local cache_key= post_key=
+  reach_reused=0
+  resolve_reach_cache_dir
+  if cache_key=$(reach_cache_key); then
+    if reach_cache_load "$cache_key"; then
+      reach_reused=1
+      return 0
+    fi
+  fi
   ask_tests
   if [ "$tests" = unread ]; then
     [ ! -s "$tests_dir/ask" ] || cat "$tests_dir/ask" >&2
@@ -868,6 +1497,10 @@ read_tests() {
   if [ "$tests" = unread ]; then
     [ ! -s "$tests_dir/ask" ] || cat "$tests_dir/ask" >&2
     return 1
+  fi
+  # Revalidate the key after computing reach so mid-query mutations never publish under stale inputs.
+  if [ -n "$cache_key" ] && post_key=$(reach_cache_key) && [ "$post_key" = "$cache_key" ]; then
+    reach_cache_store "$cache_key"
   fi
 }
 
@@ -931,8 +1564,14 @@ branch_plan() (
   set -- --plan-merge
   [ "$all" = 0 ] || set -- "$@" --all
   rc=0
+  resolve_reach_cache_dir
   # Affected retains rejected Dune output in TMPDIR for inspection.
-  TMPDIR="$scratch_parent" "${BASH:-bash}" tools/merge-build-check.sh "$@" </dev/null || rc=$?
+  if [ -n "${OCANNL_TOOL_MERGE_BUILD_REACH_CACHE+x}" ] && [ -n "$reach_cache_dir" ]; then
+    env OCANNL_TOOL_MERGE_BUILD_REACH_CACHE="$reach_cache_dir" TMPDIR="$scratch_parent" \
+      "${BASH:-bash}" tools/merge-build-check.sh "$@" </dev/null || rc=$?
+  else
+    TMPDIR="$scratch_parent" "${BASH:-bash}" tools/merge-build-check.sh "$@" </dev/null || rc=$?
+  fi
   [ "$rc" != 2 ] || die_plan 'the candidate merge does not support plan queries'
   exit "$rc"
 )
@@ -949,6 +1588,7 @@ merged_plan() (
   was_pending=$pending
   cover_tier
   show_cover "$was_pending"
+  [ "$reach_reused" = 0 ] || echo "$me: tests plan: reused cached reach"
   case $tests_verdict/$tests/$tests_incomplete in
     cross-cutting/list/0) echo "$me: tests plan: CROSS-CUTTING (first tier selected)" ;;
     cross-cutting/list/1) echo "$me: tests plan: CROSS-CUTTING (first tier selected, INCOMPLETE)" ;;
@@ -1021,6 +1661,7 @@ finish_tier format "$started"
 run_compile_tier
 started=$SECONDS
 read_tests || finish_tier tests "$started" "$tests_why"
+[ "$reach_reused" = 0 ] || timing_rows+=("$me: tests reach: reused cached result")
 if [ ${#needs[@]} -gt 0 ]; then
   [ -z "$tests_owed" ] || echo "$me: tests tier: OWED -- $tests_owed did not run here"
   [ "$train_why" = '' ] || echo "$me: tests tier: OWED -- $train_why"

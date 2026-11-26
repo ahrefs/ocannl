@@ -38,7 +38,10 @@
 # The #plan-locale leg
 # exercises CROSS-CUTTING plans with LANG and LC_ALL unset or empty under LC_CTYPE=UTF-8
 # (gh-ocannl-2462), pinning the exported LANG=C guard, caller-locale preservation, and C-locale
-# reason filtering.
+# reason filtering. The #reach-cache leg (gh-ocannl-2488) pins test-reach reuse across repeated
+# `--plan --base`, `--plan-merge` and full merge builds while checking owed-run records afresh,
+# fail-closed invalidation on candidate/tree/base-alone/dirty/ignored-file/Dune/opam/env/OS
+# changes, rejection of corrupted/symlinked/group-writable cache files, and default cache paths.
 # The #compile-output leg alone uses real
 # dune and Python in a minimal isolated project: the repository's actual capped-fixture rule
 # runs twice, then with a planted failing case. It compares bytes and rejects the exact unittest
@@ -63,6 +66,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
   GIT_COMMON_DIR GIT_CEILING_DIRECTORIES SHIP_PR_MERGE_BASE_SHA SHIP_PR_MERGE_HEAD_SHA \
   OCANNL_TOOL_OWED_RUN_FETCH_CAP OCANNL_TOOL_OWED_RUN_PUSH_RETRIES OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF
+# Keep fake-env fixture legs isolated from each other and from the user's real reach cache; the
+# dedicated #reach-cache leg overrides or unsets this explicitly.
+export OCANNL_TOOL_MERGE_BUILD_REACH_CACHE=off
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
   GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
   GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
@@ -193,6 +199,9 @@ case $1 in
     exit "${FAKE_TEST_RUN_RC:-0}" ;;
 esac
 printf '%s\n' "$*" >>"$FAKE_RECORD.tiers"
+if [ -n "${FAKE_MUTATE_FILE:-}" ]; then
+  printf 'mutated-mid-query\n' >>"$FAKE_MUTATE_FILE"
+fi
 if [ -n "${FAKE_PLAN_BASE:-}" ]; then
   [ "$(git rev-parse 'HEAD^1')" = "$FAKE_PLAN_BASE" ] &&
     [ "$(git rev-parse 'HEAD^2')" = "$FAKE_PLAN_HEAD" ] &&
@@ -711,6 +720,416 @@ EOF
     report 0 'standalone owed-run.sh publishes and preserves caller-supplied LC_ALL'
   else report 1 'standalone owed-run.sh publishes and preserves caller-supplied LC_ALL' \
     "exit $rc; locale=$(cat "$TMP/owed-locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
+fi
+if harness_leg 'test-reach cache reuses matching candidate reach and checks owed records afresh #reach-cache'; then
+  fixture reach-cache
+  printf 'fixture-ignored.cfg\n' >"$R/.gitignore"
+  commit_on base
+  rc_base=$(git -C "$R" rev-parse HEAD)
+  git -C "$R" checkout -q side
+  last x.ml
+  last tools/sub/a.sh
+  commit_on side
+  rc_head=$(git -C "$R" rev-parse HEAD)
+
+  rc_owed=$TMP/reach-cache-owed.git
+  git init -q --bare "$rc_owed"
+  rc_cache=$TMP/reach-cache-store
+  rc_xdg=$TMP/reach-cache-xdg
+  mkdir -p "$rc_xdg/dune"
+  printf '(lang dune 3.20)\n' >"$rc_xdg/dune/config"
+  rc_ws=$TMP/reach-cache-ws.dune
+  printf '(lang dune 3.20)\n' >"$rc_ws"
+  rc_switch=$TMP/reach-cache-switch
+  rc_bin=$rc_switch/bin
+  mkdir -p "$rc_switch/.opam-switch" "$rc_switch/lib/pkg_a" "$rc_switch/lib/ocaml" "$rc_bin"
+  printf 'installed: ["dune.3.24.2"]\n' >"$rc_switch/.opam-switch/switch-state"
+  printf 'version = "1.0"\n' >"$rc_switch/lib/pkg_a/META"
+  printf 'destdir="."\npath="./ocaml:."\n' >"$rc_switch/lib/findlib.conf"
+  printf 'version = "5.5.1"\n' >"$rc_switch/lib/ocaml/META.stdlib"
+  cp "$TMP/dunebin/dune" "$rc_bin/dune"
+  chmod +x "$rc_bin/dune"
+
+  printf '%s\n' '@test/training/train-a' >"$TMP/rc-train"
+  printf '%s\n' '@a/runtest-x' '@test/operations/runtest-cover' >"$TMP/rc-tier-list"
+  printf '%s\n' 'affected: tools/sub/a.sh: named as a dependency by the rule of @test/operations/runtest-cover' >"$TMP/rc-named"
+
+  rc_run() { # BIN_PREFIX [ARG...]
+    local prefix=$1
+    shift
+    OCANNL_TOOL_MERGE_BUILD_REACH_CACHE=$rc_cache \
+      XDG_CONFIG_HOME=$rc_xdg OPAM_SWITCH_PREFIX=$rc_switch \
+      OCANNL_TOOL_OWED_RUN_URL=${RC_OWED_URL:-$rc_owed} \
+      FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting \
+      FAKE_TIER_LIST=$TMP/rc-tier-list FAKE_NAMED=$TMP/rc-named \
+      FAKE_TRAIN_N=1 FAKE_TRAIN_NAMES=$TMP/rc-train \
+      FAKE_REASON='x.ml (6 aliases)' \
+      run "$prefix" "$@"
+  }
+  rc_asked_prepush() { grep -q '^prepush ' "$TMP/record.tiers"; }
+
+  # 1. Pre-push --plan --base misses cache and reports unadmitted.
+  rc_run "$TMP/linuxbin:$rc_bin" --plan --base "$rc_base"
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach' &&
+     has 'merge-build-check: tests tier: CROSS-CUTTING reason: x.ml (6 aliases)' &&
+     has 'harness tier: tools/sub/a.sh is named as a dependency by @test/operations/runtest-cover, which the tests tier runs' &&
+     grep -qxF 'ship-pr-merge-plan: unadmitted runtest @test/training/train-a' "$TMP/out"; then
+    report 0 'first --plan --base computes reach, populates cache and reports unadmitted'
+  else report 1 'first --plan --base computes reach, populates cache and reports unadmitted' \
+    "exit $rc; tiers=$(tiers); $(cat "$TMP/out")"; fi
+
+  # Publish the owed-run record to the SAME bare repository (pre-push -> record -> post-push).
+  owed "$rc_owed" add "$(run_line "$rc_head" 'build @runtest @train -j 4')"
+  [ "$orc" = 0 ] || { echo "fixture: reach-cache record could not be published" >&2; exit 1; }
+
+  # 2. Post-push --plan --base reuses cached reach without asking prepush, checks record afresh.
+  rc_run "$TMP/linuxbin:$rc_bin" --plan --base "$rc_base"
+  if [ "$rc" = 0 ] && ! rc_asked_prepush && has 'merge-build-check: tests plan: reused cached reach' &&
+     has 'merge-build-check: tests tier: CROSS-CUTTING reason: x.ml (6 aliases)' &&
+     has 'harness tier: tools/sub/a.sh is named as a dependency by @test/operations/runtest-cover, which the tests tier runs' &&
+     grep -qxF 'ship-pr-merge-plan: admitted runtest @test/training/train-a' "$TMP/out"; then
+    report 0 'second --plan --base reuses cached reach while checking the published owed-run record afresh'
+  else report 1 'second --plan --base reuses cached reach while checking the published owed-run record afresh' \
+    "exit $rc; tiers=$(tiers); $(cat "$TMP/out")"; fi
+
+  # 3. Same candidate merged on HEAD: --plan-merge and full merge build both reuse the cache.
+  merge_side
+  rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && ! rc_asked_prepush && has 'merge-build-check: tests plan: reused cached reach' &&
+     grep -qxF 'ship-pr-merge-plan: admitted runtest @test/training/train-a' "$TMP/out"; then
+    report 0 '--plan-merge reuses reach cached by --plan --base for the same candidate merge'
+  else report 1 '--plan-merge reuses reach cached by --plan --base for the same candidate merge' \
+    "exit $rc; tiers=$(tiers); $(cat "$TMP/out")"; fi
+
+  rc_run "$TMP/linuxbin:$rc_bin"
+  if [ "$rc" = 0 ] && ! rc_asked_prepush &&
+     grep -qxF 'build --root . -j 4 @a/runtest-x @test/operations/runtest-cover' "$TMP/record" &&
+     ! grep -q '^shell ' "$TMP/record" &&
+     has 'harness tier: tools/sub/a.sh is named as a dependency by @test/operations/runtest-cover, which the tests tier runs' &&
+     has 'merge-build-check: tests reach: reused cached result' &&
+     has 'merge-build-check: passed'; then
+    report 0 'full merge build reuses cached reach, builds restored aliases and settles harness coverage'
+  else report 1 'full merge build reuses cached reach, builds restored aliases and settles harness coverage' \
+    "exit $rc; record=$(cat "$TMP/record"); tiers=$(tiers); $(cat "$TMP/out")"; fi
+
+  # Full merge build still checks owed-run record afresh even on a cache hit.
+  RC_OWED_URL=$OWED_EMPTY rc_run "$TMP/linuxbin:$rc_bin"
+  if [ "$rc" = 1 ] && ! rc_asked_prepush &&
+     has 'no owed-run record for' && ! has 'merge-build-check: passed'; then
+    report 0 'full merge build still refuses an unadmitted record on a reach cache hit'
+  else report 1 'full merge build still refuses an unadmitted record on a reach cache hit' \
+    "exit $rc; tiers=$(tiers); $(cat "$TMP/out")"; fi
+
+  # Ship-pr failed build logs stay byte-identical between cached and uncached runs.
+  SHIP_PR_MERGE_BASE_SHA=$rc_base SHIP_PR_MERGE_HEAD_SHA=$rc_head FAKE_TESTS_RC=1 \
+    rc_run "$TMP/linuxbin:$rc_bin"
+  rc_fail_cached=$rc
+  rc_fail_cached_asked=0; rc_asked_prepush && rc_fail_cached_asked=1
+  cp "$TMP/out" "$TMP/rc-fail-cached"
+  SHIP_PR_MERGE_BASE_SHA=$rc_base SHIP_PR_MERGE_HEAD_SHA=$rc_head FAKE_TESTS_RC=1 \
+    OCANNL_TOOL_MERGE_BUILD_REACH_CACHE=off \
+    XDG_CONFIG_HOME=$rc_xdg OPAM_SWITCH_PREFIX=$rc_switch \
+    OCANNL_TOOL_OWED_RUN_URL=$rc_owed \
+    FAKE_PREPUSH_RC=2 FAKE_VERDICT=cross-cutting \
+    FAKE_TIER_LIST=$TMP/rc-tier-list FAKE_NAMED=$TMP/rc-named \
+    FAKE_TRAIN_N=1 FAKE_TRAIN_NAMES=$TMP/rc-train \
+    FAKE_REASON='x.ml (6 aliases)' \
+    run "$TMP/linuxbin:$rc_bin"
+  if [ "$rc_fail_cached" = 1 ] && [ "$rc_fail_cached_asked" = 0 ] && [ "$rc" = 1 ] &&
+     rc_asked_prepush && cmp -s "$TMP/rc-fail-cached" "$TMP/out" && ! has 'reused cached'; then
+    report 0 'failed ship-pr merge builds emit byte-identical logs on cached and uncached runs'
+  else report 1 'failed ship-pr merge builds emit byte-identical logs on cached and uncached runs' \
+    "exits $rc_fail_cached/$rc asked_cached=$rc_fail_cached_asked; $(diff "$TMP/rc-fail-cached" "$TMP/out")"; fi
+
+  # 4. Invalidation on candidate/tree/worktree/ignored-file changes.
+  rc_merge_sha=$(git -C "$R" rev-parse HEAD)
+  base_alone_sha=$(git -C "$R" commit-tree 'HEAD^1^{tree}' -p 'HEAD^1' -p 'HEAD^2' -m 'base alone')
+  git -C "$R" checkout -q --detach "$base_alone_sha"
+  rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'base-alone tree (same parents, base tree) misses the merged-tree reach cache'
+  else report 1 'base-alone tree (same parents, base tree) misses the merged-tree reach cache' \
+    "exit $rc; tiers=$(tiers); $(cat "$TMP/out")"; fi
+  git -C "$R" checkout -q "$rc_merge_sha"
+
+  # Dirty working tree bypasses cache (neither reads nor corrupts the clean entry).
+  printf 'dirty\n' >>"$R/r.txt"
+  rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'a dirty working tree bypasses the reach cache'
+  else report 1 'a dirty working tree bypasses the reach cache' \
+    "exit $rc; tiers=$(tiers); $(cat "$TMP/out")"; fi
+  git -C "$R" checkout -q -- r.txt
+  rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && ! rc_asked_prepush && has 'reused cached reach'; then
+    report 0 'restoring the clean working tree hits the original cached entry again'
+  else report 1 'restoring the clean working tree hits the original cached entry again' \
+    "exit $rc; tiers=$(tiers); $(cat "$TMP/out")"; fi
+
+  # Git assume-unchanged and skip-worktree index flags hide edits from git status; both must bypass.
+  git -C "$R" update-index --assume-unchanged x.ml
+  printf 'hidden-edit\n' >>"$R/x.ml"
+  rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'assume-unchanged index flag bypasses the reach cache even when git status is empty'
+  else report 1 'assume-unchanged index flag bypasses the reach cache even when git status is empty' \
+    "exit $rc; tiers=$(tiers); $(cat "$TMP/out")"; fi
+  git -C "$R" update-index --no-assume-unchanged x.ml
+  git -C "$R" checkout -q -- x.ml
+  git -C "$R" update-index --skip-worktree x.ml
+  rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'skip-worktree index flag bypasses the reach cache'
+  else report 1 'skip-worktree index flag bypasses the reach cache' \
+    "exit $rc; tiers=$(tiers); $(cat "$TMP/out")"; fi
+  git -C "$R" update-index --no-skip-worktree x.ml
+
+  # Ignored non-directory file invalidates cache when added or edited.
+  printf 'v1\n' >"$R/fixture-ignored.cfg"
+  rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'adding an ignored non-directory file invalidates the reach cache'
+  else report 1 'adding an ignored non-directory file invalidates the reach cache' \
+    "exit $rc; tiers=$(tiers); $(cat "$TMP/out")"; fi
+  printf 'v2-changed\n' >"$R/fixture-ignored.cfg"
+  rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'editing an ignored non-directory file invalidates the reach cache'
+  else report 1 'editing an ignored non-directory file invalidates the reach cache' \
+    "exit $rc; tiers=$(tiers); $(cat "$TMP/out")"; fi
+  rm -f "$R/fixture-ignored.cfg"
+
+  # 5. Invalidation on Dune / toolchain / env / OS inputs.
+  OCANNL_BACKEND=metal rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'changing OCANNL_BACKEND invalidates the reach cache'
+  else report 1 'changing OCANNL_BACKEND invalidates the reach cache' "exit $rc; $(tiers)"; fi
+
+  DUNE_PROFILE=release rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'changing DUNE_PROFILE invalidates the reach cache'
+  else report 1 'changing DUNE_PROFILE invalidates the reach cache' "exit $rc; $(tiers)"; fi
+
+  OCANNL_TOOL_AFFECTED_PROBE=0 rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'changing OCANNL_TOOL_AFFECTED_PROBE invalidates the reach cache'
+  else report 1 'changing OCANNL_TOOL_AFFECTED_PROBE invalidates the reach cache' "exit $rc; $(tiers)"; fi
+
+  DUNE_WORKSPACE=$rc_ws rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  rc_ws_first_hit=0
+  rc_asked_prepush && rc_ws_first_hit=1
+  printf '(lang dune 3.20)\n(context default)\n' >"$rc_ws"
+  DUNE_WORKSPACE=$rc_ws rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && [ "$rc_ws_first_hit" = 1 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'setting and editing DUNE_WORKSPACE invalidates the reach cache'
+  else report 1 'setting and editing DUNE_WORKSPACE invalidates the reach cache' "exit $rc; first=$rc_ws_first_hit; $(tiers)"; fi
+
+  printf '(lang dune 3.20)\n(cache disabled)\n' >"$rc_xdg/dune/config"
+  rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'editing user dune config under XDG_CONFIG_HOME invalidates the reach cache'
+  else report 1 'editing user dune config under XDG_CONFIG_HOME invalidates the reach cache' "exit $rc; $(tiers)"; fi
+
+  printf 'installed: ["dune.3.24.2" "cudajit.0.8.0"]\n' >"$rc_switch/.opam-switch/switch-state"
+  rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'changing opam switch-state invalidates the reach cache'
+  else report 1 'changing opam switch-state invalidates the reach cache' "exit $rc; $(tiers)"; fi
+
+  mkdir -p "$rc_switch/lib/pkg_b"
+  printf 'version = "2.0"\n' >"$rc_switch/lib/pkg_b/META"
+  rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'installing a package META under the switch lib directory invalidates the reach cache'
+  else report 1 'installing a package META under the switch lib directory invalidates the reach cache' "exit $rc; $(tiers)"; fi
+
+  # Flat META.<package> in OCAMLPATH (including same-length in-place edits) invalidates cache.
+  rc_ocamlpath=$TMP/rc-ocamlpath
+  mkdir -p "$rc_ocamlpath"
+  printf 'version = "1.0"\n' >"$rc_ocamlpath/META.pkg_c"
+  OCAMLPATH=$rc_ocamlpath rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  rc_flat_1=0; rc_asked_prepush && rc_flat_1=1
+  OCAMLPATH=$rc_ocamlpath rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  rc_flat_2=0; ! rc_asked_prepush && has 'reused cached reach' && rc_flat_2=1
+  printf 'version = "2.0"\n' >"$rc_ocamlpath/META.pkg_c"
+  OCAMLPATH=$rc_ocamlpath rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && [ "$rc_flat_1" = 1 ] && [ "$rc_flat_2" = 1 ] &&
+     rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'editing a flat META.<package> file in OCAMLPATH invalidates the reach cache'
+  else report 1 'editing a flat META.<package> file in OCAMLPATH invalidates the reach cache' \
+    "exit $rc; m1=$rc_flat_1 h2=$rc_flat_2; $(tiers)"; fi
+
+  # Mid-query input mutation prevents publishing under the stale pre-query key.
+  rc_mid_cache=$TMP/reach-cache-mid
+  FAKE_MUTATE_FILE="$rc_switch/.opam-switch/switch-state" \
+    rc_cache=$rc_mid_cache rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  rc_mid_entries=$(find "$rc_mid_cache" -maxdepth 1 -name 'reach-*.v1' 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$rc" = 0 ] && rc_asked_prepush && [ "$rc_mid_entries" = 0 ]; then
+    report 0 'a mid-query switch-state change suppresses cache publication under the stale key'
+  else report 1 'a mid-query switch-state change suppresses cache publication under the stale key' \
+    "exit $rc; entries=$rc_mid_entries; $(cat "$TMP/out")"; fi
+
+  printf '# modified dune shim\n' >>"$rc_bin/dune"
+  rc_run "$TMP/linuxbin:$rc_bin" --plan-merge
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'modifying the dune executable invalidates the reach cache'
+  else report 1 'modifying the dune executable invalidates the reach cache' "exit $rc; $(tiers)"; fi
+
+  # Different host OS (Darwin vs Linux) misses and preserves Linux shell leg output on Darwin hits.
+  rc_darwin_reach=$TMP/rc-darwin-reach
+  printf 'tools/sub/a.sh\ttools/test-one.sh\n' >"$rc_darwin_reach"
+  FAKE_REACH=$rc_darwin_reach RC_OWED_URL=$OWED_EMPTY rc_run "$TMP/darwinbin:$rc_bin" --plan-merge
+  rc_darwin_1=$rc
+  rc_darwin_asked_1=0; rc_asked_prepush && rc_darwin_asked_1=1
+  FAKE_REACH=$rc_darwin_reach RC_OWED_URL=$OWED_EMPTY rc_run "$TMP/darwinbin:$rc_bin" --plan-merge
+  if [ "$rc_darwin_1" = 0 ] && [ "$rc_darwin_asked_1" = 1 ] && [ "$rc" = 0 ] &&
+     ! rc_asked_prepush && has 'reused cached reach' &&
+     has 'linux-shell leg:' &&
+     grep -qxF 'ship-pr-merge-plan: unadmitted runtest @test/training/train-a linux:member:tools/test-one.sh' "$TMP/out"; then
+    report 0 'Darwin host misses Linux cache entry and preserves linux-shell needs on Darwin cache hit'
+  else report 1 'Darwin host misses Linux cache entry and preserves linux-shell needs on Darwin cache hit' \
+    "rc1=$rc_darwin_1 asked1=$rc_darwin_asked_1 rc2=$rc; $(tiers); $(cat "$TMP/out")"; fi
+
+  # 6. Moved base and moved head invalidate cache.
+  git -C "$R" checkout -q base
+  git -C "$R" reset -q --hard "$rc_base"
+  first r.txt && commit_on base
+  rc_base2=$(git -C "$R" rev-parse HEAD)
+  git -C "$R" checkout -q side
+  rc_run "$TMP/linuxbin:$rc_bin" --plan --base "$rc_base2"
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'a moved base invalidates the reach cache'
+  else report 1 'a moved base invalidates the reach cache' "exit $rc; $(tiers)"; fi
+  last r.txt && commit_on side
+  rc_run "$TMP/linuxbin:$rc_bin" --plan --base "$rc_base2"
+  if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+    report 0 'a moved head invalidates the reach cache'
+  else report 1 'a moved head invalidates the reach cache' "exit $rc; $(tiers)"; fi
+
+  # 7. Fail-closed safety: failures never cached; corrupt/symlink/group-writable entries rejected;
+  # unwritable cache dir never fails the plan; default XDG/HOME and relative cache paths work.
+  rc_safe_cache=$TMP/reach-cache-safe
+  OCANNL_TOOL_MERGE_BUILD_REACH_CACHE=$rc_safe_cache \
+    XDG_CONFIG_HOME=$rc_xdg OPAM_SWITCH_PREFIX=$rc_switch \
+    FAKE_VERDICT=none run "$TMP/linuxbin:$rc_bin" --plan --base "$rc_base2"
+  if [ "$rc" = 1 ] && [ ! -d "$rc_safe_cache" ]; then
+    report 0 'a failed tests-tier read writes no cache entry'
+  else report 1 'a failed tests-tier read writes no cache entry' "exit $rc; dir=$(ls -la "$rc_safe_cache" 2>&1)"; fi
+
+  # Populate rc_safe_cache once, then check pruning safety and tamper handling.
+  mkdir -p "$rc_safe_cache"
+  rc_unrelated_tmp=$rc_safe_cache/.tmp.unrelated
+  rc_unrelated_v1=$rc_safe_cache/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.v1
+  rc_stale_stage=$rc_safe_cache/.ocannl-reach-tmp.0000000000000000000000000000000000000000000000000000000000000000.99999.000001
+  : >"$rc_unrelated_tmp" && touch -t 202001010000 "$rc_unrelated_tmp"
+  : >"$rc_unrelated_v1" && touch -t 202001010000 "$rc_unrelated_v1"
+  : >"$rc_stale_stage" && touch -t 202001010000 "$rc_stale_stage"
+  rc_cache=$rc_safe_cache rc_run "$TMP/linuxbin:$rc_bin" --plan --base "$rc_base2"
+  if [ "$rc" = 0 ] && [ -f "$rc_unrelated_tmp" ] && [ -f "$rc_unrelated_v1" ] && [ ! -e "$rc_stale_stage" ]; then
+    report 0 'cache pruning removes stale reach staging files while preserving unrelated .tmp.* and *.v1 files'
+  else report 1 'cache pruning removes stale reach staging files while preserving unrelated .tmp.* and *.v1 files' \
+    "exit $rc; ls=$(ls -la "$rc_safe_cache" 2>&1)"; fi
+  rc_entry=$(find "$rc_safe_cache" -maxdepth 1 -name 'reach-*.v1' | head -n 1)
+  if [ -n "$rc_entry" ]; then
+    cp "$rc_entry" "$TMP/rc-good-entry"
+    # (a) Truncated entry (missing end trailer) -> rejected as miss, overwritten cleanly.
+    head -n 4 "$TMP/rc-good-entry" >"$rc_entry"
+    rc_cache=$rc_safe_cache rc_run "$TMP/linuxbin:$rc_bin" --plan --base "$rc_base2"
+    if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+      report 0 'a truncated cache entry is rejected as a miss and recomputed'
+    else report 1 'a truncated cache entry is rejected as a miss and recomputed' "exit $rc; $(tiers)"; fi
+    # (b) Key mismatch inside entry -> rejected as miss.
+    sed 's/^key	.*/key	0000000000000000000000000000000000000000000000000000000000000000/' \
+      "$TMP/rc-good-entry" >"$rc_entry"
+    rc_cache=$rc_safe_cache rc_run "$TMP/linuxbin:$rc_bin" --plan --base "$rc_base2"
+    if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+      report 0 'a key-mismatched cache entry is rejected as a miss'
+    else report 1 'a key-mismatched cache entry is rejected as a miss' "exit $rc; $(tiers)"; fi
+    # (c) Symlink entry -> rejected as miss.
+    rm -f "$rc_entry" && ln -s "$TMP/rc-good-entry" "$rc_entry"
+    rc_cache=$rc_safe_cache rc_run "$TMP/linuxbin:$rc_bin" --plan --base "$rc_base2"
+    if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+      report 0 'a symlinked cache entry is rejected as a miss'
+    else report 1 'a symlinked cache entry is rejected as a miss' "exit $rc; $(tiers)"; fi
+    # (d) Group-writable entry -> rejected as miss.
+    cp "$TMP/rc-good-entry" "$rc_entry" && chmod 0620 "$rc_entry"
+    rc_cache=$rc_safe_cache rc_run "$TMP/linuxbin:$rc_bin" --plan --base "$rc_base2"
+    if [ "$rc" = 0 ] && rc_asked_prepush && ! has 'reused cached reach'; then
+      report 0 'a group-writable cache entry is rejected as a miss'
+    else report 1 'a group-writable cache entry is rejected as a miss' "exit $rc; $(tiers)"; fi
+  else
+    report 1 'cache entry file was created in rc_safe_cache' 'no *.v1 file found'
+  fi
+
+  # Unwritable cache path (regular file) never fails the plan.
+  rc_not_a_dir=$TMP/reach-cache-not-a-dir
+  : >"$rc_not_a_dir"
+  rc_cache=$rc_not_a_dir rc_run "$TMP/linuxbin:$rc_bin" --plan --base "$rc_base2"
+  if [ "$rc" = 0 ] && rc_asked_prepush; then
+    report 0 'an unwritable cache path falls back cleanly without failing the plan'
+  else report 1 'an unwritable cache path falls back cleanly without failing the plan' "exit $rc; $(cat "$TMP/out")"; fi
+
+  # Default cache path under XDG_CACHE_HOME and HOME (when OCANNL_TOOL_MERGE_BUILD_REACH_CACHE is unset).
+  rc_def_xdg=$TMP/rc-default-xdg
+  rc_def_home=$TMP/rc-default-home
+  mkdir -p "$rc_def_xdg" "$rc_def_home"
+  (cd "$R" && env -u OCANNL_TOOL_MERGE_BUILD_REACH_CACHE \
+    XDG_CACHE_HOME="$rc_def_xdg" XDG_CONFIG_HOME="$rc_xdg" HOME="$rc_def_home" \
+    OPAM_SWITCH_PREFIX="$rc_switch" OCANNL_TOOL_OWED_RUN_URL="$OWED_EMPTY" \
+    PATH="$TMP/linuxbin:$rc_bin:$TMP/gitbin:$SYS_PATH" FAKE_RECORD="$TMP/record" \
+    "$BASH" tools/merge-build-check.sh --plan --base "$rc_base2") >"$TMP/out" 2>&1
+  rc_xdg_1=$?
+  : >"$TMP/record.tiers"
+  (cd "$R" && env -u OCANNL_TOOL_MERGE_BUILD_REACH_CACHE \
+    XDG_CACHE_HOME="$rc_def_xdg" XDG_CONFIG_HOME="$rc_xdg" HOME="$rc_def_home" \
+    OPAM_SWITCH_PREFIX="$rc_switch" OCANNL_TOOL_OWED_RUN_URL="$OWED_EMPTY" \
+    PATH="$TMP/linuxbin:$rc_bin:$TMP/gitbin:$SYS_PATH" FAKE_RECORD="$TMP/record" \
+    "$BASH" tools/merge-build-check.sh --plan --base "$rc_base2") >"$TMP/out" 2>&1
+  rc_xdg_2=$?
+  if [ "$rc_xdg_1" = 0 ] && [ "$rc_xdg_2" = 0 ] && ! rc_asked_prepush &&
+     has 'reused cached reach' && [ -d "$rc_def_xdg/ocannl/merge-build-reach" ]; then
+    report 0 'unset cache override defaults to XDG_CACHE_HOME/ocannl/merge-build-reach'
+  else report 1 'unset cache override defaults to XDG_CACHE_HOME/ocannl/merge-build-reach' \
+    "rc=$rc_xdg_1/$rc_xdg_2; $(tiers); $(cat "$TMP/out")"; fi
+
+  (cd "$R" && env -u OCANNL_TOOL_MERGE_BUILD_REACH_CACHE -u XDG_CACHE_HOME \
+    XDG_CONFIG_HOME="$rc_xdg" HOME="$rc_def_home" \
+    OPAM_SWITCH_PREFIX="$rc_switch" OCANNL_TOOL_OWED_RUN_URL="$OWED_EMPTY" \
+    PATH="$TMP/linuxbin:$rc_bin:$TMP/gitbin:$SYS_PATH" FAKE_RECORD="$TMP/record" \
+    "$BASH" tools/merge-build-check.sh --plan --base "$rc_base2") >"$TMP/out" 2>&1
+  rc_home_1=$?
+  : >"$TMP/record.tiers"
+  (cd "$R" && env -u OCANNL_TOOL_MERGE_BUILD_REACH_CACHE -u XDG_CACHE_HOME \
+    XDG_CONFIG_HOME="$rc_xdg" HOME="$rc_def_home" \
+    OPAM_SWITCH_PREFIX="$rc_switch" OCANNL_TOOL_OWED_RUN_URL="$OWED_EMPTY" \
+    PATH="$TMP/linuxbin:$rc_bin:$TMP/gitbin:$SYS_PATH" FAKE_RECORD="$TMP/record" \
+    "$BASH" tools/merge-build-check.sh --plan --base "$rc_base2") >"$TMP/out" 2>&1
+  rc_home_2=$?
+  if [ "$rc_home_1" = 0 ] && [ "$rc_home_2" = 0 ] && ! rc_asked_prepush &&
+     has 'reused cached reach' && [ -d "$rc_def_home/.cache/ocannl/merge-build-reach" ]; then
+    report 0 'without XDG_CACHE_HOME, cache defaults to HOME/.cache/ocannl/merge-build-reach'
+  else report 1 'without XDG_CACHE_HOME, cache defaults to HOME/.cache/ocannl/merge-build-reach' \
+    "rc=$rc_home_1/$rc_home_2; $(tiers); $(cat "$TMP/out")"; fi
+
+  # Relative explicit cache path resolves against caller's initial cwd across --plan --base.
+  rc_rel_cwd=$TMP/rc-rel-cwd
+  mkdir -p "$rc_rel_cwd"
+  (cd "$rc_rel_cwd" && OCANNL_TOOL_MERGE_BUILD_REACH_CACHE=rel-store \
+    XDG_CONFIG_HOME="$rc_xdg" OPAM_SWITCH_PREFIX="$rc_switch" OCANNL_TOOL_OWED_RUN_URL="$OWED_EMPTY" \
+    PATH="$TMP/linuxbin:$rc_bin:$TMP/gitbin:$SYS_PATH" FAKE_RECORD="$TMP/record" \
+    "$BASH" "$R/tools/merge-build-check.sh" --plan --base "$rc_base2") >"$TMP/out" 2>&1
+  rc_rel_1=$?
+  : >"$TMP/record.tiers"
+  (cd "$rc_rel_cwd" && OCANNL_TOOL_MERGE_BUILD_REACH_CACHE=rel-store \
+    XDG_CONFIG_HOME="$rc_xdg" OPAM_SWITCH_PREFIX="$rc_switch" OCANNL_TOOL_OWED_RUN_URL="$OWED_EMPTY" \
+    PATH="$TMP/linuxbin:$rc_bin:$TMP/gitbin:$SYS_PATH" FAKE_RECORD="$TMP/record" \
+    "$BASH" "$R/tools/merge-build-check.sh" --plan --base "$rc_base2") >"$TMP/out" 2>&1
+  rc_rel_2=$?
+  if [ "$rc_rel_1" = 0 ] && [ "$rc_rel_2" = 0 ] && ! rc_asked_prepush &&
+     has 'reused cached reach' && [ -d "$rc_rel_cwd/rel-store" ]; then
+    report 0 'relative OCANNL_TOOL_MERGE_BUILD_REACH_CACHE resolves against caller cwd across --plan --base'
+  else report 1 'relative OCANNL_TOOL_MERGE_BUILD_REACH_CACHE resolves against caller cwd across --plan --base' \
+    "rc=$rc_rel_1/$rc_rel_2; $(tiers); $(cat "$TMP/out")"; fi
 fi
 if harness_leg 'the format tier runs first, its scans off, and a red one ends the run #tiers'; then
   R=$APART run "$TMP/dunebin"
