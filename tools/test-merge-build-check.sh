@@ -33,7 +33,8 @@
 # or `--plan` alone). Push retries in `tools/owed-run.sh` (gh-ocannl-2436) are pinned for transient
 # remote rejections, concurrent `--force-with-lease` contention, exhaustion, exponential backoff,
 # immediate stop on auth/authorization errors, and fleet hook retry recovery. The #owed-run
-# transport fixtures also require a TERM-resistant helper to stop at FETCH_CAP.
+# transport fixtures exercise the real deadline and trigger its alarm only after each
+# TERM-resistant helper is ready, then require that helper to stop.
 # The #plan-locale leg
 # exercises CROSS-CUTTING plans with LANG and LC_ALL unset or empty under LC_CTYPE=UTF-8
 # (gh-ocannl-2462), pinning the exported LANG=C guard, caller-locale preservation, and C-locale
@@ -74,7 +75,7 @@ cleanup_fixture() {
     [ -f "$pidfile" ] || continue
     IFS= read -r pid <"$pidfile" || continue
     case $pid in '' | *[!0-9]* | 0*) continue ;; esac
-    cmd=$(ps -p "$pid" -o args= 2>/dev/null) || continue
+    cmd=$(ps -ww -p "$pid" -o args= 2>/dev/null) || continue
     case $cmd in *" $pidfile") kill -KILL "$pid" 2>/dev/null || : ;; esac
   done
 }
@@ -1346,38 +1347,72 @@ FAKEGIT
     report 0 'publish replaces a non-commit record ref under the existing lease'
   else report 1 'publish replaces a non-commit record ref under the existing lease' \
     "bad=$bad_rc waive=$waive_rc check=$orc; $(cat "$TMP/owed-out")"; fi
-  # The leading Git process exits on TERM while its transport helper keeps the streams open.
+  # Record the process that owns the actual alarm, including on the alarm-and-exec subject.
   mkdir -p "$TMP/hanggitbin"
+  cat >"$TMP/hanggitbin/perl" <<'FAKEPERL'
+#!/bin/sh
+if [ -n "${FAKE_SUPERVISOR_PID:-}" ]; then
+  for a do
+    if [ "$a" = "$FAKE_GIT_HANG" ]; then
+      printf '%s\n' "$$" >"$FAKE_SUPERVISOR_PID"
+      break
+    fi
+  done
+fi
+exec "$FAKE_REAL_PERL" "$@"
+FAKEPERL
+  # The leading Git process exits on TERM while its transport helper keeps the streams open.
   cat >"$TMP/hanggitbin/git" <<'FAKEGIT'
 #!/bin/sh
 for a do
   if [ "$a" = "$FAKE_GIT_HANG" ]; then
+    [ -n "${FAKE_HELPER_PID:-}" ] || exec sleep 15
     perl -e '
       $SIG{TERM} = "IGNORE";
-      my $path = shift;
+      my ($supervisor, $path) = @ARGV;
+      open my $s, "<", $supervisor or die $!;
+      my $owner = <$s>;
+      die "missing alarm owner" unless $owner =~ /^[1-9][0-9]*\n$/;
       open my $f, ">", "$path.tmp" or die $!;
       print $f "$$\n";
       close $f or die $!;
       rename "$path.tmp", $path or die $!;
-      sleep 15;
-    ' "$FAKE_HELPER_PID" &
-    exec sleep 15
+      kill "ALRM", int($owner) or die $!;
+      sleep 30;
+    ' "$FAKE_SUPERVISOR_PID" "$FAKE_HELPER_PID" &
+    exec sleep 30
   fi
 done
 exec "$FAKE_REAL_GIT" "$@"
 FAKEGIT
-  chmod +x "$TMP/hanggitbin/git"
+  chmod +x "$TMP/hanggitbin/git" "$TMP/hanggitbin/perl"
+  real_perl=$(command -v perl)
+  started=$SECONDS
+  hang_rc=0
+  (cd "$R" && PATH=$TMP/hanggitbin:$TMP/gitbin:$SYS_PATH \
+    FAKE_GIT_HANG=ls-remote FAKE_HELPER_PID= FAKE_SUPERVISOR_PID= \
+    FAKE_REAL_GIT=$GIT FAKE_REAL_PERL=$real_perl \
+    OCANNL_TOOL_OWED_RUN_FETCH_CAP=1 OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL \
+    "$BASH" tools/owed-run.sh check "$APART_HEAD" runtest) >"$TMP/owed-out" 2>&1 || hang_rc=$?
+  if [ "$hang_rc" = 3 ] && [ "$((SECONDS - started))" -lt 5 ] &&
+     grep -qF 'could not be read within 1s: unreadable' "$TMP/owed-out"; then
+    report 0 'the real FETCH_CAP stops a hanging ls-remote and check returns exit 3'
+  else
+    report 1 'the real FETCH_CAP stops a hanging ls-remote and check returns exit 3' \
+      "exit=$hang_rc took=$((SECONDS - started))s; $(cat "$TMP/owed-out")"
+  fi
   for verb in ls-remote fetch; do
     pidfile=$TMP/hang-$verb.pid
     started=$SECONDS
     hang_rc=0
     (cd "$R" && PATH=$TMP/hanggitbin:$TMP/gitbin:$SYS_PATH \
-      FAKE_GIT_HANG=$verb FAKE_HELPER_PID=$pidfile FAKE_REAL_GIT=$GIT \
-      OCANNL_TOOL_OWED_RUN_FETCH_CAP=1 OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL \
+      FAKE_GIT_HANG=$verb FAKE_HELPER_PID=$pidfile FAKE_SUPERVISOR_PID=$TMP/supervisor-$verb.pid \
+      FAKE_REAL_GIT=$GIT FAKE_REAL_PERL=$real_perl \
+      OCANNL_TOOL_OWED_RUN_FETCH_CAP=20 OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL \
       "$BASH" tools/owed-run.sh check "$APART_HEAD" runtest) >"$TMP/owed-out" 2>&1 || hang_rc=$?
     took=$((SECONDS - started))
     case $verb in ls-remote) action=read ;; fetch) action=fetched ;; esac
-    claim="a hanging $verb returns exit 3 at FETCH_CAP and kills its TERM-resistant helper"
+    claim="a hanging $verb returns exit 3 after the alarm and kills its ready TERM-resistant helper"
     helper=missing
     if [ -s "$pidfile" ]; then
       IFS= read -r pid <"$pidfile"
@@ -1388,8 +1423,8 @@ FAKEGIT
         sleep 0.05
       done
     fi
-    if [ "$hang_rc" = 3 ] && [ "$took" -lt 5 ] &&
-       grep -qF "could not be $action within 1s: unreadable" "$TMP/owed-out" &&
+    if [ "$hang_rc" = 3 ] && [ "$took" -lt 20 ] &&
+       grep -qF "could not be $action within 20s: unreadable" "$TMP/owed-out" &&
        { [ -z "$helper" ] || [[ $helper = Z* ]]; }; then
       report 0 "$claim"
     else

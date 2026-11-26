@@ -6069,12 +6069,12 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   checkpoint. ship-pr's scratch repository has no remote, so the merge build fetches the ref from
   that URL itself, bounded (60 s), and refuses when it cannot read it. A merge owing nothing
   reads no record.
-- **Transport cleanup (gh-ocannl-2481).** `owed-run.sh` gives each bounded Git transport a
-  private process group. On expiry it keeps Git's PID reserved through TERM and KILL so a helper
-  still gets KILL if Git already exited. Output goes to scratch files to keep the bound independent
-  of pipe EOF. The shared benchmark runner already uses `cell_group` to cancel during the active
-  wait and confirms the group is gone before unwinding. Its regression fixture plants a descendant
-  that ignores TERM, as do the hanging ls-remote and fetch fixtures for the owed-run reader.
+- **Transport cleanup (gh-ocannl-2481).** `owed-run.sh` gives unattended Git transports a
+  private process group whose leader holds its identity through TERM and KILL even if Git exits.
+  Scratch files keep the bound independent of transport pipe EOF. Manual terminal pushes keep
+  Git's existing foreground timeout so its prompt can read the terminal. The shared benchmark
+  runner already uses `cell_group` to cancel during the active wait and confirms the group is
+  gone before unwinding. The fixtures for both tools plant descendants that ignore TERM.
 - **What.** A finished, exit-0, clean-at-launch tools/test-run.sh run under `--expect-backend cc`
   of `runtest`, `build @runtest [@train]`, `build @train` or `build @test/training/train-NAME...`
   (each with an optional `-j N`), on the PR's head itself. Keyed by the head, not the merged

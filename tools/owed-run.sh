@@ -69,11 +69,13 @@
 # a filtered or first-tier run); a NEED no record covers.
 # Transport unreadable (exit 3, saying why and naming OWED_RUN_URL): a ref read or object fetch
 # that could not complete within FETCH_CAP seconds, or a fetched ref whose commit object is missing
-# (unreadable). On expiry, bounded Git commands get TERM then KILL in their private process
-# group, with a short grace and a bounded wait for Git itself. This covers helpers that stay in
-# that group. Helpers that detach and processes stuck in uninterruptible kernel waits require
-# separate operator recovery. `check` does not retry transport failures;
-# callers decide whether to fail closed (the main merge build) or withhold a verdict (`--plan-merge`).
+# (unreadable). On expiry, unattended Git commands get TERM then KILL in their private process
+# group, with a short grace and a bounded reap. This covers helpers that stay in that group.
+# Detached helpers and uninterruptible kernel waits require separate operator recovery.
+# A manual push with terminal prompts enabled retains its foreground group and direct Git alarm
+# so Git or SSH can read the controlling terminal. Set GIT_TERMINAL_PROMPT=0 for group cleanup.
+# `check` does not retry transport failures. Callers decide whether to fail closed (the main
+# merge build) or withhold a verdict (`--plan-merge`).
 # Writer and source are informational. The writer identifies the publication path. Anyone with
 # push access can still craft a line claiming any writer. The record certifies the checkout at
 # launch and the backend held. Other ambient settings and edits undone mid-run fall outside it.
@@ -130,11 +132,22 @@ die() { echo "$me: $*" >&2; exit 2; }
 refuse() { echo "$me: REFUSED -- $* (records on $OWED_RUN_URL)"; exit 1; }
 unreadable() { echo "$me: REFUSED -- $* (records on $OWED_RUN_URL)"; exit 3; }
 is_sha() { case $1 in *[!0-9a-f]* | '') return 1 ;; esac; [ "${#1}" = 40 ]; }
-# macOS has no timeout(1). Keep the group leader unreaped through escalation so its PID
-# still identifies this transport even if the leader exits on TERM and its helper does not.
+# macOS has no timeout(1). The group leader holds its identity until the supervisor
+# accepts Git's status or finishes escalation, even if Git exits on the cap boundary.
 bounded() {
   perl -MPOSIX -MTime::HiRes=sleep -e '
-    my $cap = shift;
+    my ($cap, $mode) = splice @ARGV, 0, 2;
+    if ($mode eq "push" && ($ENV{GIT_TERMINAL_PROMPT} // "1") ne "0" &&
+        open(my $tty, "<", "/dev/tty")) {
+      my $foreground = tcgetpgrp(fileno($tty));
+      if (defined $foreground && $foreground == getpgrp()) {
+        close $tty;
+        alarm $cap;
+        exec { $ARGV[0] } @ARGV or exit 127;
+      }
+    }
+    pipe(my $result_r, my $result_w) or die "Git result pipe: $!";
+    pipe(my $life_r, my $life_w) or die "Git group lifetime pipe: $!";
     my $blocked = POSIX::SigSet->new(SIGINT, SIGTERM, SIGHUP);
     my $old = POSIX::SigSet->new();
     sigprocmask(SIG_BLOCK, $blocked, $old) or die "block signals: $!";
@@ -146,42 +159,66 @@ bounded() {
     my $pid = fork();
     defined $pid or die "fork: $!";
     if (!$pid) {
-      $SIG{$_} = "DEFAULT" for qw(INT TERM HUP ALRM);
+      close $result_r;
+      close $life_w;
       setpgid(0, 0) or die "isolate Git transport: $!";
+      my $git = fork();
+      defined $git or die "fork Git: $!";
+      if (!$git) {
+        close $result_w;
+        close $life_r;
+        $SIG{$_} = "DEFAULT" for qw(INT TERM HUP ALRM);
+        sigprocmask(SIG_SETMASK, $old) or die "restore signals: $!";
+        exec { $ARGV[0] } @ARGV or exit 127;
+      }
+      $SIG{$_} = "IGNORE" for qw(INT TERM HUP);
       sigprocmask(SIG_SETMASK, $old) or die "restore signals: $!";
-      exec { $ARGV[0] } @ARGV or exit 127;
+      waitpid($git, 0) == $git or die "wait for Git: $!";
+      my $status = $?;
+      syswrite($result_w, chr($status & 127 ? 128 + ($status & 127) : $status >> 8));
+      close $result_w;
+      # Git may have exited while a helper stayed behind. The supervisor owns the decision.
+      sysread($life_r, my $released, 1);
+      exit 0;
     }
-    # Either side can establish the group before the supervisor accepts cancellation. EACCES
-    # means the child already execed after setting its group, and ESRCH means it already exited.
-    if (!setpgid($pid, $pid) && !$!{EACCES} && !$!{ESRCH}) {
+    close $result_w;
+    close $life_r;
+    # Either side can establish the group before the supervisor accepts cancellation.
+    if (!setpgid($pid, $pid) && !$!{ESRCH}) {
       my $error = $!;
       kill("KILL", -$pid) or kill("KILL", $pid);
       die "isolate Git transport: $error";
     }
     alarm $cap;
     sigprocmask(SIG_SETMASK, $old) or die "restore signals: $!";
+    my $status;
+    my $readable = "";
+    vec($readable, fileno($result_r), 1) = 1;
     until (defined $stop) {
-      my $waited = waitpid($pid, WNOHANG);
-      if ($waited == $pid) {
-        my $status = $?;
-        exit($status & 127 ? 128 + ($status & 127) : $status >> 8);
-      }
-      die "wait for Git transport: $!" if $waited < 0 && !$!{EINTR};
-      sleep 0.02;
+      my $ready = $readable;
+      my $count = select($ready, undef, undef, 0.05);
+      next if $count == 0 || ($count < 0 && $!{EINTR});
+      sysread($result_r, $status, 1) if $count > 0;
+      last;
     }
     alarm 0;
-    kill "TERM", -$pid;
-    sleep 0.25;
-    kill "KILL", -$pid;
+    if (defined $stop || !length($status // "")) {
+      $stop //= 126;
+      kill "TERM", -$pid;
+      sleep 0.25;
+      kill "KILL", -$pid;
+    }
+    close $life_w;
     for (1 .. 25) {
-      last if waitpid($pid, WNOHANG) != 0;
+      my $reaped = waitpid($pid, WNOHANG);
+      last if $reaped == $pid || ($reaped < 0 && !$!{EINTR});
       sleep 0.02;
     }
-    exit $stop;
+    exit($stop // ord($status));
   ' -- "$FETCH_CAP" "$@"
 }
 # A read never prompts, reads no ambient credential helper's prompt, and keeps English diagnostics.
-rgit() { LC_ALL=C GIT_TERMINAL_PROMPT=0 bounded git -C "$root" "$@"; }
+rgit() { LC_ALL=C GIT_TERMINAL_PROMPT=0 bounded read git -C "$root" "$@"; }
 
 # is_auth_failure STDERR: true when any line matches the closed auth/authorization denylist.
 is_auth_failure() {
@@ -457,7 +494,7 @@ publish() {
       if [ "$rc" = 0 ]; then
         msg+=$line
         commit=$(printf '%s\n' "$msg" | git -C "$root" commit-tree "$tree" -p "$h") || die "could not write the record commit"
-        LC_ALL=C bounded git -C "$root" push --quiet --force-with-lease="$ref:$old" "$OWED_RUN_URL" "$commit:$ref" >"$_owed_scratch/err" 2>&1 || rc=$?
+        LC_ALL=C bounded push git -C "$root" push --quiet --force-with-lease="$ref:$old" "$OWED_RUN_URL" "$commit:$ref" >"$_owed_scratch/err" 2>&1 || rc=$?
         if [ "$rc" != 0 ]; then
           err=$(cat "$_owed_scratch/err" 2>/dev/null)
           step="push $ref to $OWED_RUN_URL"
@@ -815,7 +852,7 @@ EOF
       fi
     done
     if [ ${#dels[@]} -gt 0 ]; then
-      bounded git -C "$root" push --quiet "$OWED_RUN_URL" "${dels[@]}" || die "prune: the delete push to $OWED_RUN_URL failed"
+      bounded push git -C "$root" push --quiet "$OWED_RUN_URL" "${dels[@]}" || die "prune: the delete push to $OWED_RUN_URL failed"
       echo "$me: pruned ${#dels[@]} record(s) of merged heads on $OWED_RUN_URL"
     fi ;;
   -h | --help) sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//' ;;
