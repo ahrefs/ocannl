@@ -14145,7 +14145,6 @@ let sink_narrow_reduction_loops (llc : t) : t =
   let sink (c : t) : t option =
     match chain c with
     | Some (_, (_ :: _ :: _ as loops), (Set { tn = d; idcs = di; llsc; _ } as leaf))
-    (* gh-ocannl-2422: keep narrow-float-only (see header and backend-precision-and-simd.md). *)
       when Ops.is_narrow_float (Lazy.force d.Tn.storage_prec)
            && reads_self d di llsc && only_self_reads d di llsc ->
         let syms = List.map loops ~f:(fun (s, _, _) -> s) in
