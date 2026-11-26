@@ -53,7 +53,7 @@ files.
   already charges BOTH arms (`sc_split`'s sum, since gh-ocannl-637), flagged approximate because it
   reads no backend (CUDA and Metal short-circuit) (gh-ocannl-1695 pins it in `cost_model_extraction`). The inline fan-in guard's
   collector (`Low_level.eval_reads_traversal`'s `branches` hook) charges the backend's rendering:
-  the union of an admitted select's arms where `backend_facts.blends_value_selects` holds, the wider
+  the union of an admitted select's arms where `Backend_intf.charges_select_arm_union` holds, the wider
   arm elsewhere (gh-ocannl-1775; virtualization-and-inlining.md). Two traps for a test of it
   (`test/operations/branchless_select`): clang if-converts `c ? a[i] : b[i]` on base by selecting
   the ADDRESS, so a branch claim needs a constant arm (`where cond g 0`, the backward shape); and a
@@ -273,9 +273,13 @@ files.
   `codegen_not_traced` statically against `Test_scan.Codegen_stage_modules.modules` (shared with
   `digest_completeness`, gh-ocannl-2440) -- so a new codegen-stage read, including a GPU-only one,
   owes `emitted_flips` (or `emitted_exemptions`/`codegen_not_traced`) a row and fails on `cc`
-  before merge. `digest_identity_flips` calibrates one representative per
-  class against a real compile; when picking a code-borne representative note that many optimizer
-  keys (`virtualize_max_visits` and its neighbors) are read ONCE into `Low_level.virtualize_settings`
+  before merge. Every compile of the probe runs under `Ir.Kernel_code_cache.with_cold_caches`
+  (gh-ocannl-2478), so the traced compile and each flip miss the kernel cache and reach
+  post-compile and split settings; this is pinned by `kernels_compiled > 0 && kernels_reused = 0`
+  and, on `cc`, by every per-compile oracle-class `cc_backend.ml` key outside `codegen_not_traced`
+  being traced. `digest_identity_flips` calibrates one representative per class against a real
+  compile; when picking a code-borne representative note that many optimizer keys
+  (`virtualize_max_visits` and its neighbors) are read ONCE into `Low_level.virtualize_settings`
   at module init, so poking `Utils.config_file_args` at runtime does not move them. Caches with an
   identity of their own still state their own extra inputs (the analysis cache's
   `inline_complex_computations`, the cc probe cache's compiler/arch/simd settings).
@@ -545,8 +549,10 @@ files.
   halves, roles read off each nest's accumulating write, with an interchanged negative control, and
   the narrow half: bf16 weight and input gradients raw reduction-outer, optimized output-first.
   A bf16 input gradient over independent affine window axes (1-D or 2-D) gains cell loops owning
-  every visit before all reductions (gh-ocannl-2423, gh-ocannl-2464). An f32 gradient keeps the
-  lowered order.
+  every visit before all reductions (gh-ocannl-2423, gh-ocannl-2464). A unit kernel axis can fold
+  to a positive single-term affine index that keeps its iterator as a cell loop after the bounds
+  and separation checks (gh-ocannl-2479). An f32 gradient (plain or overlapping-window) keeps
+  the lowered order (gh-ocannl-2422; backend-precision-and-simd.md).
 - **A gh-490 extent guard is per-ITERATOR, so an axis with no product iterator gets none**, and
   `Accum_op` reaches that shape from ordinary `%op` code: a maximum-one symbolic axis has an empty
   product space, both sides indexed at `Fixed_idx 0`. Reducing over one bound to zero returned the

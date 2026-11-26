@@ -34,12 +34,13 @@ type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.comp; backprop : A
 [@@deriving sexp_of]
 
 (* What became of the tensor's code once it stopped being a root. A root leaves the session's root
-   map when a consumer embeds it, when it is handed out ([consume_forward_code], [take_forward_code]
-   -- the [%cd] embedding path -- or [consume_backprop_code]); repeated handout is allowed for
-   [Taken], so every non-embedding removal records its kind here. A second copy of handed-out code
-   in one compilation lineage is the lineage's to refuse (gh-ocannl-1724). The cell is mutable and
-   shared by record copies that preserve code ownership; [param] starts a fresh cell when it changes
-   ownership. Markers stay on tensors rather than accumulating in session-global storage. *)
+   map when a consumer embeds it, when it is handed out ([consume_forward_code],
+   [embed_forward_code] -- the [%cd] embedding path -- or [consume_backprop_code]); repeated handout
+   is allowed for [Taken], so every non-embedding removal records its kind here. A second copy of
+   handed-out code in one compilation lineage is the lineage's to refuse (gh-ocannl-1724). The cell
+   is mutable and shared by record copies that preserve code ownership; [param] starts a fresh cell
+   when it changes ownership. Markers stay on tensors rather than accumulating in session-global
+   storage. *)
 type handout = Not_handed_out | Taken [@@deriving sexp_of, equal]
 
 (* gh-ocannl-1796: the forward owner cell of a tensor -- a GC-independent shadow of "this tensor is
@@ -775,12 +776,12 @@ let init_params ?skip (t : t) : Asgns.comp = with_seed_fetches (init_params_body
 (* A forward graph reads a seed the same way: a draw whose code another graph absorbed -- an unused
    draw, a sibling graph compiled into another routine, a discarded scheme trace -- reads the seed
    without writing it (gh-ocannl-2157). Every forward handout ([consume_forward_code],
-   [take_forward_code] for [%cd]) carries the [Constant_bits] fetch of each registered seed its code
-   reads and does not write, so a routine reading a seed writes it, whichever context it links in.
-   The fetch replays an immutable literal: re-running it never changes a draw. A repaired handout is
-   memoized per tensor record, so that repeated handouts stay physically equal (gh-ocannl-1724's
-   replay contract); the entry is held weakly by the record, which holds [forward] itself, so it
-   keeps nothing alive that the tensor does not. *)
+   [embed_forward_code] for [%cd]) carries the [Constant_bits] fetch of each registered seed its
+   code reads and does not write, so a routine reading a seed writes it, whichever context it links
+   in. The fetch replays an immutable literal: re-running it never changes a draw. A repaired
+   handout is memoized per tensor record, so that repeated handouts stay physically equal
+   (gh-ocannl-1724's replay contract); the entry is held weakly by the record, which holds [forward]
+   itself, so it keeps nothing alive that the tensor does not. *)
 module Weak_tensors = Stdlib.Ephemeron.K1.Make (struct
   type nonrec t = t
 
@@ -801,7 +802,7 @@ let forward_handout t =
       if not (phys_equal repaired t.forward) then Weak_tensors.replace forward_handouts t repaired;
       repaired
 
-let take_forward_code t =
+let embed_forward_code t =
   remove_fwd_root t;
   t.consumption.fwd <- Taken;
   forward_handout t
@@ -1936,7 +1937,7 @@ found conflicting roots with shared non-embedded descendants: %{String.concat ~s
 (consume them first; a root dropped before its forward code was consumed can never be, so rebuild this tensor's computation)|}],
              Some t );
     note_external_handout ~fwd:true t;
-    take_forward_code t)
+    embed_forward_code t)
 
 let consume_backprop_code t =
   Shape.check_untainted ();
@@ -2071,9 +2072,9 @@ let restore_checkpoint ?omit ~provenance ck =
     install_validity_check ());
   if not (skip "roots") then (
     (* The checkpoint's roots, wholesale: a root a discarded construction embedded (via [Tensor.op]
-       or [%cd]'s [take_forward_code]) is a root again, with its handout marker reset -- only a root
-       is ever taken, so these are all the markers the window could have set. External handouts are
-       not taken back. *)
+       or [%cd]'s [embed_forward_code]) is a root again, with its handout marker reset -- only a
+       root is ever taken, so these are all the markers the window could have set. External handouts
+       are not taken back. *)
     let fwd = Map.filter_keys g_forward_roots ~f:(fun id -> not (Set.mem handouts.fwd_out id)) in
     (* The surviving backprop roots (gh-ocannl-1745): a root the GC reclaimed since the checkpoint
        had no holder, so no one can name it again, and its leaves go back (gh-ocannl-1804) -- unless

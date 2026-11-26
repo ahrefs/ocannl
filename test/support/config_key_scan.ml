@@ -198,6 +198,33 @@ let rec pattern_name pattern =
   | Ppat_constraint (inner, _) | Ppat_alias (inner, _) -> pattern_name inner
   | _ -> None
 
+(** Every top-level definition name declared in [content] (value, type, constructor, record field,
+    module, module type, exception, external, class). Used to verify that backend-default marker
+    targets name real top-level definitions in their owning module. *)
+let top_level_definition_names content =
+  let ast = structure_of content in
+  List.concat_map ast ~f:(fun item ->
+      match item.pstr_desc with
+      | Pstr_value (_, bindings) ->
+          List.filter_map bindings ~f:(fun binding -> pattern_name binding.pvb_pat)
+      | Pstr_type (_, decls) ->
+          List.concat_map decls ~f:(fun decl ->
+              let extras =
+                match decl.ptype_kind with
+                | Ptype_variant constrs -> List.map constrs ~f:(fun c -> c.pcd_name.txt)
+                | Ptype_record labels -> List.map labels ~f:(fun l -> l.pld_name.txt)
+                | Ptype_abstract | Ptype_open -> []
+              in
+              decl.ptype_name.txt :: extras)
+      | Pstr_module { pmb_name = { txt = Some name; _ }; _ } -> [ name ]
+      | Pstr_recmodule bindings -> List.filter_map bindings ~f:(fun b -> b.pmb_name.txt)
+      | Pstr_modtype { pmtd_name = { txt; _ }; _ } -> [ txt ]
+      | Pstr_exception { ptyexn_constructor = { pext_name = { txt; _ }; _ }; _ } -> [ txt ]
+      | Pstr_primitive { pval_name = { txt; _ }; _ } -> [ txt ]
+      | Pstr_class decls -> List.map decls ~f:(fun d -> d.pci_name.txt)
+      | _ -> [])
+  |> Set.of_list (module String)
+
 (* A path is flattened defensively here, unlike {!longident_of}: this one runs over MODULE paths,
    where a functor application is a shape the language admits, and a scan that raised on one would
    refuse a file for containing an unrelated [module M = F (X)]. *)
@@ -1712,23 +1739,50 @@ let initialization_items content =
     enumerated (gh-ocannl-592: a hand-written list says nothing about the file that falls off it,
     and three files did, each staying green because their keys were read from somewhere else too).
 
-    Two kinds of argument are therefore not sources. Anything that is not a [.ml] file: the config
-    file the rule depends on, the reference file, the executable itself. And dune's preprocessed
-    twin [x.pp.ml] of an [x.ml] that is in the list — those are the ppx expansion of a file already
+    Three kinds of argument are therefore not sources. Anything that is not a [.ml] file: the config
+    file the rule depends on, the reference file, the executable itself. Dune's preprocessed twin
+    [x.pp.ml] of an [x.ml] that is in the list — those are the ppx expansion of a file already
     scanned, so they would double every census, and they exist only where the library that owns them
     is built, which is what would make the census differ between a machine with the CUDA toolchain
-    and one without. A twin is dropped only when its original is present, so a source genuinely
-    named [x.pp.ml] is not silently lost.
+    and one without; a twin is dropped only when its original is present, so a source genuinely
+    named [x.pp.ml] is not silently lost. And the generated target [d/t.ml] of a Dune [(select)]
+    whose arm [d/t.<variant>.ml] is in the list (gh-ocannl-2482) — the generated target holds
+    whichever alternative the current host selected, while every checked-in arm is handed over under
+    its own file name on every box; dropping the generated target makes every scan judge every
+    select alternative identically across toolchains. [vendor_stub_arms_scan] pins this naming rule
+    against every repository [dune] [(select)] and against checked-in source collisions.
 
     Nothing else is filtered, and both tests print how many files they scanned: a glob that stops
     matching shows up as a diff rather than as a quietly smaller census. *)
+
+(** The generated [(select)] target path implied by a checked-in arm path of the form
+    [d/t.<variant>.ml], where [<variant>] is non-empty, dot-free and not ["pp"]. Returns
+    [Some "d/t.ml"], preserving [path]'s directory prefix and separator, or [None] otherwise. *)
+let select_target_of_arm path =
+  match String.chop_suffix path ~suffix:".ml" with
+  | None -> None
+  | Some without_ext -> (
+      let base = Stdlib.Filename.basename without_ext in
+      let prefix = String.drop_suffix without_ext (String.length base) in
+      match String.lsplit2 base ~on:'.' with
+      | Some (stem, variant)
+        when (not (String.is_empty stem))
+             && (not (String.is_empty variant))
+             && (not (String.contains variant '.'))
+             && not (String.equal variant "pp") ->
+          Some (prefix ^ stem ^ ".ml")
+      | _ -> None)
+
 let sources_among args =
   let sources =
     List.filter args ~f:(String.is_suffix ~suffix:".ml")
     |> List.dedup_and_sort ~compare:String.compare
   in
   let present = Set.of_list (module String) sources in
+  let selected = List.filter_map sources ~f:select_target_of_arm |> Set.of_list (module String) in
   List.filter sources ~f:(fun path ->
+      (not (Set.mem selected path))
+      &&
       match String.chop_suffix path ~suffix:".pp.ml" with
       | Some stem -> not (Set.mem present (stem ^ ".ml"))
       | None -> true)

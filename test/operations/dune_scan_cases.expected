@@ -298,6 +298,7 @@ ok: program runners -- the variables pinned around every run of the program
 ok: stanza programs -- an executables stanza is one program per name, sharing what no name owns
 ok: stanza programs -- a test runs itself beside any rule running it, over the directory's own modules
 ok: stanza programs -- a tests stanza is one program per name, each run by itself
+ok: stanza programs -- a default-module-set stanza gets a select's logical target module rather than its dotted arms
 ok: backend marker sentinel -- in a comment
 ok: backend marker sentinel -- inside a quoted argument, where it declares nothing
 ok: backend marker sentinel -- in a comment above every stanza, which encloses it in none
@@ -321,6 +322,15 @@ Contained-marker refusal diagnostics exercised by the cases above:
   a marker inside a convention-specific wrong stanza -- wrong library stanza at line 2: the marker belongs on a rule
   a sentinel outside a comment -- 1 sentinel(s) in text but 0 in comments
 
+ok: backend-default marker -- valid definition on library
+ok: backend-default marker -- valid reader on test, executable, and inline-test library
+ok: backend-default marker -- co-existence with ocannl-backend marker on one stanza (sentinels do not collide)
+ok: backend-default marker -- definition rejected on test stanza
+ok: backend-default marker -- reader rejected on plain library and rule
+ok: backend-default marker -- refuses none backend, unknown backend, duplicate backend, empty entry
+ok: backend-default marker -- refuses malformed target, duplicate target, spaced comma list, bad name
+ok: backend-default marker -- refuses outside stanza and outside comment
+ok: backend-default marker -- sentinel counts do not collide with ocannl-backend
 ok: refused -- a marker nested inside a stanza
 ok: refused -- a block comment
 ok: refused -- a datum comment

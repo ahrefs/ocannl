@@ -412,6 +412,8 @@ let raw_entries =
         "[scanner-refusal:26f527c022e2a36b727d2635a64c83e2] compiles a copy";
         "[scanner-refusal:3f49f1a86b0b50ae1cc45ae30b8d6bcd] preprocesses";
         "[scanner-refusal:b1fb94e1e4593366f815fcc28f356790] the availability-only exception";
+        "[scanner-refusal:dee2d648128c5e060fd019f8fb9194cc] Config_key_scan.sources_among";
+        "[scanner-refusal:84df002d61c09f8e4c713e4286fdc7ac] Config_key_scan.select_target_of_arm";
         "[scanner-refusal:e62fde2478073ff697b31a8548df54f1] dune-file glob matches";
         "[scanner-refusal:513451a79c3ecc3b1fb18f6fee5ee404] arrayjit/vendor_stubs/<package>/dune";
         "[scanner-refusal:b079d32e59c7b93562738e4061682b90] arrayjit/vendor_stubs/";
@@ -420,8 +422,11 @@ let raw_entries =
         "[scanner-refusal:047374463fd606fe95cf257ebf928364] arrayjit/vendor_stubs/";
         "[scanner-refusal:518629fae55a4ef4b29ab72b3a71d8ce] each module's agreement";
         "[scanner-refusal:f4e3a8ac36957f5a6f54cd735b3c2092] package stand-in declared";
+        "[scanner-refusal:6cd3c184704a37f8cb97e98efd6a0a87] beside unrelated sources";
         "[scanner-refusal:90b26d38400dc5a37ed715269ba3cfbe] every vendor-gated select";
         "[scanner-refusal:4cc754a0d44bcdcb048630ccd8e65a5b] vendor-gated arm's stand-in";
+        "[scanner-refusal:2c9effa9c434f42e299fea8a5bb96b20] Config_key_scan.select_target_of_arm";
+        "[scanner-refusal:1c9ecdb5107c44b922f23d89fb734f94] checked-in ml source";
       ] );
     ( "config_statement_scan.ml",
       [
@@ -489,6 +494,9 @@ let raw_entries =
       ] );
     ( "codegen_text_inventory.ml",
       [
+        "[scanner-refusal:78fef1ba5a8812597666a8c7a41cf736] the eligible inventory";
+        "[scanner-refusal:bbee5d2953722bf625614fa7741f472a] the required inventory";
+        "[scanner-refusal:6428d3507ac51411ea25280739f681fd] HIP batch estimate";
         "[scanner-refusal:83dfdd0395c402128515f27b2f3b1b1c] the exclusion for";
         "[scanner-refusal:24dcaa782a3b33780918bb1933206e78] the compiler entry";
         "[scanner-refusal:3f0b314f29005911be716581fa1a4f10] the scan raised";
@@ -497,6 +505,7 @@ let raw_entries =
         "[scanner-refusal:564de56163a842792f2175c0c12d75d5] Utils.build_files_dir";
         "[scanner-refusal:d4306fe9c227b85db951de0b64f85ad8] Test_utils.Generated.main_logic";
         "[scanner-refusal:6eb14f027a4be6648748900004341e36] the after-marker exemption";
+        "[scanner-refusal:bdce0b6c9330d52290dc2dce205f1b0b] cover every eligible";
         "[scanner-refusal:b1a8055bff15f499f2f143975afca3d7] reaches the stale-exclusion";
         "[scanner-refusal:ae3ea5e30f52522fe3ba79794609f56f] reaches the stale-entry";
         "[scanner-refusal:2c67621c20b4be85e0176da0370f83cb] reaches the scanner-defect";
@@ -694,6 +703,11 @@ let raw_entries =
         "[scanner-refusal:7336dd5a712b0c3a578b64d7defb1654] between stanzas declares";
         "[scanner-refusal:1aaab6e3cd8f4615e1cd1d0321e309a1] times and only";
         "[scanner-refusal:f11c09a8318b3a7863444256973f57d4] running an executable";
+        "[scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does";
+        "[scanner-refusal:6d4652d347d64362ce0c9b3c1498abb9] carries a backend-default";
+        "[scanner-refusal:eeabf0209c60b38c2cf243f1fcbaac4a] backend-default marker that";
+        "[scanner-refusal:f75580a3f9d63e77e8203a3df984bb9c] times and only";
+        "[scanner-refusal:942031ff44cb018ae2d7eee70ed6327a] the backend default";
         "[scanner-refusal:95919586e2a2b25eaaf13ca8093ab584] repository-wide scan rule";
         "[scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule";
         "[scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner";
@@ -727,6 +741,13 @@ let raw_entries =
         "[scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests";
         "[scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests";
         "[scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts";
+        "[scanner-refusal:ffa1cdde8b0746fcdb7a1ac0b406107a] the backend default";
+        "[scanner-refusal:2d95d96433c72c5c970b888087a59832] the backend default";
+        "[scanner-refusal:6c8e61d2480bca6f93d3fd99b945e5ad] the backend default";
+        "[scanner-refusal:04f8a4dfd1058a7595117f80bc1fcb0c] the backend default";
+        "[scanner-refusal:66742d7bb3766af11b75ab38bf798fdb] the backend default";
+        "[scanner-refusal:b0d8f5f604f61eb8ecc4829d93f24a83] the backend-default reader";
+        "[scanner-refusal:afd2f461af706b40bf4582f1b0a30b01] the backend-default reader";
         "[scanner-refusal:77d0be0fe2fca9a97da8be7f833d9c6e] is spelled without";
         "[scanner-refusal:25657f61eca857f6fd2f34de66e81eaf] scanner refusal";
         "[scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no";
@@ -842,6 +863,8 @@ let raw_entries =
         "[scanner-refusal:1941f1fd1c6d01e76c592bdab3261140] search item invalidates";
         "[scanner-refusal:4aeee97cadd279f1e1d00bd64a116077] search item invalidates";
         "[scanner-refusal:c3b6672a6f1e65c6ba16b1c987d1a8cb] invalidates an earlier";
+        "[scanner-refusal:aa2e14b6af61751440ba04ff7709d6e6] invalidates an initialization";
+        "[scanner-refusal:88245fbc788612e3501d835011df08f2] interface-only sibling module";
         "[scanner-refusal:4b7124f3852d2e10d4a830de32bdedde] carrying cc-vector-width independent";
         "[scanner-refusal:974939e6b89b36d455f0e19ff70a42d3] pinning the variable";
         "[scanner-refusal:687a8e82db5772147024b757deca3cd3] program whose initialization";
@@ -887,6 +910,14 @@ let raw_entries =
         "[scanner-refusal:fac99db54dbc751b212940875f53c769] captured Verdict run";
         "[scanner-refusal:edc4786c103754e1274b9e12cf08fa3f] nonempty binding undoes";
         "[scanner-refusal:e41ce36dfe9ad79d2112520081833ba9] captured Verdict run";
+        "[scanner-refusal:3f8d91b20ff8dd63fdb0fa1e1cd5cc7b] select stanza passes";
+        "[scanner-refusal:cab6ce652200dd6b791b352310a35bdc] undeclared tracing gate";
+        "[scanner-refusal:4b254ada2beaa28473ff82577bf198ee] undeclared ambient env";
+        "[scanner-refusal:1692b7fcf8f2e58a4884d397c7d39c9c] non-default select arm";
+        "[scanner-refusal:f1f5e5ad4613c408d71f8a02b4462be9] non-default select arm";
+        "[scanner-refusal:4112d0c301944346aa5b2b228db48361] non-default select arm";
+        "[scanner-refusal:c32893cb68f676d5b920e664ddd544a1] default-module-set stanza discovers";
+        "[scanner-refusal:cc3f3f4d2c2871eaf60a3bbe9f670f42] invalidates an initialization";
       ] );
     ( "ocamlformat_ignore_scan.ml",
       [
@@ -1393,6 +1424,28 @@ let raw_direct_evidence =
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "verdict_ratchet.ml:1045125e8f0a2a1ed0a5933a3c7ab89e",
       "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
+    ( "env_var_deps.ml:6d4652d347d64362ce0c9b3c1498abb9",
+      "backend-default marker on wrong stanza is refused: true" );
+    ( "env_var_deps.ml:eeabf0209c60b38c2cf243f1fcbaac4a",
+      "backend-default marker outside any stanza is refused: true" );
+    ( "env_var_deps.ml:f75580a3f9d63e77e8203a3df984bb9c",
+      "backend-default sentinel outside a comment is refused: true" );
+    ( "env_var_deps.ml:942031ff44cb018ae2d7eee70ed6327a",
+      "duplicate backend-default reader on one stanza is refused: true" );
+    ( "env_var_deps.ml:ffa1cdde8b0746fcdb7a1ac0b406107a",
+      "duplicate backend-default definition is refused: true" );
+    ( "env_var_deps.ml:2d95d96433c72c5c970b888087a59832",
+      "backend-default definition with zero readers is refused: true" );
+    ( "env_var_deps.ml:6c8e61d2480bca6f93d3fd99b945e5ad",
+      "backend-default definition naming a missing module is refused: true" );
+    ( "env_var_deps.ml:04f8a4dfd1058a7595117f80bc1fcb0c",
+      "backend-default definition naming an unparseable module is refused: true" );
+    ( "env_var_deps.ml:66742d7bb3766af11b75ab38bf798fdb",
+      "backend-default definition naming a missing top-level definition is refused: true" );
+    ( "env_var_deps.ml:b0d8f5f604f61eb8ecc4829d93f24a83",
+      "backend-default reader naming an undefined default is refused: true" );
+    ( "env_var_deps.ml:afd2f461af706b40bf4582f1b0a30b01",
+      "backend-default reader whose backends do not overlap the default is refused: true" );
   ]
 
 (** Direct failures no control executes, each with the reason none does: a refusal the scanner can

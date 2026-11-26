@@ -26,14 +26,22 @@
 # can read one, anonymously. Each write keeps the head's earlier records and adds its own.
 #
 # What `record` certifies:
-#   - For a tools/test-run.sh run record under ~/.ocannl-test-runs: `exit` present (the run
-#     finished) and 0; `dirty` present and empty (clean at launch); `head`, the commit;
-#     `expect-backend` exactly `cc`; and `cmd`, dune's argv, one of FULL or TRAIN below.
+#   - For a tools/test-run.sh run record (under ~/.ocannl-test-runs or a private
+#     OCANNL_TOOL_TEST_RUNS): `exit` present (the run finished) and 0; `dirty` present and empty
+#     (clean at launch); `head`, the commit; `expect-backend` exactly `cc`; and `cmd`, dune's
+#     argv, one of FULL or TRAIN below.
 #   - For a tools/linux-shell-leg.sh receipt (`kind` = `linux-shell`, gh-ocannl-2414): `exit`
 #     present and 0; `dirty` present and empty; `os` exactly `Linux`; `head`, the commit; and
 #     `targets`, a comma-separated canonical list of `harnesses`, `member:<MEMBER>` and/or
 #     `@<DIR>/runtest-<NAME>`.
 # Refused otherwise, nothing published.
+# `leg-record` (invoked by `tools/owed-run-report.sh`, gh-ocannl-2359, gh-ocannl-2468) prefers
+# `FLEET_LEG_RECEIPT_DIR` (never falling back to `last` when set) and falls back to the
+# worktree's `linux-shell` pointer or `tools/test-run.sh paths run last` only when unset. A
+# validly bound, clean, exit-0 receipt for this leg and observed SHA whose backend is not `cc` or
+# whose recorded request is not a FULL/TRAIN command logs `ineligible leg` instead of `record
+# refused`; broken bindings, stale receipts, wrong heads, and dirty/failed runs log `record
+# refused`.
 #
 # What `check HEAD NEED...` admits (exit 0, one `owed-run: admitted ...` line per record it
 # used), as a fail-closed allowlist. NEED is `runtest` (the full suite), `train` (every `train-`
@@ -61,8 +69,16 @@
 # a filtered or first-tier run); a NEED no record covers.
 # Transport unreadable (exit 3, saying why and naming OWED_RUN_URL): a ref read or object fetch
 # that could not complete within FETCH_CAP seconds, or a fetched ref whose commit object is missing
-# (unreadable). `check` does not retry transport failures so callers keep their read cap bounded;
-# callers decide whether to fail closed (the main merge build) or withhold a verdict (`--plan-merge`).
+# (unreadable). On expiry, unattended Git commands get TERM then KILL in their private process
+# group, with a short grace and a bounded reap. This covers helpers that stay in that group.
+# Detached helpers and uninterruptible kernel waits require separate operator recovery.
+# A manual push with terminal prompts enabled retains its foreground group and direct Git alarm
+# so Git or SSH can read the controlling terminal. Set GIT_TERMINAL_PROMPT=0 for group cleanup.
+# Reads always run in the private group. A transport that opens the controlling terminal
+# itself, such as SSH asking for a passphrase or host-key confirmation, can be stopped by
+# job control until FETCH_CAP. Provide credentials and host keys for unattended reads.
+# `check` does not retry transport failures. Callers decide whether to fail closed (the main
+# merge build) or withhold a verdict (`--plan-merge`).
 # Writer and source are informational. The writer identifies the publication path. Anyone with
 # push access can still craft a line claiming any writer. The record certifies the checkout at
 # launch and the backend held. Other ambient settings and edits undone mid-run fall outside it.
@@ -91,6 +107,10 @@
 # Exit status: 0 done or admitted, 1 record refused (`check`), 2 usage or write/certification error,
 #              3 transport unreadable (`check`).
 set -u
+# Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462, gh-ocannl-2484):
+# with neither LANG nor LC_ALL set, Homebrew Bash's libintl calls CoreFoundation when tearing
+# down a local or temporary locale assignment, which can SIGSEGV inside forked subshells.
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
 me=owed-run
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 # The repository the records live in: the PR repository (AGENTS.md, Pull Requests).
@@ -115,16 +135,99 @@ die() { echo "$me: $*" >&2; exit 2; }
 refuse() { echo "$me: REFUSED -- $* (records on $OWED_RUN_URL)"; exit 1; }
 unreadable() { echo "$me: REFUSED -- $* (records on $OWED_RUN_URL)"; exit 3; }
 is_sha() { case $1 in *[!0-9a-f]* | '') return 1 ;; esac; [ "${#1}" = 40 ]; }
-# bounded CMD...: CMD under FETCH_CAP (macOS has no timeout(1); perl's alarm survives exec).
-bounded() { perl -e 'alarm shift; exec @ARGV or exit 127' "$FETCH_CAP" "$@"; }
+# macOS has no timeout(1). The group leader holds its identity until the supervisor
+# accepts Git's status or finishes escalation, even if Git exits on the cap boundary.
+bounded() {
+  perl -MPOSIX -MTime::HiRes=sleep -e '
+    my ($cap, $mode) = splice @ARGV, 0, 2;
+    if ($mode eq "push" && ($ENV{GIT_TERMINAL_PROMPT} // "1") ne "0" &&
+        open(my $tty, "<", "/dev/tty")) {
+      my $foreground = tcgetpgrp(fileno($tty));
+      if (defined $foreground && $foreground == getpgrp()) {
+        close $tty;
+        alarm $cap;
+        exec { $ARGV[0] } @ARGV or exit 127;
+      }
+    }
+    pipe(my $result_r, my $result_w) or die "Git result pipe: $!";
+    pipe(my $life_r, my $life_w) or die "Git group lifetime pipe: $!";
+    my $blocked = POSIX::SigSet->new(SIGINT, SIGTERM, SIGHUP);
+    my $old = POSIX::SigSet->new();
+    sigprocmask(SIG_BLOCK, $blocked, $old) or die "block signals: $!";
+    my $stop;
+    $SIG{HUP}  = sub { $stop //= 129 };
+    $SIG{INT}  = sub { $stop //= 130 };
+    $SIG{ALRM} = sub { $stop //= 142 };
+    $SIG{TERM} = sub { $stop //= 143 };
+    my $pid = fork();
+    defined $pid or die "fork: $!";
+    if (!$pid) {
+      close $result_r;
+      close $life_w;
+      setpgid(0, 0) or die "isolate Git transport: $!";
+      my $git = fork();
+      defined $git or die "fork Git: $!";
+      if (!$git) {
+        close $result_w;
+        close $life_r;
+        $SIG{$_} = "DEFAULT" for qw(INT TERM HUP ALRM);
+        sigprocmask(SIG_SETMASK, $old) or die "restore signals: $!";
+        exec { $ARGV[0] } @ARGV or exit 127;
+      }
+      $SIG{$_} = "IGNORE" for qw(INT TERM HUP);
+      sigprocmask(SIG_SETMASK, $old) or die "restore signals: $!";
+      waitpid($git, 0) == $git or die "wait for Git: $!";
+      my $status = $?;
+      syswrite($result_w, chr($status & 127 ? 128 + ($status & 127) : $status >> 8));
+      close $result_w;
+      # Git may have exited while a helper stayed behind. The supervisor owns the decision.
+      sysread($life_r, my $released, 1);
+      exit 0;
+    }
+    close $result_w;
+    close $life_r;
+    # Either side can establish the group before the supervisor accepts cancellation.
+    if (!setpgid($pid, $pid) && !$!{ESRCH}) {
+      my $error = $!;
+      kill("KILL", -$pid) or kill("KILL", $pid);
+      die "isolate Git transport: $error";
+    }
+    alarm $cap;
+    sigprocmask(SIG_SETMASK, $old) or die "restore signals: $!";
+    my $status;
+    my $readable = "";
+    vec($readable, fileno($result_r), 1) = 1;
+    until (defined $stop) {
+      my $ready = $readable;
+      my $count = select($ready, undef, undef, 0.05);
+      next if $count == 0 || ($count < 0 && $!{EINTR});
+      sysread($result_r, $status, 1) if $count > 0;
+      last;
+    }
+    alarm 0;
+    if (defined $stop || !length($status // "")) {
+      $stop //= 126;
+      kill "TERM", -$pid;
+      sleep 0.25;
+      kill "KILL", -$pid;
+    }
+    close $life_w;
+    for (1 .. 25) {
+      my $reaped = waitpid($pid, WNOHANG);
+      last if $reaped == $pid || ($reaped < 0 && !$!{EINTR});
+      sleep 0.02;
+    }
+    exit($stop // ord($status));
+  ' -- "$FETCH_CAP" "$@"
+}
 # A read never prompts, reads no ambient credential helper's prompt, and keeps English diagnostics.
-rgit() { LC_ALL=C GIT_TERMINAL_PROMPT=0 bounded git -C "$root" "$@"; }
+rgit() { LC_ALL=C GIT_TERMINAL_PROMPT=0 bounded read git -C "$root" "$@"; }
 
 # is_auth_failure STDERR: true when any line matches the closed auth/authorization denylist.
 is_auth_failure() {
   local lc l
   [ -n "$1" ] || return 1
-  lc=$(printf '%s\n' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+  lc=$(printf '%s\n' "$1" | env LC_ALL=C tr '[:upper:]' '[:lower:]')
   while IFS= read -r l; do
     case $l in
       *'authentication failed'* | \
@@ -175,7 +278,7 @@ retry_or_die() {
 
 # remote_ref REF: sets `remote_sha` to what REF names on OWED_RUN_URL, empty when it names nothing.
 # Nonzero status when the repository could not be read; sets `remote_err` to stderr on failure.
-# Uses scratch files rather than pipes so an orphaned transport helper cannot hold $(...) past FETCH_CAP.
+# A scratch file keeps the read independent of pipe EOF, including from detached helpers.
 remote_ref() {
   local rc=0
   remote_sha=
@@ -394,7 +497,7 @@ publish() {
       if [ "$rc" = 0 ]; then
         msg+=$line
         commit=$(printf '%s\n' "$msg" | git -C "$root" commit-tree "$tree" -p "$h") || die "could not write the record commit"
-        LC_ALL=C bounded git -C "$root" push --quiet --force-with-lease="$ref:$old" "$OWED_RUN_URL" "$commit:$ref" >"$_owed_scratch/err" 2>&1 || rc=$?
+        LC_ALL=C bounded push git -C "$root" push --quiet --force-with-lease="$ref:$old" "$OWED_RUN_URL" "$commit:$ref" >"$_owed_scratch/err" 2>&1 || rc=$?
         if [ "$rc" != 0 ]; then
           err=$(cat "$_owed_scratch/err" 2>/dev/null)
           step="push $ref to $OWED_RUN_URL"
@@ -443,7 +546,7 @@ on_record_master() {
 
 record_run() {
   local run=$1 print=$2 leg_record=${3-} observed_head=${4-}
-  local requested_cmd requested_cover h c host line checkout writer=record
+  local requested_cmd requested_cover exp_backend h c host line checkout writer=record
   case $run in
     '' | last) run=$(cd "$root" && "${BASH:-bash}" tools/test-run.sh paths run last) || die "record: no last run of this worktree" ;;
   esac
@@ -451,10 +554,6 @@ record_run() {
   if [ -n "$leg_record" ]; then
     cmp -s "$run/fleet-leg-run-record" <(printf '%s\n' "$leg_record") ||
       die "record: $run does not match this fleet leg's run record"
-    requested_cmd=$(cat "$run/fleet-leg-command" 2>/dev/null) &&
-      [[ $requested_cmd != *$'\n'* ]] && cmd_cover "$requested_cmd" ||
-      die "record: $run did not request an owed-run command"
-    requested_cover=$cover
   fi
   [ -f "$run/exit" ] || die "record: $run has no exit status: it has not finished"
   [ "$(cat "$run/exit")" = 0 ] || die "record: $run exited $(cat "$run/exit"), not 0"
@@ -462,18 +561,44 @@ record_run() {
   [ ! -s "$run/dirty" ] || die "record: $run ran a dirty checkout"
   h=$(sed -n 1p "$run/head" 2>/dev/null)
   is_sha "$h" || die "record: $run recorded no head commit"
-  [ "$(cat "$run/expect-backend" 2>/dev/null)" = cc ] ||
-    die "record: $run was not run with --expect-backend cc (its expect-backend: '$(cat "$run/expect-backend" 2>/dev/null)')"
-  c=$(sed -n 1p "$run/cmd" 2>/dev/null) c=${c% }
-  cmd_cover "$c" || die "record: $run ran '$c', none of the forms a record covers (tools/owed-run.sh's header)"
-  host=$(hostname -s 2>/dev/null || hostname)
   if [ -n "$leg_record" ]; then
-    [ "$cover" = "$requested_cover" ] || die "record: $run does not cover the fleet leg's requested targets"
     [ "$h" = "$observed_head" ] || die "record: $run is for a different head than the fleet leg observed"
     [ "$h" = "$(git -C "$root" rev-parse HEAD)" ] || die "record: $run is for a different head"
     checkout=$(git -C "$root" status --porcelain --untracked-files=all --ignore-submodules=none) ||
       die "record: could not read the fleet worktree's checkout state"
     [ -z "$checkout" ] || die "record: the fleet worktree is dirty"
+  fi
+  exp_backend=$(cat "$run/expect-backend" 2>/dev/null)
+  if [ "$exp_backend" != cc ]; then
+    if [ -n "$leg_record" ]; then
+      printf '%s\n' "$me: recorded nothing (ineligible leg: $run was not run with --expect-backend cc; expect-backend is '${exp_backend:-none}')"
+      return 0
+    fi
+    die "record: $run was not run with --expect-backend cc (its expect-backend: '$exp_backend')"
+  fi
+  if [ -n "$leg_record" ]; then
+    if [ ! -f "$run/fleet-leg-command" ]; then
+      if [ -f "$run/fleet-leg-ineligible" ]; then
+        printf '%s\n' "$me: recorded nothing (ineligible leg: $run did not request an owed-run command via explicit spaced --expect-backend cc)"
+        return 0
+      fi
+      die "record: $run did not request an owed-run command (missing fleet-leg-command)"
+    fi
+    requested_cmd=$(cat "$run/fleet-leg-command" 2>/dev/null) ||
+      die "record: could not read $run/fleet-leg-command"
+    [[ $requested_cmd != *$'\n'* ]] && [ -n "${requested_cmd% }" ] ||
+      die "record: $run did not request an owed-run command"
+    if ! cmd_cover "$requested_cmd"; then
+      printf '%s\n' "$me: recorded nothing (ineligible leg: $run did not request an owed-run command: '${requested_cmd% }')"
+      return 0
+    fi
+    requested_cover=$cover
+  fi
+  c=$(sed -n 1p "$run/cmd" 2>/dev/null) c=${c% }
+  cmd_cover "$c" || die "record: $run ran '$c', none of the forms a record covers (tools/owed-run.sh's header)"
+  host=$(hostname -s 2>/dev/null || hostname)
+  if [ -n "$leg_record" ]; then
+    [ "$cover" = "$requested_cover" ] || die "record: $run does not cover the fleet leg's requested targets"
     # Integration runs at merged heads owe no record and can leave a ref that no PR will prune.
     if on_record_master "$h"; then
       printf '%s\n' "$me: recorded nothing (head is on master at $OWED_RUN_URL)"
@@ -556,6 +681,17 @@ case $verb in
   linux-shell-pointer)
     [ $# -le 1 ] || die "linux-shell-pointer: at most one WORKTREE"
     linux_shell_last_pointer "${1:-$root}" || die "linux-shell-pointer: cannot determine receipt pointer (set HOME or OCANNL_TOOL_TEST_RUNS)" ;;
+  qualifies-receipt)
+    [ $# = 1 ] && [ -d "$1" ] || exit 1
+    [ -f "$1/exit" ] && [ "$(cat "$1/exit" 2>/dev/null)" = 0 ] || exit 1
+    [ -f "$1/dirty" ] && [ ! -s "$1/dirty" ] || exit 1
+    [ "$(cat "$1/expect-backend" 2>/dev/null)" = cc ] || exit 1
+    [ -f "$1/fleet-leg-command" ] || exit 1
+    req_cmd=$(cat "$1/fleet-leg-command" 2>/dev/null) || exit 1
+    [[ $req_cmd != *$'\n'* ]] && [ -n "${req_cmd% }" ] && cmd_cover "$req_cmd" || exit 1
+    req_cover=$cover
+    eff_cmd=$(sed -n 1p "$1/cmd" 2>/dev/null) eff_cmd=${eff_cmd% }
+    cmd_cover "$eff_cmd" && [ "$cover" = "$req_cover" ] || exit 1 ;;
   record)
     run= print=0
     for a do
@@ -573,24 +709,37 @@ case $verb in
   leg-record)
     [ $# = 3 ] && [[ $1 = /* ]] && [ -n "$2" ] && is_sha "$3" ||
       die "leg-record: expected an absolute leg record path, request ID and observed SHA"
-    linux_cand=
-    if [ -n "${FLEET_LEG_RECEIPT_DIR:-}" ] && [ -d "$FLEET_LEG_RECEIPT_DIR" ] &&
-       [ "$(cat "$FLEET_LEG_RECEIPT_DIR/kind" 2>/dev/null)" = linux-shell ]; then
-      linux_cand=$FLEET_LEG_RECEIPT_DIR
-    elif ptr=$(linux_shell_last_pointer 2>/dev/null) && [ -r "$ptr" ]; then
-      cand=$(sed -n 1p "$ptr" 2>/dev/null)
-      if [ -n "$cand" ] && [ -d "$cand" ] && [ "$(cat "$cand/kind" 2>/dev/null)" = linux-shell ] &&
-         cmp -s "$cand/fleet-leg-run-record" <(printf '%s\n' "$1"); then
-        linux_cand=$cand
-      fi
-    fi
-    if [ -n "$linux_cand" ]; then
-      if ! ( export GIT_TERMINAL_PROMPT=0; record_linux_shell "$linux_cand" 0 "$1" "$3" ) </dev/null 2>&1; then
+    if [ -n "${FLEET_LEG_RECEIPT_DIR+x}" ]; then
+      if [[ $FLEET_LEG_RECEIPT_DIR != /* ]] || [[ $FLEET_LEG_RECEIPT_DIR = *$'\n'* ]]; then
+        printf '%s\n' "$me: record: FLEET_LEG_RECEIPT_DIR must be a single-line absolute path: '$FLEET_LEG_RECEIPT_DIR'"
         printf '%s\n' "$me: recorded nothing (record refused)"
+      elif [ -d "$FLEET_LEG_RECEIPT_DIR" ] &&
+           [ "$(cat "$FLEET_LEG_RECEIPT_DIR/kind" 2>/dev/null)" = linux-shell ]; then
+        if ! ( export GIT_TERMINAL_PROMPT=0; record_linux_shell "$FLEET_LEG_RECEIPT_DIR" 0 "$1" "$3" ) </dev/null 2>&1; then
+          printf '%s\n' "$me: recorded nothing (record refused)"
+        fi
+      else
+        if ! ( export GIT_TERMINAL_PROMPT=0; record_run "$FLEET_LEG_RECEIPT_DIR" 0 "$1" "$3" ) </dev/null 2>&1; then
+          printf '%s\n' "$me: recorded nothing (record refused)"
+        fi
       fi
     else
-      if ! ( export GIT_TERMINAL_PROMPT=0; record_run last 0 "$1" "$3" ) </dev/null 2>&1; then
-        printf '%s\n' "$me: recorded nothing (record refused)"
+      linux_cand=
+      if ptr=$(linux_shell_last_pointer 2>/dev/null) && [ -r "$ptr" ]; then
+        cand=$(sed -n 1p "$ptr" 2>/dev/null)
+        if [ -n "$cand" ] && [ -d "$cand" ] && [ "$(cat "$cand/kind" 2>/dev/null)" = linux-shell ] &&
+           cmp -s "$cand/fleet-leg-run-record" <(printf '%s\n' "$1"); then
+          linux_cand=$cand
+        fi
+      fi
+      if [ -n "$linux_cand" ]; then
+        if ! ( export GIT_TERMINAL_PROMPT=0; record_linux_shell "$linux_cand" 0 "$1" "$3" ) </dev/null 2>&1; then
+          printf '%s\n' "$me: recorded nothing (record refused)"
+        fi
+      else
+        if ! ( export GIT_TERMINAL_PROMPT=0; record_run last 0 "$1" "$3" ) </dev/null 2>&1; then
+          printf '%s\n' "$me: recorded nothing (record refused)"
+        fi
       fi
     fi ;;
   add)
@@ -706,7 +855,7 @@ EOF
       fi
     done
     if [ ${#dels[@]} -gt 0 ]; then
-      bounded git -C "$root" push --quiet "$OWED_RUN_URL" "${dels[@]}" || die "prune: the delete push to $OWED_RUN_URL failed"
+      bounded push git -C "$root" push --quiet "$OWED_RUN_URL" "${dels[@]}" || die "prune: the delete push to $OWED_RUN_URL failed"
       echo "$me: pruned ${#dels[@]} record(s) of merged heads on $OWED_RUN_URL"
     fi ;;
   -h | --help) sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//' ;;

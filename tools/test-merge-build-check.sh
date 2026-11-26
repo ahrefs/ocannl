@@ -32,7 +32,10 @@
 # `unadmitted <needs>` on definitive exit 1, and none on transport-unreadable exit 3, other error
 # or `--plan` alone). Push retries in `tools/owed-run.sh` (gh-ocannl-2436) are pinned for transient
 # remote rejections, concurrent `--force-with-lease` contention, exhaustion, exponential backoff,
-# immediate stop on auth/authorization errors, and fleet hook retry recovery. The #plan-locale leg
+# immediate stop on auth/authorization errors, and fleet hook retry recovery. The #owed-run
+# transport fixtures exercise the real deadline and trigger its alarm only after each
+# TERM-resistant helper is ready, then require that helper to stop.
+# The #plan-locale leg
 # exercises CROSS-CUTTING plans with LANG and LC_ALL unset or empty under LC_CTYPE=UTF-8
 # (gh-ocannl-2462), pinning the exported LANG=C guard, caller-locale preservation, and C-locale
 # reason filtering.
@@ -65,6 +68,17 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
   GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
 SYS_PATH=/usr/bin:/bin
 GIT=$(command -v git)
+
+cleanup_fixture() {
+  local pidfile pid cmd
+  for pidfile in "$TMP"/hang-*.pid; do
+    [ -f "$pidfile" ] || continue
+    IFS= read -r pid <"$pidfile" || continue
+    case $pid in '' | *[!0-9]* | 0*) continue ;; esac
+    cmd=$(ps -ww -p "$pid" -o args= 2>/dev/null) || continue
+    case $cmd in *" $pidfile") kill -KILL "$pid" 2>/dev/null || : ;; esac
+  done
+}
 
 mkdir -p "$TMP/dunebin" "$TMP/opambin" "$TMP/emptyopam" "$TMP/linuxbin" "$TMP/darwinbin"
 printf '#!/bin/sh\necho Linux\n' >"$TMP/linuxbin/uname"
@@ -632,7 +646,71 @@ FAKE
     report 0 '--plan --base on a CROSS-CUTTING branch with unset LANG/LC_ALL prints reason and verdict and exports LANG=C'
   else report 1 '--plan --base on a CROSS-CUTTING branch with unset LANG/LC_ALL prints reason and verdict and exports LANG=C' \
     "exit $rc; locale=$(cat "$TMP/locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
+  # Standalone tools/owed-run.sh unset-locale guard (gh-ocannl-2484): leg-record
+  # runs record_linux_shell inside a forked subshell calling local LC_ALL=C
+  # helpers and git. Run from a fresh clean fixture (where fixture() committed
+  # the real tools/owed-run.sh) and require publication in all four cases.
   git -C "$R" checkout -q base
+  fixture owed-locale
+  owed_locale_bin="$TMP/owed-locale-bin"
+  mkdir -p "$owed_locale_bin" "$TMP/owed-locale-receipt"
+  real_git=$(command -v git)
+  cat >"$owed_locale_bin/git" <<EOF
+#!/bin/sh
+if [ -n "\${OWED_LOCALE_OUT:-}" ] && [ ! -e "\$OWED_LOCALE_OUT" ]; then
+  printf 'LANG=%s LC_ALL=%s LC_CTYPE=%s\n' "\${LANG-<unset>}" "\${LC_ALL-<unset>}" "\${LC_CTYPE-<unset>}" >"\$OWED_LOCALE_OUT"
+fi
+exec "$real_git" "\$@"
+EOF
+  chmod +x "$owed_locale_bin/git"
+  owed_bare="$TMP/owed-locale-bare.git"
+  git init -q --bare "$owed_bare"
+  owed_head=$(git -C "$R" rev-parse HEAD)
+  printf 'linux-shell\n' >"$TMP/owed-locale-receipt/kind"
+  printf '%s\n' "$owed_head" >"$TMP/owed-locale-receipt/head"
+  : >"$TMP/owed-locale-receipt/dirty"
+  printf 'Linux\n' >"$TMP/owed-locale-receipt/os"
+  printf 'member:tools/test-promote.sh\n' >"$TMP/owed-locale-receipt/targets"
+  printf '0\n' >"$TMP/owed-locale-receipt/exit"
+  printf '/tmp/owed-locale-leg\n' >"$TMP/owed-locale-receipt/fleet-leg-run-record"
+  printf 'member:tools/test-promote.sh\n' >"$TMP/owed-locale-receipt/fleet-leg-targets"
+  run_owed_locale() { # ENV_ARGS... -- OWED_ARGS...
+    local env_args=()
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do env_args+=("$1"); shift; done
+    shift
+    rc=0
+    rm -f "$TMP/owed-locale-seen"
+    (cd "$R" && env ${env_args[@]+"${env_args[@]}"} PATH="$owed_locale_bin:$SYS_PATH" \
+      OWED_LOCALE_OUT="$TMP/owed-locale-seen" \
+      FLEET_LEG_RECEIPT_DIR="$TMP/owed-locale-receipt" \
+      OCANNL_TOOL_OWED_RUN_URL="$owed_bare" \
+      OCANNL_TOOL_OWED_RUN_PUSH_RETRIES=0 OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF=0 \
+      "$BASH" tools/owed-run.sh "$@") >"$TMP/out" 2>&1 || rc=$?
+  }
+  run_owed_locale -u LANG -u LC_ALL LC_CTYPE=UTF-8 -- leg-record /tmp/owed-locale-leg req-1 "$owed_head"
+  if [ "$rc" = 0 ] && grep -q 'owed-run: published refs/owed-runs/' "$TMP/out" &&
+     [ "$(cat "$TMP/owed-locale-seen" 2>/dev/null)" = 'LANG=C LC_ALL=<unset> LC_CTYPE=UTF-8' ]; then
+    report 0 'standalone owed-run.sh leg-record with unset LANG/LC_ALL publishes from its subshell and exports LANG=C'
+  else report 1 'standalone owed-run.sh leg-record with unset LANG/LC_ALL publishes from its subshell and exports LANG=C' \
+    "exit $rc; locale=$(cat "$TMP/owed-locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
+  run_owed_locale LANG= LC_ALL= LC_CTYPE=UTF-8 -- leg-record /tmp/owed-locale-leg req-1 "$owed_head"
+  if [ "$rc" = 0 ] && grep -q 'owed-run: published refs/owed-runs/' "$TMP/out" &&
+     [ "$(cat "$TMP/owed-locale-seen" 2>/dev/null)" = 'LANG=C LC_ALL= LC_CTYPE=UTF-8' ]; then
+    report 0 'standalone owed-run.sh with empty LANG/LC_ALL publishes and exports LANG=C while keeping LC_CTYPE'
+  else report 1 'standalone owed-run.sh with empty LANG/LC_ALL publishes and exports LANG=C while keeping LC_CTYPE' \
+    "exit $rc; locale=$(cat "$TMP/owed-locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
+  run_owed_locale -u LC_ALL LANG=en_US.UTF-8 LC_CTYPE=UTF-8 -- leg-record /tmp/owed-locale-leg req-1 "$owed_head"
+  if [ "$rc" = 0 ] && grep -q 'owed-run: published refs/owed-runs/' "$TMP/out" &&
+     [ "$(cat "$TMP/owed-locale-seen" 2>/dev/null)" = 'LANG=en_US.UTF-8 LC_ALL=<unset> LC_CTYPE=UTF-8' ]; then
+    report 0 'standalone owed-run.sh publishes and preserves caller-supplied LANG'
+  else report 1 'standalone owed-run.sh publishes and preserves caller-supplied LANG' \
+    "exit $rc; locale=$(cat "$TMP/owed-locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
+  run_owed_locale -u LANG LC_ALL=POSIX LC_CTYPE=UTF-8 -- leg-record /tmp/owed-locale-leg req-1 "$owed_head"
+  if [ "$rc" = 0 ] && grep -q 'owed-run: published refs/owed-runs/' "$TMP/out" &&
+     [ "$(cat "$TMP/owed-locale-seen" 2>/dev/null)" = 'LANG=<unset> LC_ALL=POSIX LC_CTYPE=UTF-8' ]; then
+    report 0 'standalone owed-run.sh publishes and preserves caller-supplied LC_ALL'
+  else report 1 'standalone owed-run.sh publishes and preserves caller-supplied LC_ALL' \
+    "exit $rc; locale=$(cat "$TMP/owed-locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
 fi
 if harness_leg 'the format tier runs first, its scans off, and a red one ends the run #tiers'; then
   R=$APART run "$TMP/dunebin"
@@ -1269,52 +1347,91 @@ FAKEGIT
     report 0 'publish replaces a non-commit record ref under the existing lease'
   else report 1 'publish replaces a non-commit record ref under the existing lease' \
     "bad=$bad_rc waive=$waive_rc check=$orc; $(cat "$TMP/owed-out")"; fi
-  # Hanging ls-remote and fetch with a lingering child holding stdout/stderr open: must still time
-  # out within FETCH_CAP (on base, remote_ref's $(rgit ls-remote ...) pipe hung for the full 6s).
-  mkdir -p "$TMP/hanglsbin" "$TMP/hangfetchbin"
-  cat >"$TMP/hanglsbin/git" <<FAKEGIT
+  # Record the process that owns the actual alarm, including on the alarm-and-exec subject.
+  mkdir -p "$TMP/hanggitbin"
+  cat >"$TMP/hanggitbin/perl" <<'FAKEPERL'
+#!/bin/sh
+if [ -n "${FAKE_SUPERVISOR_PID:-}" ]; then
+  for a do
+    if [ "$a" = "$FAKE_GIT_HANG" ]; then
+      printf '%s\n' "$$" >"$FAKE_SUPERVISOR_PID"
+      break
+    fi
+  done
+fi
+exec "$FAKE_REAL_PERL" "$@"
+FAKEPERL
+  # The leading Git process exits on TERM while its transport helper keeps the streams open.
+  cat >"$TMP/hanggitbin/git" <<'FAKEGIT'
 #!/bin/sh
 for a do
-  case \$a in
-    ls-remote)
-      sleep 6 &
-      exec sleep 6 ;;
-  esac
+  if [ "$a" = "$FAKE_GIT_HANG" ]; then
+    [ -n "${FAKE_HELPER_PID:-}" ] || exec sleep 15
+    perl -e '
+      $SIG{TERM} = "IGNORE";
+      my ($supervisor, $path) = @ARGV;
+      open my $s, "<", $supervisor or die $!;
+      my $owner = <$s>;
+      die "missing alarm owner" unless $owner =~ /^[1-9][0-9]*\n$/;
+      open my $f, ">", "$path.tmp" or die $!;
+      print $f "$$\n";
+      close $f or die $!;
+      rename "$path.tmp", $path or die $!;
+      kill "ALRM", int($owner) or die $!;
+      sleep 30;
+    ' "$FAKE_SUPERVISOR_PID" "$FAKE_HELPER_PID" &
+    exec sleep 30
+  fi
 done
-exec "$GIT" "\$@"
+exec "$FAKE_REAL_GIT" "$@"
 FAKEGIT
-  cat >"$TMP/hangfetchbin/git" <<FAKEGIT
-#!/bin/sh
-for a do
-  case \$a in
-    fetch)
-      sleep 6 &
-      exec sleep 6 ;;
-  esac
-done
-exec "$GIT" "\$@"
-FAKEGIT
-  chmod +x "$TMP/hanglsbin/git" "$TMP/hangfetchbin/git"
-  started=$SECONDS
-  hang_ls_rc=0
-  (cd "$R" && PATH=$TMP/hanglsbin:$TMP/gitbin:$SYS_PATH \
-    OCANNL_TOOL_OWED_RUN_FETCH_CAP=1 OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL \
-    "$BASH" tools/owed-run.sh check "$APART_HEAD" runtest) >"$TMP/owed-out" 2>&1 || hang_ls_rc=$?
-  ls_took=$((SECONDS - started))
-  if [ "$hang_ls_rc" = 3 ] && [ "$ls_took" -lt 5 ] && grep -qF 'could not be read within 1s: unreadable' "$TMP/owed-out"; then
-    report 0 "a hanging ls-remote with a child holding stdout/stderr open still returns exit 3 at FETCH_CAP (${ls_took}s < 5s)"
-  else report 1 'a hanging ls-remote with a child holding stdout/stderr open still returns exit 3 at FETCH_CAP' \
-    "exit=$hang_ls_rc took=${ls_took}s; $(cat "$TMP/owed-out")"; fi
+  chmod +x "$TMP/hanggitbin/git" "$TMP/hanggitbin/perl"
+  real_perl=$(command -v perl)
   started=$SECONDS
   hang_rc=0
-  (cd "$R" && PATH=$TMP/hangfetchbin:$TMP/gitbin:$SYS_PATH \
+  (cd "$R" && PATH=$TMP/hanggitbin:$TMP/gitbin:$SYS_PATH \
+    FAKE_GIT_HANG=ls-remote FAKE_HELPER_PID= FAKE_SUPERVISOR_PID= \
+    FAKE_REAL_GIT=$GIT FAKE_REAL_PERL=$real_perl \
     OCANNL_TOOL_OWED_RUN_FETCH_CAP=1 OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL \
     "$BASH" tools/owed-run.sh check "$APART_HEAD" runtest) >"$TMP/owed-out" 2>&1 || hang_rc=$?
-  took=$((SECONDS - started))
-  if [ "$hang_rc" = 3 ] && [ "$took" -lt 5 ] && grep -qF 'could not be fetched within 1s: unreadable' "$TMP/owed-out"; then
-    report 0 "a hanging fetch with a child holding stderr open still returns exit 3 at FETCH_CAP (${took}s < 5s)"
-  else report 1 'a hanging fetch with a child holding stderr open still returns exit 3 at FETCH_CAP' \
-    "exit=$hang_rc took=${took}s; $(cat "$TMP/owed-out")"; fi
+  if [ "$hang_rc" = 3 ] && [ "$((SECONDS - started))" -lt 5 ] &&
+     grep -qF 'could not be read within 1s: unreadable' "$TMP/owed-out"; then
+    report 0 'the real FETCH_CAP stops a hanging ls-remote and check returns exit 3'
+  else
+    report 1 'the real FETCH_CAP stops a hanging ls-remote and check returns exit 3' \
+      "exit=$hang_rc took=$((SECONDS - started))s; $(cat "$TMP/owed-out")"
+  fi
+  for verb in ls-remote fetch; do
+    pidfile=$TMP/hang-$verb.pid
+    started=$SECONDS
+    hang_rc=0
+    (cd "$R" && PATH=$TMP/hanggitbin:$TMP/gitbin:$SYS_PATH \
+      FAKE_GIT_HANG=$verb FAKE_HELPER_PID=$pidfile FAKE_SUPERVISOR_PID=$TMP/supervisor-$verb.pid \
+      FAKE_REAL_GIT=$GIT FAKE_REAL_PERL=$real_perl \
+      OCANNL_TOOL_OWED_RUN_FETCH_CAP=20 OCANNL_TOOL_OWED_RUN_URL=$OWED_FULL \
+      "$BASH" tools/owed-run.sh check "$APART_HEAD" runtest) >"$TMP/owed-out" 2>&1 || hang_rc=$?
+    took=$((SECONDS - started))
+    case $verb in ls-remote) action=read ;; fetch) action=fetched ;; esac
+    claim="a hanging $verb returns exit 3 after the alarm and kills its ready TERM-resistant helper"
+    helper=missing
+    if [ -s "$pidfile" ]; then
+      IFS= read -r pid <"$pidfile"
+      for ((tick=0; tick<20; tick++)); do
+        helper=$(ps -p "$pid" -o stat= 2>/dev/null)
+        # An exited orphan may briefly remain a zombie until its new parent reaps it.
+        case $helper in '' | Z*) break ;; esac
+        sleep 0.05
+      done
+    fi
+    if [ "$hang_rc" = 3 ] && [ "$took" -lt 20 ] &&
+       grep -qF "could not be $action within 20s: unreadable" "$TMP/owed-out" &&
+       { [ -z "$helper" ] || [[ $helper = Z* ]]; }; then
+      report 0 "$claim"
+    else
+      report 1 "$claim" "exit=$hang_rc took=${took}s helper=${helper:-gone}; $(cat "$TMP/owed-out")"
+    fi
+    cleanup_fixture
+  done
 fi
 
 owed_record_leg() {
@@ -1330,16 +1447,34 @@ owed_record_leg() {
   hook_head=$(git -C "$R" rev-parse HEAD)
   hook_url=$TMP/owed-record.git
   git init -q --bare "$hook_url" || { harness_abandon 'could not create the record repository'; return; }
-  leg_record() { # LAST_RUN LEG_RECORD OBSERVED_SHA
+  leg_record() { # LAST_RUN LEG_RECORD OBSERVED_SHA [RECEIPT_DIR]
     hrc=0
     (
       cd "$R" || exit 2
-      PATH=$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$hook_url FAKE_LAST_RUN=$1 \
-        "./$hook" "$2" fixture-request "$3"
+      if [ $# -ge 4 ]; then
+        PATH=$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$hook_url FAKE_LAST_RUN=$1 \
+          FLEET_LEG_RECEIPT_DIR=$4 "./$hook" "$2" fixture-request "$3"
+      else
+        PATH=$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$hook_url FAKE_LAST_RUN=$1 \
+          "./$hook" "$2" fixture-request "$3"
+      fi
     ) >"$TMP/hook-out" 2>&1 || hrc=$?
   }
-  hook_skip() { # LABEL EXPECTED: a refusal leaves the remote ref absent
+  hook_skip() { # LABEL EXPECTED: a refusal or ineligible skip leaves the remote ref absent
     if [ "$hrc" = 0 ] && grep -qF "$2" "$TMP/hook-out" &&
+       [ -z "$(git -C "$R" ls-remote "$hook_url" "refs/owed-runs/$hook_head")" ]; then
+      report 0 "$1"
+    else report 1 "$1" "exit $hrc; $(cat "$TMP/hook-out")"; fi
+  }
+  hook_ineligible() { # LABEL EXPECTED: ineligible leg is distinguished from a broken receipt binding
+    if [ "$hrc" = 0 ] && grep -qF 'ineligible leg:' "$TMP/hook-out" && grep -qF "$2" "$TMP/hook-out" &&
+       ! grep -qF 'record refused' "$TMP/hook-out" && ! grep -qF 'does not match' "$TMP/hook-out" &&
+       [ -z "$(git -C "$R" ls-remote "$hook_url" "refs/owed-runs/$hook_head")" ]; then
+      report 0 "$1"
+    else report 1 "$1" "exit $hrc; $(cat "$TMP/hook-out")"; fi
+  }
+  hook_refused() { # LABEL EXPECTED: broken binding or refusal prints record refused
+    if [ "$hrc" = 0 ] && grep -qF 'record refused' "$TMP/hook-out" && grep -qF "$2" "$TMP/hook-out" &&
        [ -z "$(git -C "$R" ls-remote "$hook_url" "refs/owed-runs/$hook_head")" ]; then
       report 0 "$1"
     else report 1 "$1" "exit $hrc; $(cat "$TMP/hook-out")"; fi
@@ -1352,35 +1487,58 @@ owed_record_leg() {
   touch "$leg_path" "$other_path"
   printf '%s\n' "build $alias -j 1" >"$last_run/fleet-leg-command"
   leg_record "$last_run" "$leg_path" "$hook_head"
-  hook_skip 'a receipt without a fleet invocation path is refused' "does not match this fleet leg's run record"
+  hook_refused 'a receipt without a fleet invocation path is refused' "does not match this fleet leg's run record"
   printf '%s\n' "$other_path" >"$last_run/fleet-leg-run-record"
   leg_record "$last_run" "$leg_path" "$hook_head"
-  hook_skip 'an earlier receipt for the same head and targets cannot stand for this leg' "does not match this fleet leg's run record"
+  hook_refused 'an earlier receipt for the same head and targets cannot stand for this leg' "does not match this fleet leg's run record"
   printf '%s\n' "$leg_path" >"$last_run/fleet-leg-run-record"
   leg_record "$last_run" "$leg_path" "$(git -C "$R" rev-parse HEAD^)"
-  hook_skip 'a matching invocation path cannot stand for a different observed head' 'is for a different head than the fleet leg observed'
+  hook_refused 'a matching invocation path cannot stand for a different observed head' 'is for a different head than the fleet leg observed'
   printf '%s\n' "build $alias @a/runtest-first" >"$last_run/fleet-leg-command"
   leg_record "$last_run" "$leg_path" "$hook_head"
-  hook_skip 'a mixed first-tier request with an eligible effective command is refused' 'did not request an owed-run command'
+  hook_ineligible 'a mixed first-tier request with an eligible effective command is logged as an ineligible leg' 'did not request an owed-run command'
   printf '%s\n' "--targets-file $TMP/list build" >"$last_run/fleet-leg-command"
   leg_record "$last_run" "$leg_path" "$hook_head"
-  hook_skip 'a targets file with an eligible effective command is refused' 'did not request an owed-run command'
+  hook_ineligible 'a targets file with an eligible effective command is logged as an ineligible leg' 'did not request an owed-run command'
+  rm -f "$last_run/fleet-leg-command"
+  leg_record "$last_run" "$leg_path" "$hook_head"
+  hook_refused 'a cc receipt missing fleet-leg-command is refused' 'missing fleet-leg-command'
+  printf 'non-canonical-cc-invocation\n' >"$last_run/fleet-leg-ineligible"
+  leg_record "$last_run" "$leg_path" "$hook_head" "$last_run"
+  hook_ineligible 'a cc receipt marked ineligible (non-canonical syntax) is logged as an ineligible leg' 'explicit spaced --expect-backend cc'
+  rm -f "$last_run/fleet-leg-ineligible"
   printf '%s\n' 'build @test/training/train-b' >"$last_run/fleet-leg-command"
   leg_record "$last_run" "$leg_path" "$hook_head"
-  hook_skip 'a receipt for different targets cannot stand for this leg' "does not cover the fleet leg's requested targets"
+  hook_refused 'a receipt for different targets cannot stand for this leg' "does not cover the fleet leg's requested targets"
   printf '%s\n' "build $alias -j 1" >"$last_run/fleet-leg-command"
-  gpu_run=$(rundir leg-gpu 0 '' cuda "build $alias" "$hook_head")
+  gpu_run=$(rundir leg-gpu 0 '' cuda "build @test/operations/runtest-focused" "$hook_head")
+  focused_run=$(rundir leg-focused-cc 0 '' cc "build @test/operations/runtest-focused" "$hook_head")
   dirty_run=$(rundir leg-dirty 0 ' M x.ml' cc "build $alias" "$hook_head")
-  for rejected_run in "$gpu_run" "$dirty_run"; do
-    cp "$last_run/fleet-leg-run-record" "$last_run/fleet-leg-command" "$rejected_run/"
-  done
-  leg_record "$gpu_run" "$leg_path" "$hook_head"
-  hook_skip 'a matching receipt still requires the cc backend' 'was not run with --expect-backend cc'
+  printf '%s\n' "$leg_path" >"$gpu_run/fleet-leg-run-record"
+  printf '%s\n' "$leg_path" >"$focused_run/fleet-leg-run-record"
+  printf '%s\n' 'build @test/operations/runtest-focused' >"$focused_run/fleet-leg-command"
+  cp "$last_run/fleet-leg-run-record" "$last_run/fleet-leg-command" "$dirty_run/"
+  leg_record "$last_run" "$leg_path" "$hook_head" "$gpu_run"
+  hook_ineligible 'a matching non-cc receipt via FLEET_LEG_RECEIPT_DIR is logged as an ineligible leg' 'was not run with --expect-backend cc'
+  leg_record "$last_run" "$leg_path" "$hook_head" "$focused_run"
+  hook_ineligible 'a matching focused cc receipt via FLEET_LEG_RECEIPT_DIR is logged as an ineligible leg' 'did not request an owed-run command'
   leg_record "$dirty_run" "$leg_path" "$hook_head"
-  hook_skip 'a dirty receipt is refused with hook exit zero' 'ran a dirty checkout'
+  hook_refused 'a dirty receipt is refused with hook exit zero' 'ran a dirty checkout'
+  # Stale receipt under the same SHA via FLEET_LEG_RECEIPT_DIR must refuse and never fall back to a matching last.
+  stale_same_sha=$(rundir leg-stale-same-sha 0 '' cc "$leg_cmd" "$hook_head")
+  printf '%s\n' "$other_path" >"$stale_same_sha/fleet-leg-run-record"
+  printf '%s\n' "build $alias -j 1" >"$stale_same_sha/fleet-leg-command"
+  leg_record "$last_run" "$leg_path" "$hook_head" "$stale_same_sha"
+  hook_refused 'a stale receipt under the same SHA via FLEET_LEG_RECEIPT_DIR refuses without falling back to last' "does not match this fleet leg's run record"
+  leg_record "$last_run" "$leg_path" "$hook_head" "$TMP/no-such-receipt-dir"
+  hook_refused 'a missing FLEET_LEG_RECEIPT_DIR refuses without falling back to last' 'no run directory'
+  leg_record "$last_run" "$leg_path" "$hook_head" last
+  hook_refused 'a relative FLEET_LEG_RECEIPT_DIR refuses without resolving last' 'FLEET_LEG_RECEIPT_DIR must be a single-line absolute path'
+  leg_record "$last_run" "$leg_path" "$hook_head" ''
+  hook_refused 'an explicitly empty FLEET_LEG_RECEIPT_DIR refuses without falling back to last' 'FLEET_LEG_RECEIPT_DIR must be a single-line absolute path'
   last x.ml
   leg_record "$last_run" "$leg_path" "$hook_head"
-  hook_skip 'a dirty checkout cannot publish a clean receipt' 'the fleet worktree is dirty'
+  hook_refused 'a dirty checkout cannot publish a clean receipt' 'the fleet worktree is dirty'
   git -C "$R" checkout -- x.ml
   git -C "$R" push -q "$hook_url" "$hook_head:refs/heads/master" ||
     { harness_abandon 'could not publish the already-merged control head'; return; }
@@ -1391,6 +1549,25 @@ owed_record_leg() {
     harness_abandon 'could not put the control head ahead of the record repository master'
     return
   fi
+  # Private OCANNL_TOOL_TEST_RUNS receipt via FLEET_LEG_RECEIPT_DIR publishes even when last is stale/unrelated.
+  priv_url=$TMP/owed-record-priv.git
+  git init -q --bare "$priv_url" || { harness_abandon 'could not create private record repository'; return; }
+  git -C "$R" push -q "$priv_url" "$hook_head^:refs/heads/master" ||
+    { harness_abandon 'could not seed private record repository master'; return; }
+  priv_run=$(rundir leg-private 0 '' cc "$leg_cmd" "$hook_head")
+  printf '%s\n' "$leg_path" >"$priv_run/fleet-leg-run-record"
+  printf '%s\n' "build $alias -j 1" >"$priv_run/fleet-leg-command"
+  saved_hook_url=$hook_url
+  hook_url=$priv_url
+  OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF=0 leg_record "$stale_same_sha" "$leg_path" "$hook_head" "$priv_run"
+  hook_url=$saved_hook_url
+  priv_host=$(hostname -s 2>/dev/null || hostname)
+  owed "$priv_url" check "$hook_head" "$alias"
+  if [ "$hrc" = 0 ] && [ "$orc" = 0 ] &&
+     grep -qF "($priv_host:$priv_run, writer=leg:$priv_host)" "$TMP/owed-out"; then
+    report 0 'FLEET_LEG_RECEIPT_DIR publishes a receipt from private state without reading last'
+  else report 1 'FLEET_LEG_RECEIPT_DIR publishes a receipt from private state without reading last' \
+    "hook=$hrc ($(cat "$TMP/hook-out")); check=$orc ($(cat "$TMP/owed-out"))"; fi
   # Simulate t1854: one transient `[remote rejected] ... (failed)` rejection on the fleet hook's push.
   : >"$TMP/hook-push-count"
   cat >"$hook_url/hooks/pre-receive" <<HOOK

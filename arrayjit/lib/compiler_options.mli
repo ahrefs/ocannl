@@ -19,11 +19,19 @@ val hip_math_options : fast_math:bool -> string list
     and the HIP schedule-cache regime. *)
 
 val clang_contraction_off : string list -> bool
-(** Whether a clang-family option vector (cc's kernel flags split into words, {!hip_math_options})
-    pins contraction off (gh-ocannl-1457): the last of [-ffp-contract=off] and the switches that
-    turn contraction on ([-ffast-math], [-ffp-contract=fast|on|fast-honor-pragmas]) is
-    [-ffp-contract=off]. A vector naming none of them leaves contraction to the toolchain's default,
-    which is not a pin. [C_syntax_config.compiler_contraction_off] reads it. *)
+(** Whether a clang-family option vector (cc's kernel flags split into words, {!hip_math_options}
+    plus any [hip_extra_compile_options]) pins contraction off (gh-ocannl-1457, gh-ocannl-2344).
+    Closed Clang driver-switch set, evaluated left-to-right: [-ffp-contract=off] and
+    [-ffp-model=strict] pin contraction off; [-ffast-math], [-Ofast], [-funsafe-math-optimizations],
+    and every other [-ffp-contract=*] or [-ffp-model=*] switch (including [on], [fast],
+    [fast-honor-pragmas], [precise], [aggressive]) clear the pin. A vector naming none of them
+    leaves contraction to the toolchain's default, which is not a pin; backend [-mllvm] flags are
+    outside this boundary. [C_syntax_config.compiler_contraction_off] reads it. *)
+
+val parse_extra_options : string -> string list
+(** Split a whitespace-separated extra-options setting (e.g. [hip_extra_compile_options],
+    gh-ocannl-2344) into individual compiler argv tokens, dropping empty entries. Splits on ASCII
+    whitespace ([' '], ['\t'], ['\n'], ['\r']) only; does not interpret shell quotes or escapes. *)
 
 val hiprtc :
   target_archs:string list ->
@@ -33,13 +41,16 @@ val hiprtc :
   fast_math:bool ->
   with_debug:bool ->
   ?with_line_info:bool ->
+  ?extra_options:string list ->
   unit ->
   string list
 (** The hiprtc (HIP) option vector: includes, then {!hip_math_options}, the target's half-register
-    workaround, then debug -- or, without it, [?with_line_info]'s line tables ([-gline-tables-only],
+    workaround, debug -- or, without it, [?with_line_info]'s line tables ([-gline-tables-only],
     default off): source-line attribution in the code object, which the debug-artifact runs carry so
-    an ISA census can read the code that ran (gh-ocannl-1695). Line tables do not change the code
-    generated. *)
+    an ISA census can read the code that ran (gh-ocannl-1695) -- and finally [?extra_options]
+    (default [[]], from [hip_extra_compile_options], gh-ocannl-2344). Appending [extra_options] last
+    lets diagnostic flags override earlier switches under clang's left-to-right option processing.
+    Line tables do not change the code generated. *)
 
 val nvrtc_reassociation_opt_in : string
 (** nvrtc's opt-IN for floating-point reassociation. It exists here only so {!nvrtc} can be checked

@@ -438,6 +438,42 @@ let case_consumer_refused ~label ~tag shape =
         (label ^ ": routine B is refused for the cross-routine merge splice")
         (String.is_substring msg ~substring:"reads a merge buffer")
 
+(* The shared-loop tap retains a read of its later sibling. Only the consumer's fixed index decides
+   whether that dependency's merge read has to be replayed. *)
+let case_nested_consumer_decided () =
+  let source = mk "nested_merge" and dep = mk "nested_dep" and tap = mk "nested_tap" in
+  let out = mk ~dims:[| 1 |] "nested_out" in
+  List.iter [ source; out ] ~f:materialize;
+  let provider i = LL.Get_merge_buffer (source, [| iter i |]) in
+  let j = sym () and i = sym () in
+  let llc_a =
+    seq
+      (loop_n j dim (set_at dep (iter j) (provider j)))
+      (loop_n i dim
+         (seq
+            (set_at tap (iter i) (where_ (lt (embed i) (ic 1)) (get dep [| iter i |]) (ramp 70. i)))
+            (set_at dep (iter i) (add (provider i) (tick i)))))
+  in
+  let ctx = LL.empty_optimize_ctx () in
+  let o_a = optimize_in ctx ~name:"sts_nested_producer" llc_a in
+  p "nested replay: the tap retains the separately stored merge dependency"
+    (known_virtual o_a tap && known_virtual o_a dep
+    && Option.value (template_count ctx tap ~f:(read_of dep)) ~default:0 > 0
+    && Option.value (template_count ctx dep ~f:(merge_read_of source)) ~default:0 > 0);
+  let reader index = set_at out (fixed 0) (get tap [| fixed index |]) in
+  (match consume ctx ~name:"sts_nested_dead_arm" (reader 1) with
+  | Error msg -> p ("nested replay: the dead arm permits the read (refused: " ^ msg ^ ")") false
+  | Ok optimized ->
+      let values =
+        execute ~name:"sts_nested_dead_arm" optimized ~seed:[ (out, blank 1) ] ~read:[ out ]
+      in
+      p_all2 "nested replay: the dead arm leaves the live cell value" (List.hd_exn values) [| 71. |]
+        ~f:Float.equal);
+  p "nested replay: the live arm refuses the cross-routine merge splice"
+    (match consume ctx ~name:"sts_nested_live_arm" (reader 0) with
+    | Error msg -> String.is_substring msg ~substring:"reads a merge buffer"
+    | Ok _ -> false)
+
 (* A virtual consumer is stored as a template, and the walk producing it decides with the extent of
    a reduction loop the template keeps: [w[i] := sum_k where (k < 2) x2[i,k] v[i]]. *)
 let case_consumer_kept_loop () =
@@ -1366,6 +1402,7 @@ let () =
       where_ (lt (embed s) (ic dim)) x v);
   case_consumer_kept_loop ();
   case_consumer_write_index_opaque ();
+  case_nested_consumer_decided ();
   case_consumer_refused ~label:"consumer where 0 x v (v live)" ~tag:"cl" (fun _ ~x ~v ->
       where_ (ic 0) x v);
   case_consumer_refused ~label:"consumer where (i < 2) x v (undecided)" ~tag:"cu" (fun s ~x ~v ->

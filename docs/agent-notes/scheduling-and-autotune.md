@@ -149,6 +149,12 @@ files.
   written in the routine, no sliding window (matmuls, 1x1 convs).
   `test/operations/cpu_fork_join_chains` (direct and pipeline legs, each against the serial
   compile), `cost_model_fork_join_updates`.
+- **Winograd bypasses the CPU channel-vector schedule** (gh-ocannl-2429). The `approximate` profile
+  enables `winograd_conv`. Its transformed-domain contractions lack the sliding-window index the
+  direct schedule requires. In the untuned cc batch-64 `cifar_resnet` cell on rog-nv-linux (AVX2),
+  all seven padded 3×3 forward sites packed and emitted SIMD with `--ocannl_winograd_conv=false`.
+  In two pass orders the override took step p50 from 141.5–142.6 ms to 107.4–112.2 ms
+  (exact 108.7–109.8 ms). [Issue and evidence](https://github.com/ahrefs/ocannl/issues/2429).
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
   (gh-ocannl-1003). The presets' chain is the single-child loop path, which stops at the
   online-softmax hoist's preamble (`for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } }`);
@@ -1012,22 +1018,28 @@ files.
   0, no cache tier, against threshold 32 and is CUDA/HIP only; on cc the seeded default is off
   altogether.
 - **A change to what the `auto` gate seeds owes a CUDA run of the singles readers**
-  (gh-ocannl-2306). Where the seeded plan has a segmentation of its own, a search's default
-  seeded sweep times `F_swap` singles of the plan in place of the staffed `F_sketch` ones
+  (gh-ocannl-2306, gh-ocannl-2382). Where the seeded plan has a segmentation of its own, a search's
+  default seeded sweep times `F_swap` singles of the plan in place of the staffed `F_sketch` ones
   (gh-ocannl-1664), so a ranking change flips what every-backend tests counting those labels
   exercise on CUDA alone: staging#2115 (gh-ocannl-2279) made the gate seed both products of a
   two-matmul chain there, and `autotune_sketch_placements` went red on master, seen only by the
-  CUDA integration loop (fixed test-side in staging#2134). `affected` cannot route it: these tests
-  name `Autotune` but none of the gate's definitions, so a change inside `seeded_ranker` ranks
-  them LINK-ONLY (`model_seeded_anchor`, whose claim's comment names `seeded_ranker`, is
-  REFERENCED), and `--gpu-gated` drops the every-backend ones, whose code holds no GPU gate, by
-  design: what flips is a backend's default, which no reach reading names can see. So a change to
-  `seeded_ranker`, `seeded_default_gate`, `seeded_segment_judgment` or the `Cost_model` terms the
-  gate's score sums (`operand_deliveries` among them) runs, on CUDA, the set this derives
-  (the tests reading single labels, `slow-autotune_fission_sketch` among them):
-  `git grep -lE 'F_sketch|F_swap|Fissioned_chain\.is_' -- 'test/*.ml' ':!test/support' | xargs tools/test-run.sh aliases`,
-  and says so in the PR body; a red there that the change explains is fixed test-side or in the
-  gate, never left for the loop.
+  CUDA integration loop (fixed test-side in staging#2134). Because what flips is a backend default
+  that link reach cannot see, `arrayjit/lib/dune` defines the `seeded-plan` backend-default marker
+  (`; ocannl-backend-default: seeded-plan = cuda,hip Autotune.seeded_ranker,Autotune.seeded_default_gate,Autotune.seeded_segment_judgment -- ...`)
+  and every CUDA-capable single-label reader in `test/operations/dune` declares
+  `; ocannl-backend-default: seeded-plan -- ...` (all 9 every-backend readers / 10 aliases,
+  `slow-autotune_fission_sketch` and `runtest-schedule_conv_gemm-tf32` included; the 5
+  `ocannl-backend: cc` single-label readers never run on CUDA and stay out of `--gpu-gated`). For
+  a change inside `seeded_ranker`, `seeded_default_gate`, or `seeded_segment_judgment`,
+  `tools/test-run.sh affected --gpu-gated --referenced-only --since <base>` now mechanically routes
+  to those declared CUDA readers (on both CUDA boxes and cc-only Macs). For a change to the
+  `Cost_model` terms the gate's score sums (`operand_deliveries` among them, which are not listed
+  in `seeded-plan`), or when auditing newly added label readers that may lack the marker, use the
+  fallback grep
+  `git grep -lE 'F_sketch|F_swap|Fissioned_chain\.is_' -- 'test/*.ml' ':!test/support' | xargs tools/test-run.sh aliases`
+  (filtering to every-backend / CUDA-capable aliases), run the resulting set on CUDA, and cite the
+  run in the PR body; a red there that the change explains is fixed test-side or in the gate, never
+  left for the loop.
   `model_seeded_anchor`'s CUDA/HIP claim pins the exact count under the shipped gate (the chain's
   seeded plan seeds exactly its two products), so such a change owes a HIP run of it too, on both
   memory models. With the direct-read pricing reverted (`~price_direct_loads:false` in
@@ -2767,6 +2779,12 @@ files.
   Depth 256 won only on CUDA's 16-row small-output site (1.43x), where the search's crown was
   the split of the merged k (partials plus combine, 0.0096 ms) instead.
 ## Timing objectives and calibration
+- CUDA value-select segment comparisons use byte-identical repeats for each rendering and a common
+  device output (gh-ocannl-2385). Independent output allocations can split same-source readings
+  even when the readings visit both orders. The row requires balanced admitted rounds and all
+  four cross pairings to clear the repeat envelope in the same direction. The timed witness
+  covers only `where_masked` at both densities and PTX targets. The measured floor and controls
+  are in the [value-select benchmark](../../benchmarks/README.md#cuda-value-select-benchmark).
 - **What the tuner's numbers are a measurement OF is a config choice, and the two objectives do not
   crown the same candidate** (gh-ocannl-755). `Autotune.time_routine` takes a `timing_mode`, from
   config `autotune_timing`: `isolated` is the historical one launch plus one host sync — a lone
@@ -3095,6 +3113,12 @@ files.
   against a spinner-generated load ladder (`_build/default/test/operations/`, `OCANNL_BACKEND=...`
   pinned) yields the distribution directly — and CPU-backend depths sit at the 200 cap, Metal's at
   31-80, HIP's at 200-750 and CUDA's at ~1700, so one box cannot stand in for the fleet.
+- **Discrete HIP `gfx1102` sequential candidate timing can misrank 32-WG-multiple grids**
+  (gh-ocannl-2384). Because in-process `Autotune.tune` candidates share one HSA AQL hardware queue,
+  a candidate whose grid is a multiple of 32 workgroups locks into the per-WGP SIMD-pair phase left
+  by prior non-32-WG-multiple candidates and can read ~20-40% slower than its phase-0 timing,
+  misranking the crowned choice. See `training-and-performance.md` (gh-ocannl-2384) for the
+  mechanism, the `GPU_MAX_HW_QUEUES` separate-stream control, and surviving reading methods.
 ## Cache regimes and placement replay
 - The schedule-cache directory carries one key-regime stamp, independent of the serialized entry's
   `entry_version` (gh-ocannl-835). Bump `Schedule_cache.cache_regime_version` whenever
@@ -3443,6 +3467,23 @@ files.
   (`Autotune.call_budget_elapsed` for the call, `budget_elapsed` per search, a search's first
   attempt being its `baseline`); per-search, no non-floor attempt may start at an index at or past
   the cut.
+- **Built-in per-cell search budgets in `benchmarks/orchestrate.py`** (`CELL_SEARCH_BUDGETS_S`,
+  gh-ocannl-2430). `cifar_resnet/metal/tuned/approximate` defaults to `tune_call_budget_seconds=1800`
+  (applied only when the measured checkout supports `tune_call_budget_seconds`, overridable via
+  `--cell-flag`, `=0` for uncapped; sized for `--cell-timeout 3600` like uncapped `exact`, not the
+  1,800 s default cap): uncapped, its four approximate searches (two
+  placement arms plus `tune_inline_flips=2` over Winograd's transformed sites) hit the 3,600 s cap
+  on m4-max on 2026-10-30 and 2026-11-20. In an exclusive `mac-studio` (Apple M4 Max) Metal window
+  with `BENCH_KERNEL_TABLE=1`, the 1,800 s budget completed in 1,799.93 s search + 336 s pass-2
+  replay (`REPLAY`, 4 replays, no ship substitution), reporting step p50 160.636 ms (p10-p90
+  160.291-161.411 ms, queued 153.570 ms, parity PASS `7.3e-07`, within exact envelope), dominant
+  kernel `k129/152 15.093 ms (queued) kernel_s1c2.grad n155.grad conv2d_s1c1.grad`. Because
+  uncapped `exact` needs ~1,575 s/arm to reach the `F_split` seeds at the end of `phase=seeds`
+  (79.8 ms in 3,155 s), even a 2,700 s budget (~675 s/search across four searches) would still
+  cut before `F_split` while spending +15 min of each exclusive window and narrowing worst-case
+  headroom under `--cell-timeout 3600` (with 336 s measured non-search overhead, up to 600 s for
+  the dominant-kernel cap); the budgeted row is therefore **budget-bounded** and not comparable
+  with uncapped `exact`, which `orchestrate.py`'s `report.md` notes on any `budget_cut` row.
 - **A deferred cache hit ships its validated code relinked** (gh-ocannl-1440).
   `Context.compile_outcome ?retain` keeps a successful compile's code, censuses and pre-link
   context (`Context.retained`, no working pools: those are a link's), and

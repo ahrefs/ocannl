@@ -1204,12 +1204,12 @@ jobs:
     - name: Test toolchain harnesses
       env:
         OCANNL_TOOL_HARNESS_STRICT: 1
-      run: tools/test-harnesses.sh --toolchain --expected-skips tools/harness-skips-ci-toolchain.txt
+      run: tools/test-harnesses.sh --toolchain --timings --expected-skips tools/harness-skips-ci-toolchain.txt
     - name: Test promotion harnesses
       if: ${{ !cancelled() && steps.install-formatting-deps.outcome == 'success' }}
       env:
         OCANNL_TOOL_HARNESS_STRICT: 1
-      run: tools/test-harnesses.sh --promotion
+      run: tools/test-harnesses.sh --promotion --timings
     # The script's default command also builds the repository scans (gh-ocannl-1321), which need
     # the project's dependencies this switch does not hold; the build matrix runs them.
     - name: Check formatting and documentation comments
@@ -1261,7 +1261,7 @@ jobs:
     - name: Test promotion harnesses
       env:
         OCANNL_TOOL_HARNESS_STRICT: 1
-      run: tools/test-harnesses.sh --promotion
+      run: tools/test-harnesses.sh --promotion --timings
 
   # The shell harnesses that sit outside dune, on a job of their own: none of
   # them needs a toolchain, so they answer in minutes beside the build matrix
@@ -1402,7 +1402,7 @@ jobs:
     # Four members at once, the runner's four cores (gh-ocannl-2002): the slow
     # members wait on their fixtures more than they compute.
     - name: Test shell harnesses
-      run: tools/test-harnesses.sh --ci-shell --jobs 4
+      run: tools/test-harnesses.sh --ci-shell --timings --jobs 4
 
   # The shell harnesses' real-dune checks (gh-ocannl-1650), scheduled like the
   # job above: a box that merges has a dune, so the merge build's harness tier
@@ -1435,7 +1435,7 @@ jobs:
     - name: Install Dune
       run: opam install dune
     - name: Test the real-dune harness checks
-      run: tools/test-harnesses.sh --ci-real-dune
+      run: tools/test-harnesses.sh --ci-real-dune --timings
 
   # The affected reader's full no-op audit (gh-ocannl-2447) has its own
   # verdict so a failure in another harness cannot obscure it.

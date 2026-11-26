@@ -444,11 +444,60 @@ def flag_applies(flag, cell):
     return flag.selector is None or all(s is None or s == c for s, c in zip(flag.selector, cell))
 
 
-def cell_flags(flags, cell):
-    """The `(key, value)` settings the `--cell-flag` entries give one cell, in command-line
-    order. Two entries setting one key on one cell are refused before the sweep starts
+# Per-cell default OCANNL search budgets, in seconds (`tune_call_budget_seconds`), keyed by
+# (workload, backend, variant, regime) (gh-ocannl-2430).
+#
+# `cifar_resnet/metal/tuned/approximate` hit the 3,600 s cell cap on 2026-10-30 and again on
+# 2026-11-20 on m4-max (`exact` took 3,155-3,276 s across its two placement arms, while
+# `approximate` adds Winograd's transformed sites and `tune_inline_flips=2`, doubling the
+# searches to four). A 1,800 s call budget bounds the whole `Train.tune_placements` call
+# (~450 s per search across both arms and both flips) inside the ResNet sweeps'
+# `--cell-timeout 3600` (each pass has ~336 s measured non-search overhead on m4-max, up to
+# 600 s when the dominant-kernel instrument hits its cap; like uncapped `exact`, the cell
+# requires `--cell-timeout 3600` rather than the 1,800 s default cap). Uncapped `exact` needs
+# ~1,575 s/arm to reach the `F_split` seeds at the end of `phase=seeds` (79.8 ms), so even a
+# 2,700 s budget (~675 s/search) still cuts before `F_split` while spending +15 min of every
+# exclusive window and shrinking worst-case headroom under 3,600 s; the budgeted row reports
+# ~160.6 ms on m4-max and is therefore budget-bounded and not comparable with uncapped `exact`.
+#
+# Applied as `--ocannl_tune_call_budget_seconds=<seconds>` when the measured checkout's
+# `ocannl_config.reference` supports `tune_call_budget_seconds` and no operator `--cell-flag`
+# already sets `tune_call_budget_seconds` for that cell (pass `=0` to run uncapped), and
+# recorded in `ocannl_flags`, the variant column and `ambient_ocannl_shadowed` like any other
+# per-cell flag.
+CELL_SEARCH_BUDGETS_S = {
+    ("cifar_resnet", "metal", "tuned", "approximate"): 1800,
+}
+
+
+def cell_search_budget(cell, regime, budgets=None):
+    """Built-in `tune_call_budget_seconds` default for `(cell, regime)`, or None.
+
+    `cell` is `(workload, backend, variant, precision)`; budgets apply across precisions, keyed
+    by `(workload, backend, variant, regime)`.
+    """
+    if regime is None:
+        return None
+    budgets = CELL_SEARCH_BUDGETS_S if budgets is None else budgets
+    workload, backend, variant, _precision = cell
+    return budgets.get((workload, backend, variant, regime))
+
+
+def cell_flags(flags, cell, regime=None, budgets=None):
+    """The `(key, value)` settings given to one cell: any built-in search budget from
+    `CELL_SEARCH_BUDGETS_S` supported by the measured checkout and not overridden by an operator
+    `--cell-flag`, followed by the operator's `--cell-flag` entries in command-line order. Two
+    operator entries setting one key on one cell are refused before the sweep starts
     (`flag_problems`), so here each key occurs once."""
-    return [(f.key, f.value) for f in flags if flag_applies(f, cell)]
+    operator = [(f.key, f.value) for f in flags if flag_applies(f, cell)]
+    budget = cell_search_budget(cell, regime, budgets=budgets)
+    if (
+        budget is not None
+        and "tune_call_budget_seconds" in config_reference()[0]
+        and not any(k == "tune_call_budget_seconds" for k, _ in operator)
+    ):
+        return [("tune_call_budget_seconds", f"{budget:g}"), *operator]
+    return operator
 
 
 def flag_problems(flags, cells):
@@ -480,7 +529,9 @@ def shadowing_warning(ambient, cells, regimes, flags):
     for cell in cells:
         workload, backend, variant, _ = cell
         for regime in regimes:
-            args = ocannl_cell_args(backend, regime, variant, cell_flags(flags, cell))
+            args = ocannl_cell_args(
+                backend, regime, variant, cell_flags(flags, cell, regime=regime)
+            )
             for var, by in shadowed_ambient(ambient, args).items():
                 outranked[var].add(by)
     if not outranked:
@@ -1578,7 +1629,7 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint
         # result line salvaged from a killed process would be a partial run's (gh-ocannl-760).
         print(stdout[-4000:])
         note = (
-            f"TIMED OUT after {timeout:g}s (cap; --cell-timeout raises it, 0 disables) — "
+            f"TIMED OUT after {timeout:g}s (cap) — "
             "killed the cell's whole process group"
         )
         if remaining is not cell_group.GONE:
@@ -2894,11 +2945,25 @@ def report(
             )
         if any(r.get("ocannl_flags") for r in rows):
             lines.append(
-                "A `+KEY=VALUE` after an OCANNL variant is a per-cell `--cell-flag` "
-                "(gh-ocannl-1273): the cell ran with `--ocannl_<key>=<value>` on its command line, which "
-                "outranks its regime's profile and the environment, so the row is its regime with "
-                "that key overridden. The regime gate accepts that declared override where the "
-                "runner reports it resolved, and nothing else.\n"
+                "A `+KEY=VALUE` after an OCANNL variant is a per-cell flag — an operator "
+                "`--cell-flag` (gh-ocannl-1273) or a built-in per-cell search budget "
+                "(`CELL_SEARCH_BUDGETS_S`, gh-ocannl-2430): the cell ran with "
+                "`--ocannl_<key>=<value>` on its command line, which outranks its regime's "
+                "profile and the environment, so the row is its regime with that key set. "
+                "The regime gate accepts that declared setting where the runner reports it "
+                "resolved, and nothing else.\n"
+            )
+        if any(
+            arm.get("budget_cut")
+            for r in rows
+            for arm in ((r.get("tune") or {}).get("arms") or [])
+        ):
+            lines.append(
+                "A tuned row whose search hit its wall-clock budget (`budget_cut: true` in "
+                "`results.jsonl`, marked `+tune_call_budget_seconds=...` or "
+                "`+autotune_budget_seconds=...` in `variant`) is **budget-bounded**: its "
+                "search stopped before exploring the full candidate list and is not directly "
+                "comparable with an uncapped tuned row of another regime (gh-ocannl-2430).\n"
             )
         if any(r.get("precision_mismatch") for r in rows):
             lines.append(
@@ -3534,13 +3599,16 @@ def main():
                                 )
                             continue
                         env = cell_env(os.environ, fx, variant, precision)
-                        flags = cell_flags(args.cell_flag, (name, backend, variant, precision))
                         for regime in args.profile:
                             # The regime is a third axis over the cells (gh-ocannl-719): the same
                             # variant and precision, dispatched under the profile that IS the
-                            # regime, gated at that regime's envelope, labelled as such. The
-                            # operator's per-cell flags follow it (gh-ocannl-1273), and are named in
-                            # the label like the regime.
+                            # regime, gated at that regime's envelope, labelled as such. Built-in
+                            # per-cell search budgets (`CELL_SEARCH_BUDGETS_S`, gh-ocannl-2430) and
+                            # the operator's per-cell flags follow it (gh-ocannl-1273), and are
+                            # named in the label like the regime.
+                            flags = cell_flags(
+                                args.cell_flag, (name, backend, variant, precision), regime=regime
+                            )
                             cmd, cell_stamp = ocannl_cell(
                                 model, backend, regime, variant, flags, ambient
                             )

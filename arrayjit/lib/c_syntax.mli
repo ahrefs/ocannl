@@ -494,11 +494,16 @@ type async_copy_syntax = {
 }
 (** Asynchronous global-to-workgroup-shared copies for staging software-pipelined tiles. *)
 
+type blend_wrapper = [ `Lambda | `Stmt_expr ]
+(** Wrapper around {!Blend_over_locals}'s local bindings: an immediately-invoked C++ lambda
+    (CUDA/HIP, where NVRTC rejects statement expressions) or a GNU statement expression (MSL 3.1,
+    where lambdas are unsupported). *)
+
 type select_blend =
   | Blend_truth of (PPrint.document -> PPrint.document -> PPrint.document -> PPrint.document)
-  | Blend_over_locals of string
+  | Blend_over_locals of { decl : string; wrap : blend_wrapper }
       (** How a backend renders a select evaluating both arms: a truth blend, or arms bound to
-          locals. *)
+          locals declared with [decl] inside [wrap]. *)
 
 type param_guard_dialect =
   | C_guards
@@ -515,6 +520,9 @@ type result_probe_dialect =
 
 val blend_local_a : string
 (** The local a [Blend_over_locals] blend binds its first arm to; tests find blends by it. *)
+
+type private_array_cell = { cell_type : string; load_cell : string; store_cell : string }
+(** The physical cell type and its load and store functions for a thread-private array. *)
 
 (** What a backend supplies to the C-family renderer: its dialect's spellings, capabilities and
     hooks. *)
@@ -595,7 +603,10 @@ module type C_syntax_config = sig
   (** Format specifier for printing floating point numbers in debug logs. *)
 
   val styled_log_arg : PPrint.document -> PPrint.document
-  (** Function to convert potentially floating-point numeric values for logging. *)
+  (** Function to convert potentially floating-point numeric values for logging. [log_value_args]
+      widens narrow-float values ([Half_prec], [Bfloat16_prec], [Fp8_prec]) to [Ops.single] through
+      {!convert_precision} before guarding and calling this, so implementations only see wide
+      floating-point or integer expressions. *)
 
   val uint4x32_log_lane : PPrint.document -> int -> PPrint.document
   (** Lane [i] (0 to 3) of a [uint4x32] value, as a [%u] routine-log argument. A [uint4x32] value is
@@ -641,21 +652,27 @@ module type C_syntax_config = sig
       {!Result_type_probes.with_probes} (gh-ocannl-2117); {!Pure_C_config}'s default is [C_probes],
       so a C++ dialect must say so. *)
 
+  val select_blend_policy : unit -> Backend_intf.select_blend_policy
+  (** The effective backend policy for speculating value select arms. *)
+
   val select_blend_syntax : Ops.prec -> select_blend option
   (** A branchless rendering of a value select at this compute precision (gh-ocannl-1622), in one of
       the {!select_blend} forms: it must evaluate both arms unconditionally — each rendered before
       any [?:], [&&] or [||] ({!operand_conditionality_violations} checks it) — and have exactly the
       C type and value of the short-circuiting spelling it replaces, bit for bit. [pp_scalar_op]
-      uses it for a [Where], [Relu_gate] or [Satur01_gate] that {!Low_level.speculable_select}
-      admits, keeping the condition exactly as the short-circuiting spelling tests it.
+      uses it for a [Where], [Relu_gate] or [Satur01_gate] that the policy and
+      {!Low_level.speculable_select} admit, keeping the condition exactly as the short-circuiting
+      spelling tests it.
 
       Why: C forbids evaluating the unselected arm of [?:], so where an arm holds a load the
       compiler cannot prove dereferenceable it emits a conditional branch, and a step's time follows
       the data (cifar_resnet's inlined ReLU and max-pool backward selects on cc, gh-ocannl-1557).
-      With both arms already values, the compiler if-converts. AMDGPU branches too (gh-ocannl-1695),
-      so HIP blends over [auto] locals. [None] (the {!Pure_C_config} default) keeps the
-      short-circuiting [ternop_syntax] / [binop_syntax] spelling: CUDA's, which ptxas if-converts
-      itself, and Metal's, whose compiler no tool here can read. *)
+      With both arms already values, the compiler if-converts. HIP blends load-free arms over [auto]
+      locals and leaves selected loads behind their condition (gh-ocannl-2427). [None] (the
+      {!Pure_C_config} default) keeps the short-circuiting [ternop_syntax] / [binop_syntax]
+      spelling: CUDA's, which ptxas if-converts itself. Metal blends speculable selects inside
+      single-threaded serial-loop kernels via a GNU statement expression and keeps parallel GPU
+      kernels short-circuiting (gh-ocannl-2400). *)
 
   val unop_syntax : Ops.prec -> Ops.unop -> PPrint.document -> PPrint.document
   val vec_unop_syntax : Ops.prec -> Ops.vec_unop -> PPrint.document -> PPrint.document
@@ -873,6 +890,12 @@ module type C_syntax_config = sig
   (** Declaration suffix aligning stack-allocated local arrays for SIMD access, e.g.
       [__attribute__((aligned(32)))] (gh-ocannl-164). Applies to the plain stack-array branch only,
       never to workgroup-shared placements. *)
+
+  val private_array_cell : Ops.prec -> private_array_cell option
+  (** Physical cell type and codecs for thread-private arrays that cannot use the native type. The
+      codecs act on values at logical storage precision, preserving the existing rounding points.
+      The cell preserves the native size and alignment, and all-zero bytes encode zero. [None] uses
+      the native type directly. *)
 
   val heap_local_arrays : bool
   (** Whether a [Local]-placement array past the stack budget is declared on the heap
@@ -1239,6 +1262,7 @@ val with_compiler_options :
     {!operand_conditionality_violations}. *)
 module Over_locals : sig
   val blend_where :
+    wrap:blend_wrapper ->
     decl:string ->
     ternop_syntax:
       (Ops.prec ->
@@ -1254,6 +1278,7 @@ module Over_locals : sig
     PPrint.document
 
   val blend_gate :
+    wrap:blend_wrapper ->
     decl:string ->
     binop_syntax:(Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.document) ->
     Ops.prec ->

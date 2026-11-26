@@ -26,15 +26,17 @@
    blends outside and keeps the inner guard. Executed with the hazardous reads inactive. - Assembly,
    on cc's own compiler and kernel flags: no conditional branch is attributed to a select's source
    lines, and those lines carry instructions, the realistic leg's included (gh-ocannl-1660); on CUDA
-   and HIP (gh-ocannl-1695; HIP blends, CUDA's ptxas predicates the short-circuiting spelling
-   itself), the same claim of the code object the run compiled (SASS through [ptxas] and [nvdisasm],
-   AMDGPU through [llvm-objdump]); on Metal (gh-ocannl-1828), the AIR the Metal Toolchain compiles
-   the run's [.metal] artifact to under the run's own compile options, which keeps the
-   short-circuit's branch on every leg: pinned as counted, on the toolchain version counted, the
-   zero-branch claim skipping there. - The realistic composition: a ReLU feeding a 2x2 max pool,
-   backward through the default placements (the selects inlined into their consumers) — the gradient
-   emits the blend and equals, bitwise, both an OCaml reference and the same program with inlining
-   off. *)
+   (gh-ocannl-1695), the same claim of the code object the run compiled (SASS through [ptxas] and
+   [nvdisasm]). HIP keeps loaded arms conditional and blends the register-only gate
+   (gh-ocannl-2427), whose AMDGPU code object is read through [llvm-objdump]. On Metal
+   (gh-ocannl-1828, gh-ocannl-2400), the AIR the Metal Toolchain compiles the run's [.metal]
+   artifact to under the run's own compile options, which keeps the short-circuit's branch on
+   parallel loaded-arm legs (pinned as counted on the toolchain version counted, the zero-branch
+   claim skipping there), compiles the parallel register-only gate branch-free (0 conditional
+   branches and a [select] instruction), and blends single-threaded serial-loop selects branch-free
+   under [Blend_serial_loop]. - The realistic composition: a ReLU feeding a 2x2 max pool, backward
+   through the default placements (the selects inlined into their consumers) — the gradient emits
+   the blend and equals, bitwise, both an OCaml reference and the same program with inlining off. *)
 
 (* cc-fp-contract: exact-operands -- selects, adds and a pool gradient multiplying dyadic weights by
    one *)
@@ -104,6 +106,10 @@ let select_blend prec =
 
 let blends_at prec = Option.is_some (select_blend prec)
 let blends = blends_at single
+let facts = Context.backend_facts_of_name backend_name
+let blends_loaded_arms = Ir.Backend_intf.charges_select_arm_union facts
+let on_hip = String.equal backend_name "hip"
+let hip_leg = Verdict.leg ~when_:on_hip ~on:backend_name ()
 
 (* The loop the census legs' select runs under. On a GPU dialect, a [Grid] loop: one select per
    thread, the shape a parallel backward kernel has (a serial loop's unrolled copies are the other
@@ -114,9 +120,21 @@ let census_axis = if Option.is_some gpu_dialect then LL.Grid else LL.Serial
    answers [None] at the leg's precision (and [on_cc] restricts [cpu_only] legs, whose expected
    values are C-typed): written once (gh-ocannl-1703, gh-ocannl-2386). *)
 let blend_leg ~cpu_only ~prec =
-  Verdict.leg ~when_:(((not cpu_only) || on_cc) && blends_at prec) ~on:backend_name ()
+  Verdict.leg
+    ~when_:(((not cpu_only) || on_cc) && blends_loaded_arms && blends_at prec)
+    ~on:backend_name ()
 
 let single_blend_leg = Verdict.leg ~when_:blends ~on:backend_name ()
+
+let grid_register_blend_leg =
+  Verdict.leg ~when_:(blends && (blends_loaded_arms || on_hip)) ~on:backend_name ()
+
+let single_loaded_blend_leg = blend_leg ~cpu_only:false ~prec:single
+
+let single_serial_blend_leg =
+  Verdict.leg
+    ~when_:(blends && Ir.Backend_intf.blends_serial_loop_selects facts)
+    ~on:backend_name ()
 
 let over_locals_leg =
   Verdict.leg
@@ -307,7 +325,9 @@ let branch_free r = r.readable && r.branches = 0
    compiled from. One reading per artifact, a branching one printing its sites; no artifact at all
    is an empty list, which a claim's [p_all] fails, and a missing tool is an unreadable reading: on
    CUDA and HIP the census is the claim, so neither skips. *)
-let gpu_census dialect ~patterns name =
+(* Shared GPU artifact enumeration and disassembly plumbing for both line-anchored [gpu_census] and
+   whole-function [air_function_branch_free_select]. *)
+let for_each_gpu_artifact dialect name ~on_error ~on_parsed =
   let artifact_ext, source_ext =
     match dialect with
     | Asm.Sass -> (".ptx", ".cu")
@@ -321,12 +341,8 @@ let gpu_census dialect ~patterns name =
     if exists stem then stem :: parts (k + 1) else []
   in
   let stems = (if exists name then [ name ] else []) @ parts 0 in
-  let say fmt =
-    Printf.ksprintf
-      (fun m -> Stdio.eprintf "branchless_select: %s: %s (not part of the golden)\n" name m)
-      fmt
-  in
-  if List.is_empty stems then say "no %s artifact" artifact_ext;
+  let say_line m = Stdio.eprintf "branchless_select: %s: %s (not part of the golden)\n" name m in
+  if List.is_empty stems then say_line ("no " ^ artifact_ext ^ " artifact");
   List.map stems ~f:(fun stem ->
       let artifact = Generated.path ~ext:artifact_ext stem in
       let source_basename = stem ^ source_ext in
@@ -337,50 +353,92 @@ let gpu_census dialect ~patterns name =
           ?metal_toolchain:(Result.ok (Lazy.force metal_toolchain))
           dialect ~artifact
       with
-      | Error why ->
-          say "%s: the census cannot read it: %s" stem why;
-          { readable = false; branches = 0 }
+      | Error why -> on_error ~say_line ~stem ~why
       | Ok (dump, toolchain) ->
           let parsed = Asm.parse_gpu dialect ~dump ~source_basename in
-          let anchor = select_lines ~patterns source in
-          let lines = Array.of_list (String.split_lines source) in
-          Set.iter anchor ~f:(fun l ->
-              let sites, i = Asm.gpu_branch_sites parsed ~anchor:(Set.singleton (module Int) l) in
-              say "%s line %d: %d branch(es) in %d instruction(s): %s" stem l (List.length sites) i
-                (String.strip lines.(l - 1)));
-          let sites, instructions = Asm.gpu_branch_sites parsed ~anchor in
-          say
-            "%s: %d conditional branch(es) in %d instruction(s) on %d select line(s), %d %s line \
-             marker(s) for %s, by %s"
-            stem (List.length sites) instructions (Set.length anchor) parsed.g_markers
-            (Asm.gpu_dialect_name dialect) source_basename toolchain;
-          let reading =
-            {
-              readable = instructions > 0 && parsed.g_markers > 0 && not (Set.is_empty anchor);
-              branches = List.length sites;
-            }
-          in
-          (* Every branch with the instruction before it, so the run names what branched. *)
-          ignore
-            (Asm.explain_branch_claim ~source ~prefix:("branchless_select: " ^ stem)
-               ~holds:(branch_free reading) sites
-              : bool);
-          reading)
+          on_parsed ~say_line ~stem ~source_basename ~source ~toolchain parsed)
 
-(* Metal's finding (gh-ocannl-1828): Metal keeps the short-circuiting [?:] for every [Where]
-   (backend-dialects-and-idents.md: MSL [select] evaluates both arms, which a range guard's
-   deliberately out-of-range read must not), and the toolchain's front end keeps that short-circuit
-   around the arm's device load as a [br i1] on the select's line: one on each of the four
-   hand-built legs. The realistic pool kernel's [?:] lines, whose anchor (as on CUDA) also holds the
-   window loops' index guards, carry one too, but on the guards' line: its selects' own lines carry
-   none, so its pin counts the lines together and claims no short-circuit of a select. So the
-   zero-branch claim, version-independent, skips on Metal citing [air_divergence], and the census is
-   pinned instead as it reads: exactly [air_branches] per leg, on the Metal Toolchain versions it
-   was counted on, an environment skip on any other (the maintainer's rule on gh-ocannl-1828: exact
-   counts name the version they pin). A fix that makes Metal's value selects branch-free reddens the
-   pin, which is the cue to drop it and let the zero-branch claim run. What AIR shows is the front
-   end's IR, not the GPU's machine code ([Asm.disassemble_gpu]). *)
-let air_divergence = "gh-ocannl-2400"
+let gpu_census dialect ~patterns name =
+  for_each_gpu_artifact dialect name
+    ~on_error:(fun ~say_line ~stem ~why ->
+      say_line (Printf.sprintf "%s: the census cannot read it: %s" stem why);
+      { readable = false; branches = 0 })
+    ~on_parsed:(fun ~say_line ~stem ~source_basename ~source ~toolchain parsed ->
+      let say fmt = Printf.ksprintf say_line fmt in
+      let anchor = select_lines ~patterns source in
+      let lines = Array.of_list (String.split_lines source) in
+      Set.iter anchor ~f:(fun l ->
+          let sites, i = Asm.gpu_branch_sites parsed ~anchor:(Set.singleton (module Int) l) in
+          say "%s line %d: %d branch(es) in %d instruction(s): %s" stem l (List.length sites) i
+            (String.strip lines.(l - 1)));
+      let sites, instructions = Asm.gpu_branch_sites parsed ~anchor in
+      say
+        "%s: %d conditional branch(es) in %d instruction(s) on %d select line(s), %d %s line \
+         marker(s) for %s, by %s"
+        stem (List.length sites) instructions (Set.length anchor) parsed.g_markers
+        (Asm.gpu_dialect_name dialect) source_basename toolchain;
+      let reading =
+        {
+          readable = instructions > 0 && parsed.g_markers > 0 && not (Set.is_empty anchor);
+          branches = List.length sites;
+        }
+      in
+      (* Every branch with the instruction before it, so the run names what branched. *)
+      ignore
+        (Asm.explain_branch_claim ~source ~prefix:("branchless_select: " ^ stem)
+           ~holds:(branch_free reading) sites
+          : bool);
+      reading)
+
+(* Function-wide AIR check for a single-select kernel (gh-ocannl-2400): unlike [gpu_census], which
+   scopes branches to lines matching [patterns] via [!dbg], this inspects every instruction in the
+   compiled AIR function (with or without debug locations) and verifies both that zero conditional
+   branches (excluding [!llvm.loop] back-edges when [allow_loop_back_edges] is true) appear anywhere
+   in the function and that an AIR [select] instruction is emitted. *)
+let air_function_branch_free_select ?(patterns = [ " ? " ]) ?(allow_loop_back_edges = false) name =
+  for_each_gpu_artifact Asm.Air name
+    ~on_error:(fun ~say_line ~stem ~why ->
+      say_line (Printf.sprintf "%s: the AIR function census cannot read it: %s" stem why);
+      false)
+    ~on_parsed:(fun ~say_line ~stem ~source_basename ~source ~toolchain parsed ->
+      let say fmt = Printf.ksprintf say_line fmt in
+      let anchor = select_lines ~patterns source in
+      let conds =
+        List.filter parsed.g_lines ~f:(fun (_, g) ->
+            g.g_cond
+            && not (allow_loop_back_edges && String.is_substring g.g_text ~substring:"!llvm.loop"))
+      in
+      let selects =
+        List.count parsed.g_lines ~f:(fun (_, g) -> String.equal g.g_mnemonic "select")
+      in
+      say
+        "%s: whole-function AIR: %d non-loop conditional branch(es), %d select(s) in %d \
+         instruction(s), %d line marker(s) for %s, by %s"
+        stem (List.length conds) selects (List.length parsed.g_lines) parsed.g_markers
+        source_basename toolchain;
+      List.iter conds ~f:(fun (asm_line, g) ->
+          say "%s: AIR conditional branch at line %d: %s" stem asm_line g.g_text);
+      parsed.g_markers > 0 && (not (Set.is_empty anchor)) && List.is_empty conds && selects > 0)
+
+(* Metal's boundary (gh-ocannl-1828, settled in gh-ocannl-2400): Metal uses [Blend_serial_loop],
+   blending speculable selects inside single-threaded serial-loop kernels (where keeping [?:] blocks
+   loop pipelining and costs even at 0% active) and keeping short-circuiting [?:] in parallel GPU
+   kernels (where keeping [?:] outperforms eager blending on sparse, uniform-false and causal-mask
+   loaded-arm inputs on M4 Max, while AGX machine-code lowering itself is unobserved without a
+   disassembler). In AIR (Metal Toolchain 32023.922, mac-studio M4 Max), a parallel [Grid] select
+   whose arm loads device memory keeps [1 br i1] on each of the four hand-built legs, while a
+   parallel load-free arm ([bs_register_gate]) already compiles to an AIR function with [0]
+   conditional branches and a [select] instruction, and a single-threaded serial-loop loaded arm
+   ([bs_serial_loop_select]) blends to [0] conditional branches and a [select] instruction. The
+   realistic pool kernel's [?:] lines, whose anchor (as on CUDA) also holds the window loops' index
+   guards, carry one branch on the guards' line.
+
+   So the zero-branch claim over parallel loaded-arm selects skips on Metal citing [air_boundary],
+   the loaded-arm AIR counts stay pinned on the Metal Toolchain versions they were counted on (an
+   environment skip on any other), and [bs_register_gate], [bs_serial_loop_select], and the
+   [bs_where_zero] negative control check the whole AIR function (including instructions without
+   debug locations) whenever the Metal Toolchain is present. *)
+let air_boundary = "gh-ocannl-2400"
 let air_branches = 1
 let air_pinned_toolchains = [ "32023.922" ]
 let air_census_runs () = on_air && Result.is_ok (Lazy.force metal_toolchain)
@@ -407,7 +465,8 @@ let air_pinned_leg =
 (* Read emitted select source lines in the backend compiler's assembly. CUDA's claim covers the
    floor PTX target policy only, including the pool kernel (gh-ocannl-1822). On Metal, the AIR
    census's pin follows the zero-branch claim's row. *)
-let census_claim ~patterns ~gpu_patterns ~air_claim ~air_skip claim name =
+let census_claim ~patterns ~gpu_patterns ?(air_expected = Some air_branches) ~air_claim ~air_skip
+    claim name =
   let claim = claim ^ " (CUDA: floor PTX target only)" in
   let native_cuda =
     String.equal backend_name "cuda"
@@ -426,8 +485,17 @@ let census_claim ~patterns ~gpu_patterns ~air_claim ~air_skip claim name =
       if on_cc then p claim (compiled_branch_free ~patterns name)
       else
         match gpu_dialect with
-        | Some Asm.Air ->
-            Verdict.skipped claim ~backend:(Printf.sprintf "metal (%s, %s)" air_skip air_divergence)
+        | Some Asm.Air -> (
+            match air_expected with
+            | None ->
+                Verdict.in_leg ~leg:air_toolchain_leg claim (fun label ->
+                    p_all label (Lazy.force air_readings) ~f:branch_free)
+            | Some _ ->
+                Verdict.skipped claim
+                  ~backend:(Printf.sprintf "metal (%s, %s)" air_skip air_boundary))
+        | Some Asm.Amdgpu ->
+            Verdict.in_leg ~leg:single_loaded_blend_leg claim (fun label ->
+                p_all label (gpu_census Asm.Amdgpu ~patterns:gpu_patterns name) ~f:branch_free)
         | Some dialect ->
             p_all claim (gpu_census dialect ~patterns:gpu_patterns name) ~f:branch_free
         | None ->
@@ -436,9 +504,10 @@ let census_claim ~patterns ~gpu_patterns ~air_claim ~air_skip claim name =
                (not part of the golden)\n"
               name backend_name;
             skipped claim);
-  in_legf ~leg:air_pinned_leg "%s (pinned on Metal Toolchain %s; %s)" (air_claim air_branches)
-    (String.concat ~sep:", " air_pinned_toolchains) air_divergence (fun label ->
-      p_all label (Lazy.force air_readings) ~f:(fun r -> r.readable && r.branches = air_branches))
+  Option.iter air_expected ~f:(fun expected ->
+      in_legf ~leg:air_pinned_leg "%s (pinned on Metal Toolchain %s; %s)" (air_claim expected)
+        (String.concat ~sep:", " air_pinned_toolchains) air_boundary (fun label ->
+          p_all label (Lazy.force air_readings) ~f:(fun r -> r.readable && r.branches = expected)))
 
 (* === The value legs. === *)
 
@@ -643,6 +712,98 @@ let () =
       in_legf ~leg:leg' "%s: no short-circuiting spelling of the select remains" leg.name
         (fun label -> no_short_circuit_claim ~prec:leg.prec label (Lazy.force text)))
 
+(* The causal fill selects a scaled score when admitted. Loading the score on discarded lanes is the
+   unified-memory HIP regression in gh-ocannl-2427. *)
+let () =
+  let name = "bs_mask_fill" in
+  let mask = mk_single "mask" and score = mk_single "score" and out = mk_single "out" in
+  let i = sym () in
+  let idx = [| iter i |] in
+  let at tn = (get tn idx, single) in
+  let scaled = LL.Binop (Ops.Mul, at score, (c 0.5, single)) in
+  let fill = LL.Ternop (Ops.Where, at mask, (scaled, single), (c (-.inf), single)) in
+  let scores = Array.init n ~f:(fun i -> Float.of_int ((2 * i) + 1)) in
+  let masks = Array.init n ~f:(fun i -> if i % 2 = 0 then 1. else 0.) in
+  let want =
+    Array.map2_exn masks scores ~f:(fun m s -> if Float.(m > 0.) then 0.5 *. s else -.inf)
+  in
+  let llc = loop_n ~axis:census_axis i n (set out idx fill) in
+  let got = execute_leg ~name ~seed:[ (mask, masks); (score, scores) ] ~out llc in
+  p_all2 "causal fill: the mask selects scaled scores and negative infinities" got want ~f:same_bits;
+  in_leg ~leg:hip_leg "causal fill: HIP keeps the score load in the selected arm" (fun claim ->
+      let text = kernel_text name in
+      let ident = Option.value_exn score.Tn.code_name in
+      let score_access = facts.node_ident_prefix ^ ident ^ "[" in
+      let after_question_mark = String.lsplit2 text ~on:'?' in
+      p claim
+        ((not (has text blend_marker))
+        && Option.exists after_question_mark ~f:(fun (before, after) ->
+            (not (has before score_access)) && has after score_access)))
+
+(* The gradient was loaded by an earlier statement, so the gate only selects a register value. *)
+let () =
+  let name = "bs_register_gate" in
+  let mask = mk_single "mask" and grad = mk_single "grad" and out = mk_single "out" in
+  let local = mk_single ~dims:[||] "register_grad" in
+  virtualize local;
+  let id = LL.get_scope local in
+  let i = sym () in
+  let idx = [| iter i |] in
+  let masks = Array.init n ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
+  let grads = Array.init n ~f:(fun i -> Float.of_int (i + 1)) in
+  let gate payload = LL.Binop (Ops.Relu_gate, (get mask idx, single), (payload, single)) in
+  let in_loop body = loop_n ~axis:census_axis i n body in
+  let raw = in_loop (set out idx (gate (get grad idx))) in
+  let scoped =
+    in_loop
+      (seq
+         (LL.Declare_local { id; needs_init = false })
+         (seq (LL.Set_local (id, get grad idx)) (set out idx (gate (LL.Get_local id)))))
+  in
+  List.iter [ mask; grad; out ] ~f:materialize;
+  let optimized = optimize_scoped ~name ~raw scoped in
+  let got =
+    List.hd_exn (execute ~name optimized ~seed:[ (mask, masks); (grad, grads) ] ~read:[ out ])
+  in
+  let want = Array.map2_exn masks grads ~f:(fun m g -> if Float.(m > 0.) then g else 0.) in
+  p_all2 "register-only gradient gate: the selected gradient reaches the output" got want
+    ~f:same_bits;
+  in_leg ~leg:grid_register_blend_leg "register-only gradient gate: the emitter blends"
+    (fun claim -> p claim (has (kernel_text name) blend_marker));
+  in_leg ~leg:hip_leg "register-only gradient gate: HIP emits branch-free selection" (fun claim ->
+      p_all claim (gpu_census Asm.Amdgpu ~patterns:[ "ocannl_sel_" ] name) ~f:branch_free);
+  in_leg ~leg:air_toolchain_leg
+    "register-only gradient gate: Metal's AIR function has 0 conditional branches and emits select"
+    (fun claim -> p_all claim (air_function_branch_free_select name) ~f:Fn.id)
+
+(* gh-ocannl-2400: a loaded-arm select inside a single-threaded [Serial] loop (no [Grid] or
+   [Workgroup] loop). Metal's [Blend_serial_loop] blends it over [auto] locals via a GNU statement
+   expression and compiles the whole AIR function with zero conditional branches and a [select]. *)
+let () =
+  let name = "bs_serial_loop_select" in
+  let mask = mk_single (name ^ "_m")
+  and grad = mk_single (name ^ "_g")
+  and out = mk_single (name ^ "_out") in
+  let i = sym () in
+  let idx = [| iter i |] in
+  let masks = Array.init n ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
+  let grads = Array.init n ~f:(fun i -> Float.of_int (i + 1)) in
+  let gate = LL.Binop (Ops.Relu_gate, (get mask idx, single), (get grad idx, single)) in
+  let llc = loop_n ~axis:LL.Serial i n (set out idx gate) in
+  let got = execute_leg ~name ~seed:[ (mask, masks); (grad, grads) ] ~out llc in
+  let want = Array.map2_exn masks grads ~f:(fun m g -> if Float.(m > 0.) then g else 0.) in
+  p_all2 "serial-loop loaded gate: values match the select's semantics, bitwise" got want
+    ~f:same_bits;
+  in_leg ~leg:air_leg "serial-loop loaded gate: Metal emits the blend inside a serial-only kernel"
+    (fun claim -> p claim (has (kernel_text name) blend_marker));
+  in_leg ~leg:air_toolchain_leg
+    "serial-loop loaded gate: Metal's AIR function has 0 non-loop conditional branches and emits \
+     select" (fun claim ->
+      p_all claim
+        (air_function_branch_free_select ~patterns:[ "ocannl_sel_" ] ~allow_loop_back_edges:true
+           name)
+        ~f:Fn.id)
+
 let () =
   let prefix = (Context.backend_facts_of_name backend_name).Ir.Backend_intf.node_ident_prefix in
   List.iter [ "bs_sat01_gate"; "bs_sat01_gate_int32" ] ~f:(fun name ->
@@ -675,7 +836,12 @@ let () =
              "%s: Metal's AIR keeps the select's short-circuit, %d conditional branch(es) on its \
               line"
              name)
-        ~air_skip:"its AIR keeps the select's short-circuit" claim name)
+        ~air_skip:"its AIR keeps the select's short-circuit" claim name);
+  in_leg ~leg:air_toolchain_leg
+    "bs_where_zero: whole-function AIR check rejects a loaded-arm [?:] in a Grid loop (negative \
+     control)" (fun claim ->
+      let readings = air_function_branch_free_select "bs_where_zero" in
+      p claim ((not (List.is_empty readings)) && List.exists readings ~f:not))
 
 (* === The guards that must keep short-circuiting. === *)
 
@@ -720,36 +886,35 @@ let () =
       let text = kernel_text name in
       p claim (has text guard_spelling && not (has text blend_marker)))
 
-(* [out[i] := m[i] != 0 ? s[i] * 0.5 : NAN]: a masked attention's fill, a NaN LITERAL arm. Under
-   HIP's no-NaNs fast math a NaN bound to a local is the optimizer's to drop, and a blended [where
-   mask s NAN] came back finite (gh-ocannl-1695), so the GPU blend leaves such a select
-   short-circuiting; cc's blend selects bit patterns and keeps it. The NaN reaches the masked cells
-   on every backend. *)
+(* The index-derived score keeps both arms load-free, so the NaN literal alone keeps the GPU blend
+   short-circuiting (gh-ocannl-1695). *)
 let () =
   let name = "bs_nan_fill" in
-  let m = mk_single (name ^ "_m") and sv = mk_single (name ^ "_s") in
+  let m = mk_single (name ^ "_m") in
   let out = mk_single (name ^ "_out") in
   let mv = [| 1.; 0.; 1.; 1.; 0.; 0.; 1.; 0. |] in
-  let svv = [| 2.; 4.; -6.; 0.5; 1.; 3.; -0.; 8. |] in
   let i = sym () in
+  let score = LL.Binop (Ops.Add, (LL.Embed_index (iter i), single), (c 1., single)) in
   let sel =
     LL.Ternop
       ( Ops.Where,
         (get m [| iter i |], single),
-        (LL.Binop (Ops.Mul, (get sv [| iter i |], single), (c 0.5, single)), single),
+        (LL.Binop (Ops.Mul, (score, single), (c 0.5, single)), single),
         (c nan, single) )
   in
   let llc = loop_n i n (set out [| iter i |] sel) in
-  let got = execute_leg ~name ~seed:[ (m, mv); (sv, svv) ] ~out llc in
-  let want = Array.init n ~f:(fun i -> if Float.(mv.(i) <> 0.) then svv.(i) *. 0.5 else nan) in
+  let got = execute_leg ~name ~seed:[ (m, mv) ] ~out llc in
+  let want =
+    Array.init n ~f:(fun i -> if Float.(mv.(i) <> 0.) then Float.of_int (i + 1) *. 0.5 else nan)
+  in
   p_all2 (name ^ ": values, the NaN fill reaching the masked cells") got want ~f:same_bits;
   in_leg ~leg:over_locals_leg
     (name ^ ": a NaN-literal arm keeps its [?:] where the blend binds locals") (fun claim ->
       let text = kernel_text name in
       p claim (has text guard_spelling && not (has text blend_marker)))
 
-(* [out[i] := v[i] != 0 ? (i < 4 ? a[i] : 0) : -1] over [i < 6]: the outer, value select blends —
-   its arm's one read sits behind a guard of its own — and the inner index guard stays [?:]. *)
+(* [out[i] := v[i] != 0 ? (i < 4 ? a[i] : 0) : -1] over [i < 6]. The inner index guard protects the
+   read. HIP keeps the outer test too because a nested arm contains a load. *)
 let () =
   let name = "bs_nested_guard" in
   let a = mk_single ~dims:[| 4 |] (name ^ "_a") and v = mk_single ~dims:[| 6 |] (name ^ "_v") in
@@ -763,10 +928,20 @@ let () =
   let llc = loop_n i 6 (set out [| iter i |] outer) in
   let got = execute_leg ~name ~seed:[ (a, a_vals); (v, vv) ] ~out llc in
   p_all2 (name ^ ": values") got [| 1.5; -1.; 3.5; -1.; 0.; 0. |] ~f:same_bits;
-  in_leg ~leg:single_blend_leg (name ^ ": the value select blends around the inner guard's [?:]")
-    (fun claim ->
+  in_leg ~leg:single_loaded_blend_leg
+    (name ^ ": the value select blends around the inner guard's [?:]") (fun claim ->
       let text = kernel_text name in
-      p claim (has text blend_marker && has text guard_spelling))
+      p claim (has text blend_marker && has text guard_spelling));
+  in_leg ~leg:hip_leg (name ^ ": HIP keeps both conditionals around the nested load") (fun claim ->
+      let text = kernel_text name in
+      let store = facts.node_ident_prefix ^ Option.value_exn out.Tn.code_name ^ "[" in
+      let statement =
+        Option.bind (String.substr_index text ~pattern:store) ~f:(fun pos ->
+            String.lsplit2 (String.drop_prefix text pos) ~on:';')
+      in
+      p claim
+        (Option.exists statement ~f:(fun (statement, _) ->
+             (not (has statement blend_marker)) && String.count statement ~f:(Char.equal '?') = 2)))
 
 (* [out[i] := v[i] != 0 ? ((int)a[i] / (int)b[i] == 0 ? g[i] : 0) : -1], and the same with one more
    select between: [v[i] != 0 ? (u[i] != 0 ? (... division select ...) : 0) : -1]. The division's
@@ -887,7 +1062,7 @@ let () =
   if outlined then
     Verdict.claim "the forced run rendered the pool kernel outlined"
       (not (List.is_empty (Generated.outlined_parts (Generated.read "bs_pool_inlined"))));
-  in_leg ~leg:single_blend_leg "pool backward: the inlined gradient's selects call the blend"
+  in_leg ~leg:single_serial_blend_leg "pool backward: the inlined gradient's selects call the blend"
     (fun claim ->
       let text = kernel_text "bs_pool_inlined" in
       p claim (has text blend_marker));
@@ -908,9 +1083,6 @@ let () =
      only if neither branches (gh-ocannl-1695). *)
   census_claim ~patterns:[ "ocannl_sel_" ]
     ~gpu_patterns:(if blends then [ "ocannl_sel_" ] else [ " ? " ])
-    ~air_claim:
-      (Printf.sprintf
-         "pool backward: Metal's AIR has %d conditional branch(es) on the inlined kernel's [?:] \
-          lines, its window guards' and its selects' together")
-    ~air_skip:"its AIR has a branch on the inlined kernel's [?:] lines, the window guards'"
-    claim "bs_pool_inlined"
+    ~air_expected:None
+    ~air_claim:(fun _ -> "")
+    ~air_skip:"" claim "bs_pool_inlined"

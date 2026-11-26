@@ -67,30 +67,47 @@ let hip_math_options ~fast_math =
       "-fno-gpu-approx-transcendentals";
     ]
 
-(* gh-ocannl-1457: whether a clang-family option vector (cc's kernel flags, hiprtc's) pins
-   contraction off. Clang applies floating-point switches left to right and [-ffast-math] implies
-   [-ffp-contract=fast], so the last of the two decides; a vector naming neither leaves contraction
-   to the toolchain's default, which is never a pin. *)
+(* gh-ocannl-1457, gh-ocannl-2344: whether a clang-family option vector (cc's kernel flags,
+   hiprtc's) pins contraction off. Closed Clang driver-switch set evaluated left-to-right (swept
+   against [clang -x hip -### -ffp-contract=off]): [-ffp-contract=off] and [-ffp-model=strict] pin
+   contraction off; [-ffast-math], [-Ofast], [-funsafe-math-optimizations], and every other
+   [-ffp-contract=*] or [-ffp-model=*] switch (including [fast], [on], [fast-honor-pragmas],
+   [precise], [aggressive]) clear the pin. A vector naming none leaves contraction to the
+   toolchain's default, which is never a pin; [-mllvm] backend switches are outside this
+   boundary. *)
 let clang_contraction_off options =
   List.fold_left
     (fun off option ->
       match option with
-      | "-ffp-contract=off" -> true
-      | "-ffast-math" | "-ffp-contract=fast" | "-ffp-contract=on"
-      | "-ffp-contract=fast-honor-pragmas" ->
+      | "-ffp-contract=off" | "-ffp-model=strict" -> true
+      | "-ffast-math" | "-Ofast" | "-funsafe-math-optimizations" -> false
+      | s
+        when String.starts_with ~prefix:"-ffp-contract=" s
+             || String.starts_with ~prefix:"-ffp-model=" s ->
           false
       | _ -> off)
     false options
 
+let is_ascii_space = function ' ' | '\t' | '\n' | '\r' -> true | _ -> false
+
+(* gh-ocannl-2344: split a whitespace-separated extra-options string into individual hiprtc argv
+   tokens. Deliberately does not interpret shell quotes or escapes so token boundaries are identical
+   across command line, environment and resolved-configuration records. *)
+let parse_extra_options s =
+  String.map (fun c -> if is_ascii_space c then ' ' else c) s
+  |> String.split_on_char ' '
+  |> List.filter (fun token -> token <> "")
+
 let hiprtc ~target_archs ~hip_include_options ~rocwmma_include_options ~uses_rocwmma ~fast_math
-    ~with_debug ?(with_line_info = false) () =
+    ~with_debug ?(with_line_info = false) ?(extra_options = []) () =
   hip_include_options
   @ (if uses_rocwmma then rocwmma_include_options @ [ "-std=c++17" ] else [])
   (* These are compiler options rather than kernel-body pragmas so they also govern the bf16 and f16
      operators while the HIP headers are parsed. *)
   @ hip_math_options ~fast_math
   @ hip_target_options ~target_archs
-  @ if with_debug then [ "-g" ] else if with_line_info then [ "-gline-tables-only" ] else []
+  @ (if with_debug then [ "-g" ] else if with_line_info then [ "-gline-tables-only" ] else [])
+  @ extra_options
 
 (* nvrtc's opt-IN for floating-point reassociation. nvrtc accepts it (13.3 answers a
    [--fassociative-math=false] with "does not accept any argument", so its parser knows the name and

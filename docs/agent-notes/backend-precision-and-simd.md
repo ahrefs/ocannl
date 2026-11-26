@@ -769,10 +769,36 @@ files.
   judged on widens, and values move only where the backend widens (towards the exact sum). Gated on
   the node's storage precision, not the backend's `accum_prec` (where nothing widens a localized
   accumulator is the RMW exactly, so no backend fact is needed, and the optimizer stays
-  backend-independent), and not applied to f32: there it is bitwise neutral but trades the untuned
-  CPU and Metal backward's streaming rank-1 updates for strided dot products, a perf question of its
-  own. The allowlist is fail-closed (perfect serial chain, the target read only at its own cell,
+  backend-independent), and kept narrow-only rather than ungated for f32 (gh-ocannl-2422). Paired
+  6-round exclusive `mac-studio` (Apple M4 Max) f32 untuned backward A/Bs (`bin_cells.py --box
+  m4-max`, `step_ms.p50`, all 6/6 sign-test `p = 0.0312` except `lenet` cc `ungated/plain`
+  `p = 0.688`; Metal parity losses bitwise identical, cc within 3.1e-6 from FMA contraction):
+  ungating regressed `cc` on `gpt2_mini_train` (952.3 [925.8-969.3] -> 1163 [1157-1193] ms,
+  1.242x [1.193-1.254]; queued 950.9 -> 1171 ms, 1.243x; `gpt2_mini_train` has no affine-window
+  write axes, so this is plain-cell sinking alone, and the lower baseline vs gh-ocannl-2362's
+  indicative 1649-1723 ms reflects an exclusive window vs a shared-box run) and `cifar_resnet`
+  (72.15 [71.07-72.60] -> plain 113.5 [112.1-114.0] ms, 1.571x [1.549-1.600] -> ungated 138.0
+  [135.4-139.8] ms, 1.911x [1.866-1.960]; overlapping-window `ungated/plain` 1.222x [1.202-1.227];
+  queued 72.22 -> 113.8 -> 139.0 ms), with only tiny `lenet` slightly faster (6.937 [6.839-7.196]
+  -> plain 6.500 -> ungated 6.608 [6.453-6.674] ms, 0.944x [0.916-0.976]; `ungated/plain` 1.022x).
+  On Metal, ungating won on `gpt2_mini_train` (66.17 [65.71-66.51] -> 46.74 [46.66-47.17] ms,
+  0.710x [0.702-0.711]; queued 57.42 -> 38.31 ms, 0.667x) and `cifar_resnet` (382.9 [375.6-398.8]
+  -> 244.6 [243.9-256.2] ms, 0.644x [0.637-0.652]; queued 378.4 -> 247.0 ms, 0.661x; 2-arm
+  exclusive window to fit the 30-min bound), while `lenet` gained on plain-only (40.93
+  [40.91-40.96] -> 33.22 [33.18-33.25] ms, 0.811x [0.810-0.812]) and regressed under the
+  overlapping-window sink (42.74 [42.73-42.78] ms, 1.044x [1.044-1.045]; `ungated/plain` 1.287x
+  [1.285-1.289]). Because the optimizer is backend-independent and plain-cell sinking (on both
+  `gpt2_mini_train` and `cifar_resnet`) as well as overlapping-window sinking (on `cifar_resnet`)
+  severely regress untuned CPU backward (trading streaming rank-1 updates for strided dot products
+  and guarded affine scans), the narrow-float gate stays and the GPU schedule-time sink
+  (`Autotune.reduction_sink`) stays separate. The allowlist is fail-closed (perfect serial chain, the target read only at its own cell,
   pure index guards that move with the loop they mention). Plain cell loops interchange.
+  Positive single-term affine axes `a*i + c` (gh-ocannl-2479) also keep `i` as a cell loop.
+  This covers the strided unit-tap axis of a 1×k or k×1 convolution and physical padding shifts.
+  The write symbol must be distinct from those of every other axis. Full-range physical bounds
+  and separation must hold even when a guard protects the original access.
+  Guarded nests with a single-term axis and FP8 storage decline. The guard can leave a cell
+  untouched, while a widened accumulator's write-back can change its bits.
   A cell with independent supported positive affine pairs, one per axis (gh-ocannl-2423,
   gh-ocannl-2464), is reparametrized per overlapping axis by owner and residue while preserving
   each cell's original contribution order across windows and interleaved reductions (each
@@ -788,7 +814,8 @@ files.
   `post_virtualization_pipeline` in `Low_level.specialize_proc` by
   `Low_level.widen_narrow_scatters`: because a scatter's destination cell is data-dependent and
   cannot reside in a scalar local, the stage threads the backend's `accum_prec` beside
-  `blends_value_selects` (through `Backends.lower_assignments` / `Assignments.lower` /
+  the arm-union charge derived by `Backend_intf.charges_select_arm_union` (through
+  `Backends.lower_assignments` / `Assignments.lower` /
   `Low_level.optimize` / `Context.lowered_for_decisions`) and brackets each eligible statement in a
   weakly-memoized `On_device` buffer in `scatter_accum_namespace` (`W = T; scatter(W); T = W`),
   rounding once at the store-back and leaving narrow policies, FP8, provably single-hit scatters,
@@ -800,7 +827,10 @@ files.
   split tail, a disjoint window with gaps, FP16, and the shorter-scan-over-64 decline; 2-D
   overlapping, mixed, and all-injective bf16 parity plus overlapping 2-D FP16 parity against the
   once-rounded f32 twin, privatized f32 tiles, a hand-built mixed-frame 2-D order witness, and
-  coupled-pair / residue-budget boundary controls). The 1-D and 2-D overlapping FP16 fixtures select
+  coupled-pair / residue-budget boundary controls). It also checks strided unit-tap convolutions
+  with overlapping and disjoint windows, and pins the declines for an in-bounds negative
+  coefficient and for a positive single-term axis that needs a guard for bounds.
+  The 1-D and 2-D overlapping FP16 fixtures select
   `Fp16_wide` explicitly and start at 2048 to match the BF16 fixtures' spacing of two at 256, so
   the same window contributions expose per-window rounding in both formats. The plain path is pinned by
   `lowered_nest_order`'s narrow legs and `narrow_grad_residency` (a bf16 dense layer's three
@@ -2272,7 +2302,7 @@ files.
   `CUDA: floor PTX target only` and records the native-target skips as environment-scoped, with
   the reason on stderr; all applicable value claims still run natively. This scope also covers
   the pool kernel's assembly claim. Keep CUDA's short-circuiting renderer and
-  `cuda_facts.blends_value_selects = false`: enabling blending would change both emission and the
+  `cuda_facts.select_blend_policy = No_blend`: enabling blending would change both emission and the
   inline fan-in guard's arm-load accounting, which this performance census does not justify.
   A floor-policy pass is not evidence that native PTX stays branchless, nor a timing claim.
 - **A device-wide CUDA blend policy trades gains for a sparse equality regression** (gh-ocannl-2281).
@@ -2280,7 +2310,7 @@ files.
   scheduled kernels at sm_75 and sm_120 PTX. With six paired rounds and byte-identical controls,
   blending cut the max-pool backward time by 34% and 22%, respectively, and sped up both masks
   for `where_zero` and `relu_gate`. Sparse `where_eq` slowed by 3.8% and 4.1%, beyond the
-  control ranges at both targets. CUDA therefore keeps `blends_value_selects = false` at both
+  control ranges at both targets. CUDA therefore keeps `select_blend_policy = No_blend` at both
   targets. The issue records the per-cell timings.
 - **Widths that no local hardware can execute still get checked, three ways.** gh-ocannl-621's
   AVX-512, AVX512-FP16 and aarch64 rows were written on a machine with none of them (QEMU's TCG
@@ -2919,6 +2949,17 @@ files.
   `cache_key_agreement` pins that relationship; `test_hip_compile_options` pins both vectors.
   `division_special_values` and `unary_math_special_values` require the exact contracts under
   both policies. `branchless_select` checks all five HIP NaN-condition cases.
+- **Diagnostic HIP compiler-option A/Bs use `hip_extra_compile_options` without editing source**
+  (gh-ocannl-2344): whitespace-separated flags (ASCII whitespace only, no shell quoting) are
+  appended at the end of `Compiler_options.hiprtc`, after `hip_math_options`, target workarounds
+  and debug/line-info flags, so clang's left-to-right option processing lets appended flags
+  override earlier switches (e.g. `bin_cells.py --arm approx='--ocannl_hip_extra_compile_options="-freciprocal-math -fapprox-func"'`).
+  `Cuda_like_config.Hip.compiler_contraction_off` inspects `hip_math_options @ extra_options`, so
+  contraction overrides move `Tile_mma` fallback fusion and `/mma-fallback-unfused` together;
+  non-empty parsed options append `/hiprtc-extra:<rendered>` at the end of HIP's `codegen_tag`
+  (omitted when empty, keeping default keys valid) and enter the kernel code cache key via
+  `hiprtc_options`. Pinned by `arrayjit/test/test_hip_compile_options`, `cache_key_agreement` and
+  `test/operations/hip_extra_compile_options`.
 - **HIP fmod must classify either NaN operand by bits** (gh-ocannl-1909): ROCm returned
   the dividend for a NaN divisor under fast math plus `-fhonor-nans`, at f32, half, bfloat16
   and f64 on gfx1151. `Builtins_hip.ocannl_fmodf` and `ocannl_fmod` now select NaN for

@@ -6,12 +6,21 @@ Usage: gh1821_geometry_fit.py OUT [--arm ARM] [--multiprocessors P] [--warp W] [
                               [--copy-rate R|sweep] [--regress]
 
   OUT   a gh1253_cells.sh output directory: per cell, rank_<site>_<dims>.tsv (and
-        rank_<site>_<dims>.tsv.stock when profile timing cells appended to the main TSV) and
-        rank_<site>_<dims>_<ARM>.out (bench_rank_site.exe's rank-site lines). Reads `.tsv.stock`
-        when present so profile timings never enter the stock fit; refuses a marked mixed TSV
+        rank_<site>_<dims>.tsv.stock when profile timing cells appended to the main TSV),
+        rank_<site>_<dims>_<ARM>.out (bench_rank_site.exe's rank-site lines), and any stock timing
+        censuses (`<cell>_time.err` and `<cell>_time_r<N>.err`; profile logs such as
+        `<cell>_time_<profile>.err` are never read). Reads `.tsv.stock` when present so profile
+        timings never enter the stock fit; refuses a marked mixed TSV
         (`# gh1253_cells: stock snapshot required`) whose `.tsv.stock` is missing (exit 2,
         `stock_snapshot_missing` on stderr, no stdout). Archive provenance comes solely from this
-        marker.
+        marker. From the stock timing censuses, reads only `autotune-seeding: plan` and
+        `autotune-seeding: preset-digest` records via `gh1442_agreement.stock_attribution`, joins
+        configured preset incumbents (`default` and `F_preset[...]` `seeded`) by `preset-digest`
+        against positive 12-column stock rows (replicates kept independent of same-label rows at
+        other digests) and census-selected `F_seeded[...]` by exact label, and refuses conflicting
+        censuses or missing attributed incumbents (`preset_unmatched` / `seeded_plan_unmatched`,
+        exit 2, no stdout). Archives without census logs keep the legacy `baseline` / unique
+        `F_seeded[...]` lookup.
   --arm the listing to re-score (default `shipped`): the fill-only reference F, i.e. scored with no
         staged-copy term and a continuous fill (`shipped` before gh-ocannl-1821 on CUDA; `noocc`
         on HIP, whose shipped listing carries an occupancy factor).
@@ -52,16 +61,30 @@ import statistics
 import sys
 
 import bench_output
-from gh1600_txn_fit import replicates, row_label
+from gh1600_txn_fit import row_replicates, stock_replicates
 
 GEO = re.compile(r"gpu (\d+)x(\d+)x(\d+)/(\d+)x(\d+)( bgrid)?( coal-[kn])?")
 
 
 def stock_tsv_path(tsv):
     """Prefer the archived .tsv.stock snapshot when present; otherwise read tsv, which
-    replicates() refuses if marked as mixed."""
+    stock_replicates() refuses if marked as mixed."""
     stock = f"{tsv}.stock"
     return stock if os.path.isfile(stock) else tsv
+
+
+def stock_census_paths(out, cell):
+    """Stock timing stderr logs in out (`<cell>_time.err` and `<cell>_time_r<N>.err`),
+    excluding profile timing logs such as `<cell>_time_<profile>.err`."""
+    pat = re.compile(rf"^{re.escape(cell)}_time(?:_r([1-9][0-9]*))?\.err$")
+    found = []
+    for entry in os.listdir(out):
+        m = pat.match(entry)
+        if m:
+            path = os.path.join(out, entry)
+            if os.path.isfile(path):
+                found.append((0 if m.group(1) is None else int(m.group(1)), path))
+    return [path for _, path in sorted(found)]
 
 
 def dims(cell):
@@ -88,8 +111,8 @@ def load(out, arm):
             continue
         m, n, k = dims(cell)
         src = stock_tsv_path(tsv)
-        times = replicates(src)
-        if not times:
+        stock = stock_replicates(src, stock_census_paths(out, cell))
+        if not stock.times:
             raise ValueError(f"{src}: no calibration rows")
         explain, kernels, order = {}, {}, []
         with open(listing) as f:
@@ -106,16 +129,17 @@ def load(out, arm):
                                             for spec in fields.get("kernels", "").split(";") if spec]
         rows = []
         for pos, label in enumerate(order):
-            row = row_label(label, times)
-            if row is None or label not in kernels:
+            resolved = row_replicates(label, stock, cell)
+            if resolved is None or label not in kernels:
                 continue
+            rep_times, _ = resolved
             fills = explain[label][2]
             ks = [{"c": float(x["c"]), "m": float(x["m"]), "wg": int(x["wg"]), "thr": int(x["thr"]),
                    "fill": fills[i] if i < len(fills) else 1.0}
                   for i, x in enumerate(kernels[label])]
             g = GEO.search(label)
-            rows.append({"label": label, "pos": pos, "times": times[row],
-                         "med": statistics.median(times[row]), "rank": explain[label][0],
+            rows.append({"label": label, "pos": pos, "times": rep_times,
+                         "med": statistics.median(rep_times), "rank": explain[label][0],
                          "adm": explain[label][1], "kernels": ks,
                          "geo": tuple(map(int, g.groups()[:5])) if g else None,
                          "bgrid": bool(g and g.group(6)), "coal": bool(g and g.group(7))})

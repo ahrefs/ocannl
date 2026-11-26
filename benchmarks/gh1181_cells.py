@@ -60,6 +60,9 @@ ARMS = {
     "tinygrad-beam2": ("tinygrad", None, "approximate", "beam"),
     "torch-defaults-eager": ("pytorch", None, "approximate", "eager"),
 }
+# The November 2026 rog window's healthy BEAM=2 searches reached 334 s (gh-ocannl-2431).
+# Leave room for that cold search while bounding a stall well inside the 1,800 s sweep cap.
+ARM_TIMEOUTS_S = {("rog-nv", "cuda", "tinygrad-beam2"): 600}
 BEAM = 2
 AUGUST = "7014dc4463d00ef1b5d7ef9a24d02ba3556973ee"
 RUNNER = "_build/default/benchmarks/runners/ocannl/bench_gpt.exe"
@@ -84,7 +87,9 @@ def parse_args(argv=None):
     ap.add_argument("--workloads", nargs="+", default=["gpt2_mini"])
     ap.add_argument("--arms", nargs="+", choices=list(ARMS), default=list(ARMS))
     ap.add_argument("--repeats", type=int, default=4, help="repeat 0 is a discarded warm-up")
-    ap.add_argument("--cell-timeout", type=float, default=1800)
+    ap.add_argument("--cell-timeout", type=float, default=1800, metavar="SECONDS",
+                    help="per-cell cap (default 1800), subject to the shorter arm cap on rog; "
+                    "0 disables both cell caps and keeps the total timeout")
     ap.add_argument("--total-timeout", type=float, default=18000)
     ap.add_argument("--cpus", default="0-15" if platform.system() == "Linux" else "",
                     help="taskset CPU list for every cell (Linux); empty to not pin")
@@ -160,6 +165,10 @@ def expected_backend(framework, backend, reference=False):
     return tiny_dev
 
 
+def arm_timeout(a, arm):
+    return min(a.cell_timeout, ARM_TIMEOUTS_S.get((a.box, a.backend, arm), a.cell_timeout))
+
+
 def environment(a, fixtures):
     import orchestrate as o
 
@@ -199,6 +208,7 @@ def environment(a, fixtures):
         "arms": a.arms,
         "repeats": a.repeats,
         "cell_timeout_s": a.cell_timeout,
+        "arm_timeout_s": {arm: arm_timeout(a, arm) for arm in a.arms},
         "total_timeout_s": a.total_timeout,
         "cpus": a.cpus,
         # Reaches the torch cells unfiltered: where a box's interpreter lacks its dev headers,
@@ -333,13 +343,14 @@ def measure(a):
             fail(workload, arm, repeat, stage, "total time cap reached", env, regime)
             return None
         label = cell_label(workload, arm, repeat, stage)
+        cap = arm_timeout(a, arm)
         row, note, checkpoint = o.run_cell_kept(
             label, [*pin, *cmd], env=env, cwd=cwd,
             # Interrupted: record the cell, and what it completed, before propagating.
             on_interrupted=lambda kept: fail(
                 workload, arm, repeat, stage, "interrupted mid-cell", env, regime, kept),
             # A zero cell cap disables only the cell's own cap, never the total.
-            timeout=min(a.cell_timeout, remaining) if a.cell_timeout else remaining,
+            timeout=min(cap, remaining) if cap else remaining,
             on_incomplete=(o.ocannl_cache_note if arm.startswith("ocannl") else None))
         if row is None:
             fail(workload, arm, repeat, stage, note, env, regime, checkpoint)

@@ -318,18 +318,10 @@ let exemptions =
 let read_sources dirs =
   List.concat_map dirs ~f:(fun dir ->
       let on_disk = "../../" ^ dir in
-      let names = Stdlib.Sys.readdir on_disk |> Array.to_list in
-      List.filter_map names ~f:(fun name ->
-          let selected =
-            Option.value_map (String.chop_suffix name ~suffix:".ml") ~default:false ~f:(fun stem ->
-                List.mem names (stem ^ ".missing.ml") ~equal:String.equal)
-          in
-          if
-            String.is_suffix name ~suffix:".ml"
-            && (not (String.is_suffix name ~suffix:".pp.ml"))
-            && not selected
-          then Some (dir ^ "/" ^ name, Stdio.In_channel.read_all (on_disk ^ "/" ^ name))
-          else None))
+      Stdlib.Sys.readdir on_disk |> Array.to_list |> Test_scan.Config_key_scan.sources_among
+      |> List.filter ~f:(fun name -> not (String.is_suffix name ~suffix:".pp.ml"))
+      |> List.map ~f:(fun name ->
+          (dir ^ "/" ^ name, Stdio.In_channel.read_all (on_disk ^ "/" ^ name))))
   |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
 
 let () =

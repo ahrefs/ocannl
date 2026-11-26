@@ -6,6 +6,10 @@ the equality select stated short: the routine does not emit the blend: true
 the equality select stated blend: the producer is materialized by the fan-in cap: true
 the equality select stated blend: the loss matches the reference (exact: small integers): true
 the equality select stated blend: the routine emits the blend: true
+HIP defaults to load-free blending: true
+HIP's default policy leaves a two-loaded-arm select within the cap: true
+Metal defaults to serial-loop blending: true
+Metal's default policy leaves a two-loaded-arm select within the cap and blends in a serial loop: true
 pool backward stated short: the routine does not emit the blend: true
 pool backward stated blend: the routine emits the blend: true
 pool backward: the blended gradient equals the short-circuiting one, bitwise: true

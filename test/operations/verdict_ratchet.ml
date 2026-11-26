@@ -6243,10 +6243,6 @@ let exempt_leg_gate_calls : (string * int * string) list =
       2,
       "local bracket helper with_probe passes a Ctypes Dl.dlopen handle of a standalone host C \
        compiler probe, independent of OCANNL codegen" );
-    ( "test/operations/cost_model_fill.ml:Autotune.ranking_fill_model",
-      1,
-      "known dependent gate (pre-existing): gates fill_leg on Autotune.ranking_fill_model while \
-       claiming about Autotune.ranking_ms; tracked for follow-up" );
     ( "test/operations/launch_predicate_parity.ml:Autotune.c_a",
       1,
       "reads the conv site's input precision node from the test fixture lowering for \
@@ -7120,6 +7116,290 @@ end
 let leg = Verdict.leg ~when_:Autotune.ok ~on:"cc" ()
 let () = in_leg ~leg "local" (fun label -> p label true)|ocaml},
       [] );
+    (* gh-ocannl-2470: repeated forces of the same lazy binding, fresh helper-allocated sub_legs,
+       and immediately applied anonymous functions. *)
+    ( "accepts repeated Lazy.force calls on the same named lazy binding running \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let run =
+  lazy
+    (Test_utils.with_policy
+       (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+       (fun () -> in_leg ~leg:sub "tf32 once" (fun label -> p label true)))
+let () =
+  Lazy.force run;
+  Lazy.force run|ocaml},
+      [] );
+    ( "refuses distinct lazy bindings forced across two invocations of a Test_utils.with_policy \
+       helper",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let check enabled =
+  let run =
+    lazy
+      (Test_utils.with_policy
+         (fun p -> { p with Ir.Numerics.tf32_matmuls = enabled })
+         (fun () -> in_leg ~leg:sub "tf32 replay" (fun label -> p label true)))
+  in
+  Lazy.force run;
+  Lazy.force run
+let () =
+  check false;
+  check true|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "accepts separately allocated sub_legs returned by distinct invocations of a factory helper",
+      {ocaml|open Verdict.Claims
+let parent = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let make () =
+  Verdict.sub_leg parent ~on:"tf32" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let () =
+  let first = make () in
+  in_leg ~leg:first "outside" (fun label -> p label true);
+  let second = make () in
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg:second "inside" (fun label -> p label true))|ocaml},
+      [] );
+    ( "refuses the same factory-allocated sub_leg reused outside and inside Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let parent = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let make () =
+  Verdict.sub_leg parent ~on:"tf32" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let () =
+  let first = make () in
+  in_leg ~leg:first "outside" (fun label -> p label true);
+  let _second = make () in
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg:first "inside" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses a leg gating on an unqualified capability field inside an immediately applied \
+       anonymous function",
+      {ocaml|open Verdict.Claims
+let caps = Context.codegen_capabilities (Context.auto ())
+let leg =
+  Verdict.leg ~on:"metal"
+    ~when_:
+      ((fun (c : Ir.Backend_intf.codegen_capabilities) -> c.workgroup_allocation_alignment = 4)
+         caps)
+    ()
+let () = in_leg ~leg "aligned" (fun label -> p label true)|ocaml},
+      [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
+    ( "refuses a leg gating on a capability field matched by an immediately applied function \
+       expression",
+      {ocaml|open Verdict.Claims
+let caps = Context.codegen_capabilities (Context.auto ())
+let leg =
+  Verdict.leg ~on:"metal"
+    ~when_:((function { workgroup_allocation_alignment = a; _ } -> a = 4) caps)
+    ()
+let () = in_leg ~leg "aligned" (fun label -> p label true)|ocaml},
+      [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
+    ( "refuses a disallowed call in an unused argument of an immediately applied anonymous function",
+      {ocaml|open Verdict.Claims
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:((fun _ -> true) (Option.is_some (Autotune.detect_conv llc)))
+    ()
+let () = in_leg ~leg "unused arg" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses a lazy policy-wrapper force after a conditional first force and an unwrapped claim",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let run =
+  lazy
+    (Test_utils.with_policy
+       (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+       (fun () -> in_leg ~leg:sub "tf32 conditional" (fun label -> p label true)))
+let () =
+  if flag then Lazy.force run;
+  in_leg ~leg:sub "outside" (fun label -> p label true);
+  Lazy.force run|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "accepts separately allocated sub_legs returned through a nested local factory helper",
+      {ocaml|open Verdict.Claims
+let parent = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let make () =
+  let alloc () =
+    Verdict.sub_leg parent ~on:"tf32" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+  in
+  alloc ()
+let () =
+  let first = make () in
+  in_leg ~leg:first "outside" (fun label -> p label true);
+  let second = make () in
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg:second "inside" (fun label -> p label true))|ocaml},
+      [] );
+    ( "refuses a disallowed call in an eager argument when projecting a field from an immediately \
+       applied anonymous function",
+      {ocaml|open Verdict.Claims
+type box = { ok : bool }
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:(((fun _ -> { ok = true }) (Option.is_some (Autotune.detect_conv llc))).ok)
+    ()
+let () = in_leg ~leg "projected inline arg" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses a lazy policy-wrapper force after an iterator callback force over an unknown \
+       collection and an unwrapped claim",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let run =
+  lazy
+    (Test_utils.with_policy
+       (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+       (fun () -> in_leg ~leg:sub "tf32 iter" (fun label -> p label true)))
+let () =
+  List.iter flags ~f:(fun _ -> Lazy.force run);
+  in_leg ~leg:sub "outside" (fun label -> p label true);
+  Lazy.force run|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses a lazy policy-wrapper force after an uncalled optional default force and an \
+       unwrapped claim",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let run =
+  lazy
+    (Test_utils.with_policy
+       (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+       (fun () -> in_leg ~leg:sub "tf32 default" (fun label -> p label true)))
+let _check ?(_x = Lazy.force run) () = ()
+let () =
+  in_leg ~leg:sub "outside" (fun label -> p label true);
+  Lazy.force run|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses a disallowed call in an unused optional default of an immediately applied anonymous \
+       function",
+      {ocaml|open Verdict.Claims
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:((fun ?(_probe = Option.is_some (Autotune.detect_conv llc)) () -> true) ())
+    ()
+let () = in_leg ~leg "unused default" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses a disallowed call in an eager argument when a destructured result projects only \
+       part of an immediately applied anonymous function",
+      {ocaml|open Verdict.Claims
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:(let ok, _ = (fun x -> x) (true, Option.is_some (Autotune.detect_conv llc)) in ok)
+    ()
+let () = in_leg ~leg "projected inline tuple" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses a lazy policy-wrapper force after a stored anonymous closure force and an unwrapped \
+       claim",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let run =
+  lazy
+    (Test_utils.with_policy
+       (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+       (fun () -> in_leg ~leg:sub "tf32 stored" (fun label -> p label true)))
+let _stored = Some (fun () -> Lazy.force run)
+let () =
+  in_leg ~leg:sub "outside" (fun label -> p label true);
+  Lazy.force run|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses an eager ambient read passed to an immediately applied anonymous function that \
+       consumes it inside Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:
+      ((fun x -> Test_utils.with_policy (fun p -> p) (fun () -> x))
+         (Ir.Numerics.get ()).tf32_matmuls)
+    ()
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg "wrapped inline arg" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses a disallowed call in a sequence prefix inside an immediately applied anonymous \
+       function whose record field is projected",
+      {ocaml|open Verdict.Claims
+type box = { ok : bool }
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:
+      (((fun () ->
+           ignore (Autotune.detect_conv llc);
+           { ok = true })
+          ())
+         .ok)
+    ()
+let () = in_leg ~leg "projected inline body" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses a disallowed call in a forced lazy sequence prefix inside an immediately applied \
+       anonymous function whose record field is projected",
+      {ocaml|open Verdict.Claims
+type box = { ok : bool }
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:
+      (((fun () ->
+           Lazy.force
+             (lazy
+               (ignore (Autotune.detect_conv llc);
+                { ok = true })))
+          ())
+         .ok)
+    ()
+let () = in_leg ~leg "projected forced lazy body" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses a disallowed call in a named helper invoked inside an immediately applied anonymous \
+       function whose record field is projected",
+      {ocaml|open Verdict.Claims
+type box = { ok : bool }
+let make () =
+  ignore (Autotune.detect_conv llc);
+  { ok = true }
+let leg = Verdict.leg ~on:"cuda" ~when_:(((fun () -> make ()) ()).ok) ()
+let () = in_leg ~leg "projected named helper body" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses an eager ambient read passed to an immediately applied anonymous function that \
+       consumes it inside an explicit Ll_test.advertised policy",
+      {ocaml|open Verdict.Claims
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:
+      ((fun x ->
+          Ll_test.advertised
+            ~policy:{ (Ir.Numerics.get ()) with Ir.Numerics.tf32_matmuls = x }
+            ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single
+            ~d_prec:Ir.Ops.single ())
+         (Ir.Numerics.get ()).tf32_matmuls)
+    ()
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg "explicit policy inline arg" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses a lazy policy-wrapper force after an uninstantiated functor force and an unwrapped \
+       claim",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let run =
+  lazy
+    (Test_utils.with_policy
+       (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+       (fun () -> in_leg ~leg:sub "tf32 functor" (fun label -> p label true)))
+module Unused () = struct
+  let () = Lazy.force run
+end
+let () =
+  in_leg ~leg:sub "outside" (fun label -> p label true);
+  Lazy.force run|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
   ]
 
 let run_leg_gate_controls () =
@@ -8457,9 +8737,9 @@ let () =
       let content = In_channel.read_all path in
       (* A source this reader cannot read is reported by NAME and the scan carries on, rather than
          taking the run down with a syntax error naming no file: the corpus is globbed, so what
-         arrives is whatever the test directories hold -- including whatever a `(select …)` or a ppx
-         put there -- and the one thing worse than a parse failure here is one that leaves nobody
-         knowing which of three hundred files it was about. *)
+         arrives is every checked-in source in the test directories (`sources_among` drops generated
+         `(select …)` targets and `.pp.ml` twins), and the one thing worse than a parse failure here
+         is one that leaves nobody knowing which of three hundred files it was about. *)
       let scanned, (helper_claims, probe_tokens), dialects, line_breaks =
         read_claims ~fail ~source content
       in

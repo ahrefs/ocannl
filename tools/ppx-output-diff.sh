@@ -37,6 +37,8 @@
 # revision, a failed worktree, enumeration, build or rendering, or a revision with no
 # preprocessed file in scope (a corpus that went blind is no verdict).
 set -u
+# Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462, gh-ocannl-2484).
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
 me=ppx-output-diff
 die() { echo "$me: $*" >&2; exit 2; }
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
@@ -201,7 +203,7 @@ awk -F '\t' 'FNR == NR { b[$1] = $2; next } { h[$1] = $2 }
   END {
     for (p in b) print p, b[p], ((p in h) ? h[p] : "absent")
     for (p in h) if (!(p in b)) print p, "absent", h[p]
-  }' "$tmp/base.inputs" "$tmp/head.inputs" | LC_ALL=C sort >"$tmp/pairs"
+  }' "$tmp/base.inputs" "$tmp/head.inputs" | env LC_ALL=C sort >"$tmp/pairs"
 expansion=0 source=0 added=0 removed=0
 while read -r t b h; do
   if [ "$b" = absent ]; then echo "$me: ADDED      $t" >&2; added=$((added + 1))

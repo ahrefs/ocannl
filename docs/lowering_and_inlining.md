@@ -576,6 +576,11 @@ the computation's leaves between the deferring routine and the consuming read, t
 observes the *new* value, whereas the materialized reading of the same program text snapshots the
 leaf as of the deferring routine's execution point.
 
+If a stored template retains a read of a separately stored virtual dependency, that read
+evaluates the dependency's stored components in program order at consumption. A later assignment
+to the dependency within the deferring routine can therefore affect the replayed value. An
+already-inlined dependency is replayed through its captured scope.
+
 This is deliberate: **at the arrayjit level, the recompute-vs-materialize semantics of a deferred
 computation is not fixed** — a placement decision selects which reading executes, and both are
 legal. Users control the choice with two knobs:

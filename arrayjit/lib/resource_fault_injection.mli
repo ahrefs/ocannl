@@ -15,6 +15,9 @@
     pins both halves. *)
 
 type point =
+  | Delta_pool_before_allocate
+      (** Immediately before a delta pool's allocation, under the same refusal handler as the
+          allocation itself. The census records the pool after the allocation succeeds. *)
   | Delta_pool_allocated
   | Delta_unwind_before_free
   | Link_after_delta
@@ -40,3 +43,12 @@ val hit : point -> unit
 
 val with_callback : (point -> unit) -> f:(unit -> 'a) -> 'a
 (** Installs the callback for [f] and restores the prior callback even when [f] raises. *)
+
+val pool_cap : default:int -> int
+(** The working cap in the calling domain. *)
+
+val with_pool_cap : int -> f:(unit -> 'a) -> 'a
+(** Lowers the pool cap to at most the given byte count in the calling domain during [f]. The cap
+    must be a positive power of two to preserve the link floor for page-rounded allocations.
+    Otherwise raises [Invalid_argument] before entering [f]. An outer cap still applies to an inner
+    scope. The prior cap is restored even when [f] raises. *)

@@ -83,8 +83,8 @@ files.
   local, no division: index guards) included, the others dropped, since they may rely on the test
   that no longer precedes them. Letting such tests guard made the
   definitions' order depend on their tests' reads, which CSE sharing turns into cycles, and cutting
-  those dropped index guards (Codex review, rounds 2-6). Under a blend (cc and HIP at a
-  float precision, `speculable_select`, whose conditions never mention an index) both arms run by
+  those dropped index guards (Codex review, rounds 2-6). Under a permitted blend
+  (`speculable_select`, whose conditions never mention an index) both arms run by
   contract, so nothing is guarded and no branch is added; a gate's operand keeps its hoisted
   definitions too (a value test, never a range guard). Both licences rest on lowering's invariant
   that a read able to leave its node sits under an index guard of its own, which
@@ -1024,12 +1024,13 @@ files.
   5.5-6.5%, so an identical schedule varies ~1pp run to run -- all three non-overlapping), and balancing that order matters: a fixed order
   confounds the cap with session position, which was worth ~1.4pp of an apparent 7.1%.
 - **The fan-in guard charges a value select as the backend renders it** (gh-ocannl-1775). Where
-  `backend_facts.blends_value_selects` holds (cc, HIP), a `Where` that `speculable_select` admits is
+  `Backend_intf.charges_select_arm_union` holds (cc's eager policy), a `Where` that `speculable_select` admits is
   a blend evaluating both arms, so a setter is charged the UNION of the arms' loads (distinct nodes,
   never the sum of sizes); elsewhere (CUDA, Metal) one arm -- the one whose loads are the most
   AFTER transitive expansion (gh-ocannl-1874), every tied one kept (gh-ocannl-2098, below): an arm
   loading one virtual node can replay more than an arm loading three materialized ones, so a choice
-  on direct loads under-counts. Hence
+  on direct loads under-counts. HIP's load-free blend adds no arm loads, so its guard also
+  uses this wider-arm calculation (gh-ocannl-2427). Hence
   `setter_reads` keeps each setter's `read_charge` -- unconditional loads plus every select's arms
   and its `speculable` admission, unresolved -- and `decide_placements` resolves it
   (`resolve_charge`) with its transitive `expand` under the backend's flag; the cached analysis
@@ -1047,7 +1048,7 @@ files.
   `access_fold`, `backend_facts`, and `op_table_compile` against the emitted kernels.
 - **To time a whole program under the other select rendering, override the fact, not the
   renderer** (gh-ocannl-2326). `Backend_intf.with_select_blend ~facts ~blend` states
-  `blends_value_selects` for one backend's record on the calling domain, and both readers take it
+  the eager or short-circuit policy for one backend's record on the calling domain, and both readers take it
   through `effective_facts`: `Backends.lower_assignments` (so the guard charges the union exactly
   where the renderer blends) and the cc/CUDA/HIP renderers. `Cuda_backend.with_select_rendering`
   wraps it for `bench_cuda_select`. A `~prelowered` segment keeps the placements it was lowered
@@ -1122,7 +1123,7 @@ files.
   it (edges into a `known_non_virtual` node dropped) and walks the components dependencies first. A
   component of one node takes the per-setter maximum above. A cycle's members share one set, the
   union of what all their charges load from outside it, across setters and across select arms and
-  whatever the backend's `blends_value_selects`: "one setter per read" and "one arm per evaluation"
+  under any select blend policy: "one setter per read" and "one arm per evaluation"
   hold per cell, and a chain through a cycle evaluates several. So it is a conservative estimate,
   which can join mutually exclusive setters. The set is finished before any member lands, and each
   member lands on its own eligibility, so an exempt member stays and the others land; that can
@@ -1235,7 +1236,15 @@ files.
   dropped) and visits every operand -- never `evaluation_reads_of_proc`, the cost collector, which
   skips merge reads and charges one `Where` arm. A new statement or scalar constructor, or a change to
   what instantiation keeps, must update `replay_facts` too: its match arms are exhaustive for that
-  reason. A materialized node with a buffer ends the walk (it shields a `Local` dependency behind
+  reason. A shared-loop capture can retain an ordinary read of a later candidate (gh-ocannl-2493).
+  On an inherited splice, `virtual_llc` serves these reads at the substituted indices when both
+  nodes' components come entirely from earlier routines. A retained read observes the dependency
+  at consumption, after the producer has run. The read site's bounds can eliminate a `Where` arm
+  after substitution. Scopes that retract to a materialized buffer shield their bodies.
+  Cleanup refuses a surviving virtual buffer read with its provenance.
+  `buffer_aliasing` checks the virtual dependency chain and the materialized shield against one
+  materialized run.
+  A materialized node with a buffer ends the walk (it shields a `Local` dependency behind
   it); answers rank `Unobservable_local` > `Unobservable_aliased` (a buffer the `buffer_aliasing`
   planner shares, which `to_host` and linking refuse) > `Unobservable_merge` > `Launch_bound` >
   `Needs_context`.

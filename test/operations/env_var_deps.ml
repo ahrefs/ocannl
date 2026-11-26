@@ -1176,8 +1176,14 @@ let width_key = "cc_vector_bytes"
    rounds 1-3 of staging#1263, where proving arbitrary statements of a setting kept finding new ways
    to write one). An initialization pin is invalidated if any top-level item from the pinning one
    onward -- including the search item and later items -- spells a vector-file key literal (by
-   config key or env-var name), without trying to distinguish read-only diagnostics from resets; a
-   program that needs to mention a key after pinning pins via `(setenv …)` or carries the marker.
+   config key or env-var name), without trying to distinguish read-only diagnostics from resets, or
+   if any sibling module of the same program (excluding `modules_without_implementation`) spells a
+   vector-file key literal anywhere in its parsed expressions or lacks a parsable implementation
+   source; a program that only makes a read-only mention of a key after pinning or in a sibling
+   module can pin via `(setenv …)` or carry the marker (in-process `Utils.state_config` resets
+   outrank `(setenv …)` and are not checked by the `setenv` branch). Dynamic key strings computed at
+   runtime and linked library modules outside the program's own module set are outside this literal
+   pass.
 
    "Starts a search" is derived from the search's entry points [search_value] (and
    [search_values_extra]) of [search_home] and the values of the framework library
@@ -1489,9 +1495,11 @@ let main () =
     List.map sources ~f:(fun (path, _) -> Stdlib.Filename.dirname path)
     |> Set.of_list (module String)
   in
-  let source_of ~dir module_name =
-    List.Assoc.find sources ~equal:String.equal
-      (String.lowercase (Scan.in_subdir dir (module_name ^ ".ml")))
+  (* Every checked-in source file that compiles as [module_name] in [stanza]: the direct
+     [<module>.ml], or every arm of a [(select <module>.ml from …)] (gh-ocannl-2482). *)
+  let module_source_files ~dir stanza module_name =
+    Policy.module_sources stanza module_name
+    |> List.map ~f:(fun file -> (file, String.lowercase (Scan.in_subdir dir file)))
   in
   (* gh-ocannl-1368: the search's entry points, derived. The anchor is refused when it moves, as the
      width's are: a renamed `tune` would otherwise retire the rule with an empty population. *)
@@ -1874,6 +1882,10 @@ let main () =
      resolves it to, and where it was written -- compared across directories once every dune file is
      read. *)
   let relative_lock_sites = ref [] in
+  (* gh-ocannl-2382: backend-default definitions (on library stanzas) and readers (on program
+     stanzas), cross-checked after every dune file is read. *)
+  let backend_default_defs = ref [] in
+  let backend_default_readers = ref [] in
   (* Every `(env_var ...)` under a sexp, at any depth. *)
   let rec env_vars_in = function
     | Sexp.List [ Sexp.Atom "env_var"; Sexp.Atom name ] -> [ name ]
@@ -2285,6 +2297,114 @@ let main () =
          `(subdir b (rule … probe.exe))` name different programs and only the pair says which
          (gh-ocannl-747, Codex P2 round 3). *)
       let all_group_runners = file_stanzas in
+      (* gh-ocannl-2382: backend-default dependency markers, checked through the shared
+         contained-marker contract and cross-checked across files after the walk. *)
+      let default_contract = Scan.default_marker_contract content in
+      List.iter default_contract.Scan.contract_issues ~f:(function
+        | Scan.Malformed_marker { issue_line; issue_text; issue_malformed } ->
+            fail
+              (Printf.sprintf
+                 "%s:%d has a `%s` comment that does not parse as a marker: %s. The line reads \
+                  `;%s`"
+                 dune_file issue_line Scan.default_marker_sentinel
+                 (Scan.default_marker_malformed_reason issue_malformed)
+                 issue_text)
+        | Scan.Marker_in_wrong_stanza { issue_line; issue_why; _ } ->
+            fail
+              (Printf.sprintf "%s:%d carries a backend-default marker on the wrong stanza: %s"
+                 dune_file issue_line issue_why)
+        | Scan.Marker_outside_stanza { issue_line; _ } ->
+            fail
+              (Printf.sprintf
+                 "%s:%d has a backend-default marker that sits inside no stanza -- move it inside \
+                  the parentheses of the stanza it is about"
+                 dune_file issue_line)
+        | Scan.Marker_outside_comment
+            { issue_text_occurrences = in_text; issue_comment_occurrences = in_comments } ->
+            fail
+              (Printf.sprintf
+                 "%s spells `%s` %d times and only %d of them are in a comment -- a \
+                  backend-default marker outside a comment declares nothing"
+                 dune_file Scan.default_marker_sentinel in_text in_comments));
+      let backend_reach_of_marked_contract m =
+        match Scan.backend_rule_of m with
+        | Scan.Declares_variable -> `Any
+        | Scan.Names_backend (_, body) | Scan.Declares_and_names (_, body) ->
+            `Fixed (String.split body.Scan.backend ~on:',')
+        | Scan.Runs_nothing | Scan.Names_twice _ | Scan.Names_neither -> `Fixed []
+      in
+      let backend_reach_of_location ~subdir ~line =
+        match
+          List.find marker_contract.Scan.contract_stanzas ~f:(fun m ->
+              String.equal m.Scan.marker_stanza.Scan.marked_subdir subdir
+              && Int.equal m.Scan.marker_stanza.Scan.marked_line line)
+        with
+        | None -> `Fixed []
+        | Some m -> backend_reach_of_marked_contract m
+      in
+      let backend_reach_of_runner runner =
+        match
+          List.find marker_contract.Scan.contract_stanzas ~f:(fun m ->
+              phys_equal m.Scan.marker_stanza.Scan.marked_sexp runner)
+        with
+        | None -> `Fixed []
+        | Some m -> backend_reach_of_marked_contract m
+      in
+      let merge_reach a b =
+        match (a, b) with
+        | `Any, _ | _, `Any -> `Any
+        | `Fixed xs, `Fixed ys -> `Fixed (List.dedup_and_sort (xs @ ys) ~compare:String.compare)
+      in
+      List.iter default_contract.Scan.contract_stanzas ~f:(fun m ->
+          let stanza = m.Scan.marker_stanza in
+          let seen_reader_names = ref (Set.empty (module String)) in
+          List.iter m.Scan.stanza_markers ~f:(fun marker ->
+              match marker.Scan.contained_value with
+              | Scan.Default_definition
+                  { default_name; default_backends; default_targets; default_reason = _ } ->
+                  let def_dir = Scan.in_subdir dir stanza.Scan.marked_subdir in
+                  let select_arms = Scan.select_arms stanza.Scan.marked_sexp in
+                  backend_default_defs :=
+                    ( default_name,
+                      default_backends,
+                      default_targets,
+                      dune_file,
+                      marker.Scan.contained_line,
+                      def_dir,
+                      select_arms )
+                    :: !backend_default_defs
+              | Scan.Default_reader { default_name; default_reason = _ } ->
+                  if Set.mem !seen_reader_names default_name then
+                    fail
+                      (Printf.sprintf
+                         "%s:%d names the backend default `%s` more than once on the same stanza \
+                          -- drop the duplicate reader marker"
+                         dune_file marker.Scan.contained_line default_name)
+                  else (
+                    seen_reader_names := Set.add !seen_reader_names default_name;
+                    let reach =
+                      match stanza.Scan.marked_head with
+                      | "executable" | "executables" ->
+                          let runners =
+                            Scan.program_runners ~subdir:stanza.Scan.marked_subdir
+                              ~runner_stanzas:all_group_runners stanzas stanza.Scan.marked_sexp
+                            |> List.concat_map ~f:snd |> List.map ~f:fst
+                          in
+                          List.fold runners ~init:(`Fixed []) ~f:(fun acc runner ->
+                              merge_reach acc (backend_reach_of_runner runner))
+                      | _ ->
+                          backend_reach_of_location ~subdir:stanza.Scan.marked_subdir
+                            ~line:stanza.Scan.marked_line
+                    in
+                    backend_default_readers :=
+                      ( default_name,
+                        dune_file,
+                        marker.Scan.contained_line,
+                        Printf.sprintf "%s %s" stanza.Scan.marked_head
+                          (if String.is_empty stanza.Scan.marked_name then "<unnamed>"
+                           else stanza.Scan.marked_name),
+                        reach )
+                      :: !backend_default_readers)));
       (* gh-ocannl-800: collect the executable each repository-wide scan rule runs. Dune's main
          module contract makes [foo.exe] come from [foo.ml]; the source lookup below holds that
          relationship against the files this run was actually handed. This is deliberately a
@@ -2592,7 +2712,9 @@ let main () =
       let policy_listed = ref [] in
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
-          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
+          let directory_modules =
+            Scan.directory_modules ~stanzas:group ~dir:here (List.map source_files ~f:fst)
+          in
           (* The ambient gate's own aliases are the one entry no member answers for: every family
              stanza lists one, so the stanza is rerun when the environment changes. *)
           let gates =
@@ -2980,11 +3102,13 @@ let main () =
                         | _ -> false)
                   in
                   let sources =
-                    List.filter_map modules ~f:(function
+                    List.concat_map modules ~f:(function
                       | Sexp.Atom module_name ->
-                          Option.map (source_of ~dir module_name) ~f:(fun on_disk ->
-                              (module_name ^ ".ml", In_channel.read_all on_disk))
-                      | _ -> None)
+                          List.filter_map (module_source_files ~dir stanza module_name)
+                            ~f:(fun (file, key) ->
+                              Option.map (List.Assoc.find sources ~equal:String.equal key)
+                                ~f:(fun on_disk -> (file, In_channel.read_all on_disk)))
+                      | _ -> [])
                   in
                   (* Each module read once, through its refusal (gh-ocannl-1500): an unparsable
                      module used to raise out of the whole check here. *)
@@ -3104,7 +3228,9 @@ let main () =
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
           let directory = if String.is_empty here then "." else here in
-          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
+          let directory_modules =
+            Scan.directory_modules ~stanzas:group ~dir:here (List.map source_files ~f:fst)
+          in
           List.iter group ~f:(fun stanza ->
               match
                 Scan.stanza_programs ~subdir ~runner_stanzas:all_group_runners ~directory_modules
@@ -3159,8 +3285,12 @@ let main () =
                          TOLD has no implementation is not a missing input: an `.mli` runs
                          nothing. *)
                       List.iter own_modules ~f:(fun module_name ->
+                          let has_all_sources =
+                            List.for_all (module_source_files ~dir:here stanza module_name)
+                              ~f:(fun (_, key) -> List.Assoc.mem sources key ~equal:String.equal)
+                          in
                           if
-                            Option.is_none (source_of ~dir:here module_name)
+                            (not has_all_sources)
                             && Scan.needs_source declared module_name
                             && Set.mem scanned_dirs directory
                           then
@@ -3175,8 +3305,8 @@ let main () =
                       (* gh-ocannl-1368: a program starting a search, with a run that can select cc,
                          pins the vector file or says at its stanza why its claims hold at every
                          width. *)
-                      let in_here module_name =
-                        String.lowercase (Scan.in_subdir here (module_name ^ ".ml"))
+                      let module_keys module_name =
+                        List.map (module_source_files ~dir:here stanza module_name) ~f:snd
                       in
                       (* One subject per program: a `(tests (names a b))` stanza builds a separate
                          executable per name, linking each one's main module and the shared ones but
@@ -3268,61 +3398,100 @@ let main () =
                          pinning one onward (including the search item and later items) spells a key
                          of the file, which could reset it (round 4, gh-ocannl-2458). No other
                          module of the program names a search at all, since its initializers may run
-                         before the pinning one. *)
+                         before the pinning one, nor spells a vector-file key literal or lacks a
+                         parsable implementation source when it needs one (gh-ocannl-2490). *)
                       let init_pin modules =
-                        let names_search m = Map.mem search_reach (in_here m) in
+                        let names_search m =
+                          List.exists (module_keys m) ~f:(Map.mem search_reach)
+                        in
                         let key_literals =
                           List.concat_map vector_file_keys ~f:(fun (key, _) ->
                               vector_file_literals key)
                         in
+                        let spells_key item =
+                          List.exists item.Sources.literals ~f:(fun literal ->
+                              List.mem key_literals literal ~equal:String.equal)
+                        in
+                        let sibling_disqualifies m =
+                          if not (Scan.needs_source declared m) then false
+                          else
+                            match module_source_files ~dir:here stanza m with
+                            | [] -> true
+                            | arms ->
+                                List.exists arms ~f:(fun (_, key) ->
+                                    match List.Assoc.find sources key ~equal:String.equal with
+                                    | None -> true
+                                    | Some on_disk -> (
+                                        match
+                                          Test_scan.Scan_attempt.run (fun () ->
+                                              Sources.initialization_items
+                                                (In_channel.read_all on_disk))
+                                        with
+                                        | Scanned items -> List.exists items ~f:spells_key
+                                        | Unparsed _ | Raised _ -> true))
+                        in
+                        let arm_pin ~others (file, key) =
+                          match Map.find vector_file_init_order key with
+                          | Some (items, helper_of, is_search, first_applied) ->
+                              let barrier = function
+                                | path when is_search path -> true
+                                | first :: _ :: _ -> List.mem others first ~equal:String.equal
+                                | _ -> false
+                              in
+                              let rec scan index pinned = function
+                                | [] -> pinned
+                                | item :: rest
+                                  when Option.exists first_applied ~f:(Int.equal index)
+                                       || List.exists item.Sources.paths ~f:barrier ->
+                                    (* No later pin counts after a search or cross-module barrier,
+                                       and a key literal in this item or any later one may still
+                                       reset the pin before a search runs. *)
+                                    if List.exists (item :: rest) ~f:spells_key then None
+                                    else pinned
+                                | item :: rest ->
+                                    let pinned =
+                                      match
+                                        if item.Sources.runs then
+                                          List.filter_map item.Sources.called ~f:helper_of
+                                        else []
+                                      with
+                                      | [] -> pinned
+                                      | helpers -> Some helpers
+                                    in
+                                    let pinned = if spells_key item then None else pinned in
+                                    scan (index + 1) pinned rest
+                              in
+                              Option.map (scan 0 None items) ~f:(fun helpers ->
+                                  Printf.sprintf "%s calls %s at initialization, before any search"
+                                    file
+                                    (String.concat ~sep:", "
+                                       (List.map
+                                          (List.dedup_and_sort helpers ~compare:String.compare)
+                                          ~f:(fun helper -> "`" ^ helper ^ "`"))))
+                          | None -> None
+                        in
                         List.find_map modules ~f:(fun m ->
                             let others =
-                              List.filter modules ~f:(fun m' -> not (String.equal m m'))
+                              List.filter modules ~f:(fun m' ->
+                                  not (String.equal (String.lowercase m) (String.lowercase m')))
                             in
-                            match Map.find vector_file_init_order (in_here m) with
-                            | Some (items, helper_of, is_search, first_applied)
-                              when not (List.exists others ~f:names_search) ->
-                                let barrier = function
-                                  | path when is_search path -> true
-                                  | first :: _ :: _ -> List.mem others first ~equal:String.equal
-                                  | _ -> false
-                                in
-                                let spells_key item =
-                                  List.exists item.Sources.literals ~f:(fun literal ->
-                                      List.mem key_literals literal ~equal:String.equal)
-                                in
-                                let rec scan index pinned = function
-                                  | [] -> pinned
-                                  | item :: rest
-                                    when Option.exists first_applied ~f:(Int.equal index)
-                                         || List.exists item.Sources.paths ~f:barrier ->
-                                      (* No later pin counts after a search or cross-module barrier,
-                                         and a key literal in this item or any later one may still
-                                         reset the pin before a search runs. *)
-                                      if List.exists (item :: rest) ~f:spells_key then None
-                                      else pinned
-                                  | item :: rest ->
-                                      let pinned =
-                                        match
-                                          if item.Sources.runs then
-                                            List.filter_map item.Sources.called ~f:helper_of
-                                          else []
-                                        with
-                                        | [] -> pinned
-                                        | helpers -> Some helpers
-                                      in
-                                      let pinned = if spells_key item then None else pinned in
-                                      scan (index + 1) pinned rest
-                                in
-                                Option.map (scan 0 None items) ~f:(fun helpers ->
-                                    Printf.sprintf
-                                      "%s.ml calls %s at initialization, before any search"
-                                      (String.lowercase m)
-                                      (String.concat ~sep:", "
-                                         (List.map
-                                            (List.dedup_and_sort helpers ~compare:String.compare)
-                                            ~f:(fun helper -> "`" ^ helper ^ "`"))))
-                            | _ -> None)
+                            if
+                              List.exists others ~f:names_search
+                              || List.exists others ~f:sibling_disqualifies
+                            then None
+                            else
+                              match module_source_files ~dir:here stanza m with
+                              | [ single ] -> arm_pin ~others single
+                              | arms -> (
+                                  let searching_arms =
+                                    List.filter arms ~f:(fun (_, key) -> Map.mem search_reach key)
+                                  in
+                                  match searching_arms with
+                                  | [] -> None
+                                  | _ ->
+                                      Option.map
+                                        (Option.all (List.map searching_arms ~f:(arm_pin ~others)))
+                                        ~f:(String.concat ~sep:"; ")))
                       in
                       (* How a subject pins the whole file on every cc run, or [None]. Per key and
                          run, by precedence: a command-line setting leaves it unpinned (the
@@ -3355,8 +3524,8 @@ let main () =
                       let searching =
                         List.filter_map subjects ~f:(fun (subject, modules, mine, runs) ->
                             match
-                              List.filter_map modules ~f:(fun m ->
-                                  Map.find search_reach (in_here m))
+                              List.concat_map modules ~f:(fun m ->
+                                  List.filter_map (module_keys m) ~f:(Map.find search_reach))
                               |> List.concat
                               |> List.dedup_and_sort ~compare:String.compare
                             with
@@ -3435,7 +3604,9 @@ let main () =
          calling it passes, which is the point. *)
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
-          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
+          let directory_modules =
+            Scan.directory_modules ~stanzas:group ~dir:here (List.map source_files ~f:fst)
+          in
           List.iter group ~f:(fun stanza ->
               match Scan.head stanza with
               | Some "library" ->
@@ -3485,7 +3656,9 @@ let main () =
          tomorrow is asked for its alias the day it lands. *)
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
-          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
+          let directory_modules =
+            Scan.directory_modules ~stanzas:group ~dir:here (List.map source_files ~f:fst)
+          in
           let where =
             if String.is_empty subdir then dune_file
             else Printf.sprintf "%s, in `(subdir %s …)`" dune_file subdir
@@ -3525,11 +3698,14 @@ let main () =
                      (String.concat ~sep:", " operands)
                      (String.concat ~sep:", " (aliases_of stanza))
                      (String.concat ~sep:", " (goldens_in stanza))));
-          List.iter libraries ~f:(fun (library, _) ->
+          List.iter libraries ~f:(fun (library, lib_stanza) ->
               List.iter (modules_of_library library) ~f:(fun module_name ->
                   let holds =
-                    Option.value_map (source_of ~dir:here module_name) ~default:false
-                      ~f:(fun on_disk -> holds_inline_tests (In_channel.read_all on_disk))
+                    List.exists (module_source_files ~dir:here lib_stanza module_name)
+                      ~f:(fun (_, key) ->
+                        Option.value_map (List.Assoc.find sources ~equal:String.equal key)
+                          ~default:false ~f:(fun on_disk ->
+                            holds_inline_tests (In_channel.read_all on_disk)))
                   in
                   let served =
                     List.exists runs ~f:(fun (_, runs_library, operands) ->
@@ -3571,6 +3747,112 @@ let main () =
                       a run that can select cc -- drop the marker"
                      (width_marker_where marker.Scan.contained_line))));
       check_family_members ());
+  (* gh-ocannl-2382: cross-file validation of backend-default definitions and readers. *)
+  (let defs = List.rev !backend_default_defs in
+   let readers = List.rev !backend_default_readers in
+   let defs_by_name = Hashtbl.create (module String) in
+   List.iter defs ~f:(fun ((name, _, _, _, _, _, _) as def) ->
+       Hashtbl.add_multi defs_by_name ~key:name ~data:def);
+   let def_map = Hashtbl.create (module String) in
+   Hashtbl.to_alist defs_by_name
+   |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+   |> List.iter ~f:(fun (name, entries) ->
+       let entries = List.rev entries in
+       if List.length entries > 1 then
+         let places =
+           List.map entries ~f:(fun (_, _, _, file, line, _, _) -> Printf.sprintf "%s:%d" file line)
+           |> String.concat ~sep:", "
+         in
+         fail
+           (Printf.sprintf
+              "the backend default `%s` is defined more than once (%s) -- each default name must \
+               have one library definition"
+              name places)
+       else Hashtbl.set def_map ~key:name ~data:(List.hd_exn entries));
+   let parsed_defs_cache = Hashtbl.create (module String) in
+   let defs_of_source path on_disk =
+     Hashtbl.find_or_add parsed_defs_cache path ~default:(fun () ->
+         Test_scan.Scan_attempt.run (fun () ->
+             Sources.top_level_definition_names (In_channel.read_all on_disk)))
+   in
+   let reader_names =
+     List.map readers ~f:(fun (name, _, _, _, _) -> name) |> Set.of_list (module String)
+   in
+   List.iter defs ~f:(fun (name, _backends, targets, file, line, def_dir, select_arms) ->
+       if not (Set.mem reader_names name) then
+         fail
+           (Printf.sprintf
+              "the backend default `%s` defined at %s:%d has no reader stanza -- add a reader \
+               marker or drop the unused definition"
+              name file line);
+       List.iter targets ~f:(fun (mod_name, def_name) ->
+           let stem = String.uncapitalize mod_name ^ ".ml" in
+           let direct_path = Scan.in_subdir def_dir stem in
+           let candidate_paths =
+             match List.Assoc.find source_files ~equal:String.equal direct_path with
+             | Some on_disk -> [ (direct_path, on_disk) ]
+             | None ->
+                 List.filter_map select_arms ~f:(fun (target, arm) ->
+                     if String.equal (String.lowercase target) (String.lowercase stem) then
+                       let arm_path = Scan.in_subdir def_dir arm in
+                       Option.map (List.Assoc.find source_files ~equal:String.equal arm_path)
+                         ~f:(fun on_disk -> (arm_path, on_disk))
+                     else None)
+           in
+           match candidate_paths with
+           | [] ->
+               fail
+                 (Printf.sprintf
+                    "the backend default `%s` at %s:%d names `%s.%s`, but `%s` is not in the \
+                     scanned sources"
+                    name file line mod_name def_name direct_path)
+           | candidates ->
+               let found = ref false in
+               let had_error = ref false in
+               List.iter candidates ~f:(fun (path, on_disk) ->
+                   match defs_of_source path on_disk with
+                   | Test_scan.Scan_attempt.Scanned names ->
+                       if Set.mem names def_name then found := true
+                   | (Test_scan.Scan_attempt.Unparsed _ | Test_scan.Scan_attempt.Raised _) as err ->
+                       let detail =
+                         match err with
+                         | Test_scan.Scan_attempt.Unparsed where -> where
+                         | Test_scan.Scan_attempt.Raised msg -> msg
+                         | Test_scan.Scan_attempt.Scanned _ -> assert false
+                       in
+                       had_error := true;
+                       fail
+                         (Printf.sprintf
+                            "the backend default `%s` at %s:%d could not parse `%s`: %s" name file
+                            line path detail));
+               if (not !found) && not !had_error then
+                 fail
+                   (Printf.sprintf
+                      "the backend default `%s` at %s:%d names `%s.%s`, which is not a top-level \
+                       definition in `%s`"
+                      name file line mod_name def_name direct_path)));
+   List.iter readers ~f:(fun (name, file, line, stanza_desc, reach) ->
+       match Hashtbl.find def_map name with
+       | None ->
+           fail
+             (Printf.sprintf
+                "the backend-default reader at %s:%d names `%s`, which no `(library)` stanza \
+                 defines"
+                file line name)
+       | Some (_, def_backends, _, _, _, _, _) -> (
+           match reach with
+           | `Any -> ()
+           | `Fixed allowed ->
+               if
+                 not (List.exists def_backends ~f:(fun b -> List.mem allowed b ~equal:String.equal))
+               then
+                 fail
+                   (Printf.sprintf
+                      "the backend-default reader at %s:%d (%s) reads `%s` (%s), which does not \
+                       overlap the backends it can run on (%s)"
+                      file line stanza_desc name
+                      (String.concat ~sep:", " def_backends)
+                      (match allowed with [] -> "none" | xs -> String.concat ~sep:", " xs)))));
   (* One relative lock spelling, many locks (staging#1593): dune keys a relative name by the
      directory it resolves in, so the same spelling written in two directories serializes each
      directory's actions and nothing across them -- the training lock's failure, for any lock.
@@ -6335,6 +6617,42 @@ let search_control () =
                ^ Printf.sprintf "let () = Utils.state_config ~key:%S ~data:\"-1\"; search ()\n"
                    width_key)
              ()) );
+      ( "sibling_reset",
+        refused
+          (run ~programs:"(name probe)\n (modules probe helper)"
+             ~extra:
+               [
+                 ( "t/helper.ml",
+                   Printf.sprintf "let reset () = Utils.state_config ~key:%S ~data:\"-1\"\n"
+                     width_key );
+               ]
+             ~probe:(pin ^ "let () = Helper.reset ()\n" ^ tune)
+             ()) );
+      ( "sibling_registers_reset",
+        refused
+          (run ~programs:"(name probe)\n (modules probe helper)"
+             ~extra:
+               [ ("t/helper.ml", Printf.sprintf "let () = Unix.putenv %S \"-1\"\n" registers_var) ]
+             ~probe:helper ()) );
+      ( "sibling_unparsable",
+        refused
+          (run ~programs:"(name probe)\n (modules probe helper)"
+             ~extra:[ ("t/helper.ml", "let broken =\n") ]
+             ~probe:(pin ^ "let () = Helper.setup ()\n" ^ tune)
+             ()) );
+      ( "sibling_missing",
+        refused (run ~programs:"(name probe)\n (modules probe missing)" ~probe:helper ()) );
+      ( "sibling_clean",
+        passed
+          (run ~programs:"(name probe)\n (modules probe helper)"
+             ~extra:[ ("t/helper.ml", Printf.sprintf "(* %s *)\nlet setup () = ()\n" width_key) ]
+             ~probe:(pin ^ "let () = Helper.setup ()\n" ^ tune)
+             ()) );
+      ( "sibling_interface_only",
+        passed
+          (run
+             ~programs:"(name probe)\n (modules probe sigs)\n (modules_without_implementation sigs)"
+             ~probe:helper ()) );
       ("marked", passed (run ~marker ~probe:named ()));
       ("setenv", passed (run ~action:(setenv "32") ~probe:named ()));
       ("helper", passed (run ~probe:helper ()));
@@ -6518,6 +6836,13 @@ let search_control () =
   Verdict.p "a width reset in a direct search item invalidates an earlier pin" (ok "direct_reset");
   Verdict.p "a width reset in a later item after a search invalidates an earlier pin"
     (ok "later_reset" && ok "applied_later_reset");
+  Verdict.p
+    "a sibling module spelling a vector-file key literal or lacking a parsable source invalidates \
+     an initialization pin"
+    (ok "sibling_reset" && ok "sibling_registers_reset" && ok "sibling_unparsable"
+   && ok "sibling_missing");
+  Verdict.p "a clean or interface-only sibling module does not invalidate an initialization pin"
+    (ok "sibling_clean" && ok "sibling_interface_only");
   Verdict.p "the same stanza carrying `; cc-vector-width: independent -- <reason>` passes"
     (ok "marked");
   Verdict.p "and so does one pinning the variable with `setenv` around its run" (ok "setenv");
@@ -6809,6 +7134,564 @@ let verdict_capture_control () =
         ~f:(fun (ok, (status, text)) ->
           if not ok then eprintf "Verdict capture control %s:\n%s\n" (describe_status status) text))
 
+(* gh-ocannl-2482: every module-to-source lookup inspects every `(select …)` arm under its own
+   checked-in file name, even when `sources_among` drops the generated target `<module>.ml` (or when
+   no generated target exists on disk). *)
+let select_arm_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_select_arm" "" in
+  Exn.protect
+    ~finally:(fun () -> try remove_tree root with Unix.Unix_error _ -> ())
+    ~f:(fun () ->
+      let context = control_context () in
+      List.iter context ~f:(fun (file, content) ->
+          write_file (Stdlib.Filename.concat root file) content);
+      let context_paths = List.map context ~f:fst in
+      let clean_dune =
+        {dune|(rule
+ ; ocannl-backend: none -- synthetic ambient-gate control fixture.
+ (alias runtest-gate)
+ (deps ocannl_config (universe))
+ (action (run %{dep:gate.exe})))
+
+(executable
+ (name gate)
+ (modules gate)
+ (link_flags -linkall)
+ (libraries arrayjit.utils))
+
+(alias
+ (name runtest)
+ (deps (alias runtest-gate)))
+
+(test
+ ; ocannl-backend: cc -- synthetic select-arm control fixture.
+ (name probe)
+ (deps ocannl_config)
+ (modules probe)
+ (libraries base (select probe.ml from (cudajit.cuda -> probe.real.ml) (-> probe.missing.ml))))
+|dune}
+      in
+      let inline_dune =
+        {dune|(rule
+ ; ocannl-backend: none -- synthetic ambient-gate control fixture.
+ (alias runtest-gate)
+ (deps ocannl_config (universe))
+ (action (run %{dep:gate.exe})))
+
+(executable
+ (name gate)
+ (modules gate)
+ (link_flags -linkall)
+ (libraries arrayjit.utils))
+
+(alias
+ (name runtest)
+ (deps (alias runtest-gate)))
+
+(library
+ ; ocannl-backend: none -- synthetic select-arm inline-test fixture.
+ (name probelib)
+ (modules probe)
+ (inline_tests (deps ocannl_config))
+ (libraries base (select probe.ml from (cudajit.cuda -> probe.real.ml) (-> probe.missing.ml))))
+|dune}
+      in
+      let run ~dune ~real_src ?generated_src () =
+        write_file (Stdlib.Filename.concat root "t/dune") dune;
+        write_file (Stdlib.Filename.concat root "t/gate.ml") "let () = ()\n";
+        write_file (Stdlib.Filename.concat root "t/probe.real.ml") real_src;
+        write_file (Stdlib.Filename.concat root "t/probe.missing.ml") "let () = ()\n";
+        let extra =
+          match generated_src with
+          | None -> []
+          | Some content ->
+              write_file (Stdlib.Filename.concat root "t/probe.ml") content;
+              [ "t/probe.ml" ]
+        in
+        let paths =
+          ("t/dune" :: "t/gate.ml" :: "t/probe.real.ml" :: "t/probe.missing.ml" :: extra)
+          @ context_paths
+        in
+        run_checker ~root ~exe ("." :: paths)
+      in
+      let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
+      let says substring (_, text) = String.is_substring text ~substring in
+      let clean = run ~dune:clean_dune ~real_src:"let () = ()\n" () in
+      let gate_arm =
+        run ~dune:clean_dune
+          ~real_src:"[%%global_debug_log_level_from_env_var \"OCANNL_LOG_LEVEL_PROBE\"]\n"
+          ~generated_src:"let () = ()\n" ()
+      in
+      let env_arm =
+        run ~dune:clean_dune ~real_src:"let _ = Sys.getenv_opt \"OCANNL_BACKEND\"\n"
+          ~generated_src:"let () = ()\n" ()
+      in
+      let search_arm =
+        run ~dune:clean_dune ~real_src:"let _ = Autotune.tune ()\n" ~generated_src:"let () = ()\n"
+          ()
+      in
+      let pinned_search_arm =
+        run ~dune:clean_dune
+          ~real_src:"let () = Fissioned_chain.small_menu ()\nlet _ = Autotune.tune ()\n" ()
+      in
+      let inline_arm =
+        run ~dune:inline_dune
+          ~real_src:"let%expect_test \"arm\" = print_string \"x\"; [%expect {| x |}]\n"
+          ~generated_src:"let () = ()\n" ()
+      in
+      let default_set_dune =
+        {dune|(rule
+ ; ocannl-backend: none -- synthetic ambient-gate control fixture.
+ (alias runtest-gate)
+ (deps ocannl_config (universe))
+ (action (run %{dep:gate.exe})))
+
+(executable
+ (name gate)
+ (modules gate)
+ (link_flags -linkall)
+ (libraries arrayjit.utils))
+
+(alias
+ (name runtest)
+ (deps (alias runtest-gate)))
+
+(test
+ ; ocannl-backend: cc -- synthetic default-module-set select-arm control fixture.
+ (name probe)
+ (deps ocannl_config)
+ (libraries base (select helper.ml from (cudajit.cuda -> helper.real.ml) (-> helper.missing.ml))))
+|dune}
+      in
+      let default_set_arm =
+        write_file (Stdlib.Filename.concat root "t/dune") default_set_dune;
+        write_file (Stdlib.Filename.concat root "t/gate.ml") "let () = ()\n";
+        write_file (Stdlib.Filename.concat root "t/probe.ml") "let () = ()\n";
+        write_file (Stdlib.Filename.concat root "t/helper.real.ml") "let _ = Autotune.tune ()\n";
+        write_file (Stdlib.Filename.concat root "t/helper.missing.ml") "let () = ()\n";
+        let paths =
+          "t/dune" :: "t/gate.ml" :: "t/probe.ml" :: "t/helper.real.ml" :: "t/helper.missing.ml"
+          :: context_paths
+        in
+        run_checker ~root ~exe ("." :: paths)
+      in
+      let sibling_reset_arm =
+        write_file (Stdlib.Filename.concat root "t/dune") default_set_dune;
+        write_file (Stdlib.Filename.concat root "t/gate.ml") "let () = ()\n";
+        write_file
+          (Stdlib.Filename.concat root "t/probe.ml")
+          "let () = Fissioned_chain.small_menu ()\nlet _ = Autotune.tune ()\n";
+        write_file (Stdlib.Filename.concat root "t/helper.ml") "let () = ()\n";
+        write_file
+          (Stdlib.Filename.concat root "t/helper.real.ml")
+          (Printf.sprintf "let reset () = Utils.state_config ~key:%S ~data:\"-1\"\n" width_key);
+        write_file (Stdlib.Filename.concat root "t/helper.missing.ml") "let () = ()\n";
+        let paths =
+          "t/dune" :: "t/gate.ml" :: "t/probe.ml" :: "t/helper.ml" :: "t/helper.real.ml"
+          :: "t/helper.missing.ml" :: context_paths
+        in
+        run_checker ~root ~exe ("." :: paths)
+      in
+      let clean_ok = exited 0 clean in
+      let gate_ok =
+        exited 1 gate_arm
+        && says "t/probe.real.ml reads the tracing gate OCANNL_LOG_LEVEL_PROBE" gate_arm
+      in
+      let env_ok =
+        exited 1 env_arm
+        && says "t/probe.real.ml reads the environment variable OCANNL_BACKEND by name" env_arm
+      in
+      let search_ok = exited 1 search_arm && says "starts a search" search_arm in
+      let pinned_ok = exited 0 pinned_search_arm in
+      let inline_ok = exited 1 inline_arm && says "`probe.ml` holds inline tests" inline_arm in
+      let default_set_ok = exited 1 default_set_arm && says "starts a search" default_set_arm in
+      let sibling_reset_ok =
+        exited 1 sibling_reset_arm && says "starts a search" sibling_reset_arm
+      in
+      List.iter
+        [
+          ("clean", clean_ok, clean);
+          ("gate", gate_ok, gate_arm);
+          ("env", env_ok, env_arm);
+          ("search", search_ok, search_arm);
+          ("pinned_search", pinned_ok, pinned_search_arm);
+          ("inline", inline_ok, inline_arm);
+          ("default_set", default_set_ok, default_set_arm);
+          ("sibling_reset", sibling_reset_ok, sibling_reset_arm);
+        ]
+        ~f:(fun (label, ok, (status, text)) ->
+          if not ok then
+            eprintf "select-arm control (%s) %s:\n%s\n" label (describe_status status) text);
+      printf "\nSynthetic controls: `(select …)` arms are checked under their own file names.\n";
+      Verdict.p "a clean select stanza passes with no generated target on disk" clean_ok;
+      Verdict.p "an undeclared tracing gate in a non-default select arm is refused by arm file name"
+        gate_ok;
+      Verdict.p
+        "an undeclared ambient env read in a non-default select arm is refused by arm file name"
+        env_ok;
+      Verdict.p "an unpinned search in a non-default select arm is refused" search_ok;
+      Verdict.p "a pinned search in a non-default select arm passes" pinned_ok;
+      Verdict.p "an inline test in a non-default select arm requires a per-module alias" inline_ok;
+      Verdict.p "a default-module-set stanza discovers a select target and checks its arms"
+        default_set_ok;
+      Verdict.p
+        "a vector-file key literal in a sibling's non-default select arm invalidates an \
+         initialization pin"
+        sibling_reset_ok)
+
+(* gh-ocannl-2382: synthetic controls for `; ocannl-backend-default:` validation. Exercises every
+   grammar, placement, cross-file, target-resolution, and backend-reachability refusal plus their
+   nearest valid declarations. *)
+let backend_default_marker_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_backend_default" "" in
+  Exn.protect
+    ~finally:(fun () -> try remove_tree root with Unix.Unix_error _ -> ())
+    ~f:(fun () ->
+      let context = control_context () in
+      List.iter context ~f:(fun (file, content) ->
+          write_file (Stdlib.Filename.concat root file) content);
+      let context_paths = List.map context ~f:fst in
+      let ambient =
+        {dune|(rule
+ ; ocannl-backend: none -- synthetic ambient-gate control fixture.
+ (alias runtest-gate)
+ (deps ocannl_config (universe))
+ (action (run %{dep:gate.exe})))
+
+(executable
+ (name gate)
+ (modules gate)
+ (link_flags -linkall)
+ (libraries arrayjit.utils))
+
+(alias
+ (name runtest)
+ (deps (alias runtest-gate)))
+|dune}
+      in
+      let run ~lib_dune ~lib_ml ~test_dune ?(extra_files = []) () =
+        write_file (Stdlib.Filename.concat root "lib/dune") lib_dune;
+        write_file (Stdlib.Filename.concat root "lib/gate_mod.ml") lib_ml;
+        write_file (Stdlib.Filename.concat root "t/dune") (ambient ^ "\n" ^ test_dune);
+        write_file (Stdlib.Filename.concat root "t/gate.ml") "let () = ()\n";
+        write_file (Stdlib.Filename.concat root "t/probe.ml") "let () = ()\n";
+        List.iter extra_files ~f:(fun (file, content) ->
+            write_file (Stdlib.Filename.concat root file) content);
+        let paths =
+          "lib/dune" :: "lib/gate_mod.ml" :: "t/dune" :: "t/gate.ml" :: "t/probe.ml"
+          :: List.map extra_files ~f:fst
+          @ context_paths
+        in
+        let res = run_checker ~root ~exe ("." :: paths) in
+        List.iter extra_files ~f:(fun (file, _) ->
+            try Stdlib.Sys.remove (Stdlib.Filename.concat root file) with Sys_error _ -> ());
+        res
+      in
+      let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
+      let says substring (_, text) = String.is_substring text ~substring in
+      let valid_lib_dune =
+        {dune|(library
+ ; ocannl-backend-default: seeded-plan = cuda,hip Gate_mod.seeded_ranker -- GPU seeding gate
+ (name gatelib)
+ (modules gate_mod))
+|dune}
+      in
+      let valid_lib_ml = "let seeded_ranker x = x\n" in
+      let valid_test =
+        run ~lib_dune:valid_lib_dune ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend-default: seeded-plan -- reads CUDA seeded plan
+ (name probe)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (modules probe))
+|dune}
+          ()
+      in
+      let valid_exec_runner =
+        run ~lib_dune:valid_lib_dune ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(executable
+ ; ocannl-backend-default: seeded-plan -- runner reads CUDA seeded plan
+ (name probe)
+ (modules probe))
+(rule
+ (alias runtest-probe)
+ (deps (alias runtest-gate) ocannl_config (env_var OCANNL_BACKEND))
+ (action (run %{dep:probe.exe})))
+(alias
+ (name runtest)
+ (deps (alias runtest-probe)))
+|dune}
+          ()
+      in
+      let valid_cc_default =
+        run
+          ~lib_dune:
+            {dune|(library
+ ; ocannl-backend-default: cpu-plan = cc Gate_mod.seeded_ranker -- CPU default plan
+ (name gatelib)
+ (modules gate_mod))
+|dune}
+          ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend: cc -- pins cc explicitly
+ ; ocannl-backend-default: cpu-plan -- reads CPU default plan
+ (name probe)
+ (deps ocannl_config)
+ (modules probe))
+|dune}
+          ()
+      in
+      let malformed =
+        run
+          ~lib_dune:
+            {dune|(library
+ ; ocannl-backend-default: seeded-plan = none Gate_mod.seeded_ranker -- none backend refused
+ (name gatelib)
+ (modules gate_mod))
+|dune}
+          ~lib_ml:valid_lib_ml ~test_dune:"" ()
+      in
+      let wrong_stanza =
+        run ~lib_dune:"(library (name gatelib) (modules gate_mod))\n" ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(rule
+ ; ocannl-backend-default: seeded-plan -- rule cannot carry reader marker
+ ; ocannl-backend: none -- no backend
+ (alias runtest-r)
+ (deps ocannl_config)
+ (action (progn)))
+|dune}
+          ()
+      in
+      let outside_stanza =
+        run
+          ~lib_dune:
+            {dune|; ocannl-backend-default: seeded-plan = cuda Gate_mod.seeded_ranker -- between stanzas
+(library (name gatelib) (modules gate_mod))
+|dune}
+          ~lib_ml:valid_lib_ml ~test_dune:"" ()
+      in
+      let outside_comment =
+        run ~lib_dune:"(library (name gatelib) (modules gate_mod))\n" ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(rule
+ (target x.actual)
+ (action (with-stdout-to %{target} (echo "ocannl-backend-default: seeded-plan"))))
+|dune}
+          ()
+      in
+      let dup_reader =
+        run ~lib_dune:valid_lib_dune ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend-default: seeded-plan -- first reader marker
+ ; ocannl-backend-default: seeded-plan -- duplicate reader marker
+ (name probe)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (modules probe))
+|dune}
+          ()
+      in
+      let dup_def =
+        run
+          ~lib_dune:
+            {dune|(library
+ ; ocannl-backend-default: seeded-plan = cuda Gate_mod.seeded_ranker -- first def
+ ; ocannl-backend-default: seeded-plan = hip Gate_mod.seeded_ranker -- duplicate def
+ (name gatelib)
+ (modules gate_mod))
+|dune}
+          ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend-default: seeded-plan -- reads plan
+ (name probe)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (modules probe))
+|dune}
+          ()
+      in
+      let orphan_def = run ~lib_dune:valid_lib_dune ~lib_ml:valid_lib_ml ~test_dune:"" () in
+      let missing_mod =
+        run
+          ~lib_dune:
+            {dune|(library
+ ; ocannl-backend-default: seeded-plan = cuda Missing_mod.fn -- missing module file
+ (name gatelib)
+ (modules gate_mod))
+|dune}
+          ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend-default: seeded-plan -- reads plan
+ (name probe)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (modules probe))
+|dune}
+          ()
+      in
+      let unparseable_mod =
+        run ~lib_dune:valid_lib_dune ~lib_ml:"let = broken\n"
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend-default: seeded-plan -- reads plan
+ (name probe)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (modules probe))
+|dune}
+          ()
+      in
+      let missing_def =
+        run
+          ~lib_dune:
+            {dune|(library
+ ; ocannl-backend-default: seeded-plan = cuda Gate_mod.renamed_fn -- missing top-level def
+ (name gatelib)
+ (modules gate_mod))
+|dune}
+          ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend-default: seeded-plan -- reads plan
+ (name probe)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (modules probe))
+|dune}
+          ()
+      in
+      let undef_reader =
+        run ~lib_dune:"(library (name gatelib) (modules gate_mod))\n" ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend-default: no-such-plan -- reads undefined default
+ (name probe)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (modules probe))
+|dune}
+          ()
+      in
+      let incompatible_backend =
+        run ~lib_dune:valid_lib_dune ~lib_ml:valid_lib_ml
+          ~test_dune:
+            {dune|(test
+ ; ocannl-backend: cc -- CPU-only test cannot read CUDA/HIP default
+ ; ocannl-backend-default: seeded-plan -- incompatible backend default
+ (name probe)
+ (deps ocannl_config)
+ (modules probe))
+|dune}
+          ()
+      in
+      let subdir_disambiguation =
+        run ~lib_dune:valid_lib_dune ~lib_ml:valid_lib_ml
+          ~extra_files:[ ("t/a/probe.ml", "let () = ()\n"); ("t/b/probe.ml", "let () = ()\n") ]
+          ~test_dune:
+            {dune|(subdir a
+ (rule
+  ; ocannl-backend: none -- subdir a gate.
+  (alias runtest-gate)
+  (deps ocannl_config (universe))
+  (action (run %{dep:../gate.exe})))
+ (alias (name runtest) (deps (alias runtest-gate)))
+ (test
+  ; ocannl-backend: cuda -- subdir a runs on CUDA
+  ; ocannl-backend-default: seeded-plan -- valid CUDA reader
+  (name probe)
+  (deps ocannl_config)
+  (modules probe)))
+(subdir b
+ (rule
+  ; ocannl-backend: none -- subdir b gate.
+  (alias runtest-gate)
+  (deps ocannl_config (universe))
+  (action (run %{dep:../gate.exe})))
+ (alias (name runtest) (deps (alias runtest-gate)))
+ (test
+  ; ocannl-backend: cc -- subdir b runs on CPU only
+  ; ocannl-backend-default: seeded-plan -- must be refused despite identical sexp in subdir a
+  (name probe)
+  (deps ocannl_config)
+  (modules probe)))
+|dune}
+          ()
+      in
+      let checks =
+        [
+          ("valid test reader with env_var OCANNL_BACKEND passes", exited 0 valid_test, valid_test);
+          ( "valid executable reader with env_var OCANNL_BACKEND runner passes",
+            exited 0 valid_exec_runner,
+            valid_exec_runner );
+          ( "valid cc-only default read by ocannl-backend: cc test passes",
+            exited 0 valid_cc_default,
+            valid_cc_default );
+          ( "malformed backend-default marker is refused",
+            exited 1 malformed && says "comment that does not parse as a marker" malformed,
+            malformed );
+          ( "backend-default marker on wrong stanza is refused",
+            exited 1 wrong_stanza
+            && says "carries a backend-default marker on the wrong stanza" wrong_stanza,
+            wrong_stanza );
+          ( "backend-default marker outside any stanza is refused",
+            exited 1 outside_stanza && says "sits inside no stanza" outside_stanza,
+            outside_stanza );
+          ( "backend-default sentinel outside a comment is refused",
+            exited 1 outside_comment
+            && says "a backend-default marker outside a comment declares nothing" outside_comment,
+            outside_comment );
+          ( "duplicate backend-default reader on one stanza is refused",
+            exited 1 dup_reader && says "more than once on the same stanza" dup_reader,
+            dup_reader );
+          ( "duplicate backend-default definition is refused",
+            exited 1 dup_def && says "is defined more than once" dup_def,
+            dup_def );
+          ( "backend-default definition with zero readers is refused",
+            exited 1 orphan_def && says "has no reader stanza" orphan_def,
+            orphan_def );
+          ( "backend-default definition naming a missing module is refused",
+            exited 1 missing_mod && says "is not in the scanned sources" missing_mod,
+            missing_mod );
+          ( "backend-default definition naming an unparseable module is refused",
+            exited 1 unparseable_mod && says "could not parse" unparseable_mod,
+            unparseable_mod );
+          ( "backend-default definition naming a missing top-level definition is refused",
+            exited 1 missing_def && says "is not a top-level definition in" missing_def,
+            missing_def );
+          ( "backend-default reader naming an undefined default is refused",
+            exited 1 undef_reader && says "which no `(library)` stanza defines" undef_reader,
+            undef_reader );
+          ( "backend-default reader whose backends do not overlap the default is refused",
+            exited 1 incompatible_backend
+            && says "does not overlap the backends it can run on" incompatible_backend,
+            incompatible_backend );
+          ( "identical stanza sexps in different subdirs check their own backend markers",
+            exited 1 subdir_disambiguation
+            && says "does not overlap the backends it can run on (cc)" subdir_disambiguation
+            && (not
+                  (says "does not overlap the backends it can run on (cuda)" subdir_disambiguation))
+            && says "FAILED: 1 check did not hold:" subdir_disambiguation,
+            subdir_disambiguation );
+        ]
+      in
+      printf "\nSynthetic controls: `; ocannl-backend-default:` markers.\n";
+      List.iter checks ~f:(fun (label, ok, ((status, text) as res)) ->
+          if not ok then
+            eprintf "backend-default control (%s) %s:\n%s\n" label (describe_status status) text;
+          attribute label [ res ];
+          Verdict.p label ok))
+
 let () =
   match Array.to_list argv with
   | _ :: [ "--control" ] ->
@@ -6828,6 +7711,8 @@ let () =
       module_reads_control ();
       malformed_tree_control ();
       verdict_capture_control ();
+      select_arm_control ();
+      backend_default_marker_control ();
       (* Dune's repository-wide rule hands the same source to [main] as [./env_var_deps.ml] after a
          full build has materialized the local build-tree copy. Exercise that spelling here too: the
          manifest identity is repository-relative even when the file used to extract the diagnostics

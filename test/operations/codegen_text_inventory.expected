@@ -120,6 +120,7 @@ test/operations/accum_width.ml [run by @test/operations/runtest-accum_width]
     "= " ^ ... ^ "v"
     "Vectorized reduction rendering"
     ... ^ "(bfloat16_to_single("
+test/operations/bf16_local_scratch.ml [run by @test/operations/runtest-bf16_local_scratch]
 test/operations/branchless_select.ml [run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math, @test/operations/runtest-branchless_select-outlined; also pins text this scan cannot name: computed fragment, untraced callback, opaque aggregate component, unsupplied application, mutation or unseen buffer write]
     ") != 0.0 ? ("
     ")["
@@ -660,6 +661,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/einsum/runtest-inline_permuted_view-c_fwd
 @test/einsum/runtest-test_cse-cse_d_fwd
 @test/operations/runtest-accum_width
+@test/operations/runtest-bf16_local_scratch
 @test/operations/runtest-branchless_select
 @test/operations/runtest-branchless_select-no_hip_fast_math
 @test/operations/runtest-branchless_select-outlined
@@ -851,8 +853,9 @@ test/operations/autotune_timing_modes.ml [through Ll_test.link; run by @test/ope
 test/operations/back_to_back_runs.ml [prelowered compile; run by @test/operations/runtest-back_to_back_runs]
 test/operations/bench_line_samples.ml [through Bench_harness.dominant_kernel; run by @test/operations/runtest-bench_line_readers]
 test/operations/bench_self_test.ml [through Bench_harness.run_self_test; through Bench_harness.time_shipped_segments; run by @test/operations/runtest-bench_self_test]
+test/operations/bf16_local_scratch.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-bf16_local_scratch]
 test/operations/bf16_subnormal_storage.ml [through Ll_test.execute; run by @test/operations/runtest-bf16_subnormal_storage, @test/operations/runtest-bf16_subnormal_storage-reproducible]
-test/operations/branchless_select.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math, @test/operations/runtest-branchless_select-outlined]
+test/operations/branchless_select.ml [through Ll_test.execute; through Ll_test.optimize_and_execute; run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math, @test/operations/runtest-branchless_select-outlined]
 test/operations/buffer_aliasing.ml [prelowered compile; run by @test/operations/runtest-buffer_aliasing]
 test/operations/byte_uniform_unsigned.ml [through Ll_test.execute; run by @test/operations/runtest-byte_uniform_unsigned]
 test/operations/canonical_render.ml [staged callback; run by @test/operations/runtest-canonical_render]
@@ -888,6 +891,7 @@ test/operations/half_index_bound_constant.ml [through Ll_test.execute; run by @t
 test/operations/half_unary_math.ml [through Ll_test.execute; run by @test/operations/runtest-half_unary_math, @test/operations/runtest-half_unary_math-reproducible]
 test/operations/hardware_warp_shuffle.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-hardware_warp_shuffle]
 test/operations/heap_local_arrays.ml [through Ll_test.execute; run by @test/operations/runtest-heap_local_arrays, @test/operations/runtest-heap_local_arrays-outlined]
+test/operations/hip_extra_compile_options.ml [through Ll_test.execute; run by @test/operations/runtest-hip_extra_compile_options]
 test/operations/hip_half_load.ml [through Ll_test.link; run by @test/operations/runtest-hip_half_load]
 test/operations/hip_half_masked_gradient.ml [through Ll_test.link; run by @test/operations/runtest-hip_half_masked_gradient]
 test/operations/hip_scratch_tune_survives.ml [prelowered compile; run by @test/operations/slow-hip_scratch_tune_survives]
@@ -913,6 +917,7 @@ test/operations/metal_reap_failure.ml [through Ll_test.run_routine; run by @test
 test/operations/metal_routine_log_delivery.ml [through Ll_test.run_routine; run by @test/operations/runtest-metal_routine_log_delivery]
 test/operations/minted_name_labels.ml [through Ll_test.run_routine; run by @test/operations/runtest-minted_name_labels-logged, @test/operations/runtest-minted_name_labels-plain]
 test/operations/narrow_constant_rounding.ml [through Ll_test.execute; run by @test/operations/runtest-narrow_constant_rounding]
+test/operations/narrow_conv_grad_residency.ml [through Ll_test.link; through Ll_test.run; run by @test/operations/runtest-narrow_conv_grad_residency]
 test/operations/narrow_scatter_residency.ml [prelowered compile; through Ll_test.run; run by @test/operations/runtest-narrow_scatter_residency]
 test/operations/narrow_storage_compute.ml [through Ll_test.link; run by @test/operations/runtest-narrow_storage_compute]
 test/operations/narrow_uniform_bound.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-narrow_uniform_bound]
@@ -936,6 +941,7 @@ test/operations/rev_sides_padded_target.ml [through Ll_test.link; run by @test/o
 test/operations/rev_sides_width1_store.ml [through Ll_test.link; run by @test/operations/runtest-rev_sides_width1_store]
 test/operations/rng_operand_precision.ml [through Ll_test.execute; run by @test/operations/runtest-rng_operand_precision]
 test/operations/routine_log_dropped_notice.ml [through Ll_test.run_routine; run by @test/operations/runtest-routine_log_dropped_notice]
+test/operations/routine_log_narrow_floats.ml [through Ll_test.run_routine; run by @test/operations/runtest-routine_log_narrow_floats]
 test/operations/routine_log_nested_scopes.ml [through Ll_test.run; run by @test/operations/runtest-routine_log_nested_scopes]
 test/operations/routine_log_stream_files.ml [through Ll_test.run_routine; run by @test/operations/runtest-routine_log_stream_files]
 test/operations/runtime_integer_power.ml [through Ll_test.execute; run by @test/operations/runtest-runtime_integer_power]
@@ -987,6 +993,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-back_to_back_runs
 @test/operations/runtest-bench_line_readers
 @test/operations/runtest-bench_self_test
+@test/operations/runtest-bf16_local_scratch
 @test/operations/runtest-bf16_subnormal_storage
 @test/operations/runtest-bf16_subnormal_storage-reproducible
 @test/operations/runtest-branchless_select
@@ -1045,6 +1052,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-hardware_warp_shuffle
 @test/operations/runtest-heap_local_arrays
 @test/operations/runtest-heap_local_arrays-outlined
+@test/operations/runtest-hip_extra_compile_options
 @test/operations/runtest-hip_half_load
 @test/operations/runtest-hip_half_masked_gradient
 @test/operations/runtest-integer_bf16_narrowing
@@ -1071,6 +1079,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-minted_name_labels-logged
 @test/operations/runtest-minted_name_labels-plain
 @test/operations/runtest-narrow_constant_rounding
+@test/operations/runtest-narrow_conv_grad_residency
 @test/operations/runtest-narrow_scatter_residency
 @test/operations/runtest-narrow_storage_compute
 @test/operations/runtest-narrow_uniform_bound
@@ -1098,6 +1107,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-rev_sides_width1_store
 @test/operations/runtest-rng_operand_precision
 @test/operations/runtest-routine_log_dropped_notice
+@test/operations/runtest-routine_log_narrow_floats
 @test/operations/runtest-routine_log_nested_scopes
 @test/operations/runtest-routine_log_stream_files
 @test/operations/runtest-runtime_integer_power
@@ -1146,6 +1156,17 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/slow-virtual_inliner_oracle-widen-2
 @test/operations/slow-virtual_inliner_oracle-widen-3
 @test/operations/slow-where_scope_generator-widen
+
+== slow HIP batches on minix-amd-linux ==
+Run each command as its own batch on minix-amd-linux (unified memory). Omit these aliases
+from combined HIP batches. The comments estimate test action time. Allow extra time for
+compilation and slot acquisition. Each runner invocation has its own cap.
+env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build @test/operations/slow-hip_scratch_tune_survives -j 4 # about thirty seconds
+env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build @test/operations/slow-virtual_inliner_oracle-widen-0 -j 4 # about four to five minutes
+env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build @test/operations/slow-virtual_inliner_oracle-widen-1 -j 4 # about four to five minutes
+env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build @test/operations/slow-virtual_inliner_oracle-widen-2 -j 4 # about four to five minutes
+env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build @test/operations/slow-virtual_inliner_oracle-widen-3 -j 4 # about four to five minutes
+env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build @test/operations/slow-where_scope_generator-widen -j 4 # about two to three minutes
 
 == tests calling a backend's compiler with source of their own ==
 They pin nothing and build no kernel through the pipeline, and a change to a backend's

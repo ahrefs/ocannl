@@ -1,8 +1,8 @@
 (* gh-ocannl-2326: [Ir.Backend_intf.with_select_blend], the seam [bench_cuda_select] times a whole
-   training step through, reaches both readers of a backend's [blends_value_selects] fact: the
-   lowering's inline fan-in guard and the renderer. A step timed under it is then placed as it
-   renders, which an override of the renderer alone would not give: the guard would charge one arm
-   of a select the renderer blends.
+   training step through, reaches both readers of a backend's select blend policy: the lowering's
+   inline fan-in guard and the renderer. A step timed under it is then placed as it renders, which
+   an override of the renderer alone would not give: the guard would charge one arm of a select the
+   renderer blends.
 
    Pinned here, on the running backend:
 
@@ -15,8 +15,9 @@
    pool, backward: blended and short-circuiting, the same gradient, bitwise, with the blend emitted
    only where stated.
 
-   Emission claims run in a leg open where the renderer has a blend (cc, CUDA, HIP); Metal renders
-   none, so they skip there, while the placement and value claims run on every backend. *)
+   Emission claims run in a leg open where the renderer has a blend (cc, CUDA, HIP, Metal under
+   [Blend_over_locals] with [`Stmt_expr], gh-ocannl-2400), while the placement and value claims run
+   on every backend. *)
 
 (* cc-fp-contract: exact-operands -- sums of small integers, and a pool gradient selecting dyadic
    weights *)
@@ -57,7 +58,8 @@ let () =
   p_all "inside the extent, the backend's facts state the blend asked for, either way"
     [ false; true ] ~f:(fun blend ->
       BI.with_select_blend ~facts:own ~blend (fun () ->
-          Bool.equal (Context.backend_facts ctx).BI.blends_value_selects blend));
+          BI.equal_select_blend_policy (Context.backend_facts ctx).BI.select_blend_policy
+            (if blend then Blend_speculable else No_blend)));
   p "after the extent, the backend's own facts again"
     (BI.equal_backend_facts (Context.backend_facts ctx) own)
 
@@ -85,7 +87,7 @@ let expected_loss =
   List.init dim ~f:(fun i -> if i % 2 = i / 2 % 2 then cellv then_ks i else cellv else_ks i)
   |> List.fold ~init:0. ~f:( +. )
 
-let program ~blend =
+let run_program ~name ~compile =
   Tensor.unsafe_reinitialize ();
   let init l k =
     NTDSL.init ~l ~prec:Ir.Ops.single ~o:[ dim ] ~f:(fun idcs -> weight k idcs.(0)) ()
@@ -100,19 +102,24 @@ let program ~blend =
   let%op loss = y ++ "i=>0" in
   Train.set_materialized loss.Tensor.value;
   Tn.set_observable loss.Tensor.value;
-  let name = "sbo_eq_" ^ arm_name blend in
-  let what = "the equality select stated " ^ arm_name blend in
   let ctx, routine =
-    under ~blend (fun ctx -> Context.compile ~name ctx (Train.forward loss) Ir.Indexing.Empty)
+    compile (fun ctx -> Context.compile ~name ctx (Train.forward loss) Ir.Indexing.Empty)
   in
   let ctx = Context.run ctx routine in
   let plc = Context.placements ctx in
+  ( Tn.Placements.known_non_virtual plc y.Tensor.value,
+    Tn.Placements.known_virtual plc y.Tensor.value,
+    Context.get_values ctx loss.Tensor.value )
+
+let program ~blend =
+  let detail = arm_name blend in
+  let name = "sbo_eq_" ^ detail in
+  let what = "the equality select stated " ^ detail in
+  let materialized, virtual_, lv = run_program ~name ~compile:(under ~blend) in
   p
     (Printf.sprintf "%s: the producer is %s by the fan-in cap" what
        (if blend then "materialized" else "kept virtual"))
-    (Bool.equal blend (Tn.Placements.known_non_virtual plc y.Tensor.value)
-    && Bool.equal (not blend) (Tn.Placements.known_virtual plc y.Tensor.value));
-  let lv = Context.get_values ctx loss.Tensor.value in
+    (Bool.equal blend materialized && Bool.equal (not blend) virtual_);
   p
     (what ^ ": the loss matches the reference (exact: small integers)")
     (Array.length lv = 1 && Float.equal lv.(0) expected_loss);
@@ -120,7 +127,45 @@ let program ~blend =
 
 let () =
   program ~blend:false;
-  program ~blend:true
+  program ~blend:true;
+  let ctx = Context.auto () in
+  let load_free_leg =
+    Verdict.leg ~when_:(String.equal (Context.backend_name ctx) "hip") ~on:backend_name ()
+  in
+  Verdict.in_leg ~leg:load_free_leg "HIP defaults to load-free blending" (fun claim ->
+      p claim
+        (BI.equal_select_blend_policy (Context.backend_facts ctx).BI.select_blend_policy
+           Blend_load_free));
+  Verdict.in_leg ~leg:load_free_leg
+    "HIP's default policy leaves a two-loaded-arm select within the cap" (fun claim ->
+      let name = "sbo_eq_load_free" in
+      let materialized, virtual_, lv = run_program ~name ~compile:(fun f -> f ctx) in
+      p claim
+        ((not materialized) && virtual_
+        && Array.length lv = 1
+        && Float.equal lv.(0) expected_loss
+        && not
+             (String.is_substring
+                (Generated.main_logic (Generated.read name))
+                ~substring:blend_marker)));
+  let serial_loop_leg =
+    Verdict.leg ~when_:(String.equal (Context.backend_name ctx) "metal") ~on:backend_name ()
+  in
+  Verdict.in_leg ~leg:serial_loop_leg "Metal defaults to serial-loop blending" (fun claim ->
+      p claim
+        (BI.equal_select_blend_policy (Context.backend_facts ctx).BI.select_blend_policy
+           Blend_serial_loop));
+  Verdict.in_leg ~leg:serial_loop_leg
+    "Metal's default policy leaves a two-loaded-arm select within the cap and blends in a serial \
+     loop" (fun claim ->
+      let name = "sbo_eq_serial_loop" in
+      let materialized, virtual_, lv = run_program ~name ~compile:(fun f -> f ctx) in
+      p claim
+        ((not materialized) && virtual_
+        && Array.length lv = 1
+        && Float.equal lv.(0) expected_loss
+        && String.is_substring (Generated.main_logic (Generated.read name)) ~substring:blend_marker
+        ))
 
 (* === The realistic composition: ReLU into a 2x2 max pool, backward === *)
 

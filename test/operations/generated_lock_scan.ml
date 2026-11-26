@@ -226,7 +226,9 @@ let analyze ~fail ~dune_files ~sources =
               if String.equal o.dune_file s.dune_file && String.equal o.dir s.dir then Some o.sexp
               else None)
         in
-        let directory_modules = Scan.directory_modules ~dir:s.dir (List.map sources ~f:fst) in
+        let directory_modules =
+          Scan.directory_modules ~stanzas:group ~dir:s.dir (List.map sources ~f:fst)
+        in
         (* [Some] under the [program_heads] guard above, which is the list it answers for. *)
         let programs =
           Option.value_exn
@@ -645,10 +647,11 @@ let () =
     read
       (List.filter paths ~f:(fun (path, _) -> String.equal (Stdlib.Filename.basename path) "dune"))
   in
+  let kept_ml =
+    Set.of_list (module String) (Test_scan.Config_key_scan.sources_among (List.map paths ~f:fst))
+  in
   let sources =
-    read
-      (List.filter paths ~f:(fun (path, _) ->
-           String.is_suffix path ~suffix:".ml" && not (derived path)))
+    read (List.filter paths ~f:(fun (path, _) -> Set.mem kept_ml path && not (derived path)))
   in
   require_inputs ~fail:Verdict.fail ~dune_files ~sources;
   let callers, census = analyze ~fail:Verdict.fail ~dune_files ~sources in

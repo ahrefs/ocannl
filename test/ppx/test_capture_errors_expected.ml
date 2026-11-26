@@ -296,11 +296,11 @@ let logic_unary =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -324,15 +324,15 @@ let logic_binary =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          let __cd_fwd3 =
            if Tensor.is_fwd_root y
-           then Tensor.take_forward_code y
+           then Tensor.embed_forward_code y
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -359,15 +359,15 @@ let logic_binary_tuple =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          let __cd_fwd3 =
            if Tensor.is_fwd_root y
-           then Tensor.take_forward_code y
+           then Tensor.embed_forward_code y
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -394,19 +394,19 @@ let logic_ternary =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          let __cd_fwd3 =
            if Tensor.is_fwd_root y
-           then Tensor.take_forward_code y
+           then Tensor.embed_forward_code y
            else Ir.Assignments.empty_comp in
          let __cd_fwd4 =
            if Tensor.is_fwd_root z
-           then Tensor.take_forward_code z
+           then Tensor.embed_forward_code z
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -437,19 +437,19 @@ let logic_ternary_tuple =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          let __cd_fwd3 =
            if Tensor.is_fwd_root y
-           then Tensor.take_forward_code y
+           then Tensor.embed_forward_code y
            else Ir.Assignments.empty_comp in
          let __cd_fwd4 =
            if Tensor.is_fwd_root z
-           then Tensor.take_forward_code z
+           then Tensor.embed_forward_code z
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -480,11 +480,11 @@ let logic_unary_parens =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -507,11 +507,11 @@ let logic_empty =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -537,11 +537,11 @@ let logic_pointwise_capture =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -565,11 +565,11 @@ let logic_transpose_capture =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -593,15 +593,15 @@ let logic_compose_capture =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          let __cd_fwd3 =
            if Tensor.is_fwd_root y
-           then Tensor.take_forward_code y
+           then Tensor.embed_forward_code y
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -626,11 +626,11 @@ let logic_pointwise_empty =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -651,11 +651,11 @@ let logic_transpose_empty =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -676,15 +676,15 @@ let logic_binary_pointwise_empty =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          let __cd_fwd3 =
            if Tensor.is_fwd_root y
-           then Tensor.take_forward_code y
+           then Tensor.embed_forward_code y
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -709,15 +709,15 @@ let logic_compose_empty =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          let __cd_fwd3 =
            if Tensor.is_fwd_root y
-           then Tensor.take_forward_code y
+           then Tensor.embed_forward_code y
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -742,19 +742,19 @@ let logic_ternary_pointwise_empty =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          let __cd_fwd3 =
            if Tensor.is_fwd_root y
-           then Tensor.take_forward_code y
+           then Tensor.embed_forward_code y
            else Ir.Assignments.empty_comp in
          let __cd_fwd4 =
            if Tensor.is_fwd_root z
-           then Tensor.take_forward_code z
+           then Tensor.embed_forward_code z
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -782,19 +782,19 @@ let logic_accumulate_empty =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          let __cd_fwd3 =
            if Tensor.is_fwd_root y
-           then Tensor.take_forward_code y
+           then Tensor.embed_forward_code y
            else Ir.Assignments.empty_comp in
          let __cd_fwd4 =
            if Tensor.is_fwd_root z
-           then Tensor.take_forward_code z
+           then Tensor.embed_forward_code z
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -822,11 +822,11 @@ let logic_unary_compose =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -849,11 +849,11 @@ let logic_unary_compose_empty =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -876,15 +876,15 @@ let logic_binary_transpose =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          let __cd_fwd3 =
            if Tensor.is_fwd_root y
-           then Tensor.take_forward_code y
+           then Tensor.embed_forward_code y
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -910,15 +910,15 @@ let logic_binary_transpose_empty =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          let __cd_fwd3 =
            if Tensor.is_fwd_root y
-           then Tensor.take_forward_code y
+           then Tensor.embed_forward_code y
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -944,19 +944,19 @@ let logic_ternary_transpose =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          let __cd_fwd3 =
            if Tensor.is_fwd_root y
-           then Tensor.take_forward_code y
+           then Tensor.embed_forward_code y
            else Ir.Assignments.empty_comp in
          let __cd_fwd4 =
            if Tensor.is_fwd_root z
-           then Tensor.take_forward_code z
+           then Tensor.embed_forward_code z
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -986,19 +986,19 @@ let logic_ternary_transpose_empty =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          let __cd_fwd3 =
            if Tensor.is_fwd_root y
-           then Tensor.take_forward_code y
+           then Tensor.embed_forward_code y
            else Ir.Assignments.empty_comp in
          let __cd_fwd4 =
            if Tensor.is_fwd_root z
-           then Tensor.take_forward_code z
+           then Tensor.embed_forward_code z
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -1028,11 +1028,11 @@ let logic_one_char =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -1054,11 +1054,11 @@ let logic_transpose_label =
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
-           then Tensor.take_forward_code tgt
+           then Tensor.embed_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
            if Tensor.is_fwd_root x
-           then Tensor.take_forward_code x
+           then Tensor.embed_forward_code x
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;

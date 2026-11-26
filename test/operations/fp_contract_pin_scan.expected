@@ -86,6 +86,7 @@ not-executed -- no claim is about executed values: fixtures, codegen text, host 
 Test sources with bitwise equality subjects:
 test/operations/autotune_grid_record.ml -- exact-operands: Ll_test.exact_partials derives the operands' sums exact at f32
 test/operations/autotune_seeded_seed.ml -- not-cc: the value claims hold only where CUDA or HIP seeds or splits; cc skips them
+test/operations/bf16_local_scratch.ml -- no-contraction: the kernel moves, converts and zeroes values, and the packed uniform conversion contains no multiply-add
 test/operations/bf16_subnormal_storage.ml -- no-contraction: the legs copy, convert, add or halve; no product feeds an add
 test/operations/branchless_select.ml -- exact-operands: selects, adds and a pool gradient multiplying dyadic weights by one
 test/operations/coalesce_numerics.ml -- not-cc: the executed bitwise claims are gated on a hardware grid, so cc skips them
@@ -119,6 +120,7 @@ test/operations/gpu_packed_prec.ml -- no-contraction: each lane does one operati
 test/operations/grid_launch_floor.ml -- exact-operands: Bench_gebp products are multiples of an eighth and every sum stays exact in f32
 test/operations/half_float_power.ml -- pinned off
 test/operations/half_unary_math.ml -- pinned off
+test/operations/hip_extra_compile_options.ml -- not-cc: every device claim sits in the HIP leg; cc skips them all
 test/operations/init_prec_follows_param.ml -- same-shape: both sessions execute the same initializer graph at the same precisions; only how the parameter receives its half storage precision differs.
 test/operations/integer_power_domain.ml -- pinned off
 test/operations/issue_calibration.ml -- not-executed: the bitwise claim compares two fill fits computed in OCaml over synthetic sweeps

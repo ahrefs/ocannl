@@ -154,6 +154,8 @@ an initialization pin must precede a search through the functor instance: true
 a width reset in the functor search item invalidates an earlier pin: true
 a width reset in a direct search item invalidates an earlier pin: true
 a width reset in a later item after a search invalidates an earlier pin: true
+a sibling module spelling a vector-file key literal or lacking a parsable source invalidates an initialization pin: true
+a clean or interface-only sibling module does not invalidate an initialization pin: true
 the same stanza carrying `; cc-vector-width: independent -- <reason>` passes: true
 and so does one pinning the variable with `setenv` around its run: true
 and so does a program whose initialization calls a support helper stating the width: true
@@ -242,6 +244,34 @@ a captured Verdict run is refused when only a sibling run clears the variable: t
 an inner nonempty binding undoes the clear for a captured Verdict run: true
 a captured Verdict run passes with an empty binding or its own dependency: true
 
+Synthetic controls: `(select …)` arms are checked under their own file names.
+a clean select stanza passes with no generated target on disk: true
+an undeclared tracing gate in a non-default select arm is refused by arm file name: true
+an undeclared ambient env read in a non-default select arm is refused by arm file name: true
+an unpinned search in a non-default select arm is refused: true
+a pinned search in a non-default select arm passes: true
+an inline test in a non-default select arm requires a per-module alias: true
+a default-module-set stanza discovers a select target and checks its arms: true
+a vector-file key literal in a sibling's non-default select arm invalidates an initialization pin: true
+
+Synthetic controls: `; ocannl-backend-default:` markers.
+valid test reader with env_var OCANNL_BACKEND passes: true
+valid executable reader with env_var OCANNL_BACKEND runner passes: true
+valid cc-only default read by ocannl-backend: cc test passes: true
+malformed backend-default marker is refused: true
+backend-default marker on wrong stanza is refused: true
+backend-default marker outside any stanza is refused: true
+backend-default sentinel outside a comment is refused: true
+duplicate backend-default reader on one stanza is refused: true
+duplicate backend-default definition is refused: true
+backend-default definition with zero readers is refused: true
+backend-default definition naming a missing module is refused: true
+backend-default definition naming an unparseable module is refused: true
+backend-default definition naming a missing top-level definition is refused: true
+backend-default reader naming an undefined default is refused: true
+backend-default reader whose backends do not overlap the default is refused: true
+identical stanza sexps in different subdirs check their own backend markers: true
+
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:57263e03b8b032365fbd586bbd2705a3] stderr from Verdict-linked
   [scanner-refusal:2b65edf20e36d983c1a016b72c2aadd1] plugged-in check receives
@@ -274,6 +304,11 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:533fc9999ad0841992e0c1734d9c1f5d] env_var
   [scanner-refusal:7336dd5a712b0c3a578b64d7defb1654] between stanzas declares
   [scanner-refusal:1aaab6e3cd8f4615e1cd1d0321e309a1] times and only
+  [scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does
+  [scanner-refusal:6d4652d347d64362ce0c9b3c1498abb9] carries a backend-default
+  [scanner-refusal:eeabf0209c60b38c2cf243f1fcbaac4a] backend-default marker that
+  [scanner-refusal:f75580a3f9d63e77e8203a3df984bb9c] times and only
+  [scanner-refusal:942031ff44cb018ae2d7eee70ed6327a] the backend default
   [scanner-refusal:95919586e2a2b25eaaf13ca8093ab584] repository-wide scan rule
   [scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule
   [scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner
@@ -306,6 +341,13 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests
   [scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests
   [scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts
+  [scanner-refusal:ffa1cdde8b0746fcdb7a1ac0b406107a] the backend default
+  [scanner-refusal:2d95d96433c72c5c970b888087a59832] the backend default
+  [scanner-refusal:6c8e61d2480bca6f93d3fd99b945e5ad] the backend default
+  [scanner-refusal:04f8a4dfd1058a7595117f80bc1fcb0c] the backend default
+  [scanner-refusal:66742d7bb3766af11b75ab38bf798fdb] the backend default
+  [scanner-refusal:b0d8f5f604f61eb8ecc4829d93f24a83] the backend-default reader
+  [scanner-refusal:afd2f461af706b40bf4582f1b0a30b01] the backend-default reader
   [scanner-refusal:77d0be0fe2fca9a97da8be7f833d9c6e] is spelled without
   [scanner-refusal:05b0b536b88908d4ef277447d7e82ae3] exempt_reads
   [scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from
@@ -408,6 +450,8 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:1941f1fd1c6d01e76c592bdab3261140] search item invalidates
   [scanner-refusal:4aeee97cadd279f1e1d00bd64a116077] search item invalidates
   [scanner-refusal:c3b6672a6f1e65c6ba16b1c987d1a8cb] invalidates an earlier
+  [scanner-refusal:aa2e14b6af61751440ba04ff7709d6e6] invalidates an initialization
+  [scanner-refusal:88245fbc788612e3501d835011df08f2] interface-only sibling module
   [scanner-refusal:4b7124f3852d2e10d4a830de32bdedde] carrying cc-vector-width independent
   [scanner-refusal:974939e6b89b36d455f0e19ff70a42d3] pinning the variable
   [scanner-refusal:687a8e82db5772147024b757deca3cd3] program whose initialization
@@ -453,6 +497,14 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:fac99db54dbc751b212940875f53c769] captured Verdict run
   [scanner-refusal:edc4786c103754e1274b9e12cf08fa3f] nonempty binding undoes
   [scanner-refusal:e41ce36dfe9ad79d2112520081833ba9] captured Verdict run
+  [scanner-refusal:3f8d91b20ff8dd63fdb0fa1e1cd5cc7b] select stanza passes
+  [scanner-refusal:cab6ce652200dd6b791b352310a35bdc] undeclared tracing gate
+  [scanner-refusal:4b254ada2beaa28473ff82577bf198ee] undeclared ambient env
+  [scanner-refusal:1692b7fcf8f2e58a4884d397c7d39c9c] non-default select arm
+  [scanner-refusal:f1f5e5ad4613c408d71f8a02b4462be9] non-default select arm
+  [scanner-refusal:4112d0c301944346aa5b2b228db48361] non-default select arm
+  [scanner-refusal:c32893cb68f676d5b920e664ddd544a1] default-module-set stanza discovers
+  [scanner-refusal:cc3f3f4d2c2871eaf60a3bbe9f670f42] invalidates an initialization
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
   [scanner-refusal:f11c09a8318b3a7863444256973f57d4] running an executable
   [scanner-refusal:941a9fb77d867c7b1576a0f19ee5db3b] declares

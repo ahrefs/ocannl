@@ -1781,6 +1781,21 @@ type marker =
     job is to be checkable, so an empty entry between commas, a backend named twice, or a second
     declaration sharing the line are all {!Malformed} rather than normalised away — silently reading
     [cc,] as [cc] would hand back a clean answer for a marker its author got wrong. *)
+let parse_backend_list ~admitted ~empty_error raw =
+  let named = String.split raw ~on:',' |> List.map ~f:String.strip in
+  if String.is_empty raw then Error [ empty_error ]
+  else if List.exists named ~f:String.is_empty then
+    Error
+      [
+        Printf.sprintf
+          "`%s` has an empty entry between commas -- name each backend, or drop the comma" raw;
+      ]
+  else if List.exists named ~f:(fun word -> not (List.mem admitted word ~equal:String.equal)) then
+    Error [ Printf.sprintf "`%s` is not one of %s" raw (String.concat ~sep:", " admitted) ]
+  else if List.contains_dup named ~compare:String.compare then
+    Error [ Printf.sprintf "`%s` names the same backend twice" raw ]
+  else Ok named
+
 let parse_backend_declaration ~declaration:backend ~reason =
   (* A stanza may name more than one backend -- `data_parallel` runs the same model on cc and on
      multidev_cc -- and writing both is more truthful than picking one. `none` makes no such pair.
@@ -1788,27 +1803,19 @@ let parse_backend_declaration ~declaration:backend ~reason =
      Every rejection is a rejection rather than a normalisation. Dropping an empty entry would read
      `cc,` and `cc,,metal` as a clean `cc`/`cc,metal`, and deduplicating would read `cc,cc` as `cc`
      -- silently repairing a typo in the one place whose purpose is to be wrong out loud. *)
-  let named = String.split backend ~on:',' |> List.map ~f:String.strip in
-  if String.is_empty backend then Error [ "no backend named before the reason" ]
-  else if List.exists named ~f:String.is_empty then
-    Error
-      [
-        Printf.sprintf
-          "`%s` has an empty entry between commas -- name each backend, or drop the comma" backend;
-      ]
-  else if List.exists named ~f:(fun word -> not (List.mem marker_backends word ~equal:String.equal))
-  then
-    Error
-      [ Printf.sprintf "`%s` is not one of %s" backend (String.concat ~sep:", " marker_backends) ]
-  else if List.contains_dup named ~compare:String.compare then
-    Error [ Printf.sprintf "`%s` names the same backend twice" backend ]
-  else if List.mem named "none" ~equal:String.equal && List.length named > 1 then
-    Error
-      [
-        Printf.sprintf
-          "`%s` says both that the run depends on a backend and that it depends on none" backend;
-      ]
-  else Ok { backend = String.concat ~sep:"," named; reason }
+  match
+    parse_backend_list ~admitted:marker_backends ~empty_error:"no backend named before the reason"
+      backend
+  with
+  | Error _ as err -> err
+  | Ok named ->
+      if List.mem named "none" ~equal:String.equal && List.length named > 1 then
+        Error
+          [
+            Printf.sprintf
+              "`%s` says both that the run depends on a backend and that it depends on none" backend;
+          ]
+      else Ok { backend = String.concat ~sep:"," named; reason }
 
 (** What is wrong with one malformed backend marker, phrased for the author of the comment: the one
     wording [env_var_deps] fails it with and [Slot_kind] refuses a batch over. *)
@@ -2101,6 +2108,172 @@ let backend_rule_of marked =
   | true, true, [] -> Declares_variable
   | true, false, [ (line, m) ] -> Names_backend (line, m)
   | true, false, [] -> Names_neither
+
+(** {1 Backend-default dependency markers (gh-ocannl-2382)}
+
+    Two forms joined by a default name, sharing {!contained_marker_contract}:
+    {ul
+     {- Definition form, on a [(library)] stanza:
+        {v
+        ; ocannl-backend-default: <name> = <backend>[,<backend>...] <Module.def>[,<Module.def>...] -- <reason>
+        v}
+     }
+     {- Reader form, on a [(test)], [(tests)], [(executable)], [(executables)], or inline-test
+        [(library)] stanza:
+        {v ; ocannl-backend-default: <name> -- <reason> v}
+     }
+    }
+
+    Nothing malformed is normalised: empty list entries, duplicates, unknown backends, [none],
+    invalid names, or spaces inside either comma list are refused. *)
+
+let default_marker_sentinel = "ocannl-backend-default:"
+let default_marker_backends = List.filter marker_backends ~f:(fun b -> not (String.equal b "none"))
+
+type default_marker =
+  | Default_definition of {
+      default_name : string;
+      default_backends : string list;
+      default_targets : (string * string) list;
+      default_reason : string;
+    }
+  | Default_reader of { default_name : string; default_reason : string }
+
+let is_default_name s =
+  (not (String.is_empty s))
+  && Char.is_lowercase s.[0]
+  && String.for_all s ~f:(fun c -> Char.is_lowercase c || Char.is_digit c || Char.equal c '-')
+
+let is_ocaml_module_name s =
+  (not (String.is_empty s))
+  && Char.is_uppercase s.[0]
+  && String.for_all s ~f:(fun c -> Char.is_alphanum c || Char.equal c '_' || Char.equal c '\'')
+
+let is_ocaml_ident_name s =
+  (not (String.is_empty s))
+  && (not (String.equal s "_"))
+  && (Char.is_alpha s.[0] || Char.equal s.[0] '_')
+  && String.for_all s ~f:(fun c -> Char.is_alphanum c || Char.equal c '_' || Char.equal c '\'')
+
+let parse_default_targets raw =
+  let entries = String.split raw ~on:',' in
+  if String.is_empty raw then Error [ "no target definition named after the backend list" ]
+  else if List.exists entries ~f:String.is_empty then
+    Error
+      [
+        Printf.sprintf
+          "`%s` has an empty entry between commas -- name each `Module.def`, or drop the comma" raw;
+      ]
+  else
+    let parsed =
+      List.fold_result entries ~init:[] ~f:(fun acc entry ->
+          match String.lsplit2 entry ~on:'.' with
+          | Some (mod_name, def_name)
+            when is_ocaml_module_name mod_name && is_ocaml_ident_name def_name ->
+              Ok ((mod_name, def_name) :: acc)
+          | _ ->
+              Error
+                [
+                  Printf.sprintf
+                    "`%s` is not a valid `Module.def` target (use an OCaml module and top-level \
+                     identifier)"
+                    entry;
+                ])
+    in
+    match parsed with
+    | Error _ as err -> err
+    | Ok rev_targets ->
+        let targets = List.rev rev_targets in
+        let compare_pair (m1, d1) (m2, d2) =
+          match String.compare m1 m2 with 0 -> String.compare d1 d2 | c -> c
+        in
+        if List.contains_dup targets ~compare:compare_pair then
+          Error [ Printf.sprintf "`%s` names the same target definition twice" raw ]
+        else Ok targets
+
+let parse_default_declaration ~declaration ~reason =
+  match String.lsplit2 declaration ~on:'=' with
+  | None ->
+      let name = String.strip declaration in
+      if String.is_empty name then Error [ "no backend-default name before the reason" ]
+      else if not (is_default_name name) then
+        Error
+          [ Printf.sprintf "`%s` is not a valid backend-default name (use `[a-z][a-z0-9-]*`)" name ]
+      else Ok (Default_reader { default_name = name; default_reason = reason })
+  | Some (lhs, rhs) -> (
+      if String.contains rhs '=' then
+        Error [ "expected a single `=` in a backend-default definition" ]
+      else
+        let name = String.strip lhs in
+        if String.is_empty name then Error [ "no backend-default name before `=`" ]
+        else if not (is_default_name name) then
+          Error
+            [
+              Printf.sprintf "`%s` is not a valid backend-default name (use `[a-z][a-z0-9-]*`)" name;
+            ]
+        else
+          let tokens =
+            String.split_on_chars (String.strip rhs) ~on:[ ' '; '\t' ]
+            |> List.filter ~f:(Fn.non String.is_empty)
+          in
+          match tokens with
+          | [ backends_raw; targets_raw ] -> (
+              match
+                parse_backend_list ~admitted:default_marker_backends
+                  ~empty_error:"no backend named after `=`" backends_raw
+              with
+              | Error _ as err -> err
+              | Ok default_backends -> (
+                  match parse_default_targets targets_raw with
+                  | Error _ as err -> err
+                  | Ok default_targets ->
+                      Ok
+                        (Default_definition
+                           {
+                             default_name = name;
+                             default_backends;
+                             default_targets;
+                             default_reason = reason;
+                           })))
+          | _ ->
+              Error
+                [
+                  "expected `<backend>[,<backend>...] <Module.def>[,<Module.def>...]` after `=` \
+                   (no spaces inside either comma list)";
+                ])
+
+let default_marker_malformed_reason =
+  marker_malformed_reason ~sentinel:default_marker_sentinel ~separator_subject:"declaration"
+    ~grammar:
+      (Printf.sprintf "%s <name> [= <backend>[,...] <Module.def>[,...]] -- <reason>"
+         default_marker_sentinel)
+
+let default_marker_contract content =
+  contained_marker_contract content ~sentinel:default_marker_sentinel
+    ~parse_declaration:(fun _stanza -> parse_default_declaration)
+    ~belongs:(fun stanza marker ->
+      match (marker, stanza.marked_head) with
+      | Default_definition _, "library" -> Ok ()
+      | Default_definition _, head ->
+          Error
+            [
+              Printf.sprintf
+                "a `%s` stanza cannot define a backend default -- place definition markers on a \
+                 `(library)` stanza"
+                head;
+            ]
+      | Default_reader _, ("test" | "tests" | "executable" | "executables") -> Ok ()
+      | Default_reader _, "library" when Option.is_some (field stanza.marked_sexp "inline_tests") ->
+          Ok ()
+      | Default_reader _, head ->
+          Error
+            [
+              Printf.sprintf
+                "a `%s` stanza cannot read a backend default -- place reader markers on a \
+                 `(test)`, `(tests)`, `(executable)`, `(executables)`, or inline-test `(library)` \
+                 stanza"
+                head;
+            ])
 
 (** {1 A backend fixed in the action (gh-ocannl-1518)}
 
@@ -2711,15 +2884,33 @@ let modules_of ?(directory_modules = []) stanzas stanza =
       List.filter directory_modules ~f:(fun m -> not (Set.mem claimed (String.lowercase m)))
 
 (** The modules a directory holds, from the repository-relative [paths] of the sources a scan was
-    handed: the basename of every [.ml] directly in [dir] ([""] or [.] for the root). What
+    handed and the directory's [stanzas]: the basename of every plain [.ml] directly in [dir] ([""]
+    or [.] for the root) -- omitting dotted [(select)] arms such as [helper.real.ml] -- plus the
+    logical target module of every [(select <target>.ml from …)] in [stanzas] (gh-ocannl-2482). What
     {!modules_of} takes as [directory_modules]. *)
-let directory_modules ~dir paths =
+let directory_modules ?(stanzas = []) ~dir paths =
   let dir = in_subdir "" dir in
-  List.filter_map paths ~f:(fun path ->
-      let parent = in_subdir "" (Stdlib.Filename.dirname path) in
-      if String.equal parent dir then
-        String.chop_suffix (Stdlib.Filename.basename path) ~suffix:".ml"
-      else None)
+  let from_paths =
+    List.filter_map paths ~f:(fun path ->
+        let parent = in_subdir "" (Stdlib.Filename.dirname path) in
+        if String.equal parent dir then
+          match String.chop_suffix (Stdlib.Filename.basename path) ~suffix:".ml" with
+          | Some stem when not (String.contains stem '.') -> Some stem
+          | _ -> None
+        else None)
+  in
+  let from_selects =
+    List.concat_map stanzas ~f:(fun stanza ->
+        List.filter_map (select_arms stanza) ~f:(fun (target, _arm) ->
+            String.chop_suffix (Stdlib.Filename.basename target) ~suffix:".ml"))
+  in
+  let seen = Hash_set.create (module String) in
+  List.filter (from_paths @ from_selects) ~f:(fun m ->
+      let key = String.lowercase m in
+      if Hash_set.mem seen key then false
+      else (
+        Hash_set.add seen key;
+        true))
 
 (** The modules a stanza tells dune have no implementation, lowercased: an [.mli] runs nothing, so a
     scan handed no [.ml] for one of them is missing no input. *)

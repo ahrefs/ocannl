@@ -6,6 +6,22 @@
 # themselves not applicable (and the shapes of that declaration it refuses),
 # a scratch directory removed inside a leg, the default TERM its subshells
 # take, and reason-specific rejection.
+# Also audits standalone Bash scripts under `tools/*.sh` for the unset-locale
+# startup guard (gh-ocannl-2484). Closed boundary: scans non-comment lines of
+# `tools/*.sh` files whose first line invokes Bash (`#!/usr/bin/env bash` or
+# `#!/bin/bash`). A script initialized at top level before its first locale
+# assignment via `test-test-run-common.sh` or via `harness-support.sh` plus
+# `harness_args` is covered by `harness_args`. Any other Bash script under
+# `tools/*.sh` containing a locale assignment token (`LC_ALL=`, `LC_CTYPE=`,
+# `LC_COLLATE=`, `LC_NUMERIC=`, `LC_TIME=`, `LC_MESSAGES=`, `LANG=`) must carry
+# either `[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C` or an
+# unconditional top-level `export LC_ALL=C` / `export LANG=C` at column 0
+# before its first non-comment subshell (`$(`, `(`, backtick), unclosed `{`
+# block, conditional/loop keyword (`if`/`elif`/`else`/`case`/`for`/`while`/
+# `until`/`select`), or earlier locale assignment. Full shell quoting/heredocs,
+# indirect `eval`/`printf -v` assignments, non-Bash (`#!/bin/sh`) scripts, and
+# files outside `tools/*.sh` are outside this check.
+# affected-reads: tools/*.sh
 # Usage: scripts/test-harness-support.sh [--keep] [--help]
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -770,4 +786,224 @@ printf '\033[1mFile "dune"\033[0m\n\033[31mError\033[0m: missing\n' >"$TMP/ansi"
 [ "$(harness_plain "$TMP/ansi")" = 'File "dune"
 Error: missing' ]
 report $? 'plain matching removes dune ANSI while retaining diagnostic text'
+
+# Audit standalone Bash scripts under tools/*.sh for the unset-locale startup
+# guard (gh-ocannl-2484). Prints one line per offending file and returns the
+# count of offending files (capped at 1); sets audit_checked to the number of
+# in-scope standalone scripts that assign a locale variable.
+audit_standalone_locale_guards() { # FILE...
+  local out
+  out=$(awk '
+    function flush_file() {
+      if (fname == "") return
+      if (is_bash && !harness_init && has_locale) {
+        checked++
+        if (!guarded_ok) {
+          if (!saw_guard) reason = "missing startup locale guard"
+          printf "%s: %s\n", fname, reason
+          bad++
+        }
+      }
+    }
+    FNR == 1 {
+      flush_file()
+      fname = FILENAME
+      is_bash = 0; sourced_hs = 0; harness_init = 0; has_locale = 0
+      guarded_ok = 0; saw_guard = 0; bad_before_guard = 0; cond_seen = 0; brace_depth = 0
+      reason = "missing startup locale guard"
+      line = $0; sub(/\r$/, "", line)
+      if (line ~ /^#!\/(usr\/bin\/env[ \t]+bash|bin\/bash)([ \t]|$)/) is_bash = 1
+      next
+    }
+    !is_bash { next }
+    {
+      raw = $0; sub(/\r$/, "", raw)
+      trimmed = raw; sub(/^[ \t]+/, "", trimmed); sub(/[ \t]+$/, "", trimmed)
+      if (trimmed == "" || trimmed ~ /^#/) next
+      if (brace_depth == 0 && !cond_seen && !has_locale) {
+        if (raw ~ /^(\.|source)[ \t]+.*test-test-run-common\.sh/) {
+          harness_init = 1
+        } else if (raw ~ /^(\.|source)[ \t]+.*harness-support\.sh/) {
+          sourced_hs = 1
+        } else if (sourced_hs && raw ~ /^harness_args([ \t]|$)/) {
+          harness_init = 1
+        }
+      }
+      is_guard = (raw ~ /^(\[ -n "\$\{LANG:-\}" \] \|\| \[ -n "\$\{LC_ALL:-\}" \] \|\| export LANG=C|export LC_ALL=C|export LANG=C)[ \t]*$/)
+      if (is_guard && !saw_guard) {
+        saw_guard = 1
+        has_locale = 1
+        if (brace_depth == 0 && !cond_seen && !bad_before_guard) {
+          guarded_ok = 1
+        } else if (brace_depth > 0) {
+          reason = "startup locale guard sits inside an open block"
+        } else if (cond_seen) {
+          reason = "conditional or loop precedes startup locale guard"
+        }
+        next
+      }
+      if (trimmed ~ /(^|[^A-Za-z0-9_])(LC_ALL|LC_CTYPE|LC_COLLATE|LC_NUMERIC|LC_TIME|LC_MESSAGES|LANG)=/) {
+        has_locale = 1
+        if (!saw_guard && !bad_before_guard) {
+          bad_before_guard = 1
+          reason = "locale assignment precedes startup locale guard"
+        }
+      }
+      if (!saw_guard || !harness_init) {
+        if (trimmed ~ /^(if|elif|else|case|for|while|until|select)([ \t;(]|$)/) {
+          cond_seen = 1
+        }
+        scan = trimmed
+        sub(/^[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)/, "", scan)
+        if (!saw_guard && (index(scan, "$(") > 0 || index(scan, "`") > 0 || index(scan, "(") > 0)) {
+          if (!bad_before_guard) {
+            bad_before_guard = 1
+            reason = "subshell precedes startup locale guard"
+          }
+        }
+        s = scan
+        while (match(s, /[{}]/)) {
+          ch = substr(s, RSTART, 1)
+          if (ch == "{") brace_depth++
+          else if (brace_depth > 0) brace_depth--
+          s = substr(s, RSTART + 1)
+        }
+      }
+    }
+    END {
+      flush_file()
+      printf "CHECKED %d\n", checked + 0
+      exit (bad > 0 ? 1 : 0)
+    }
+  ' "$@")
+  audit_rc=$?
+  audit_checked=$(printf '%s\n' "$out" | sed -n 's/^CHECKED //p' | tail -n 1)
+  audit_findings=$(printf '%s\n' "$out" | grep -v '^CHECKED ' || true)
+}
+
+repo_tools_sh=()
+for f in "$HERE/../tools/"*.sh; do
+  [ -f "$f" ] && repo_tools_sh+=("$f")
+done
+audit_standalone_locale_guards "${repo_tools_sh[@]}"
+if [ "$audit_rc" = 0 ] && [ "${audit_checked:-0}" -ge 8 ] && [ -z "$audit_findings" ]; then
+  report 0 "every standalone tools/*.sh with locale assignments carries the startup guard ($audit_checked scripts checked)"
+else
+  report 1 "every standalone tools/*.sh with locale assignments carries the startup guard" \
+    "rc=$audit_rc checked=${audit_checked:-0}; $audit_findings"
+fi
+
+# Positive and negative synthetic controls for the standalone locale-guard audit.
+mkdir -p "$TMP/locale-audit"
+cat >"$TMP/locale-audit/ok-guard.sh" <<'EOF'
+#!/usr/bin/env bash
+set -u
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
+root=$(pwd)
+f() { local LC_ALL=C; :; }
+EOF
+cat >"$TMP/locale-audit/ok-export.sh" <<'EOF'
+#!/usr/bin/env bash
+set -u
+die() { echo "$*" >&2; exit 2; }
+export LC_ALL=C
+root=$(pwd)
+EOF
+cat >"$TMP/locale-audit/ok-harness.sh" <<'EOF'
+#!/usr/bin/env bash
+. "$HERE/harness-support.sh"
+harness_args "$@"
+LC_ALL=C sort /dev/null
+EOF
+cat >"$TMP/locale-audit/ok-common.sh" <<'EOF'
+#!/usr/bin/env bash
+. "$HERE/test-test-run-common.sh"
+LC_ALL=C sort /dev/null
+EOF
+cat >"$TMP/locale-audit/ok-no-locale.sh" <<'EOF'
+#!/usr/bin/env bash
+set -u
+echo ok
+EOF
+cat >"$TMP/locale-audit/ok-posix-sh.sh" <<'EOF'
+#!/bin/sh
+LC_ALL=C sort /dev/null
+EOF
+audit_standalone_locale_guards "$TMP/locale-audit"/ok-*.sh
+if [ "$audit_rc" = 0 ] && [ "${audit_checked:-0}" = 2 ] && [ -z "$audit_findings" ]; then
+  report 0 'locale-guard audit accepts guarded standalone scripts, harness scripts, sh scripts and locale-free scripts'
+else
+  report 1 'locale-guard audit accepts valid synthetic scripts' "rc=$audit_rc checked=${audit_checked:-0}; $audit_findings"
+fi
+
+cat >"$TMP/locale-audit/bad-local.sh" <<'EOF'
+#!/usr/bin/env bash
+set -u
+f() { local LC_ALL=C; :; }
+EOF
+cat >"$TMP/locale-audit/bad-prefix.sh" <<'EOF'
+#!/usr/bin/env bash
+set -u
+LC_ALL=C sort /dev/null
+EOF
+cat >"$TMP/locale-audit/bad-comment.sh" <<'EOF'
+#!/usr/bin/env bash
+set -u
+# [ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
+LC_ALL=C awk '{print}'
+EOF
+cat >"$TMP/locale-audit/bad-after-subshell.sh" <<'EOF'
+#!/usr/bin/env bash
+set -u
+root=$(pwd)
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
+LC_ALL=C sort /dev/null
+EOF
+cat >"$TMP/locale-audit/bad-in-func.sh" <<'EOF'
+#!/usr/bin/env bash
+set -u
+init() {
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
+}
+LC_ALL=C sort /dev/null
+EOF
+cat >"$TMP/locale-audit/bad-before-guard.sh" <<'EOF'
+#!/usr/bin/env bash
+set -u
+LC_ALL=C true
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
+EOF
+cat >"$TMP/locale-audit/bad-in-if.sh" <<'EOF'
+#!/usr/bin/env bash
+set -u
+if false; then
+export LANG=C
+fi
+f() { local LC_ALL=C; :; }
+EOF
+cat >"$TMP/locale-audit/bad-harness-no-init.sh" <<'EOF'
+#!/usr/bin/env bash
+. "$HERE/harness-support.sh"
+LC_ALL=C sort /dev/null
+EOF
+cat >"$TMP/locale-audit/bad-harness-after-locale.sh" <<'EOF'
+#!/usr/bin/env bash
+. "$HERE/harness-support.sh"
+LC_ALL=C true
+harness_args "$@"
+EOF
+bad_ok=1
+bad_detail=
+for bad_f in "$TMP/locale-audit"/bad-*.sh; do
+  audit_standalone_locale_guards "$bad_f"
+  if [ "$audit_rc" != 1 ] || [ -z "$audit_findings" ]; then
+    bad_ok=0
+    bad_detail="$bad_detail $(basename "$bad_f")(rc=$audit_rc)"
+  fi
+done
+if [ "$bad_ok" = 1 ]; then
+  report 0 'negative controls: locale-guard audit refuses unguarded, commented, late-subshell, block-nested, conditional, pre-assigned and uninitialized-harness scripts'
+else
+  report 1 'negative controls: locale-guard audit refuses unguarded scripts' "accepted:$bad_detail"
+fi
 finish

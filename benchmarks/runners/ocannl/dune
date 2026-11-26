@@ -168,6 +168,7 @@
  (libraries
   base
   bench_args
+  bench_design
   bench_harness
   bench_out
   bench_retime
@@ -185,6 +186,35 @@
     ->
     bench_cuda_select.real.ml)
    (-> bench_cuda_select.missing.ml)))
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(executable
+ (name bench_metal_select)
+ (modules bench_metal_select)
+ (libraries
+  base
+  bench_args
+  bench_design
+  bench_harness
+  bench_out
+  bench_retime
+  mtime
+  mtime.clock.os
+  ocannl
+  arrayjit.autotune
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.utils
+  (select
+   bench_metal_select.ml
+   from
+   (arrayjit.metal_backend
+    ll_test
+    arrayjit.verdict
+    ->
+    bench_metal_select.real.ml)
+   (-> bench_metal_select.missing.ml)))
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

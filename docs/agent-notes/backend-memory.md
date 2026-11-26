@@ -99,7 +99,10 @@ files.
   (8.35 GB) still allocated, and at its second on tuf's 8 GiB card, and the free bytes read as 8.6
   GB and 3.9 GB "resident after arm A", while arm A (6.9 GB) gives back everything it allocated. The
   refusal's detail now names the pool's position, the group's total and the bytes the earlier pools
-  held. Before blaming a
+  held. The CPU leg of `resource_fault_injection` lowers the cap with `with_pool_cap` and injects
+  the driver's typed refusal at `Delta_pool_before_allocate`. The handling still sees the first
+  pool live, and the caller sees the annotated refusal after the unwind frees it. A test cap must
+  be a positive power of two to preserve the link floor for page-rounded allocations. Before blaming a
   leak, score the footprint, and compare the `working_bytes` (census) and `device_free` (driver)
   fields of `Train.tune_placements`' progress lines across the arm boundaries: equal working bytes
   with a falling `device_free` is memory no pool table accounts for.
@@ -615,14 +618,22 @@ files.
   For HIP, run `env OCANNL_BACKEND=hip python3 tools/gpu-memory-census.py --hip-memory-model
   unified -- --expect-backend hip build @DIR/runtest-NAME`. Select `discrete` on tuf-amd-linux
   (gfx1102) for resident VRAM, or `unified` on minix-amd-linux (gfx1151) for resident VRAM plus
-  GTT. Minix's known HIP device allocation raised resident VRAM. The GTT term has fixture
-  coverage. A GPU-touched coherent mapped host buffer left resident GTT flat on the witnessed
-  kernel. The model is a batch label supplied by the caller and
-  defaults to unknown (both regions). The counters come from owned KFD processes' amdgpu
+  GTT. Minix's known HIP device allocation raised resident VRAM. The GTT parser has
+  [fixture coverage](../../benchmarks/test/test_gpu_memory_census.py). The caller supplies the
+  batch's model, which defaults to unknown (both regions). The counters come from owned KFD processes' amdgpu
   `fdinfo`, once per DRM client and device. The probe prefers `drm-resident-*` and falls back per
   region to the older `drm-memory-*` alias. Requested totals and CPU-only backing are outside
   the reading. The sidecar lists the fields actually used and leaves a PID unknown when no
   complete reading fits inside its traced lifetime.
+- The GTT witness (gh-ocannl-2393) on unified minix-amd-linux (gfx1151, Linux
+  7.0.0-44-generic, ROCr 7.1.0) starts the HIP process with `HSA_USERPTR_FOR_PAGED_MEM=0`.
+  A 128 MiB coherent mapped `hipHostMalloc`, filled through its device pointer and
+  synchronized, moved `drm-resident-gtt` from 14456 to 145528 KiB and back after `hipHostFree`.
+  Each phase uses the shipped `probe_drm` reading of VRAM plus GTT minus its VRAM-only reading.
+  The same GPU fill with the default allocator left GTT at 2104 KiB. The census measures
+  DRM-accounted resident backing, so GPU access can leave its GTT reading flat. On minix-amd-linux,
+  `/home/lukstafi/wave-scratch/wave-20261126-ocannl/t2393/hip-gtt-witness.py` ran at base
+  `3475f89a5`, with the witness and control in `runs/run-3` and `runs/run-4` in the same directory.
 - Building a test kernel that actually *has* a big scratch frame takes care: write the `Local`
   array in one loop and read it back in REVERSE in another. A forward read in the same order lets
   the compiler forward each store to its load and delete the array, leaving nothing to reject.

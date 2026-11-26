@@ -227,14 +227,16 @@ let () =
             ~f:(fun (a, b) -> not (bitwise a b));
           List.iter
             [
-              ("virtual twin", "nsr_c1_virt", MP.Twin_virtual);
-              ("materialized twin", "nsr_c1_mat", MP.Twin_materialized);
+              ("virtual twin", "nsr_c1_virt", MP.Twin_virtual, None);
+              ("materialized twin", "nsr_c1_mat", MP.Twin_materialized, None);
+              (* gh-ocannl-2473: the unfissioned twin keeps bf16 scratch in thread memory. *)
+              ("unfissioned virtual twin", "nsr_c1_private", MP.Twin_virtual, Some (fun o -> [ o ]));
             ]
-            ~f:(fun (label, rname, placement) ->
+            ~f:(fun (label, rname, placement, lowered_transform) ->
               let bf_grad, routine =
                 run_cast_twin_step ~name:rname ~vocab ~d_model ~ids_rows ~wte_vals ~coeff_vals
                   ~prec:(Some (bf16, placement))
-                  ()
+                  ?lowered_transform ()
               in
               digits ("bf16 case1 " ^ label) bf_grad;
               let expected = Array.map f32_grad ~f:(Ops.round_to_prec bf16) in

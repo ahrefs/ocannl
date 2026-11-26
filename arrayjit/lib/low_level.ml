@@ -1054,8 +1054,8 @@ type read_charge = {
 
 and select_charge = {
   speculable : bool;
-      (** {!speculable_select} admits it: a backend whose [blends_value_selects] fact holds renders
-          it as a blend evaluating every arm. *)
+      (** {!speculable_select} admits it: a backend that eagerly blends loaded arms renders it as a
+          blend evaluating every arm. *)
   arms : read_charge list;  (** One per arm, in order; exactly one runs where it short-circuits. *)
 }
 
@@ -1623,6 +1623,39 @@ let same_position ?dyn_axis ~statics_set (m : Indexing.axis_index array)
       | Some fa, Some fb -> [%equal: (int * Indexing.symbol) list * int] fa fb
       | _ -> false)
 
+let select_arm_is_load_free scalar =
+  let open Access_fold in
+  let policy =
+    {
+      discarded_operands = Skip;
+      gated_operands = Visit;
+      dead_loops = Skip;
+      local_scopes = Visit;
+      guards = Ignore;
+      scan_implicit = Visit;
+    }
+  in
+  let hooks =
+    {
+      (hooks ()) with
+      scalar =
+        (fun _ load_free -> function
+          | Get _ | Get_dynamic _ | Get_merge_buffer _ -> Prune false
+          | Local_scope _ | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ | Ternop _
+          | Binop _ | Unop _ ->
+              if load_free then Continue true else Prune false);
+      statement =
+        (fun _ load_free -> function
+          | Staged_compilation _ | Workgroup_barrier | Tile_mma _ | Zero_out _ | Set _
+          | Set_dynamic _ | Set_from_vec _ ->
+              Prune false
+          | Noop | Comment _ | Seq _ | For_loop _ | Scan_loop _ | If _ | Declare_local _
+          | Set_local _ ->
+              if load_free then Continue true else Prune false);
+    }
+  in
+  fold_scalar ~policy ~hooks ~init:true scalar
+
 (* See the interface: the select a backend may render as a branchless blend (gh-ocannl-1622). Ahead
    of the read collector, which charges such a select's arms by their union on a blending backend
    (gh-ocannl-1775). *)
@@ -1830,8 +1863,8 @@ let read_charge_of_proc ~(self : Tn.t) (code : t) : read_charge =
 
 (* gh-ocannl-1874: a charge's contributors, each load folded in by [expand] (the transitive guard
    expands a virtual dependency into its own fan-in; the plain reading adds the node itself). A
-   select [~blends] (the backend's [blends_value_selects] fact, gh-ocannl-1775) renders as a blend
-   -- one {!speculable_select} admits -- evaluates every arm and is charged their union. Any other
+   select [~blends] (when the backend charges an arm union, gh-ocannl-1775) renders as a blend --
+   one {!speculable_select} admits -- evaluates every arm and is charged their union. Any other
    select evaluates exactly one arm per visit, so one arm is charged, not the union -- two arms each
    within the cap must not jointly trip it: the arm whose EXPANDED reads, joined with what this
    evaluation has already been charged, are the most. Choosing after expansion is the point: an arm
@@ -4442,6 +4475,14 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     Option.iter !capture ~f:(fun (owner, hits) ->
         ignore (Hashtbl.add hits ~key:owner ~data:hit : [ `Ok | `Duplicate ]))
   in
+  (* The direct read checks before footprint dispatch, whose retraction can leave it uninstantiated.
+     A nested replay checks at its own read site. *)
+  let capture_reads_inherited_merge tn =
+    if Option.is_some !capture && Hash_set.mem inherited_merge_tainted tn then (
+      record_hit (Capture_reads_merge tn);
+      true)
+    else false
+  in
   let owner_hit tn = Option.bind !capture ~f:(fun (_, hits) -> Hashtbl.find hits tn) in
   (* gh-ocannl-1620: outside a capture walk, a read of routine-local scratch that this routine's own
      writes cover executes where it stands, but a template holding it would carry it to every read
@@ -4587,26 +4628,123 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     | Some candidate when (not (Tn.equal candidate tn)) && not will_store -> fun _ -> false
     | _ -> opaque
   in
-  (* The ordinary inlining of a read: the node's stored template instantiated at the read's indices,
-     as a scope local. [None] from [inline_computation] means the read site could not be served and
-     the node was committed [Never_virtual] there; the read then stays a buffer read. *)
-  let inline_get (traced : traced_array) indices ~enclosing : scalar_t =
+  (* gh-ocannl-1469: the loops whose extent may decide a [Where] condition in the walked code —
+     every enclosing loop except the [opaque] ones. Code that executes where it stands holds every
+     loop's extent; code the walk is producing as a node's stored template replays with the read
+     site's index substituted for the template's write-index symbols, which need not lie in the
+     producer's extent, so the capture of a [For_loop] candidate (phase 1 below) makes those symbols
+     [opaque] (the rule [elide_unevaluated_operands] applies to a template, gh-ocannl-625). Any
+     other enclosing loop -- every loop around a statement stored on its own, its write-index loops
+     included -- is outside the stored code, and a template mentioning its symbol is refused at its
+     store ([Non_virtual 9] / [10]): an emitted decision resting on it never reaches a stored
+     template, and its extent holds where the code runs. *)
+  let decision_loops ~opaque enclosing = List.filter enclosing ~f:(fun (s, _) -> not (opaque s)) in
+  let walk_where ~opaque ~enclosing ~loop cond yes no =
+    let arg (value, prec) = (loop value, prec) in
+    let cond = arg cond in
+    (* A dead arm must not instantiate an inherited computation or register its inputs. Walk the
+       condition and the live arms in program order (gh-ocannl-2052). *)
+    match decide_where ~loops:(decision_loops ~opaque enclosing) cond with
+    | Some true -> Ternop (Ops.Where, cond, arg yes, elided_operand)
+    | Some false -> Ternop (Ops.Where, cond, elided_operand, arg no)
+    | None ->
+        let yes = arg yes in
+        let no = arg no in
+        Ternop (Ops.Where, cond, yes, no)
+  in
+  (* gh-ocannl-2493: a shared-loop capture can retain a read of a later candidate. Once inherited,
+     it needs to be served at the instantiated indices, after sibling setters and omitted components
+     have been dropped. A node written here can acquire local components even if it has an inherited
+     prefix. Expanding its retained reads, or expanding a retained read using that node's current
+     components, could bind an earlier read to a later local write. *)
+  let written_here (traced : traced_array) = traced.has_assignment || traced.zeroed_out in
+  let instantiate_read ~(traced : traced_array) indices ~enclosing ~id =
     let tn = traced.tn in
-    let id = fresh_scope tn in
-    (* gh-ocannl-1551: during a capture walk, an inherited computation that cannot be instantiated
-       here is a hit (see [capture]), not a refusal. *)
     let on_inherited_unservable =
       Option.map !capture ~f:(fun _ code -> record_hit (Capture_read_uninlinable (tn, code)))
     in
-    (* gh-ocannl-1896: the read site's loops, innermost first, so an inner binder shadows. *)
     let call_range s = List.Assoc.find enclosing s ~equal:Indexing.equal_symbol in
-    Option.value ~default:(Get (tn, indices))
-    @@ Option.map
-         (inline_computation ~fresh_symbol ?on_inherited_unservable ~call_range ~id
-            ~inherited_merge_tainted ~inherited_tns optim_ctx traced static_indices indices)
-         ~f:(fun body ->
-           if Hash_set.mem inherited_tns tn then record_spliced_reads body;
-           Local_scope { id; body; orig_indices = indices; mint = Inlined_computation })
+    inline_computation ~fresh_symbol ?on_inherited_unservable ~call_range ~id
+      ~inherited_merge_tainted ~inherited_tns optim_ctx traced static_indices indices
+  in
+  let replay_scope id orig_indices body =
+    Local_scope { id; body; orig_indices; mint = Inlined_computation }
+  in
+  let rec close_replay ~opaque ~process_for ~enclosing (code : t) : t =
+    let proc = close_replay ~opaque ~process_for ~enclosing in
+    match code with
+    | Seq (a, b) ->
+        let a = proc a in
+        let b = proc b in
+        Seq (a, b)
+    | For_loop ({ index; from_; to_; body; _ } as loop) ->
+        let body =
+          close_replay ~opaque ~process_for ~enclosing:((index, (from_, to_)) :: enclosing) body
+        in
+        For_loop { loop with body }
+    | Set_local (id, value) ->
+        Set_local (id, close_replay_scalar ~opaque ~process_for ~enclosing value)
+    | Noop | Comment _ | Staged_compilation _ -> code
+    | Scan_loop _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _ | Declare_local _
+    | Workgroup_barrier | Tile_mma _ | If _ ->
+        (* Instantiation emits a scalar computation with local writes. *)
+        assert false
+  and close_replay_scalar ~opaque ~process_for ~enclosing (value : scalar_t) : scalar_t =
+    let loop = close_replay_scalar ~opaque ~process_for ~enclosing in
+    let arg (value, prec) = (loop value, prec) in
+    match value with
+    | Get (tn, indices)
+      when Hash_set.mem inherited_tns tn
+           && Tn.Placements.known_virtual plc tn
+           && not (Set.mem process_for tn) -> (
+        let traced = get_node traced_store tn in
+        if written_here traced || capture_reads_inherited_merge tn then value
+        else
+          let id = fresh_scope tn in
+          match instantiate_read ~traced indices ~enclosing ~id with
+          | None -> value
+          | Some body ->
+              let body =
+                close_replay ~opaque ~process_for:(Set.add process_for tn) ~enclosing body
+              in
+              replay_scope id indices body)
+    | Local_scope opts when not (scope_retracts_to_buffer plc opts.id.tn) ->
+        let body =
+          close_replay ~opaque ~process_for:(Set.add process_for opts.id.tn) ~enclosing opts.body
+        in
+        Local_scope { opts with body }
+    | Get_dynamic opts -> Get_dynamic { opts with dyn_value = arg opts.dyn_value }
+    | Ternop (Ops.Where, cond, yes, no) -> walk_where ~opaque ~enclosing ~loop cond yes no
+    | Ternop (op, a, b, c) ->
+        let a = arg a in
+        let b = arg b in
+        let c = arg c in
+        Ternop (op, a, b, c)
+    | Binop (op, a, b) ->
+        let a = arg a in
+        let b = arg b in
+        Binop (op, a, b)
+    | Unop (op, a) -> Unop (op, arg a)
+    | Constant _ | Constant_bits _ | Get _ | Get_local _ | Get_merge_buffer _ | Embed_index _
+    | Local_scope _ ->
+        value
+  in
+  let instantiate_at_read ~opaque ~process_for ~(traced : traced_array) indices ~enclosing ~id =
+    Option.map (instantiate_read ~traced indices ~enclosing ~id) ~f:(fun body ->
+        if Hash_set.mem inherited_tns traced.tn then (
+          let body =
+            if written_here traced then body
+            else close_replay ~opaque ~process_for:(Set.add process_for traced.tn) ~enclosing body
+          in
+          record_spliced_reads body;
+          body)
+        else body)
+  in
+  let inline_get ~opaque ~process_for (traced : traced_array) indices ~enclosing =
+    let id = fresh_scope traced.tn in
+    match instantiate_at_read ~opaque ~process_for ~traced indices ~enclosing ~id with
+    | Some body -> replay_scope id indices body
+    | None -> Get (traced.tn, indices)
   in
   (* gh-ocannl-616: footprint-scoped materialization of a read. The prologues minted while a
      top-level statement is walked are spliced ahead of it by the driver at the bottom; the
@@ -4623,7 +4761,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     Set.of_list (module Indexing.Symbol)
     @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
   in
-  let footprint_prologue (traced : traced_array) (indices : Indexing.axis_index array) ~enclosing =
+  let footprint_prologue ~opaque ~process_for (traced : traced_array)
+      (indices : Indexing.axis_index array) ~enclosing =
     let tn = traced.tn in
     let mentioned =
       Array.fold indices
@@ -4674,17 +4813,10 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         in
         let call_args = Array.map indices ~f:substitute in
         let id = fresh_scope tn in
-        let call_range f =
-          List.find_map fresh ~f:(fun (_, f', to_) ->
-              Option.some_if (Indexing.equal_symbol f f') (0, to_))
-        in
-        match
-          inline_computation ~fresh_symbol ~call_range ~id ~inherited_merge_tainted ~inherited_tns
-            optim_ctx traced static_indices call_args
-        with
+        let enclosing = List.rev_map fresh ~f:(fun (_, f, to_) -> (f, (0, to_))) in
+        match instantiate_at_read ~opaque ~process_for ~traced call_args ~enclosing ~id with
         | None -> `Rejected
         | Some body ->
-            if Hash_set.mem inherited_tns tn then record_spliced_reads body;
             let dims =
               match fresh with
               | [] -> [| 1 |]
@@ -4749,7 +4881,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
      ([footprint_ok]), or at a site the prologue builder cannot shape, the decision retracts: to the
      cap's own materialization for a local producer (recorded so the decision surface does not offer
      the flip again), to plain inlining for an inherited node or an explicit preference. *)
-  let footprint_get ~footprint_ok (traced : traced_array) indices ~enclosing : scalar_t =
+  let footprint_get ~opaque ~process_for ~footprint_ok (traced : traced_array) indices ~enclosing :
+      scalar_t =
     let tn = traced.tn in
     let retract () =
       match Hashtbl.find_exn footprint_scoped tn with
@@ -4758,11 +4891,11 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           Hashtbl.remove footprint_scoped tn;
           Hash_set.add footprint_retracted tn;
           Get (tn, indices)
-      | None -> inline_get traced indices ~enclosing
+      | None -> inline_get ~opaque ~process_for traced indices ~enclosing
     in
     if not footprint_ok then retract ()
     else
-      match footprint_prologue traced indices ~enclosing with
+      match footprint_prologue ~opaque ~process_for traced indices ~enclosing with
       | `Footprinted read -> read
       | `Rejected -> Get (tn, indices)
       | `Unsupported -> retract ()
@@ -4793,17 +4926,6 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     | Tile_mma _ | Set_dynamic _ ->
         false
   in
-  (* gh-ocannl-1469: the loops whose extent may decide a [Where] condition in the walked code —
-     every enclosing loop except the [opaque] ones. Code that executes where it stands holds every
-     loop's extent; code the walk is producing as a node's stored template replays with the read
-     site's index substituted for the template's write-index symbols, which need not lie in the
-     producer's extent, so the capture of a [For_loop] candidate (phase 1 below) makes those symbols
-     [opaque] (the rule [elide_unevaluated_operands] applies to a template, gh-ocannl-625). Any
-     other enclosing loop -- every loop around a statement stored on its own, its write-index loops
-     included -- is outside the stored code, and a template mentioning its symbol is refused at its
-     store ([Non_virtual 9] / [10]): an emitted decision resting on it never reaches a stored
-     template, and its extent holds where the code runs. *)
-  let decision_loops ~opaque enclosing = List.filter enclosing ~f:(fun (s, _) -> not (opaque s)) in
   (* [process_for] holds tensors whose [Get]s must be left untouched (self/recursive references,
      replaced by [Get_local] during the tensor's own [inline_computation]). [owned] holds tensors
      whose whole-loop computation is captured at an enclosing [For_loop]: their per-statement
@@ -4901,7 +5023,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                  provider chains). [owned'] suppresses per-statement auto-store for every
                  shared-loop candidate; [in_storage_pass] stops nested re-storage.
                  [check_and_store]/[inline_computation] filter the stored body to [k]'s own setters,
-                 so the irrelevant sibling setters left un-rewritten here are dropped. *)
+                 so the irrelevant sibling setters left un-rewritten here are dropped. A raw read of
+                 a later candidate in [k]'s own setter is served when the template is inherited. *)
               List.iteri candidates ~f:(fun k tn ->
                   if stores tn then (
                     let node : traced_array = get_node traced_store tn in
@@ -5095,7 +5218,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         (* [Get_local] will replace this [Get] during [inline_computation] if [tn] remains
            virtual. *)
         llsc
-    | Get (tn, indices) -> (
+    | Get (tn, indices) ->
         let traced = get_node traced_store tn in
         if Tn.Placements.known_non_virtual plc traced.tn then (
           (* Review round 13: [Local] is non-virtual yet does NOT persist across routines — a node
@@ -5118,17 +5241,10 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                    then record_local_dependent tn)
                  else raise (Utils.User_error (inherited_local_read_rejection tn)));
           llsc)
-        else
-          match !capture with
-          | Some _ when Hash_set.mem inherited_merge_tainted tn ->
-              (* gh-ocannl-1514: a hit, see [capture]. Ahead of the footprint arm too, which in a
-                 capture walk retracts an inherited node to [inline_get]. *)
-              record_hit (Capture_reads_merge tn);
-              llsc
-          | _ ->
-              if Hashtbl.mem footprint_scoped tn then
-                footprint_get ~footprint_ok traced indices ~enclosing
-              else inline_get traced indices ~enclosing)
+        else if capture_reads_inherited_merge tn then llsc
+        else if Hashtbl.mem footprint_scoped tn then
+          footprint_get ~opaque ~process_for ~footprint_ok traced indices ~enclosing
+        else inline_get ~opaque ~process_for traced indices ~enclosing
     | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, prec } ->
         (* Review round 12: a dynamically-indexed read cannot be served by recomputation (the gather
            index is only known at runtime), so a LOCAL table materializes — but an INHERITED table
@@ -5173,23 +5289,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     | Get_local _ -> llsc
     | Get_merge_buffer (_, _) -> llsc
     | Embed_index _ -> llsc
-    (* gh-ocannl-1469: the arm of a [Where] whose condition is decided is never evaluated — do not
-       descend into it, as for a projection's discarded operand below: inlining there could reject
-       the routine for code that never runs (a merge-tainted inherited computation), mint a scope,
-       or register a spliced read. It becomes {!elided_operand}, the form
-       [elide_unevaluated_operands] gives a stored template (gh-ocannl-625), so the condition and
-       the live arm are still walked and kept exactly. *)
-    | Ternop (Ops.Where, (cnd, cprec), (llv2, prec2), (llv3, prec3)) -> (
-        let cond = (loop cnd, cprec) in
-        match decide_where ~loops:(decision_loops ~opaque enclosing) cond with
-        | Some true -> Ternop (Ops.Where, cond, (loop llv2, prec2), elided_operand)
-        | Some false -> Ternop (Ops.Where, cond, elided_operand, (loop llv3, prec3))
-        | None ->
-            (* gh-ocannl-2052: the condition was walked first; mint arm scopes and prologues left to
-               right too. Pin: [operand_walk_order]. *)
-            let v2 = loop llv2 in
-            let v3 = loop llv3 in
-            Ternop (Ops.Where, cond, (v2, prec2), (v3, prec3)))
+    | Ternop (Ops.Where, cond, yes, no) -> walk_where ~opaque ~enclosing ~loop cond yes no
     | Ternop (op, (llv1, prec1), (llv2, prec2), (llv3, prec3)) ->
         let v1 = loop llv1 in
         let v2 = loop llv2 in
@@ -5538,6 +5638,13 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
            surviving reads to [Never_virtual] (a node read here but only written under a virtualized
            setter is decided right now), so this update is the commitment point, not a redundant
            re-assertion. Mirrors the [Get_dynamic] arm just below. Provenance 17. *)
+        if Tn.Placements.known_virtual plc a then
+          raise
+            (Utils.User_error
+               [%string
+                 "a buffer read of %{Tn.debug_name a} survived inlining, but the node is virtual \
+                  (%{Tn.Placements.debug plc a}) and has no buffer. Mark %{Tn.debug_name a} as \
+                  materialized (e.g. via Train.set_materialized) in the routine that computes it."]);
         Tn.Placements.update plc a Never_virtual Surviving_read;
         assert (
           Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
@@ -13743,23 +13850,29 @@ let validate_lane_bounds ?(site = "Low_level.validate_lane_bounds") ?comp_prec (
    Fail-closed allowlist, per maximal perfect serial chain (each level ONE statement, every loop
    [Serial], starting at 0, not dead, distinct loop symbols), with a [Set] leaf: - the target's
    storage precision is a narrow float ([Ops.is_narrow_float]); f32, f64 and integer targets keep
-   their lowered order (a perf trade on the CPU and Metal defaults, not a residency question); - the
-   leaf reads its target, and only at its own cell (no other cell, no [Get_dynamic], no
-   [Local_scope] body mentioning it), so no step observes another cell's progress; - cell loops are
-   plain iterators, or belong to independent positive two-iterator affine axes (gh-ocannl-2423,
-   gh-ocannl-2464) with pairwise-distinct write symbols across all axes. Each overlapping pair is
-   reparametrized by residue and owner so the outer cell loops own all windows and the entire
-   reduction can stay at [accum_prec]. The update must be an ordinary accumulation with remappable
-   indices. Coupled affine pairs sharing an iterator, other affine forms, concatenation, residue
-   products past the code-size cap and unproved bounds decline. Injective pairs keep both iterators
-   as outer cell loops after the separation proof; - guards between levels are [pure_index_guard]s;
-   each moves to just inside the innermost (new order) chain loop it mentions, or above the chain if
-   it mentions none -- a pure guard filters tuples, so where it sits below its own loops changes
-   neither which tuples run nor their order. [Set_dynamic] scatters, [Tile_mma], scans, sibling
-   statements and every other leaf are left alone (narrow-float [Set_dynamic] add-scatters are
-   widened by {!widen_narrow_scatters} in {!specialize_proc}). Runs after
-   [rewrite_one_hot_reductions], whose scatter match wants the vocabulary loop innermost as lowered
-   (gh-ocannl-466). *)
+   their lowered order. Kept narrow-only after paired exclusive [mac-studio] (Apple M4 Max) f32
+   untuned backward A/Bs (gh-ocannl-2422; paired timings and spreads in
+   [docs/agent-notes/backend-precision-and-simd.md]): ungating regressed cc on [gpt2_mini_train] and
+   [cifar_resnet] (both plain-cell and overlapping-window sinking hurt CPU backward), while Metal
+   gained on those two yet regressed on [lenet] under overlapping-window sinking. Because the
+   optimizer is backend-independent, one ungated pass cannot replace the narrow-only gate plus the
+   GPU schedule-time sink ([Autotune.reduction_sink]); - the leaf reads its target, and only at its
+   own cell (no other cell, no [Get_dynamic], no [Local_scope] body mentioning it), so no step
+   observes another cell's progress; - cell loops are plain iterators or belong to positive single-
+   or two-iterator affine axes (gh-ocannl-2423, gh-ocannl-2464, gh-ocannl-2479) with
+   pairwise-distinct write symbols across all axes. Each overlapping pair is reparametrized by
+   residue and owner so the outer cell loops own all windows and the entire reduction can stay at
+   [accum_prec]. The update must be an ordinary accumulation with remappable indices. Coupled affine
+   pairs sharing an iterator, other affine forms, concatenation, residue products past the code-size
+   cap and unproved bounds decline. FP8 nests with guards and a single-term axis decline. Injective
+   pairs keep both iterators as outer cell loops after the separation proof; - guards between levels
+   are [pure_index_guard]s; each moves to just inside the innermost (new order) chain loop it
+   mentions, or above the chain if it mentions none -- a pure guard filters tuples, so where it sits
+   below its own loops changes neither which tuples run nor their order. [Set_dynamic] scatters,
+   [Tile_mma], scans, sibling statements and every other leaf are left alone (narrow-float
+   [Set_dynamic] add-scatters are widened by {!widen_narrow_scatters} in {!specialize_proc}). Runs
+   after [rewrite_one_hot_reductions], whose scatter match wants the vocabulary loop innermost as
+   lowered (gh-ocannl-466). *)
 let sink_narrow_reduction_loops (llc : t) : t =
   let only_self_reads d di =
     let rec go (s : scalar_t) =
@@ -13839,24 +13952,25 @@ let sink_narrow_reduction_loops (llc : t) : t =
     wrap placed.(0) (build 0 order)
   in
   (* Per-axis ownership and original contribution order (gh-ocannl-2423, gh-ocannl-2464). When [di]
-     has plain [Iterator] axes, [Fixed_idx] axes and M >= 1 independent positive two-iterator affine
-     axes [a_m*i_m + b_m*j_m + c_m] (all write symbols pairwise distinct), classify each affine axis
-     separately with [g_m = gcd(a_m, b_m)]: - Non-overlapping ([imax_m < b_m/g_m || jmax_m <
-     a_m/g_m]): injective on [0..imax_m] x [0..jmax_m], so both iterators stay outer cell loops. -
-     Overlapping ([imax_m >= b_m/g_m && jmax_m >= a_m/g_m]): set [j_m = r_m + (a_m/g_m)*q_m] and
-     [p_m = i_m + (b_m/g_m)*q_m] (or the symmetric frame). The axis coordinate is [a_m*p_m + b_m*r_m
-     + c_m], and since [gcd(a_m/g_m, b_m/g_m) = 1] and [|r - r'| < a_m/g_m], [(r_m, p_m)] determines
-     it uniquely. A cell is a tuple of axis coordinates, so distinct residue tuples own pairwise
-     disjoint cell sets, and within each tuple the cell loops determine every cell uniquely
-     (certified on the rebuilt cell by [Affine.within_box], [Affine.separates] and absence of
-     reduction symbols). Because [imax_m >= b_m/g_m], the union of [p_m] intervals over [q_m] has no
-     holes, so clipping to [lo_m..hi_m] keeps the owner in bounds unconditionally for the peel.
+     has plain [Iterator] axes, [Fixed_idx] axes and independent positive affine axes (all write
+     symbols pairwise distinct), a single-term axis [a*i + c] fixes [i] and stays a cell loop.
+     Classify each two-term axis [a_m*i_m + b_m*j_m + c_m] separately with [g_m = gcd(a_m, b_m)]: -
+     Non-overlapping ([imax_m < b_m/g_m || jmax_m < a_m/g_m]): injective on [0..imax_m] x
+     [0..jmax_m], so both iterators stay outer cell loops. - Overlapping ([imax_m >= b_m/g_m &&
+     jmax_m >= a_m/g_m]): set [j_m = r_m + (a_m/g_m)*q_m] and [p_m = i_m + (b_m/g_m)*q_m] (or the
+     symmetric frame). The axis coordinate is [a_m*p_m + b_m*r_m + c_m], and since [gcd(a_m/g_m,
+     b_m/g_m) = 1] and [|r - r'| < a_m/g_m], [(r_m, p_m)] determines it uniquely. A cell is a tuple
+     of axis coordinates, so distinct residue tuples own pairwise disjoint cell sets, and within
+     each tuple the cell loops determine every cell uniquely (certified on the rebuilt cell by
+     [Affine.within_box], [Affine.separates] and absence of reduction symbols). Because [imax_m >=
+     b_m/g_m], the union of [p_m] intervals over [q_m] has no holes, so clipping to [lo_m..hi_m]
+     keeps the owner in bounds unconditionally for the peel.
 
      Contribution order: fix a cell [x] and two distinct guard-passing original tuples hitting [x].
-     Their outermost differing position in the original loop list cannot be a plain write loop or
-     either iterator of an injective pair (each is fixed by [x]), nor [late_m] of an overlapping
-     pair (since [early_m] precedes [late_m], agreement on [early_m] forces agreement on [late_m]).
-     It must be a pure reduction or some [early_m]. Replacing each [early_m] in place by [step_m]
+     Their outermost differing position in the original loop list cannot be a plain or single-term
+     write loop or either iterator of an injective pair (each is fixed by [x]), nor [late_m] of an
+     overlapping pair ([early_m] precedes [late_m], and agreement on [early_m] fixes [late_m]). It
+     must be a pure reduction or some [early_m]. Replacing each [early_m] in place by [step_m]
      oriented so [early_m] ascends with [step_m] (visiting [q_m] descending when [early_m = i_m],
      ascending when [early_m = j_m]), dropping each [late_m] and all write loops, and keeping pure
      reductions in place therefore preserves every cell's exact lexicographic contribution order for
@@ -13912,27 +14026,10 @@ let sink_narrow_reduction_loops (llc : t) : t =
     in
     try
       let dims = Lazy.force d.Tn.dims in
-      let pairs =
-        Array.to_list di
-        |> List.filter_mapi ~f:(fun axis -> function
-          | Indexing.Iterator _ | Fixed_idx _ -> None
-          | Affine { symbols = [ (a, i); (b, j) ]; offset } when a > 0 && b > 0 ->
-              Some (axis, (a, i), (b, j), offset)
-          | Affine _ | Sub_axis | Concat _ -> raise Unsupported)
-      in
-      let plain =
-        Array.to_list di
-        |> List.filter_map ~f:(function Indexing.Iterator s -> Some s | _ -> None)
-      in
-      let all_write_syms =
-        plain @ List.concat_map pairs ~f:(fun (_, (_, i), (_, j), _) -> [ i; j ])
-      in
       if
-        List.is_empty pairs
-        || Array.length dims <> Array.length di
+        Array.length dims <> Array.length di
         || Array.exists dims ~f:(fun dim -> dim <= 0)
         || List.contains_dup (List.map all ~f:fst) ~compare:Indexing.compare_symbol
-        || List.contains_dup all_write_syms ~compare:Indexing.compare_symbol
         || Option.is_none (accum_update_parts ~tn:d ~idcs:di llsc)
       then raise Unsupported;
       let loop_position s =
@@ -13940,9 +14037,28 @@ let sink_narrow_reduction_loops (llc : t) : t =
         | Some (pos, (_, n)) -> (pos, checked n)
         | None -> raise Unsupported
       in
+      (* A guard can leave a cell with no updates, while a localized accumulator still writes it
+         back. The FP8 round trip can change such a cell's bits, e.g. an E5M2 infinity on CUDA. *)
+      let guarded_fp8 =
+        (not (List.is_empty guards)) && Ops.equal_prec (Lazy.force d.Tn.storage_prec) Ops.fp8
+      in
+      let pairs_rev, write_syms =
+        Array.foldi di ~init:([], []) ~f:(fun axis (pairs, syms) -> function
+          | Indexing.Iterator s -> (pairs, s :: syms)
+          | Fixed_idx _ -> (pairs, syms)
+          | Affine { symbols = [ (a, i) ]; offset } when a > 0 && not guarded_fp8 ->
+              let _, imax = loop_position i in
+              ignore (add (mul a imax) offset : int);
+              ignore (checked dims.(axis) : int);
+              (pairs, i :: syms)
+          | Affine { symbols = [ (a, i); (b, j) ]; offset } when a > 0 && b > 0 ->
+              ((axis, (a, i), (b, j), offset) :: pairs, i :: j :: syms)
+          | Affine _ | Sub_axis | Concat _ -> raise Unsupported)
+      in
+      if List.contains_dup write_syms ~compare:Indexing.compare_symbol then raise Unsupported;
       let max_residue_nests = 64 in
       let frames =
-        List.filter_map pairs ~f:(fun (axis, (a, i), (b, j), offset) ->
+        List.filter_map (List.rev pairs_rev) ~f:(fun (axis, (a, i), (b, j), offset) ->
             let pi, imax = loop_position i and pj, jmax = loop_position j in
             let (a, i, imax), (b, j, jmax) =
               if pi < pj then ((a, i, imax), (b, j, jmax)) else ((b, j, jmax), (a, i, imax))
@@ -13972,8 +14088,8 @@ let sink_narrow_reduction_loops (llc : t) : t =
       let is_write s = Array.exists di ~f:(Indexing.axis_index_mentions_symbol s) in
       match frames with
       | [] ->
-          (* Every affine pair is non-overlapping, so interchange suffices. Reuse the generic
-             separation proof, including the bounds the guarded peel will need. *)
+          (* Every axis is injective, so interchange suffices. Reuse the generic separation proof,
+             including the bounds the guarded peel will need. *)
           let writes, reductions = List.partition_tf all ~f:(fun (s, _) -> is_write s) in
           let range s = Option.map (find all s) ~f:(fun hi -> (0, hi)) in
           let coords = Affine.view ~dims di in

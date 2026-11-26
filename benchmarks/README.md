@@ -497,7 +497,21 @@ single-threaded segments that sum to the serial step
   `+KEY=VALUE`, and the regime gate accepts it as declared where the runner reports that value
   from the commandline. The key must be one `ocannl_config.reference` documents and not one the
   sweep sets itself — `backend`, `profile`, `autotune_progress` — and a selector naming no cell, or
-  two entries setting one key on one cell, are refused; gh-ocannl-1273),
+  two entries setting one key on one cell, are refused; gh-ocannl-1273).
+  `orchestrate.py` also carries built-in per-cell search budgets (`CELL_SEARCH_BUDGETS_S`,
+  `tune_call_budget_seconds`), currently `cifar_resnet/metal/tuned/approximate` at 1,800 s
+  (gh-ocannl-2430: uncapped, its four approximate searches — two placement arms plus two inline
+  flips over Winograd's transformed sites — missed the 3,600 s cap on m4-max; like uncapped
+  `exact`, it is sized for `--cell-timeout 3600` rather than the 1,800 s default cap, leaving
+  headroom for timed steps and the 600 s dominant-kernel instrument). Because the budget stops
+  each of the four searches before the `F_split` seeds at the end of `phase=seeds` (160.6 ms on
+  m4-max against uncapped `exact`'s 79.8 ms in 3,155 s), this row is **budget-bounded** and is
+  not directly comparable with uncapped `exact`; `report.md` notes this whenever any tuned row
+  reports `budget_cut: true`. Built-in budgets are applied
+  only when the measured checkout's `ocannl_config.reference` supports `tune_call_budget_seconds`,
+  travel as `ocannl_flags`, appear as `+tune_call_budget_seconds=1800` in cell labels and report
+  rows (and `+call_budget=1800s` in `gh1161_sites.py`), and yield to an explicit `--cell-flag`
+  setting `tune_call_budget_seconds` for that cell (pass `=0` to run uncapped),
   `--gpu metal|cuda|hip|none` (the GPU column of the matrix — OCANNL backend, PyTorch device,
   tinygrad device together; defaults to metal on macOS and cuda elsewhere, `none` runs a
   CPU-only matrix), `--no-fixture-digest-check` (measure fixtures that do not match
@@ -592,6 +606,12 @@ single-threaded segments that sum to the serial step
   16 cores — the oversubscribed shape, on the machine class where the wedges were seen. If you
   opt into parallel search, pass `--beam-parallel <mask size>`; a wedge is bounded by the cap
   either way.
+
+  The tagline driver `gh1181_cells.py` caps CUDA tinygrad BEAM=2 cells on rog at 600 s
+  (gh-ocannl-2431). A lower `--cell-timeout` or a shorter remaining sweep budget still applies.
+  `--cell-timeout 0` disables the cell caps and leaves the sweep budget in force.
+  The driver records the arm caps before the sweep budget is applied in `env.json` as
+  `arm_timeout_s`.
 
   **An OCANNL cell is a (scheduling variant, storage precision) pair** (gh-ocannl-539). The two
   are independent axes and the matrix is their product: `--tuned --precision bf16` measures
@@ -1192,8 +1212,29 @@ pooling, forward, backward and SGD) compiled under each rendering, the choice re
 guard as well as the renderer, beside a second short-circuiting compile whose source must equal
 the first's (up to the names each lowering mints) as its control. The step's values are compared
 across the arms within a stated tolerance, since placements may differ; `BENCH_SELECT_SOURCES=<dir>`
-writes each arm's step source there. It generates its inputs in memory. Build the executable and verify
-the emitted forms, targets and host parity with a dry run before requesting a measurement window.
+writes each arm's step source there.
+
+Each segment rendering has its own byte-identical, separately linked repeat. All four routines
+bind the same device buffers by default. A timed row reports the widest admitted repeat ratio in
+either direction as `control_factor`. The range from `effect_lo` to `effect_hi` spans the four
+blend/short link pairings. The row resolves when that whole range lies below `1/control_factor`
+or above `control_factor` and the admitted rounds balance the positions and pair orders.
+Segments default to eight rounds. Use a multiple of four rounds to balance the
+planned order when overriding the default. A refused timing drops its entire round and can leave
+the row unbalanced. The step retains its own control.
+
+On `rog-nv-linux` (RTX 5070 Ti Laptop, `sm_75` and `sm_120`, 4,194,304 elements, eight
+rounds), the `where_masked` controls gave `control_factor` values of 1.241–1.383 with separate
+outputs and 1.047–1.097 with a shared output across both mask densities and link orders. With
+separate outputs the short repeat stayed faster and the blend repeat stayed slower in both
+timing orders, even after reversing the links. Sharing the output narrowed the gap. Use about
+1.10 (0.91 in the faster direction) as a planning floor for those shared-output rows, then use
+the row's own control range when reading a run. The physical address or alignment mechanism
+remains undetermined.
+[#2385](https://github.com/ahrefs/ocannl/issues/2385)
+
+The benchmark generates its inputs in memory. Build the executable and verify the emitted forms,
+targets, buffer placement and host parity with a dry run before requesting a measurement window.
 From the checkout, give the cell driver an empty scratch directory in `RUN_DIR`.
 
 ```sh
@@ -1201,7 +1242,7 @@ dune build benchmarks/runners/ocannl/bench_cuda_select.exe
 python3 -B benchmarks/cells.py cell --backend cuda --dir "$RUN_DIR" --timeout 900 \
   --expect cuda_fast_math=true --expect cuda_kernel_cache_mib=0 \
   --expect output_debug_files_in_build_directory=false -- \
-  BENCH_RETIME_CALLS=6 _build/default/benchmarks/runners/ocannl/bench_cuda_select.exe \
+  _build/default/benchmarks/runners/ocannl/bench_cuda_select.exe \
   --ocannl_cuda_fast_math=true --ocannl_cuda_kernel_cache_mib=0 \
   --ocannl_output_debug_files_in_build_directory=false --dry-run
 ```
@@ -1216,6 +1257,44 @@ Use a fresh scratch directory for the timed run and omit `--dry-run`. The cell d
 ambient settings, verifies the resolved configuration, and captures the paired medians and ranges
 in `$RUN_DIR/stdout`. Accept results from a successful cell whose recorded floor and native targets
 are distinct.
+
+For the masked segment alone, add `--where-masked-only` to both the dry and timed runs. It emits
+each round's arm timings in visit order. To investigate link and buffer effects, repeat in fresh
+cells with `--reverse-segment-link-order` and with `--separate-segment-outputs`, individually and
+together. Reversing the links preserves the timing order. The separate-output case still shares
+the inputs, as sibling links do when the root caches their read-only inputs. A failed dry run or
+readiness check stops measurement until the failing check passes. A timed cell that fails or
+exhausts its cap needs a fresh directory after the failure is addressed.
+
+### Metal value-select benchmark
+
+`bench_metal_select` is the Metal counterpart of `bench_cuda_select` (gh-ocannl-2400). It checks
+and times short-circuiting `[?:]` against local-value blending (`C_syntax.Blend_over_locals` with
+`` `Stmt_expr ``, via `Metal_backend.with_select_rendering_policy`) across fixed parallel pointwise
+segments (`where_zero`, `relu_gate`, `where_eq`, `where_masked`) over five densities
+(`uniform_zero`, `uniform_half`, `sparse`, `half_div`, `dense`), a causal-mask score-load segment
+(`causal_mask`), a register-only arm (`reg_arm`), a single-threaded serial accumulation loop
+(`serial_relu_accum`), the realistic `pool_backward` kernel, and the `cifar_conv` training step
+(batch 64, comparing `No_blend`, `Blend_serial_loop`, `Blend_speculable`, and a `No_blend` control
+with the parameter snapshot restored before every synchronized step; `--step-segments` also gives
+isolated per-segment leads, and `--step-only` runs only the step). It generates its inputs in
+memory; `BENCH_SELECT_SOURCES=<dir>` writes each arm's emitted `.metal` sources. Build and verify
+with a dry run before requesting an exclusive `mac-studio` (M4 Max) measurement window:
+
+```sh
+dune build benchmarks/runners/ocannl/bench_metal_select.exe
+python3 -B benchmarks/cells.py cell --backend metal --dir "$DRY_DIR" --timeout 600 \
+  --expect metal_kernel_cache_mib=0 --expect output_debug_files_in_build_directory=false -- \
+  BENCH_RETIME_CALLS=8 _build/default/benchmarks/runners/ocannl/bench_metal_select.exe \
+  --ocannl_metal_kernel_cache_mib=0 --ocannl_output_debug_files_in_build_directory=false --dry-run
+```
+
+Start the exclusive window on `mac-studio` with `benchmarks/check-box.sh --box m4-max
+--generated-inputs --box-only` and proceed only on exit 0; then point `--dir` at a fresh empty
+directory (`"$RUN_DIR"`) — `cells.py` rejects a nonempty directory left by the dry run — and run
+without `--dry-run` (use a multiple of 4 for `BENCH_RETIME_CALLS` so the four-arm comparisons
+have equal position histograms; add `--step-segments` for isolated per-segment leads). Every Mac
+reading names its Mac (`mac-studio` M4 Max vs `macbook-pro` M4 Pro).
 
 ## Measurement boxes
 

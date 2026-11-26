@@ -993,6 +993,24 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   instance alongside the default entry points (gh-ocannl-2405). Its control checks the same
   search with and without a marker, and checks that an initialization pin precedes the search.
   The scanner's width-rule header gives the source forms it reads.
+- **Backend-default dependency markers** (`; ocannl-backend-default:`, gh-ocannl-2382) declare that
+  a test's result flips with a backend default whose governing definitions link reach cannot see.
+  Two forms share `Dune_stanza_scan.contained_marker_contract` and the `marker_backends` vocabulary
+  without `none`: a definition form inside a `(library)` stanza
+  (`; ocannl-backend-default: <name> = <backend>[,...] <Module.def>[,...] -- <reason>`, with no
+  spaces inside either comma list, `<name>` matching `[a-z][a-z0-9-]*`, and each `<Module.def>` a
+  top-level definition in `<dir>/<module>.ml` or a `(select)` arm for it), and a reader form inside
+  a `(test)`, `(tests)`, `(executable)`, `(executables)`, or inline-test `(library)` stanza
+  (`; ocannl-backend-default: <name> -- <reason>`). `env_var_deps` holds both forms: single
+  definition per name, every reader resolves to a defined name, every defined default has at least
+  one reader, every `Module.def` resolves to a real top-level definition, and every reader stanza
+  (or an executable's runner rule) must be able to run on at least one backend named by that
+  default (refusing e.g. a `cuda,hip` default on a `; ocannl-backend: cc` stanza).
+  `tools/affected-tests.sh` enforces the same closed syntax fail-closed (exit 2), promotes reached
+  readers from LINK-ONLY to first-tier REFERENCED when a diff touches a listed `Module.def` (or
+  changes `Module` as a whole; never comment-only or sibling-definition edits), and selects
+  matching GPU-backend defaults under `--gpu-gated` (while respecting a variant `(rule)`'s own
+  `; ocannl-backend:` override).
 - A ratchet whose corpus is the repository's own test sources will scan its OWN fixture, and a
   fixture that pins a shape has to spell that shape out to pin it — so the fixture matches, every
   time, by construction (gh-ocannl-668). Exempt the FILE rather than its matches one at a time: the
@@ -1182,7 +1200,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   The floor job has a 20-minute ceiling (staging#2320). Two 15-minute attempts stopped
   during `test-affected-tests.sh`, after the same isolated fixture controls took about
   1.4 and 1.6 times as long as on staging#2318. The harness still runs all of its
-  controls at the floor. The refusal-format controls run through `@test/operations/scans`.
+  controls at the floor, and CI passes `--timings` to `tools/test-harnesses.sh` so each
+  job prints per-harness elapsed seconds (including on interruption) without adding
+  timing lines to timing-free default runs used by merge-build shared-red comparisons.
+  The refusal-format controls run through `@test/operations/scans`.
   Both toolchain-installing jobs set `OCANNL_TOOL_HARNESS_STRICT=1`, under which `harness-support.sh`
   reports a skip as a FAIL: a counted skip is right where a host lacks a capability, and a vacuous
   green where the step installed it. setup-ocaml's switch is not on a CI step's PATH, so a harness
@@ -1357,6 +1378,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is set (e.g. macOS Terminal/SSH with only `LC_CTYPE=UTF-8`, gh-ocannl-2462); standalone
   scripts that do not source `harness-support.sh` therefore export `LANG=C` before forking
   (which alone stops the lookup, with `env LC_ALL=C` as a defensive guard in subshells).
+  `scripts/test-harness-support.sh` audits standalone Bash scripts under `tools/*.sh` with
+  non-comment locale assignments for this startup guard (gh-ocannl-2484), alongside unset-locale
+  regression checks in the per-script harnesses.
 - `tools/test-ci-durations.sh` prints each failed subject's exit status, stderr,
   API-call diff and stdout (a golden diff for selector checks), before scratch cleanup
   (gh-ocannl-1993). Read these before guessing API ordering: the fetch loop is sequential.
@@ -1556,6 +1580,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   dune-list check printed `PASS`. A new real-dune check therefore lands as a dune-list line, and
   its leg's number in the selector if it is a new leg -- the job names the check it did not see
   pass. A nested run of a harness copy unsets the record variable with the others.
+  `tools/test-real-dune-registrations.sh` enforces both registrations locally and in the merge
+  build: Leg 1 scans every manifest harness for live `harness_real_dune` calls and verifies exact
+  agreement with `real_dune_legs`, Leg 2 runs every discovered leg under
+  `OCANNL_TOOL_HARNESS_NO_DUNE=1` and holds the emitted hidden-dune skips equal to
+  `tools/harness-skips-ci-shell-dune.txt`, and Leg 3 pins dropped, stale, over-selected and
+  unattributed controls (gh-ocannl-2486).
 
 - The three gh-ocannl-2140 fixtures separate a response verdict from teardown
   and later publication. `wait_signal_race.py` keeps its five-second cancellation
@@ -2961,7 +2991,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   turned a seeder that lost its twins into two skips; gate on the invariant that decides whether
   the population exists (`schedule_conv_gemm`'s cvr leg reads `Register_tile.alternatives` at the
   site's own extents; `ptx_target_parity` reads that the backend is the one compiling PTX, and
-  claims the PTX was recorded). The two-branch form is refused too: `verdict_ratchet` reads every
+  claims the PTX was recorded). The `cost_model_fill` leg uses the presence of the backend's
+  two advisory inputs (`multiprocessors` and `fill_threads`) and asserts that the model resolves
+  and both rankings exist. The test action pins advisory mode for those two inputs and the ILP cap
+  so the gate and claims use the supplied hardware limits. Before gh-ocannl-2477, losing the
+  resolved model made the ranking comparison skip even when the backend advertised both inputs.
+  The two-branch form is refused too: `verdict_ratchet` reads every
   `skipped` the resolver reads as `Verdict`'s, or a `let` binds to one (`Verdict_scan.skip_list_census`) and
   refuses one handed to a collection-module iteration, a callback or loop body that only skips,
   and a branch of an `if`/`match` applying two or more; the sites that predate the rule are
@@ -3210,10 +3245,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   unread. Most of its mutation runs exit 4, not 1: the ratchet's trailing
   `OK:` row prints only on success (the manifest's gh-ocannl-1289 section says how they were
   read).
-- `Verdict_scan.leg_gate_census` (gh-ocannl-2434) enforces two further invariants on `Verdict.leg`
+- `Verdict_scan.leg_gate_census` (gh-ocannl-2434, gh-ocannl-2470) enforces two further invariants on `Verdict.leg`
   and `Verdict.sub_leg` conditions (`~when_`): (1) every external qualified call or capability
   record field projection reachable from `~when_` (following destructured bindings, local helper
-  call sites, `List`/`Array` iterator callbacks, and unqualified projections on values bound from
+  call sites, immediately applied anonymous functions, `List`/`Array` iterator callbacks, and
+  unqualified projections on values bound from
   `Context.codegen_capabilities`/`hardware_limits`/`backend_facts`; unresolved gate parameters are
   reported as `<unresolved-param:name>`) must belong to the closed independent-gate allowlist
   (`leg_gate_allowed_paths`) or carry a counted exemption with a stated independent reason in
@@ -3222,19 +3258,26 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   evaluates an ambient-policy reader (`Ll_test.advertised` at full application without a supplied
   pinned `~policy` — missing, `?policy:None`, or unchanged `Ir.Numerics.get ()` — plus
   `Ll_test.tensorized_capability` and `Ir.Numerics.get`) outside an enclosing `Test_utils.with_*`
-  policy-wrapper callback (inline or named, eager reads tracked at their binding site and deferred
-  `sub_leg` `lazy` reads tracked at their force sites, across inline and named `sub_leg` parents)
-  cannot be used by `in_leg`/`in_legf` inside that wrapper (pass a pinned `~policy` explicitly to
-  `Ll_test.advertised`, or evaluate the gate inside the wrapper). Capability-descriptor queries
-  (`Ir.Backend_intf.advertises_mma_format_in_scope`, `Ir.Backend_intf.mma`, `Ll_test.advertised`)
-  stay allowlisted because GPU execution legs legitimately gate on hardware ISA capability, so a
-  descriptor-gated leg still needs an independently hardware-gated descriptor claim. The reader's
-  header in `test/support/verdict_scan.ml` states its closed allowlist and boundary.
-- A Dune `select` can expose a leg gate under both its variant source path and the selected
-  module's path. On cudajit builds `verdict_ratchet` reads `cuda_wmma_floor.ml` with the real
-  witness selected, so an exemption for `cuda_wmma_floor.real.ml` missed the same gate there
-  (gh-ocannl-2471). The driver probe compiles plain code at fixed `compute_75` before retargeting
-  it to `sm_70`; its target stays independent of the arm floor the witness uses.
+  policy-wrapper callback (inline or named, eager reads tracked at their binding site, deferred
+  `sub_leg` `lazy` reads tracked at their force sites with each named `lazy` binding replayed only
+  on its first force, and helper-returned legs indexed by construction-invocation identity across
+  inline and named `sub_leg` parents) cannot be used by `in_leg`/`in_legf` inside that wrapper
+  (pass a pinned `~policy` explicitly to `Ll_test.advertised`, or evaluate the gate inside the
+  wrapper). Capability-descriptor queries (`Ir.Backend_intf.advertises_mma_format_in_scope`,
+  `Ir.Backend_intf.mma`, `Ll_test.advertised`) stay allowlisted because GPU execution legs
+  legitimately gate on hardware ISA capability, so a descriptor-gated leg still needs an
+  independently hardware-gated descriptor claim. The reader's header in
+  `test/support/verdict_scan.ml` states its closed allowlist and boundary.
+- Every glob-fed OCaml scan reads Dune `(select …)` alternatives under their own checked-in file
+  names on every box and drops the generated target (`<dir>/<stem>.ml`) via
+  `Test_scan.Config_key_scan.sources_among` (`select_target_of_arm`), so exemptions, stale-exemption
+  checks and censuses cannot diverge across toolchains (gh-ocannl-2482; previously, on cudajit
+  builds `verdict_ratchet` read `cuda_wmma_floor.ml` beside `cuda_wmma_floor.real.ml`, letting
+  gh-ocannl-2471 merge unseen from a Mac). `vendor_stub_arms_scan` pins that naming rule against
+  every repository `dune` `(select …)` and refuses checked-in `.ml` collisions with a select arm's
+  target path. `env_var_deps` resolves `(select …)` arms through `Policy_invariance_scan.module_sources`
+  at every module-to-source lookup, so tracing gates, ambient `Sys.getenv` reads, vector-file search
+  checks and inline-test checks inspect every arm on every box.
 - `verdict_ratchet`'s fifth reader is about a gate FOLDED INTO THE VALUE (gh-ocannl-1310):
   `p "…" ((not on_cpu) || ok)` prints `true` on a GPU, a pass byte-identical to a CPU run that
   checked `ok`, so the transcript says the claim held on hardware that never evaluated it.
@@ -3919,6 +3962,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   fails the run, as a text member does. `codegen_text_scan_cases` pins each route beside its near
   miss, including the negative control: a fixture whose staged callback writes a node by its bare
   label.
+- **On minix-amd-linux, run the inventory's slow HIP batches one at a time** (gh-ocannl-2343).
+  The `slow HIP batches on minix-amd-linux` section gives one backend-pinned command per widened
+  oracle shard, the widened scope generator and HIP scratch tuning. Omit those aliases from
+  combined HIP batches. They remain listed with the other codegen routes, whose lists still accept
+  `--targets-file`. Use the inventory's estimates to budget test action time, plus build and
+  slot acquisition. The oracle shards serialize on the training lock, and the combined 900 s
+  batch in staging#2105 stopped after three shards. Each recipe sets its own runner cap.
 - **Count compiles with `Context.backend_compiles`, not a wrapper around `Context.compile`**
   (gh-ocannl-1882). A test-local function that shadows or wraps `Context.compile` and forwards
   `?prelowered` is read as the second route above, so the census lists its file as a prelowered
@@ -4521,10 +4571,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     gh-ocannl-1765), 6 named a changed definition with the module (4 listed with `Tn` beside a
     re-exporter such as `Context` or `Tensor`, but each also names `Tnode`, so the stricter
     re-export reading keeps them), 4 of them through a `test/support` helper definition.
-  - `affected --gpu-gated` (gh-ocannl-2074) filters that same ranked reach by declarations
-    in an alias's owner sources (`binds_hardware_grid`, `on_gpu`, or `leg`/`in_leg`/`skipped`
-    beside `on_cuda`, `on_hip`, `on_metal` or a literal GPU backend) or a GPU `ocannl-backend` marker inside its
-    owner or own rule.
+  - `affected --gpu-gated` (gh-ocannl-2074, gh-ocannl-2382) filters that same ranked reach by
+    declarations in an alias's owner sources (`binds_hardware_grid`, `on_gpu`, or
+    `leg`/`in_leg`/`skipped` beside `on_cuda`, `on_hip`, `on_metal` or a literal GPU backend), a
+    GPU `ocannl-backend` marker inside its owner or own rule, or a matching GPU
+    `; ocannl-backend-default:` marker whose listed `Module.def` targets overlap the current diff
+    (which also promotes the reached alias from LINK-ONLY to first-tier REFERENCED, so
+    `--gpu-gated --referenced-only` selects it directly).
     Use `--referenced-only` with it for direct mentions; omit that option to retain GPU-gated
     link-only consumers too. Stdout is aliases ready for a backend run; stderr names the gate
     evidence for exactly those aliases. This is the GPU-specific minimum: ungated every-backend
@@ -6019,6 +6072,12 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   checkpoint. ship-pr's scratch repository has no remote, so the merge build fetches the ref from
   that URL itself, bounded (60 s), and refuses when it cannot read it. A merge owing nothing
   reads no record.
+- **Transport cleanup (gh-ocannl-2481).** `owed-run.sh` gives unattended Git transports a
+  private process group whose leader holds its identity through TERM and KILL even if Git exits.
+  Scratch files keep the bound independent of transport pipe EOF. Manual terminal pushes keep
+  Git's existing foreground timeout so its prompt can read the terminal. The shared benchmark
+  runner already uses `cell_group` to cancel during the active wait and confirms the group is
+  gone before unwinding. The fixtures for both tools plant descendants that ignore TERM.
 - **What.** A finished, exit-0, clean-at-launch tools/test-run.sh run under `--expect-backend cc`
   of `runtest`, `build @runtest [@train]`, `build @train` or `build @test/training/train-NAME...`
   (each with an optional `-j N`), on the PR's head itself. Keyed by the head, not the merged
@@ -6029,17 +6088,22 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
 - **Recipe.** On the box that ran it, from the run's own worktree:
   `env OCANNL_BACKEND=cc tools/test-run.sh run --expect-backend cc runtest -j 4`. A training run
   uses `build @test/training/train-<name>... -j 1` or `build @train`. After a clean, successful
-  main leg, the fleet's `owed-record` hook (gh-ocannl-2359) publishes with
-  `writer=leg:<hostname>`. It skips heads already on the record repository's master. The hook
-  compares the leg's temporary run-record path to the `FLEET_LEG_RUN_RECORD` path saved in the
-  worktree's last runner receipt and requires the receipt's SHA to match the observed SHA and
-  the current checkout. This rejects earlier receipts even for the same head and command. The
-  runner saves the original explicit `run --expect-backend cc` request alongside the path.
-  Its requested and effective commands must both be allowlisted and cover the same targets.
-  A wrapper can invoke the qualifying command in the leg's worktree and share the hook's runner
-  state directory. Use the actual run directory for manual recording if the wrapper sets a
-  private `OCANNL_TOOL_TEST_RUNS`. Targets files and receipts without the binding also require
-  manual recording if eligible. A refusal leaves the leg verdict intact. Check readiness with
+  main leg, the fleet's `owed-record` hook (gh-ocannl-2359, gh-ocannl-2468) publishes with
+  `writer=leg:<hostname>`. It skips heads already on the record repository's master.
+  `tools/test-run.sh run` writes `FLEET_LEG_RUN_RECORD` into the receipt, registers the finished
+  receipt directory through `FLEET_LEG_RECEIPT_LINK` (saving `fleet-leg-command` only for an
+  explicit spaced `run --expect-backend cc` request), and unsets the `FLEET_LEG_*` receipt
+  variables for child processes. `tools/owed-run.sh leg-record` prefers `FLEET_LEG_RECEIPT_DIR`
+  (never falling back to `last` when set), so wrappers setting a private `OCANNL_TOOL_TEST_RUNS`
+  publish automatically; it falls back to the worktree's `last` pointers only when
+  `FLEET_LEG_RECEIPT_DIR` is unset. The hook compares the leg's temporary run-record path to
+  `fleet-leg-run-record` and requires the receipt's SHA to match the observed SHA and the current
+  checkout, rejecting earlier receipts even for the same head and command. Its requested and
+  effective commands must both be allowlisted and cover the same targets. Validly bound, clean,
+  exit-0 receipts from non-`cc` or non-owed (focused/targeted or `--targets-file`) legs log
+  `ineligible leg` rather than `record refused`, distinguishing them from broken receipt bindings
+  and stale receipts. Targets files and receipts without the binding still require manual recording
+  if eligible. A refusal leaves the leg verdict intact. Check readiness with
   `tools/owed-run.sh check <head sha>
   <need>...` from a checkout with that head. Records accumulate on the head's ref and the
   reader takes their union. A run naming a `train` alias gets the two-hour training cap by

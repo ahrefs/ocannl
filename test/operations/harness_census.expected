@@ -71,6 +71,7 @@ benchmarks/test-gh834-cells.sh	scripts/process-group.sh
 benchmarks/test-gh834-cells.sh	tools/opam-env.sh
 scripts/test-harness-support.sh	scripts/harness-support.sh
 scripts/test-harness-support.sh	scripts/test-harness-support.sh
+scripts/test-harness-support.sh	tools/*.sh	declares	-
 scripts/test-harness-support.sh	tools/opam-env.sh
 scripts/test-process-group.sh	scripts/harness-support.sh
 scripts/test-process-group.sh	scripts/process-group.sh
@@ -292,6 +293,21 @@ tools/test-promotion-record.sh	tools/per-test-cap.sh
 tools/test-promotion-record.sh	tools/promote.sh
 tools/test-promotion-record.sh	tools/test-promotion-record.sh
 tools/test-promotion-record.sh	tools/test-run.sh
+tools/test-real-dune-registrations.sh	benchmarks/test-*.sh	declares	--only '^1:'
+tools/test-real-dune-registrations.sh	scripts/harness-support.sh
+tools/test-real-dune-registrations.sh	scripts/test-*.sh	declares	--only '^1:'
+tools/test-real-dune-registrations.sh	test/operations/apt_fallback.sh	declares	--only '^1:'
+tools/test-real-dune-registrations.sh	test/operations/ci_matrix.sh	declares	--only '^1:'
+tools/test-real-dune-registrations.sh	tools/fleet-worker-candidates.sh
+tools/test-real-dune-registrations.sh	tools/harness-skips-ci-shell-dune.txt
+tools/test-real-dune-registrations.sh	tools/opam-env.sh
+tools/test-real-dune-registrations.sh	tools/test-*.sh	declares	--only '^1:'
+tools/test-real-dune-registrations.sh	tools/test-harnesses.sh
+tools/test-real-dune-registrations.sh	tools/test-merge-build-check.sh	declares	--only '^2:'
+tools/test-real-dune-registrations.sh	tools/test-real-dune-registrations.sh
+tools/test-real-dune-registrations.sh	tools/test-test-run-bisect.sh	declares	--only '^2:'
+tools/test-real-dune-registrations.sh	tools/test-test-run-digest.sh	declares	--only '^2:'
+tools/test-real-dune-registrations.sh	tools/test-test-run-options.sh	declares	--only '^2:'
 tools/test-refusal-manifest-sync.sh	scripts/harness-support.sh
 tools/test-refusal-manifest-sync.sh	scripts/process-group.sh
 tools/test-refusal-manifest-sync.sh	tools/batch-backends.sh
@@ -487,6 +503,7 @@ tools/test-test-run-options.sh	tools/gpu-tokens.sh
 tools/test-test-run-options.sh	tools/kernel-window.sh
 tools/test-test-run-options.sh	tools/lab-map.sh
 tools/test-test-run-options.sh	tools/opam-env.sh
+tools/test-test-run-options.sh	tools/owed-run.sh
 tools/test-test-run-options.sh	tools/per-test-cap.sh
 tools/test-test-run-options.sh	tools/sweep-fingerprint.sh
 tools/test-test-run-options.sh	tools/sweep-supervisor.sh

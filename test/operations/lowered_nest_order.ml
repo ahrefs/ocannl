@@ -243,15 +243,20 @@ let () =
   report_grads "f32 weight gradient" f32;
   p_all "an f32 weight gradient keeps its batch reduction outermost in the optimized routine"
     (snd f32) ~f:(fun (_, nest) -> not (outputs_first nest));
-  let conv ~two_dims =
+  let conv ~prec ~two_dims =
+    let prec_tag = Ir.Ops.prec_string prec in
     let x =
-      Operation.init ~l:"lno_cv_x" ~prec:Ir.Ops.single
+      Operation.init
+        ~l:("lno_cv_" ^ prec_tag ^ "_x")
+        ~prec:Ir.Ops.single
         ~o:(if two_dims then [ 8; 6 ] else [ 8 ])
         ~f:(fun idcs -> Float.of_int (1 + idcs.(0)))
         ~grad_spec:Tensor.Require_grad ()
     in
     let w =
-      Operation.init ~l:"lno_cv_w" ~prec:Ir.Ops.single
+      Operation.init
+        ~l:("lno_cv_" ^ prec_tag ^ "_w")
+        ~prec:Ir.Ops.single
         ~o:(if two_dims then [ 3; 3; 2 ] else [ 3; 2 ])
         ~f:(fun idcs -> Float.of_int (1 + idcs.(0)))
         ~grad_spec:Tensor.Prohibit_grad ()
@@ -263,9 +268,9 @@ let () =
     in
     let%op loss = y ++ "... => 0" in
     let g = Option.value_exn (Option.map x.Tensor.diff ~f:(fun d -> d.Tensor.grad)) in
-    Ir.Tnode.update_prec g Ir.Ops.bfloat16;
+    Ir.Tnode.update_prec g prec;
     Train.set_materialized g;
-    let name = if two_dims then "lno_conv2d" else "lno_conv1d" in
+    let name = (if two_dims then "lno_conv2d_" else "lno_conv1d_") ^ prec_tag in
     let opt = lowered ~name (Train.grad_update loss) in
     let nests_of llc =
       List.filter_map (accumulating_nests_with_node llc) ~f:(fun (tn, nest) ->
@@ -273,13 +278,13 @@ let () =
     in
     (nests_of opt.source, nests_of opt.llc)
   in
-  let source, llc = conv ~two_dims:false in
+  let source, llc = conv ~prec:Ir.Ops.bfloat16 ~two_dims:false in
   report "bf16 window input gradient" (source, llc);
   p_all "the bf16 window input gradient lowers over the forward window and channel loops" source
     ~f:(fun nest -> has_both nest && not (outputs_first nest));
   p_all "the optimized bf16 window input gradient opens its cell loop before all reductions" llc
     ~f:(fun nest -> has_both nest && outputs_first nest);
-  let source, llc = conv ~two_dims:true in
+  let source, llc = conv ~prec:Ir.Ops.bfloat16 ~two_dims:true in
   report "bf16 two-dimensional window input gradient" (source, llc);
   p_all
     "the bf16 two-dimensional window input gradient lowers over the forward window and channel \
@@ -290,4 +295,15 @@ let () =
      reductions"
     llc ~f:(fun nest ->
       has_both nest && outputs_first nest
-      && List.count nest ~f:(fun (_, r) -> Poly.equal r Output) = 2)
+      && List.count nest ~f:(fun (_, r) -> Poly.equal r Output) = 2);
+  let source, llc = conv ~prec:Ir.Ops.single ~two_dims:true in
+  report "f32 two-dimensional window input gradient" (source, llc);
+  p_all2
+    "an f32 two-dimensional window input gradient preserves its lowered reduction-outer loop order \
+     in the optimized routine"
+    (Array.of_list source) (Array.of_list llc) ~f:(fun s_nest l_nest ->
+      has_both s_nest
+      && (not (outputs_first s_nest))
+      && List.equal
+           (fun (s1, r1) (s2, r2) -> Idx.equal_symbol s1 s2 && Poly.equal r1 r2)
+           s_nest l_nest)

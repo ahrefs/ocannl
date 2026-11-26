@@ -136,7 +136,7 @@ let drawn ~seed variant mode =
       | Embedded_both ->
           Train.set_materialized owner.value;
           let comp =
-            Asgns.sequence [ Tensor.take_forward_code owner; Tensor.take_forward_code reader ]
+            Asgns.sequence [ Tensor.embed_forward_code owner; Tensor.embed_forward_code reader ]
           in
           let c, values = run (track (Context.auto ())) comp reader in
           { owner_values = Some (Context.get_values c owner.value); values }

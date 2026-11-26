@@ -926,6 +926,32 @@ if [ "$got" = 1 ] && cmp -s "$TMP/timed-out" "$TMP/out"; then
   report 0 'an unavailable timing file leaves the verdict and compared log intact'
 else report 1 'an unavailable timing file leaves the verdict and compared log intact' \
   "exit $got; $(diff "$TMP/timed-out" "$TMP/out")"; fi
+# --timings prints the per-member timing table on stdout before the footer, in
+# manifest order, at both widths, while keeping --list and empty --affected clean.
+for width in 1 2; do
+  DELAY_MEMBER=$af_leg FAIL_MEMBER=$af_leg \
+    run --timings --jobs "$width" --affected --since HEAD~1
+  timings_block=$(awk '/^harnesses: timings:$/{f=1; next} f && /^$/{exit} f{print}' "$TMP/out")
+  if [ "$got" = 1 ] &&
+     [ "$(printf '%s\n' "$timings_block" | sed -E 's/ in [0-9]+s \(exit / in SECONDSs (exit /')" = \
+       "  HARNESS $af_whole finished in SECONDSs (exit 0)
+  HARNESS $af_leg --only '$af_ere' finished in SECONDSs (exit 7)" ] &&
+     printf '%s\n' "$timings_block" | grep -Eq ' finished in [1-9][0-9]*s \(exit 7\)$' &&
+     [ "$(tail -n 1 "$TMP/out")" = 'harnesses: 2 run, 1 failed' ] &&
+     [ "$(grep -c '^harnesses: timings:$' "$TMP/out")" = 1 ]; then
+    report 0 "--timings (width $width) prints per-member timings before the closing footer"
+  else report 1 "--timings (width $width) prints per-member timings before the closing footer" \
+    "exit $got; block=[$timings_block]; $(tail -n 10 "$TMP/out")"; fi
+done
+run --timings --promotion --list
+if [ "$got" = 0 ] && [ ! -s "$RECORD" ] && cmp -s "$TMP/promotion" "$TMP/out"; then
+  report 0 '--timings --list prints only the member list with no timing summary'
+else report 1 '--timings --list prints only the member list with no timing summary' "exit $got; $(cat "$TMP/out")"; fi
+run --timings --affected --since HEAD
+if [ "$got" = 0 ] && [ ! -s "$RECORD" ] && ! grep -q '^harnesses: timings:$' "$TMP/out" &&
+   [ "$(tail -n 1 "$TMP/out")" = 'harnesses: 0 run, 0 failed (this change reaches no harness)' ]; then
+  report 0 '--timings with empty --affected prints no empty timing block'
+else report 1 '--timings with empty --affected prints no empty timing block' "exit $got; $(cat "$TMP/out")"; fi
 
 
 rm -rf "$BARRIER"; mkdir "$BARRIER"
@@ -957,6 +983,16 @@ HARNESS $second finished in SECONDSs (exit 0)" ] &&
   report 0 'TERM to the parallel dispatcher records timings still waiting for manifest-order output'
 else report 1 'TERM to the parallel dispatcher records timings still waiting for manifest-order output' \
   "exit $got; $(cat "$TMP/timings"); $(tail -n 8 "$TMP/out")"; fi
+HOLD_MEMBER=$first FAIL_MEMBER= TERM_DISPATCHER_MEMBER=$(sed -n '3p' "$TMP/shell") \
+  run --timings --shell --jobs 2
+timings_block=$(awk '/^harnesses: timings:$/{f=1; next} f && /^$/{exit} f{print}' "$TMP/out")
+if [ "$got" = 143 ] &&
+   [ "$(printf '%s\n' "$timings_block" | sed -nE '1,2s/ in [0-9]+s \(exit / in SECONDSs (exit /p')" = \
+     "  HARNESS $first finished in SECONDSs (exit 143)
+  HARNESS $second finished in SECONDSs (exit 0)" ]; then
+  report 0 '--timings prints completed and stopped parallel member timings on TERM to dispatcher'
+else report 1 '--timings prints completed and stopped parallel member timings on TERM to dispatcher' \
+  "exit $got; block=[$timings_block]; $(tail -n 8 "$TMP/out")"; fi
 
 # A member that ends on a signal ends the run with that status as soon as it
 # is seen to have ended: the first member, still running, is stopped, and the
@@ -1461,6 +1497,42 @@ for sig in TERM HUP; do
     kill -TERM "$(cat "$TMP/relay-member.pid")" 2>/dev/null || :
   fi
 done
+# Under --timings, an untrapped TERM to the serial dispatcher PID still leaves
+# slot_record empty and prints the in-flight member's elapsed seconds.
+direct_rec=$TMP/direct-slot-timings.rec
+direct_tmp=$TMP/direct-slot-timings
+mkdir -p "$direct_tmp"
+rm -f "$direct_rec" "$TMP/relay-ready" "$TMP/relay-member.pid"
+(cd "$TMP" && OCANNL_TOOL_HARNESSES_IN_SLOT="$direct_rec" TMPDIR="$direct_tmp" \
+  RELAY_READY="$TMP/relay-ready" RELAY_MEMBER_PID="$TMP/relay-member.pid" \
+  exec perl -e '$SIG{TERM} = "DEFAULT"; exec @ARGV or exit 127;' \
+    "$subject" --timings --affected --since HEAD --jobs 1) >"$TMP/direct-slot-timings.out" 2>&1 &
+direct_pid=$!
+term_ticks=0
+while [ "$term_ticks" -lt 100 ] && [ ! -e "$TMP/relay-ready" ]; do
+  term_ticks=$((term_ticks + 1))
+  sleep 0.05
+done
+kill -TERM "$direct_pid" 2>/dev/null || :
+wait_ticks=0
+while pid_alive "$direct_pid" && [ "$wait_ticks" -lt 100 ]; do
+  wait_ticks=$((wait_ticks + 1))
+  sleep 0.05
+done
+if pid_alive "$direct_pid"; then kill -KILL "$direct_pid" 2>/dev/null || :; fi
+direct_rc=0
+wait "$direct_pid" 2>/dev/null || direct_rc=$?
+if [ "$direct_rc" = 143 ] && [ -e "$direct_rec" ] && [ ! -s "$direct_rec" ] &&
+   grep -qxF 'harnesses: timings:' "$TMP/direct-slot-timings.out" &&
+   grep -Eq "^  HARNESS $control_member interrupted after [0-9]+s \(in flight\)$" "$TMP/direct-slot-timings.out"; then
+  report 0 '--timings prints in-flight serial member time on untrapped TERM while leaving slot_record empty'
+else
+  report 1 '--timings prints in-flight serial member time on untrapped TERM while leaving slot_record empty' \
+    "rc=$direct_rc rec=[$(cat "$direct_rec" 2>/dev/null || echo missing)] out=$(tail -n 6 "$TMP/direct-slot-timings.out" | tr '\n' '|')"
+fi
+if [ -s "$TMP/relay-member.pid" ]; then
+  kill -TERM "$(cat "$TMP/relay-member.pid")" 2>/dev/null || :
+fi
 
 # Independent pin of fleet_slot_rerun's signal-exit guard (gh-ocannl-2450):
 # even if a caller's EXIT trap writes 0 or a stale non-zero status on untrapped

@@ -178,7 +178,7 @@ let make_vb ~loc ~name ~name_expr ~hint_label ~extra_args =
 
 (** [source_ordered_list ~loc ~prefix exprs] is the list expression of [exprs], evaluated in source
     order (gh-ocannl-1770). Members of a [%cd] sequence have effects whose order decides values: the
-    first member naming a forward-root tensor embeds its forward code ([Tensor.take_forward_code]),
+    first member naming a forward-root tensor embeds its forward code ([Tensor.embed_forward_code]),
     and the members run in list order. Evaluated right to left, as a list literal is, an earlier
     member would read a root a later one computes. *)
 let source_ordered_list ~loc ~prefix exprs =
@@ -405,7 +405,7 @@ let setup_array ~punned ~bad_pun_hints ~for_slot
       let fwd_code_or_noop =
         Some
           [%expr
-            if Tensor.is_fwd_root [%e t] then Tensor.take_forward_code [%e t]
+            if Tensor.is_fwd_root [%e t] then Tensor.embed_forward_code [%e t]
             else [%e empty_comp ~loc]]
       in
       { (default_setup false) with fwd_code_or_noop; tensor = Some t }
@@ -413,7 +413,7 @@ let setup_array ~punned ~bad_pun_hints ~for_slot
       let fwd_code_or_noop =
         Some
           [%expr
-            if Tensor.is_fwd_root [%e t] then Tensor.take_forward_code [%e t]
+            if Tensor.is_fwd_root [%e t] then Tensor.embed_forward_code [%e t]
             else [%e empty_comp ~loc]]
       in
       {
@@ -448,7 +448,7 @@ let setup_array ~punned ~bad_pun_hints ~for_slot
       let fwd_code_or_noop =
         Some
           [%expr
-            if Tensor.is_fwd_root [%e t] then Tensor.take_forward_code [%e t]
+            if Tensor.is_fwd_root [%e t] then Tensor.embed_forward_code [%e t]
             else [%e empty_comp ~loc]]
       in
       {

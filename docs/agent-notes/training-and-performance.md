@@ -302,10 +302,14 @@ files.
   replays take the snapshot via `--stock-tsv` and read stock arms (and `--fit-mma`) from it
   alone; a missing census-selected `F_seeded[...]` incumbent is diagnosed as `seeded_plan_unmatched`
   (exit 1, matching `preset_unmatched`), and an empty snapshot exits 2. Stock fits use the
-  snapshot too: `gh1253_cells.sh` passes `.tsv.stock` to `gh1600_txn_fit.py`, `gh1821_geometry_fit.py`
-  reads `.tsv.stock` when present, and both refuse a marked mixed TSV without its snapshot with
-  `stock_snapshot_missing` (gh-ocannl-2397, gh-ocannl-2456). Older mixed TSVs require the
-  snapshot to be supplied explicitly for direct replay and `gh1600_txn_fit.py`.
+  snapshot too: `gh1253_cells.sh` passes `.tsv.stock` and `--census` to `gh1600_txn_fit.py`,
+  `gh1821_geometry_fit.py` reads `.tsv.stock` and the stock timing censuses (`<cell>_time.err` /
+  `<cell>_time_r<N>.err`) when present, and both refuse a marked mixed TSV without its snapshot
+  with `stock_snapshot_missing` (gh-ocannl-2397, gh-ocannl-2456) and attribute configured preset
+  (`F_preset[...]`) and census-selected `F_seeded[...]` incumbents via `stock_attribution` /
+  `preset-digest`, failing closed on `preset_unmatched` / `seeded_plan_unmatched` (exit 2;
+  gh-ocannl-2476). Older mixed TSVs require the snapshot to be supplied explicitly for direct
+  replay and `gh1600_txn_fit.py`.
 - The ranking score divides by its own rates, never the bound's ceilings (gh-ocannl-1442):
   `issue_rate` (scalar operations, the effective rate of a register-blocktiled kernel with its
   staging) and `dram_bandwidth` (the STREAM rate), `Untimed` fields overridden by
@@ -677,7 +681,7 @@ files.
   unannotated), run with `OCANNL_CC_PARALLEL_GRID=none`: the step is fissioned, but each Grid loop
   renders serially. The per-segment times are single-threaded and their sum tracks the serial step
   (429 vs 410 ms on the cifar_resnet step), so on cc they are a step attribution.
-- **The untuned cc direct-conv forward is latency-bound, not recomputed** (gh-ocannl-1549).
+- **The scalar cc direct-conv forward is latency-bound** (gh-ocannl-1549).
   Lowering leaves `for b,h,w,oc { acc = 0; for ic,kh,kw: acc += x*w; y = acc }` with a scalar
   local accumulator, each conv computed once. Without reassociation clang vectorizes neither the
   reduction nor, behind a 144-576-long body it does not unroll, the `oc` loop: one scalar `fmadd`
@@ -686,14 +690,17 @@ files.
   27-long body and Winograd's 16-long contractions run at 9-12 GMAC/s. The backward nests write
   a different cell on every innermost iteration and vectorize too. On mac-studio, serial
   segments: forward convs 295 of 429 ms (s3c2 alone 75), the whole backward plus SGD 126 ms on
-  twice the MACs. Winograd's 5.5x forward (276 -> 50 ms; the 2.2x step of staging#1355) is 2.25x
-  fewer multiplies, each about 4x cheaper, less the transforms. Standalone C on the s1c1 nest: `ic` innermost buys 8% (48 -> 45 ms); an
-  `oc`-innermost vector accumulator 3x (16 ms) under the default contraction, but it loses under
-  `cc_backend_fp_contract=off`, where the `[oc,kh,kw,ic]` layout makes its loads strided. The
+  twice the MACs. In that pre-channel-vector comparison, Winograd ran the forward 5.5x faster
+  (276 to 50 ms, with a 2.2x speedup for the step in staging#1355). It cut the multiply count by a
+  factor of 2.25 and the cost per multiply by about 4, with transform costs on top. In standalone C
+  for the s1c1 nest, `ic` innermost buys 8% (48 to 45 ms). The `oc`-innermost vector accumulator
+  ran in 16 ms (3x faster) under the default contraction. It lost under `cc_backend_fp_contract=off`
+  because the `[oc,kh,kw,ic]` layout made its loads strided. The
   untuned default now takes that form with the kernel packed channel-minor, which wins under `off`
   too (gh-ocannl-1630; `cpu_preset` in the scheduling note). On a diagnostic mac-studio probe
   (serial, b64, conv-relu-conv forward) it ran 2.7-5x faster under both contraction modes, bitwise
-  equal.
+  equal. For the untuned batch-64 cc `cifar_resnet` cell on rog-nv-linux (AVX2), the direct schedule
+  with channel vectors ran faster than Winograd. [Channel-vector measurement](scheduling-and-autotune.md#gpu-mapping-and-companion-coverage).
 - **HIP in-step attribution: `BACKEND=hip gh1133_cells.sh ... kprof`** (gh-ocannl-1392) traces
   with `rocprofv3 --kernel-trace`, which sees the replayed hipGraph's nodes without a flag, and
   states each cell's memory model (unified on minix's gfx1151, discrete on tuf's gfx1102) from the
@@ -926,6 +933,11 @@ files.
   but a retry over it is still not a from-scratch search: the finished arms replay and the rest are
   searched, and a pass reports SEARCHED whenever ANY arm searched, so the mixed retry's compile cost
   wears a from-scratch label. Wipe it before quoting a search timing.
+
+- Serial BEAM can also stall. The November 2026 tagline window on rog left a CUDA BEAM=2 cell
+  with an empty log at the cap, with successful cold searches taking up to 334 s
+  (`benchmarks/report-tagline-gpt2-20261120.md`). The tagline driver bounds the loss with the
+  arm cap documented in `benchmarks/README.md` (gh-ocannl-2431).
 
 - A direct TERM to a gh1002 cell's group does not reach the driver, which owns a separate
   session (`gh1002_cells.run_in_own_group`; gh-ocannl-2001). After the cell exits its wait returns;
@@ -1166,10 +1178,14 @@ files.
   Before reading a wide identical control as noise, read the report's Modes section
   (gh-ocannl-2308): an arm whose times split at a gap more than twice its two groups' ranges, with
   a step larger than its own paired difference, is BIMODAL, and the rounds are re-paired within
-  each mode. On gfx1151 every arm's processes fell ~1.3 ms apart, so the pooled control read
-  [0.913, 1.090] around an effect that was 1.051x/1.060x within the modes (the cells of
-  lukstafi/ocannl-staging#2103, re-rendered by `bin_cells.py report DIR`). The rule allows one cell
-  per mode only once another arm has shown the mode recurs; a lone stray cell is an outlier. A new
+  each mode. On unified gfx1151 (`gpt2_mini_train` f32) every arm's processes fell ~1.3 ms apart,
+  so the pooled control read [0.913, 1.090] around an effect that was 1.051x/1.060x within the
+  modes (lukstafi/ocannl-staging#2103, re-rendered by `bin_cells.py report DIR`); gh-ocannl-2327
+  (lukstafi/ocannl-staging#2152) saw the same per-process modes there, with its byte-identical
+  control spanning [0.908, 1.098] (median 0.996x) pooled and same-mode pairing yielding 1.055x
+  [1.039, 1.069] across 10 pairs for `exact / narrow` and 1.000x [0.990, 1.009] across 7 pairs for
+  `exact_new / exact`. The rule allows one cell per mode only once another arm has shown the mode
+  recurs; a lone stray cell is an outlier. A new
   driver imports them rather than re-deriving env scrubbing, supervision, the visiting order or the
   sign test, and reads bench output only through `benchmarks/bench_output.py` (gh-ocannl-1443): five
   private result-line readers had drifted apart (first vs last `{` line, a substring filter, a
@@ -1213,6 +1229,52 @@ files.
   the runtime refuses the second default (conventions.md, gh-ocannl-1861). A
   driver that measures revisions older than the stream (gh-ocannl-1566) cannot use it at all
   (`gh1051_boundary_split.sh`, README).
+- **HIP timing on discrete gfx1102: per-hardware-queue WGP/SIMD-pair phase toggle**
+  (gh-ocannl-2384, OCANNL probe on `gemini/w1126o-2384-probe` at `465910cc` extending
+  `claude/w1118o-2308-probe` `9b9ce2ef`, paired with
+  [standalone HIP `HW_ID1`, period-sweep, and stream-pool witnesses](https://github.com/ahrefs/ocannl/issues/2384#issuecomment-7191082207)).
+  On discrete gfx1102 (RX 7700S, 16 WGPs / 32 CUs), each HSA
+  AQL hardware compute queue (HQD) carries a persistent per-WGP starting-SIMD-pair phase
+  (`(simd0, simd2)`-first versus `(simd1, simd3)`-first, observed directly via `s_getreg_b32`
+  `HW_ID1` in the standalone HIP witness) that advances round-robin across the 16 WGPs with period
+  32 workgroups per HQD. Scratch is not involved (both `seed1` and `seed4` have
+  `.private_segment_fixed_size = 0`, and `HSA_SCRATCH_SINGLE_LIMIT` with
+  `HSA_NO_SCRATCH_RECLAIM=1` leaves the toggle intact), nor are HIP events (plain wall-timed
+  batches toggle identically). A kernel whose grid is a multiple of 32 workgroups (`seed4`:
+  `16x12 = 192` WGs, `8x8` block, 1024 B LDS) preserves every WGP's phase across launches and
+  locks into whichever phase the HQD was left in, while any interleaved kernel whose grid is not a
+  multiple of 32 (`seed1` or `seed3`: `8x6 = 48` WGs, period 2; `seed0`: `4x3 = 12` WGs, period 8;
+  even a 1-WG dummy launch flips one WGP's `HW_ID1` phase with period 32 and slows the whole
+  192-WG kernel) moves the HQD off `0 mod 32`. In `rocprofv3` traces on discrete gfx1102 across
+  flips, the inter-dispatch gap (`9.16-9.20 us`), `SQ_WAVES` (384), `SQ_INST_CYCLES_VMEM`
+  (138,240), `GL2C_HIT` (4,867) and `GL2C_MISS` (3,329) stay identical, while `SQ_WAIT_INST_LDS`
+  jumps 4.7x (`261k-267k` to `1,249k-1,254k` cycles) and kernel duration (`rocprofv3 --kernel-trace`)
+  rises ~42-43% (fast median `8.12 us`, range `7.88-8.60 us`, to slow median `11.52-11.56 us`,
+  range `11.24-11.84 us` in runs 3/7 and run 11 median `11.52 us`, shifting batched per-launch
+  wall time from `13.9-14.6` to `16.9-17.7` us).
+  Unified gfx1151 (20 WGPs / 40 CUs) showed no modes on this pair in gh-ocannl-2308; a consistent
+  hypothesis (not directly traced with `HW_ID1` on gfx1151) is that `192 mod 40 = 32` rotates
+  across WGPs within every batch rather than locking into one phase. **Surviving reading
+  methods:** (1) process-per-arm measurement (`bin_cells.py`, including via `ab.py`, and
+  `orchestrate.py` pass-2 replay) removes cross-candidate *interleaving* toggles, but does NOT by
+  itself equalize starting phase across arms whose earlier workgroup dispatches in that process
+  (init kernels, warm-up, or an in-process `Autotune` search inside the arm) differ modulo 32: a
+  32-WG-multiple timed kernel locks into whatever phase those earlier dispatches left, so two arms
+  can sit in opposite deterministic modes across every cell without tripping `bin_cells.py`'s Modes
+  detector (a ~20% apparent treatment effect); clean arm-to-arm comparison therefore requires
+  matching pre-timing workgroup totals modulo 32 (e.g., identical preamble, or isolating the timed
+  kernel on its own fresh live stream within `GPU_MAX_HW_QUEUES` before any non-32-WG-multiple work
+  runs on that queue). Note also that only `bin_cells.py` (and `ab.py` through it) runs the Modes
+  detector for residual per-process modes, while `orchestrate.py` pass-2 replay does not and needs
+  a separate mode check if per-process bimodality is suspected; (2) in-process, a dedicated
+  simultaneously live HIP stream per candidate within `GPU_MAX_HW_QUEUES` (default 4), which
+  assigns distinct AQL hardware queues (`Queue_Id` 2 vs 3) and removes the toggle (0/15 parity
+  flips and 0/11 full-tuner flips at odd `seed1` depths `1` and `617`, while `GPU_MAX_HW_QUEUES=1`
+  forces both streams onto one HQD and restores 15/15 and 11/11 flips). Destroying and recreating a
+  HIP stream does NOT reset the HQD phase: ROCclr recycles the persistent hardware queue with its
+  dirty phase intact. Shared-stream interleaved or sequential multi-candidate timing on discrete
+  gfx1102 does not survive this effect when a 32-WG-multiple candidate shares an HQD with
+  non-32-WG-multiple kernels.
 - **Interleaved timing visits arms in `Bench_design`'s spread mirrored rotation** (`bin/bench_design.ml`,
   gh-ocannl-743). Mirroring each batch cancels LINEAR drift (every pair exchanged, equal mean
   positions); it does not equalize each arm's position histogram, which is what a nonlinear effect

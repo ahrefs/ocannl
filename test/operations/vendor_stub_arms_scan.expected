@@ -1,5 +1,7 @@
 every vendor-gated select arm the census finds is compiled by a stand-in copy: true
 every vendor-gated arm's stand-in copy is held to the stanza selecting it: true
+every select arm matches Config_key_scan.select_target_of_arm for its target: true
+no checked-in .ml source collides with a select arm's target path: true
 
 Vendor packages with a stand-in: cudajit, hipjit, metal
 Package stand-in modules, each with the library its agreement alias is gated on (any: no alias, held to any library of the package):
@@ -18,6 +20,7 @@ Vendor-gated select arms, each with the stand-in copy that compiles it:
   arrayjit/test/test_metal_alloc.real.ml -> arrayjit/vendor_stubs/arms/test_metal_alloc.ml
   arrayjit/test/test_metal_storage_mode.real.ml -> arrayjit/vendor_stubs/arms/test_metal_storage_mode.ml
   benchmarks/runners/ocannl/bench_cuda_select.real.ml -> arrayjit/vendor_stubs/arms/bench_cuda_select.ml
+  benchmarks/runners/ocannl/bench_metal_select.real.ml -> arrayjit/vendor_stubs/arms/bench_metal_select.ml
   test/operations/cuda_pool_probe.real.ml -> arrayjit/vendor_stubs/arms/cuda_pool_probe.ml
   test/operations/cuda_wmma_floor.real.ml -> arrayjit/vendor_stubs/arms/cuda_wmma_floor.ml
   test/operations/host_capability_fingerprint_metal.real.ml -> arrayjit/vendor_stubs/arms/host_capability_fingerprint_metal.ml
@@ -39,6 +42,8 @@ Select arms gated on no vendor library (no copy demanded):
 Stand-in libraries, each copied module with the genuine stanza it is held to:
   bench_cuda_select_arm
     bench_cuda_select <- (executable bench_cuda_select) of benchmarks/runners/ocannl/dune
+  bench_metal_select_arm
+    bench_metal_select <- (executable bench_metal_select) of benchmarks/runners/ocannl/dune
   cuda_backend_impl_arm
     cuda_backend_impl <- (library context) of arrayjit/lib/dune
   cuda_backend_stub_check
@@ -97,4 +102,6 @@ OK: every vendor-gated select arm is type-checked off its box, against stand-ins
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:90b26d38400dc5a37ed715269ba3cfbe] every vendor-gated select
   [scanner-refusal:4cc754a0d44bcdcb048630ccd8e65a5b] vendor-gated arm's stand-in
+  [scanner-refusal:2c9effa9c434f42e299fea8a5bb96b20] Config_key_scan.select_target_of_arm
+  [scanner-refusal:1c9ecdb5107c44b922f23d89fb734f94] checked-in ml source
 End of synthetic controls.

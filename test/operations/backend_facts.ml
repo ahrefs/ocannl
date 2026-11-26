@@ -31,9 +31,14 @@ let () =
   p "the facts bind a hardware grid exactly where the device bounds a workgroup's threads"
     (Bool.equal (BI.binds_hardware_grid facts) (Option.is_some limits.max_threads_per_workgroup));
   let caps = Context.codegen_capabilities ctx in
-  p_all "codegen_capabilities.select_blend at f32 and f64 agrees with blends_value_selects"
-    [ Ir.Ops.single; Ir.Ops.double ] ~f:(fun prec ->
-      Bool.equal (Option.is_some (caps.BI.select_blend prec)) facts.BI.blends_value_selects);
+  let blend_precs =
+    if String.equal name "metal" then [ Ir.Ops.single ] else [ Ir.Ops.single; Ir.Ops.double ]
+  in
+  p_all "codegen_capabilities.select_blend at f32 and f64 agrees with the select blend policy"
+    blend_precs ~f:(fun prec ->
+      Bool.equal
+        (Option.is_some (caps.BI.select_blend prec))
+        (not (BI.equal_select_blend_policy facts.BI.select_blend_policy No_blend)));
   let cc_leg = Verdict.leg ~when_:(BI.renders_on_host_pool facts) ~on:name () in
   Verdict.in_leg ~leg:cc_leg
     "on cc, codegen_capabilities.select_blend reports Blend_truth at f32 and f64 and None elsewhere"
@@ -134,12 +139,19 @@ let () =
   let comp = Ocannl.Train.forward root in
   (* The frontend gate, which finishes shape inference, as a compile would. *)
   ignore (Context.lowered_for_decisions (Context.auto ()) comp Ir.Indexing.Empty : LL.optimized);
-  moves "blends_value_selects alone moves the inline fan-in cap's decision on a select"
+  let materializes facts =
+    let _, (o : LL.optimized) =
+      Context.Backends.lower_assignments ~facts ~limits:BI.no_hardware_limits ~accum_prec:Fn.id
+        (LL.empty_optimize_ctx ()) Ir.Indexing.Empty comp.Ir.Assignments.asgns
+    in
+    Tn.Placements.known_non_virtual o.LL.optimize_ctx.placements y.Tensor.value
+  in
+  moves "speculating loaded arms moves the inline fan-in cap's decision on a select"
     ~vary:(fun f ->
-      ({ f with BI.blends_value_selects = true }, { f with BI.blends_value_selects = false }))
-    ~decide:(fun facts ->
-      let _, (o : LL.optimized) =
-        Context.Backends.lower_assignments ~facts ~limits:BI.no_hardware_limits ~accum_prec:Fn.id
-          (LL.empty_optimize_ctx ()) Ir.Indexing.Empty comp.Ir.Assignments.asgns
-      in
-      Tn.Placements.known_non_virtual o.LL.optimize_ctx.placements y.Tensor.value)
+      ( { f with BI.select_blend_policy = Blend_speculable },
+        { f with BI.select_blend_policy = No_blend } ))
+    ~decide:materializes;
+  p_none "load-free blending keeps the loaded select within the fan-in cap" bases ~f:(fun f ->
+      materializes { f with BI.select_blend_policy = Blend_load_free });
+  p_none "serial-loop blending keeps the loaded select within the fan-in cap" bases ~f:(fun f ->
+      materializes { f with BI.select_blend_policy = Blend_serial_loop })

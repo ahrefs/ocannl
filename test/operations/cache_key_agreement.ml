@@ -29,13 +29,18 @@
    wrong together -- a key that changes the emitted kernel, is classified as leaving it alone
    (execution-neutral, placement-shaping, untimed-model), and is not hashed: every such key a
    compile reads is flipped, the probe recompiled, and a changed kernel under an unchanged key is
-   reported by name. Because dynamic tracing sees only the running backend's reads, stage 2 also
-   cross-checks [emitted_flips] / [emitted_exemptions] / [codegen_not_traced] / [settings_flips]
-   statically against the same [Test_scan.Codegen_stage_modules.modules] set [digest_completeness]
-   scans (gh-ocannl-2440), so a new GPU-only codegen-stage read fails on cc before merge rather than
-   first turning a GPU loop red. [codegen_not_traced] stays disjoint from [emitted_exemptions] and
-   is refused if [compile_probe] ever traces one of its keys, so a lazy/init-only exemption cannot
-   silently weaken the dynamic flip oracle.
+   reported by name. [compile_probe] runs with empty kernel code caches
+   ([Ir.Kernel_code_cache.with_cold_caches], gh-ocannl-2478) so both the traced compile and every
+   flip execute the backend's full compile and post-compile path rather than hitting the kernel
+   cache; the traced compile pins [kernels_compiled > 0 && kernels_reused = 0] on every backend, and
+   on [cc] every per-compile oracle-class key statically read in [cc_backend.ml] outside
+   [codegen_not_traced] must be traced. Because dynamic tracing sees only the running backend's
+   reads, stage 2 also cross-checks [emitted_flips] / [emitted_exemptions] / [codegen_not_traced] /
+   [settings_flips] statically against the same [Test_scan.Codegen_stage_modules.modules] set
+   [digest_completeness] scans (gh-ocannl-2440), so a new GPU-only codegen-stage read fails on cc
+   before merge rather than first turning a GPU loop red. [codegen_not_traced] stays disjoint from
+   [emitted_exemptions] and is refused if [compile_probe] ever traces one of its keys, so a
+   lazy/init-only exemption cannot silently weaken the dynamic flip oracle.
 
    Static cross-check boundary: reads the OCaml parse trees of [utils.ml] and every module in
    [Test_scan.Codegen_stage_modules.modules] (all required present in the rule's response file, with
@@ -211,6 +216,7 @@ let keyed_flips =
     ("gpu_graph_capture", config ~scope:Cuda_hip flag);
     ("cuda_fast_math", config ~scope:Cuda flag);
     ("hip_fast_math", config ~scope:Hip flag);
+    ("hip_extra_compile_options", config ~scope:Hip [ "-fapprox-func"; "-freciprocal-math" ]);
     ("metal_fp_contract", config ~scope:Metal [ "auto"; "off" ]);
     ("cuda_ptx_target", config ~scope:Cuda [ "floor"; "native" ]);
     ("gpu_elide_covered_zeros", config ~scope:Gpu flag);
@@ -359,9 +365,10 @@ let emitted_exemptions =
   ]
 
 (* Statically read in a codegen-stage module, in the classes the oracle covers, and NOT traced by a
-   warm [compile_probe] (resolved once by a module-level [lazy] or read only at device init). Kept
-   separate from [emitted_exemptions] so a key listed here fails immediately if [compile_probe] ever
-   starts reading it per compile instead of silently bypassing the dynamic flip oracle. *)
+   cold, post-init [compile_probe] (resolved once by a module-level [lazy] or read only at device
+   init). Kept separate from [emitted_exemptions] so a key listed here fails immediately if
+   [compile_probe] ever starts reading it per compile instead of silently bypassing the dynamic flip
+   oracle. *)
 let codegen_not_traced =
   [
     ( "cc_backend_probe_cache",
@@ -1005,8 +1012,12 @@ let () =
      acts on the whole pipeline -- the front end, the placements, the lowering and the rendering --
      so a key read anywhere on it enters the oracle. Fresh builds of one program emit one kernel up
      to the numbers minted into identifiers (gh-ocannl-1473), which [Generated.normalize_minted]
-     renames away. The population is traced on the second compile, so it holds exactly the keys a
-     compile of a fresh build reads. *)
+     renames away. Each compile runs under [Ir.Kernel_code_cache.with_cold_caches] (gh-ocannl-2478):
+     the baseline forces one-time lazy probes, and emptying the kernel code cache ensures the traced
+     second compile and every flip miss the cache and execute the backend's full compile and
+     post-compile path (reading [cc_compile_jobs], [cc_compile_unit_min_bytes],
+     [cc_backend_post_compile_timeout], [cc_backend_verify_codesign], etc.) instead of reusing the
+     baseline kernel. *)
   let routine = "cka_probe" in
   let probe () =
     let a =
@@ -1015,38 +1026,44 @@ let () =
     Train.forward TDSL.O.(relu a + (a *. a))
   in
   let compile_probe () =
-    Test_utils.Generated.arm routine;
-    let canon = ref None in
-    let _ctx, _routine =
-      Context.compile ~name:routine
-        ~lowered_transform:(fun opt ->
-          canon := Some (SC.canonicalize ~static_indices:[] opt);
-          [ opt ])
-        ctx (probe ()) Ir.Indexing.Empty
-    in
-    let canon = Option.value_exn ~here:[%here] !canon in
-    let key =
-      Option.value_exn ~here:[%here]
-        (SC.cache_key ~timing_identity ~limits:(Context.hardware_limits ctx)
-           ~capabilities:(Context.codegen_capabilities ctx)
-           ~facts:(Context.backend_facts ctx) canon ~backend)
-    in
-    ( key,
-      Test_utils.Generated.normalize_minted ~facts:(Context.backend_facts ctx)
-        (Test_utils.Generated.read routine) )
+    Ir.Kernel_code_cache.with_cold_caches (fun () ->
+        Test_utils.Generated.arm routine;
+        let canon = ref None in
+        let _ctx, _routine =
+          Context.compile ~name:routine
+            ~lowered_transform:(fun opt ->
+              canon := Some (SC.canonicalize ~static_indices:[] opt);
+              [ opt ])
+            ctx (probe ()) Ir.Indexing.Empty
+        in
+        let canon = Option.value_exn ~here:[%here] !canon in
+        let key =
+          Option.value_exn ~here:[%here]
+            (SC.cache_key ~timing_identity ~limits:(Context.hardware_limits ctx)
+               ~capabilities:(Context.codegen_capabilities ctx)
+               ~facts:(Context.backend_facts ctx) canon ~backend)
+        in
+        ( key,
+          Test_utils.Generated.normalize_minted ~facts:(Context.backend_facts ctx)
+            (Test_utils.Generated.read routine) ))
   in
   let oracle () =
     let baseline_key, baseline_src = compile_probe () in
     let traced_reads =
       let saved = Hash_set.to_list Utils.accessed_global_args in
       Hash_set.clear Utils.accessed_global_args;
-      let again_key, again_src = compile_probe () in
+      let (again_key, again_src), traced_census = Ir.Compile_cost.with_census compile_probe in
       let r = Hash_set.to_list Utils.accessed_global_args in
       List.iter saved ~f:(Hash_set.add Utils.accessed_global_args);
       let stable = String.equal again_key baseline_key && String.equal again_src baseline_src in
       if not stable then
         eprintf "two compiles of the probe, normalized:\n%s\n----\n%s\n" baseline_src again_src;
       p "two fresh builds of the probe compile to the same kernel under the same key" stable;
+      let cold = traced_census.kernels_compiled > 0 && traced_census.kernels_reused = 0 in
+      if not cold then
+        eprintf "traced compile_probe census: kernels=%d kernels_compiled=%d kernels_reused=%d\n"
+          traced_census.kernels traced_census.kernels_compiled traced_census.kernels_reused;
+      p "the traced compile_probe compiles cold without reusing a cached kernel" cold;
       Set.of_list (module String) r
     in
     let oracle_class key =
@@ -1147,6 +1164,22 @@ let () =
              (or emitted_exemptions)\n"
             key;
         in_class && at_codegen && untraced);
+    let cc_backend_oracle_keys =
+      List.Assoc.find codegen_by_file "cc_backend.ml" ~equal:String.equal
+      |> Option.value ~default:(Set.empty (module String))
+      |> Set.filter ~f:(fun key -> oracle_class key && not (not_traced key))
+      |> Set.to_list
+    in
+    Verdict.gated_all ~when_:(String.equal backend "cc") ~on:backend ~min:5
+      "every per-compile oracle-class key read in cc_backend.ml is traced by compile_probe on cc"
+      cc_backend_oracle_keys ~f:(fun key ->
+        let traced = Set.mem traced_reads key in
+        if not traced then
+          eprintf
+            "%s is read in cc_backend.ml outside codegen_not_traced, yet compile_probe on cc did \
+             not trace it\n"
+            key;
+        traced);
     let flipped =
       List.filter population ~f:(fun key ->
           (not (exempt key))

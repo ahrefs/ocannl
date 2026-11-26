@@ -40,6 +40,9 @@ a package stand-in declared in a `(subdir …)` of a parent dune file maps its m
 a tree with no package stand-in is refused: true
 a tree with no backend stand-in is refused: true
 a dune file that does not read is refused: true
+a select arm that does not match <target>.<variant>.ml is refused: true
+a checked-in .ml source colliding with a select arm's target path is refused: true
+checked-in select arms beside unrelated sources have no target-path collision: true
 an empty dune-file corpus is refused: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
@@ -54,6 +57,8 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:26f527c022e2a36b727d2635a64c83e2] compiles a copy
   [scanner-refusal:3f49f1a86b0b50ae1cc45ae30b8d6bcd] preprocesses
   [scanner-refusal:b1fb94e1e4593366f815fcc28f356790] the availability-only exception
+  [scanner-refusal:dee2d648128c5e060fd019f8fb9194cc] Config_key_scan.sources_among
+  [scanner-refusal:84df002d61c09f8e4c713e4286fdc7ac] Config_key_scan.select_target_of_arm
   [scanner-refusal:e62fde2478073ff697b31a8548df54f1] dune-file glob matches
   [scanner-refusal:513451a79c3ecc3b1fb18f6fee5ee404] arrayjit/vendor_stubs/<package>/dune
   [scanner-refusal:b079d32e59c7b93562738e4061682b90] arrayjit/vendor_stubs/
@@ -62,4 +67,5 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:047374463fd606fe95cf257ebf928364] arrayjit/vendor_stubs/
   [scanner-refusal:518629fae55a4ef4b29ab72b3a71d8ce] each module's agreement
   [scanner-refusal:f4e3a8ac36957f5a6f54cd735b3c2092] package stand-in declared
+  [scanner-refusal:6cd3c184704a37f8cb97e98efd6a0a87] beside unrelated sources
 End of synthetic controls.

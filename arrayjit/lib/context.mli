@@ -362,7 +362,7 @@ val lowered_for_decisions :
     frontend gate first, as does {!decision_surface}: a tainted session or a program over a node the
     frontend discarded is refused before lowering forces any dims (gh-ocannl-1301, gh-ocannl-1505).
     [facts] and [limits] (default: the context's {!backend_facts} and {!hardware_limits}) are the
-    target the lowering decides for: the facts' [blends_value_selects] and the limits'
+    target the lowering decides for: the facts' [select_blend_policy] and the limits'
     [online_softmax_auto_block], as a compile on that target would lower. A decision-only reader
     judging another target than the context's passes its own (gh-ocannl-1780,
     [Autotune.model_target]); the optimize context and its placements stay the context's. *)
