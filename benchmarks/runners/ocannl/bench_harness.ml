@@ -1258,10 +1258,14 @@ let kernel_calls calls =
 
 (** How a per-kernel table states its numbers, for its header: the median of [calls] timing calls
     with their range, in per-launch milliseconds under the configured [autotune_timing]. *)
-let kernel_timing_legend ~calls =
-  Printf.sprintf "median of %d timing calls with their range, ms per launch, autotune_timing=%s"
-    calls
-    (Autotune.timing_string (Bench_retime.configured_timing ()))
+let kernel_timing_legend ~backend ~calls timing =
+  let quality =
+    match (backend, timing) with
+    | "metal", Autotune.Isolated -> "; screening-grade on Metal"
+    | _ -> ""
+  in
+  Printf.sprintf "median of %d timing calls with their range, ms per launch, autotune_timing=%s%s"
+    calls (Autotune.timing_string timing) quality
 
 (** One kernel timed on its own (gh-ocannl-1694): [compile ()] compiles it as a routine of its own,
     which is run once and then re-timed by {!Bench_retime.retime} -- [calls] independent
@@ -1339,7 +1343,8 @@ let time_segments ?promote_locals ?calls ~backend ~limits ~static_indices ~ctx ~
   let segs =
     Sched.fission_scheduled ~promote_locals ?keep_mapping ~preset ~zero_sched ~static_indices opt
   in
-  Stdio.printf "segment times (%s):\n" (kernel_timing_legend ~calls);
+  Stdio.printf "segment times (%s):\n"
+    (kernel_timing_legend ~backend ~calls (Bench_retime.configured_timing ()));
   let total = ref 0. in
   let declined = ref 0 in
   (* Per-segment tensorization, straight off each compiled routine (gh-ocannl-626): this table is
@@ -1579,7 +1584,8 @@ let time_shipped_kernels ?out ?calls ?(stop = fun () -> false)
 let time_shipped_segments ?(out = Stdio.stdout) ?calls ~ctx ~bindings routines =
   let calls = kernel_calls calls in
   Stdio.Out_channel.fprintf out "segment times (%s; each kernel alone):\n"
-    (kernel_timing_legend ~calls);
+    (kernel_timing_legend ~backend:(Context.backend_name ctx) ~calls
+       (Bench_retime.configured_timing ()));
   let outcomes =
     time_shipped_kernels ~out ~calls ~ctx ~bindings routines
     |> List.map ~f:(fun (_, _, result) -> Result.map result ~f:(fun (_, spread, _) -> spread))
@@ -1853,7 +1859,7 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
   let table = kernel_table_enabled () in
   if table then
     Stdio.eprintf "bench: per-kernel table (%s; each kernel alone)\n%!"
-      (kernel_timing_legend ~calls);
+      (kernel_timing_legend ~backend ~calls (Bench_retime.configured_timing ()));
   let rows_of rows =
     if table then
       Stdio.eprintf "bench: per-kernel table: %d of %d kernels timed in %.1f s\n%!"

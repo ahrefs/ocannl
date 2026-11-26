@@ -2981,6 +2981,18 @@ files.
   total refusal reads there as a pass — the tuner tests are what catch it. Downstream,
   `family_profit_of_report` treats such a partial report as `Unmeasured`, and benchmark JSON carries
   the refusal count on each tune arm so an artifact never presents it as a complete measurement.
+  **Metal isolated per-kernel tables are screening-grade** (gh-ocannl-2409).
+  `BENCH_TIMING_TRACE=1` on the untuned 195-kernel `gpt2_mini_train` step on mac-studio (M4 Max,
+  macOS 27.2.1, base `44be37ceec`, exclusive fleet window, desktop GPU clients present) recorded
+  44 and 111 dispersion refusals out of 195 one-call screens. Four calls per kernel in two isolated
+  tables yielded 227 and 397 refusals out of 780, leaving 34 and 66 kernels without a reading.
+  Refused depth-one windows had median spreads of 2.50x and 2.84x. The queued table admitted all
+  780 calls without a retry, with a typical batch depth of 41 and a median spread of 1.12x.
+  A depth-one sample includes the whole Metal submission and bounded wait. That fixed work takes
+  a larger share of a depth-one sample than of a queued batch, and its wall-time variation can
+  cross the 2x-majority threshold. The trace measures the combined interval.
+  `Bench_harness.kernel_timing_legend` labels the Metal isolated table so its admission counts
+  and medians can be read in that context. See `run-1` for `wave-20261126-ocannl-t2409-mac-studio-1`.
   **The objective is a cache-key component** (`Schedule_cache.key_components`' `timing`, classified
   `Keyed "timing"`), which is the one place this differs from its `autotune_*` neighbours: those
   change how carefully the SAME quantity is measured, so either process's winner answers the

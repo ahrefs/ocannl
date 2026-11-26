@@ -1824,6 +1824,11 @@ both `cifar_resnet` and `cifar_resnet_b1` absent from the store (gh-ocannl-1825)
     candidates by -- not a host wall time with one launch and sync in it, so small kernels read
     lower than they did, and a number on either side of the change is not comparable with the
     other. Every table's header states the count and the timing mode.
+  - *Metal isolated timing* (gh-ocannl-2409). With `autotune_timing=isolated`, the tracer-free
+    per-kernel table is labelled `screening-grade on Metal`. Each sample includes the synchronized
+    submission's host wall time. Dispersion can leave many kernels without a reading even in an
+    exclusive fleet window. Use the queued table to compare per-launch times under sustained
+    dispatch.
   - *The row.* `bench: kernel i/n <median> ms ms_lo=<ms> ms_hi=<ms> ms_retimed=<admitted>/<calls>
     grid=..` (`Bench_retime.bounds_fields`' spelling; `nan` bounds below four admitted readings),
     and a kernel that compiled and ran but none of whose calls the admission gate kept (host
