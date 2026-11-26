@@ -176,6 +176,7 @@
  (libraries
   base
   bench_args
+  bench_design
   bench_harness
   bench_out
   bench_retime

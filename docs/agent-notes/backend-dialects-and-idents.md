@@ -68,18 +68,22 @@ files.
   AIR (Metal Toolchain 32023.922, `mac-studio` M4 Max), `?:` over a device load keeps `1 br i1`
   per hand-built census leg (`branchless_select`, gh-ocannl-1828; the pool kernel's one branch is
   on its window guards' line), `Blend_over_locals_stmt` removes that `br i1` (`0 br i1`, `1
-  select`), and a load-free arm (`bs_register_gate`) ALREADY compiles to `0 br i1` (`select`) under
-  plain `?:` -- so Metal needs neither eager nor load-free blending. Exclusive M4 Max measurements
-  (`bench_metal_select`, 6 paired rounds) show AGX does NOT predicate away loaded-arm branches:
-  keeping `?:` skips the device load on sparse and simdgroup-uniform-false inputs and is 12–34%
-  faster than eager blending (`where_zero/uniform_zero` 1.336x, `relu_gate/uniform_zero` 1.289x,
-  `where_eq/uniform_zero` 1.277x, `uniform_half` 1.116–1.156x, `sparse` 1.088–1.097x,
+  select`), and a load-free arm (`bs_register_gate`) already compiles to an AIR function with `0`
+  conditional branches and a `select` instruction under plain `?:` -- so Metal needs neither eager
+  nor load-free blending. Exclusive M4 Max measurements (`bench_metal_select`, 6 paired rounds)
+  show short-circuiting `?:` outperforms eager blending by 12–34% on sparse, simdgroup-uniform-false
+  and causal-mask loaded-arm inputs (`where_zero/uniform_zero` 1.336x, `relu_gate/uniform_zero`
+  1.289x, `where_eq/uniform_zero` 1.277x, `uniform_half` 1.116–1.156x, `sparse` 1.088–1.097x,
   `causal_mask` 1.136x), while dense (`0.969–0.996x`), 50% divergent (`0.993–1.036x`), `reg_arm`
   (`0.966–0.988x`) and `pool_backward` (`0.936 [0.832, 1.004]`) are all unresolved inside the
-  paired control. On the untuned `cifar_conv` `train_step`, blending's `-19.5%` delta (`508.11 ->
-  408.67 ms`) comes 95% from a single-threaded serial `volatile` bias-grad loop (`seg23`: `421.83
-  -> 327.78 ms`, hoisting the `volatile` load ahead of `?:`), whereas the parallel 44.3 ms `seg19`
-  is 7.8% slower under blend (`1.078 [1.021, 1.085]`).
+  paired control. Whether AGX lowers the AIR `br i1` to a hardware branch or a predicated load that
+  avoids inactive memory transactions is unconfirmed (no public AGX disassembler); either way,
+  retaining `?:` avoids the eager-blend load cost. On the untuned `cifar_conv` `train_step`,
+  blending reduced whole-step time (`508.11 -> 408.67 ms`, `0.805 [0.796, 0.828]`); as an
+  isolated-replay lead (`--step-segments`, which recompiles and times each segment alone rather than
+  measuring its in-step share), the single-threaded serial `volatile` bias-grad loop `seg23` sped
+  up (`421.83 -> 327.78 ms`, `0.776 [0.774, 0.782]`) while the parallel 44.3 ms `seg19` slowed down
+  (`1.078 [1.021, 1.085]`).
 - HIP blends a speculable, load-free value select over `auto` locals in an
   immediately-invoked lambda, `[&]() { auto ocannl_sel_a__ = A; ...; return <the dialect's own
   ?:>; }()` (`Cuda_like_config`, `C_syntax.Over_locals`, gh-ocannl-1695):

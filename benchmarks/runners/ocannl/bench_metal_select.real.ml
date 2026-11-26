@@ -317,23 +317,19 @@ let check label (ctx, routine) work { seeds; want } =
 let measure (ctx, routine) =
   Autotune.admitted_timing_ms (Autotune.time_routine ~timing:Autotune.Queued ~repeats:3 ctx routine)
 
-(* Each round times every arm once, in an order that rotates by one arm per round and runs backward
-   on every other cycle of [n] rounds, so each arm takes each position in turn: for three arms, six
-   rounds are the six orders. [before k] runs ahead of arm [k]'s timing, outside its clock. [ratios]
-   name numerator and denominator arms by name. *)
+(* Each round times every arm once in {!Bench_design.orders}' spread mirrored rotation, so every
+   pair of arms is exchanged equally often and position histograms equalize at exact multiples of
+   the arm count (e.g. multiples of 4 for the four-arm pointwise comparisons). [before k] runs ahead
+   of arm [k]'s timing, outside its clock. [ratios] name numerator and denominator arms by name. *)
 let compare_times ?(before = fun _ -> ()) ~calls ~label
     ~(arms : (string * (Context.t * Context.routine)) list) ~ratios () =
   let n = List.length arms in
   let arms = Array.of_list arms in
+  let orders = Bench_design.orders ~arms:n ~batches:calls in
   let rows =
-    Array.init calls ~f:(fun i ->
+    Array.map orders ~f:(fun order ->
         let row = Array.create ~len:n None in
-        let order =
-          List.init n ~f:(fun k ->
-              let k = if i / n % 2 = 0 then k else n - 1 - k in
-              (k + i) % n)
-        in
-        List.iter order ~f:(fun k ->
+        Array.iter order ~f:(fun k ->
             before k;
             row.(k) <- measure (snd arms.(k)));
         row)
@@ -530,41 +526,103 @@ let compare_step ~dry ~step_segments ~calls step =
           ~arms:(List.map arms ~f:(fun (name, (c, _)) -> (name, c)))
           ~ratios:[ ("blend", "short"); ("control", "short") ]
           ();
-        if step_segments then
+        if step_segments then (
           let (short_ctx, short_routine), _ = get "short" in
           let (blend_ctx, blend_routine), _ = get "blend" in
-          let short_segs = short_routine.Context.segments in
-          let blend_segs = blend_routine.Context.segments in
-          if List.length short_segs = List.length blend_segs then
-            List.iteri (List.zip_exn short_segs blend_segs) ~f:(fun i (s_seg, b_seg) ->
-                let seg_name = Printf.sprintf "sel_step_seg%d" i in
-                let compile_one ctx ~blend seg =
-                  let (c, r), srcs =
-                    Metal_backend.with_select_rendering ~blend (fun () ->
-                        Context.compile ~name:seg_name
-                          ~prelowered:(Bench_harness.scratch_segment seg)
-                          ~lowered_transform:(fun s -> [ s ])
-                          ctx Ir.Assignments.empty_comp Ir.Indexing.Empty)
-                  in
-                  ((c, r), String.concat ~sep:"\n" srcs)
+          let seg_identity i (seg : Ir.Low_level.optimized) =
+            let writes =
+              List.map (Bench_harness.writes_of seg.Ir.Low_level.llc) ~f:Ir.Tnode.debug_name
+              |> List.sort ~compare:String.compare
+            in
+            let key = String.concat ~sep:"," writes in
+            let geom = Bench_harness.segment_geometry seg in
+            let stmts = List.length (Ir.Low_level.flat_lines [ seg.Ir.Low_level.llc ]) in
+            let io = Bench_harness.segment_io seg in
+            (i, seg, key, geom, stmts, io)
+          in
+          let short_ids = List.mapi short_routine.Context.segments ~f:seg_identity in
+          let blend_ids = List.mapi blend_routine.Context.segments ~f:seg_identity in
+          let group_by_key xs =
+            let tbl = Hashtbl.create (module String) in
+            List.iter xs ~f:(fun ((_, _, key, _, _, _) as entry) ->
+                Hashtbl.add_multi tbl ~key ~data:entry);
+            tbl
+          in
+          let short_by_key = group_by_key short_ids in
+          let blend_by_key = group_by_key blend_ids in
+          let matched_blend_indices = Hash_set.create (module Int) in
+          let report_unmatched ~arm ~idx ~reason ~geom ~stmts ~io ~key =
+            p "%s/unmatched_segment arm=%s idx=%d reason=%s %s stmts=%d %s w:%s\n" label arm idx
+              reason geom stmts io
+              (if String.is_empty key then "<none>" else key)
+          in
+          List.iter short_ids ~f:(fun (si, s_seg, key, s_geom, s_stmts, s_io) ->
+              let s_group = Hashtbl.find_multi short_by_key key in
+              let b_group = Hashtbl.find_multi blend_by_key key in
+              if String.is_empty key then
+                report_unmatched ~arm:"short" ~idx:si ~reason:"no_writes" ~geom:s_geom
+                  ~stmts:s_stmts ~io:s_io ~key
+              else if List.length s_group <> 1 then
+                report_unmatched ~arm:"short" ~idx:si ~reason:"duplicate_short_writes" ~geom:s_geom
+                  ~stmts:s_stmts ~io:s_io ~key
+              else
+                match b_group with
+                | [] ->
+                    report_unmatched ~arm:"short" ~idx:si ~reason:"missing_in_blend" ~geom:s_geom
+                      ~stmts:s_stmts ~io:s_io ~key
+                | _ :: _ :: _ ->
+                    report_unmatched ~arm:"short" ~idx:si ~reason:"duplicate_blend_writes"
+                      ~geom:s_geom ~stmts:s_stmts ~io:s_io ~key
+                | [ (bi, b_seg, _, b_geom, b_stmts, b_io) ] ->
+                    if
+                      not
+                        (String.equal s_geom b_geom && Int.equal s_stmts b_stmts
+                       && String.equal s_io b_io)
+                    then (
+                      report_unmatched ~arm:"short" ~idx:si ~reason:"identity_mismatch" ~geom:s_geom
+                        ~stmts:s_stmts ~io:s_io ~key;
+                      report_unmatched ~arm:"blend" ~idx:bi ~reason:"identity_mismatch" ~geom:b_geom
+                        ~stmts:b_stmts ~io:b_io ~key;
+                      Hash_set.add matched_blend_indices bi)
+                    else (
+                      Hash_set.add matched_blend_indices bi;
+                      let seg_name = Printf.sprintf "sel_step_seg%d_%d" si bi in
+                      let compile_one ctx ~blend seg =
+                        let (c, r), srcs =
+                          Metal_backend.with_select_rendering ~blend (fun () ->
+                              Context.compile ~name:seg_name
+                                ~prelowered:(Bench_harness.scratch_segment seg)
+                                ~lowered_transform:(fun s -> [ s ])
+                                ctx Ir.Assignments.empty_comp Ir.Indexing.Empty)
+                        in
+                        ((c, r), String.concat ~sep:"\n" srcs)
+                      in
+                      let sc, _s_src = compile_one short_ctx ~blend:false s_seg in
+                      Exn.protect
+                        ~finally:(fun () -> Context.release (fst sc))
+                        ~f:(fun () ->
+                          let bc, b_src = compile_one blend_ctx ~blend:true b_seg in
+                          Exn.protect
+                            ~finally:(fun () -> Context.release (fst bc))
+                            ~f:(fun () ->
+                              if has_local b_src then
+                                compare_times ~calls
+                                  ~label:(Printf.sprintf "%s/seg%d(blend=%d)[w:%s]" label si bi key)
+                                  ~arms:[ ("short", sc); ("blend", bc) ]
+                                  ~ratios:[ ("blend", "short") ]
+                                  ()))));
+          List.iter blend_ids ~f:(fun (bi, _, key, b_geom, b_stmts, b_io) ->
+              if not (Hash_set.mem matched_blend_indices bi) then
+                let reason =
+                  if String.is_empty key then "no_writes"
+                  else if List.length (Hashtbl.find_multi blend_by_key key) <> 1 then
+                    "duplicate_blend_writes"
+                  else if List.is_empty (Hashtbl.find_multi short_by_key key) then
+                    "missing_in_short"
+                  else "duplicate_short_writes"
                 in
-                let sc, _s_src = compile_one short_ctx ~blend:false s_seg in
-                Exn.protect
-                  ~finally:(fun () -> Context.release (fst sc))
-                  ~f:(fun () ->
-                    let bc, b_src = compile_one blend_ctx ~blend:true b_seg in
-                    Exn.protect
-                      ~finally:(fun () -> Context.release (fst bc))
-                      ~f:(fun () ->
-                        if has_local b_src then
-                          compare_times ~calls
-                            ~label:(Printf.sprintf "%s/seg%d" label i)
-                            ~arms:[ ("short", sc); ("blend", bc) ]
-                            ~ratios:[ ("blend", "short") ]
-                            ())))
-          else
-            p "%s: segment count mismatch (%d vs %d)\n" label (List.length short_segs)
-              (List.length blend_segs)))
+                report_unmatched ~arm:"blend" ~idx:bi ~reason ~geom:b_geom ~stmts:b_stmts ~io:b_io
+                  ~key))))
 
 let () =
   let args = Bench_args.create "bench_metal_select" in
@@ -583,7 +641,17 @@ let () =
       let backend = Context.backend_name root in
       if not (String.equal backend "metal") then
         invalid_arg "bench_metal_select requires --ocannl_backend=metal";
-      let calls = Bench_retime.calls_of_env () in
+      let calls =
+        match Stdlib.Sys.getenv_opt "BENCH_RETIME_CALLS" with
+        | None -> 8
+        | Some _ -> Bench_retime.calls_of_env ()
+      in
+      if (not step_only) && calls % 4 <> 0 then
+        invalid_arg
+          (Printf.sprintf
+             "bench_metal_select: BENCH_RETIME_CALLS=%d must be a multiple of 4 for the four-arm \
+              comparison (pass --step-only for the three-arm step alone)"
+             calls);
       let caps = Metal_backend.host_capabilities () in
       let cap k = Option.value ~default:"unknown" (List.Assoc.find caps ~equal:String.equal k) in
       p
@@ -592,6 +660,8 @@ let () =
          timing=queued calls=%d dry_run=%b metal_math_api=%s metal_driver_build=%s\n"
         backend elements (elements / 16) batch calls dry (cap "metal_math_api")
         (cap "metal_driver_build");
+      if not step_only then p "4-arm %s\n" (Bench_design.describe ~arms:4 ~batches:calls);
+      p "3-arm %s\n" (Bench_design.describe ~arms:3 ~batches:calls);
       let node = Ll_test.node_factory ~first_id:20000 ~dims:[| elements |] () in
       let control = pointwise ~elements ~node Control in
       let workloads =

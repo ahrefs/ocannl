@@ -1178,8 +1178,9 @@ type backend_facts = {
       (** Which speculable value selects the renderer may blend at supported precisions. cc
           speculates loaded arms too (gh-ocannl-1622). HIP speculates only load-free arms
           (gh-ocannl-2427). CUDA and Metal emit short-circuiting selects by default (gh-ocannl-2400:
-          AGX skips device loads behind [?:] on sparse/uniform-false inputs and Metal's front end
-          already compiles load-free arms branch-free in AIR). *)
+          on M4 Max, short-circuiting [?:] outperforms eager blending by 12-34% on sparse and
+          uniform-false loaded-arm inputs with no measurable dense penalty, and Metal's front end
+          already compiles load-free arms to branch-free AIR [select]). *)
   renders_lane_bounds_check : bool;
       (** The dialect renders [debug_check_lane_bounds]'s run-time bound check of a packed-uniform
           lane extract's lane operand (gh-ocannl-1867): cc's [OCANNL_CHECKED_LANE], which aborts

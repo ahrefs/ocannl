@@ -379,17 +379,19 @@ let gpu_census dialect ~patterns name =
    [?:] for every [Where] and gate ([select_blend_policy = No_blend]). In AIR (Metal Toolchain
    32023.922, mac-studio M4 Max), a select whose arm loads device memory keeps [1 br i1] around the
    load on each of the four hand-built legs, while a load-free arm ([bs_register_gate]) already
-   compiles to a branchless AIR [select] with [0 br i1]. Exclusive M4 Max measurements
-   ([bench_metal_select]) show AGX does NOT predicate away loaded-arm branches: [?:] skips the
-   device load on sparse and uniform-false simdgroups (12-34% faster than eager blending; causal
-   mask 13.6% faster) while costing nothing measurable on dense or 50%-divergent inputs (all
-   unresolved inside the paired control). The realistic pool kernel's [?:] lines, whose anchor (as
-   on CUDA) also holds the window loops' index guards, carry one branch on the guards' line.
+   compiles to an AIR function with [0] conditional branches and a [select] instruction. Exclusive
+   M4 Max measurements ([bench_metal_select]) show short-circuiting [?:] outperforms eager blending
+   by 12-34% on sparse, uniform-false and causal-mask loaded-arm inputs while costing nothing
+   measurable on dense or 50%-divergent inputs (all unresolved inside the paired control); AGX
+   machine-code lowering itself (branch vs predicated load) is unobserved without an AGX
+   disassembler. The realistic pool kernel's [?:] lines, whose anchor (as on CUDA) also holds the
+   window loops' index guards, carry one branch on the guards' line.
 
    So the zero-branch claim over loaded-arm selects skips on Metal citing [air_boundary], and the
    loaded-arm AIR counts stay pinned on the Metal Toolchain versions they were counted on (an
-   environment skip on any other), while [bs_register_gate] runs the version-independent zero-branch
-   AIR claim directly whenever the Metal Toolchain is present. *)
+   environment skip on any other), while [bs_register_gate] checks the whole AIR function (including
+   instructions without debug locations) for zero conditional branches and a [select] instruction
+   whenever the Metal Toolchain is present. *)
 let air_boundary = "gh-ocannl-2400"
 let air_branches = 1
 let air_pinned_toolchains = [ "32023.922" ]
@@ -685,6 +687,52 @@ let () =
             (not (has before score_access)) && has after score_access)))
 
 (* The gradient was loaded by an earlier statement, so the gate only selects a register value. *)
+(* Function-wide AIR check for a single-select kernel whose arm is load-free (gh-ocannl-2400):
+   unlike [gpu_census], which scopes branches to lines matching [patterns] via [!dbg], this inspects
+   every instruction in the compiled AIR function (with or without debug locations) and verifies
+   both that zero conditional branches appear anywhere in the function and that an AIR [select]
+   instruction is emitted. *)
+let air_function_branch_free_select name =
+  let exists stem = Stdlib.Sys.file_exists (Generated.path ~ext:".metal" stem) in
+  let rec parts k =
+    let stem = Printf.sprintf "%s.part%d" name k in
+    if exists stem then stem :: parts (k + 1) else []
+  in
+  let stems = (if exists name then [ name ] else []) @ parts 0 in
+  let say fmt =
+    Printf.ksprintf
+      (fun m -> Stdio.eprintf "branchless_select: %s: %s (not part of the golden)\n" name m)
+      fmt
+  in
+  if List.is_empty stems then say "no .metal artifact";
+  List.map stems ~f:(fun stem ->
+      let artifact = Generated.path ~ext:".metal" stem in
+      let source_basename = stem ^ ".metal" in
+      let source = Generated.read ~ext:".metal" stem in
+      match
+        Asm.disassemble_gpu ?metal_options:(Lazy.force metal_options)
+          ?metal_toolchain:(Result.ok (Lazy.force metal_toolchain))
+          Asm.Air ~artifact
+      with
+      | Error why ->
+          say "%s: the AIR function census cannot read it: %s" stem why;
+          false
+      | Ok (dump, toolchain) ->
+          let parsed = Asm.parse_gpu Asm.Air ~dump ~source_basename in
+          let anchor = select_lines ~patterns:[ " ? " ] source in
+          let conds = List.filter parsed.g_lines ~f:(fun (_, g) -> g.g_cond) in
+          let selects =
+            List.count parsed.g_lines ~f:(fun (_, g) -> String.equal g.g_mnemonic "select")
+          in
+          say
+            "%s: whole-function AIR: %d conditional branch(es), %d select(s) in %d instruction(s), \
+             %d line marker(s) for %s, by %s"
+            stem (List.length conds) selects (List.length parsed.g_lines) parsed.g_markers
+            source_basename toolchain;
+          List.iter conds ~f:(fun (asm_line, g) ->
+              say "%s: unexpected AIR conditional branch at line %d: %s" stem asm_line g.g_text);
+          parsed.g_markers > 0 && (not (Set.is_empty anchor)) && List.is_empty conds && selects > 0)
+
 let () =
   let name = "bs_register_gate" in
   let mask = mk_single "mask" and grad = mk_single "grad" and out = mk_single "out" in
@@ -717,9 +765,8 @@ let () =
   in_leg ~leg:hip_leg "register-only gradient gate: HIP emits branch-free selection" (fun claim ->
       p_all claim (gpu_census Asm.Amdgpu ~patterns:[ "ocannl_sel_" ] name) ~f:branch_free);
   in_leg ~leg:air_toolchain_leg
-    "register-only gradient gate: Metal's AIR compiles load-free [?:] branch-free (0 conditional \
-     branches)" (fun claim ->
-      p_all claim (gpu_census Asm.Air ~patterns:[ " ? " ] name) ~f:branch_free)
+    "register-only gradient gate: Metal's AIR function has 0 conditional branches and emits select"
+    (fun claim -> p_all claim (air_function_branch_free_select name) ~f:Fn.id)
 
 let () =
   let prefix = (Context.backend_facts_of_name backend_name).Ir.Backend_intf.node_ident_prefix in

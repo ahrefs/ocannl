@@ -1238,16 +1238,18 @@ emitted `.metal` sources. Build and verify with a dry run before requesting an e
 
 ```sh
 dune build benchmarks/runners/ocannl/bench_metal_select.exe
-python3 -B benchmarks/cells.py cell --backend metal --dir "$RUN_DIR" --timeout 600 \
+python3 -B benchmarks/cells.py cell --backend metal --dir "$DRY_DIR" --timeout 600 \
   --expect metal_kernel_cache_mib=0 --expect output_debug_files_in_build_directory=false -- \
-  BENCH_RETIME_CALLS=6 _build/default/benchmarks/runners/ocannl/bench_metal_select.exe \
+  BENCH_RETIME_CALLS=8 _build/default/benchmarks/runners/ocannl/bench_metal_select.exe \
   --ocannl_metal_kernel_cache_mib=0 --ocannl_output_debug_files_in_build_directory=false --dry-run
 ```
 
 Start the exclusive window on `mac-studio` with `benchmarks/check-box.sh --box m4-max
---generated-inputs --box-only` and proceed only on exit 0; then run without `--dry-run` (add
-`--step-segments` for per-segment attribution). Every Mac reading names its Mac (`mac-studio` M4
-Max vs `macbook-pro` M4 Pro).
+--generated-inputs --box-only` and proceed only on exit 0; then point `--dir` at a fresh empty
+directory (`"$RUN_DIR"`) — `cells.py` rejects a nonempty directory left by the dry run — and run
+without `--dry-run` (use a multiple of 4 for `BENCH_RETIME_CALLS` so the four-arm pointwise
+comparison has equal position histograms; add `--step-segments` for isolated per-segment leads).
+Every Mac reading names its Mac (`mac-studio` M4 Max vs `macbook-pro` M4 Pro).
 
 ## Measurement boxes
 
