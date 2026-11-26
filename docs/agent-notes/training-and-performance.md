@@ -677,7 +677,7 @@ files.
   unannotated), run with `OCANNL_CC_PARALLEL_GRID=none`: the step is fissioned, but each Grid loop
   renders serially. The per-segment times are single-threaded and their sum tracks the serial step
   (429 vs 410 ms on the cifar_resnet step), so on cc they are a step attribution.
-- **The untuned cc direct-conv forward is latency-bound, not recomputed** (gh-ocannl-1549).
+- **The scalar cc direct-conv forward is latency-bound** (gh-ocannl-1549).
   Lowering leaves `for b,h,w,oc { acc = 0; for ic,kh,kw: acc += x*w; y = acc }` with a scalar
   local accumulator, each conv computed once. Without reassociation clang vectorizes neither the
   reduction nor, behind a 144-576-long body it does not unroll, the `oc` loop: one scalar `fmadd`
@@ -686,14 +686,17 @@ files.
   27-long body and Winograd's 16-long contractions run at 9-12 GMAC/s. The backward nests write
   a different cell on every innermost iteration and vectorize too. On mac-studio, serial
   segments: forward convs 295 of 429 ms (s3c2 alone 75), the whole backward plus SGD 126 ms on
-  twice the MACs. Winograd's 5.5x forward (276 -> 50 ms; the 2.2x step of staging#1355) is 2.25x
-  fewer multiplies, each about 4x cheaper, less the transforms. Standalone C on the s1c1 nest: `ic` innermost buys 8% (48 -> 45 ms); an
-  `oc`-innermost vector accumulator 3x (16 ms) under the default contraction, but it loses under
-  `cc_backend_fp_contract=off`, where the `[oc,kh,kw,ic]` layout makes its loads strided. The
+  twice the MACs. In that pre-channel-vector comparison, Winograd ran the forward 5.5x faster
+  (276 to 50 ms, with a 2.2x speedup for the step in staging#1355). It cut the multiply count by a
+  factor of 2.25 and the cost per multiply by about 4, with transform costs on top. In standalone C
+  for the s1c1 nest, `ic` innermost buys 8% (48 to 45 ms). The `oc`-innermost vector accumulator
+  ran in 16 ms (3x faster) under the default contraction. It lost under `cc_backend_fp_contract=off`
+  because the `[oc,kh,kw,ic]` layout made its loads strided. The
   untuned default now takes that form with the kernel packed channel-minor, which wins under `off`
   too (gh-ocannl-1630; `cpu_preset` in the scheduling note). On a diagnostic mac-studio probe
   (serial, b64, conv-relu-conv forward) it ran 2.7-5x faster under both contraction modes, bitwise
-  equal.
+  equal. For the untuned batch-64 cc `cifar_resnet` cell on rog-nv-linux (AVX2), the direct schedule
+  with channel vectors ran faster than Winograd. [Channel-vector measurement](scheduling-and-autotune.md#gpu-mapping-and-companion-coverage).
 - **HIP in-step attribution: `BACKEND=hip gh1133_cells.sh ... kprof`** (gh-ocannl-1392) traces
   with `rocprofv3 --kernel-trace`, which sees the replayed hipGraph's nodes without a flag, and
   states each cell's memory model (unified on minix's gfx1151, discrete on tuf's gfx1102) from the
