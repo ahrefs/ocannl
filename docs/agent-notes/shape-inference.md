@@ -330,7 +330,13 @@ files.
   constraints at stage 6b. After an equality solves a row, its stored total can be emitted back
   into the worklist, so the pass also tracks totals emitted before the next closing. The staged
   stores pin both partition directions and put the row equality directly in the Stage6b worklist
-  to pin the emission. No store was found where the two `packed_minimum_demand` exclusions
+  to pin the emission. The gh-ocannl-2491 search saw tensor-generated `Row_eq` re-emit packed
+  totals in stage 6. The mutation tested skips guard tracking for every total emitted while
+  processing `Row_eq` and still returns the totals to the worklist. The staged check fails with
+  its exact total. The sweep's listed shapes and draw fills agreed with and without tracking,
+  as did the observed shapes and verdicts of 2,016 shared-bit draw variants and 432 variants
+  tying a data tensor's exact total to the shared counter.
+  No store was found where the two `packed_minimum_demand` exclusions
   (`deferred_dims`, `in_param_bound_component`) change an outcome (staged attempts are refused on
   the base too). The same test pins both agreeing rules at two lane widths (9 single and 6 double
   cells, three blocks each, by constants and by minima; an f64 leg): forcing one coefficient on
