@@ -1018,22 +1018,28 @@ files.
   0, no cache tier, against threshold 32 and is CUDA/HIP only; on cc the seeded default is off
   altogether.
 - **A change to what the `auto` gate seeds owes a CUDA run of the singles readers**
-  (gh-ocannl-2306). Where the seeded plan has a segmentation of its own, a search's default
-  seeded sweep times `F_swap` singles of the plan in place of the staffed `F_sketch` ones
+  (gh-ocannl-2306, gh-ocannl-2382). Where the seeded plan has a segmentation of its own, a search's
+  default seeded sweep times `F_swap` singles of the plan in place of the staffed `F_sketch` ones
   (gh-ocannl-1664), so a ranking change flips what every-backend tests counting those labels
   exercise on CUDA alone: staging#2115 (gh-ocannl-2279) made the gate seed both products of a
   two-matmul chain there, and `autotune_sketch_placements` went red on master, seen only by the
-  CUDA integration loop (fixed test-side in staging#2134). `affected` cannot route it: these tests
-  name `Autotune` but none of the gate's definitions, so a change inside `seeded_ranker` ranks
-  them LINK-ONLY (`model_seeded_anchor`, whose claim's comment names `seeded_ranker`, is
-  REFERENCED), and `--gpu-gated` drops the every-backend ones, whose code holds no GPU gate, by
-  design: what flips is a backend's default, which no reach reading names can see. So a change to
-  `seeded_ranker`, `seeded_default_gate`, `seeded_segment_judgment` or the `Cost_model` terms the
-  gate's score sums (`operand_deliveries` among them) runs, on CUDA, the set this derives
-  (the tests reading single labels, `slow-autotune_fission_sketch` among them):
-  `git grep -lE 'F_sketch|F_swap|Fissioned_chain\.is_' -- 'test/*.ml' ':!test/support' | xargs tools/test-run.sh aliases`,
-  and says so in the PR body; a red there that the change explains is fixed test-side or in the
-  gate, never left for the loop.
+  CUDA integration loop (fixed test-side in staging#2134). Because what flips is a backend default
+  that link reach cannot see, `arrayjit/lib/dune` defines the `seeded-plan` backend-default marker
+  (`; ocannl-backend-default: seeded-plan = cuda,hip Autotune.seeded_ranker,Autotune.seeded_default_gate,Autotune.seeded_segment_judgment -- ...`)
+  and every CUDA-capable single-label reader in `test/operations/dune` declares
+  `; ocannl-backend-default: seeded-plan -- ...` (all 9 every-backend readers / 10 aliases,
+  `slow-autotune_fission_sketch` and `runtest-schedule_conv_gemm-tf32` included; the 5
+  `ocannl-backend: cc` single-label readers never run on CUDA and stay out of `--gpu-gated`). For
+  a change inside `seeded_ranker`, `seeded_default_gate`, or `seeded_segment_judgment`,
+  `tools/test-run.sh affected --gpu-gated --referenced-only --since <base>` now mechanically routes
+  to those declared CUDA readers (on both CUDA boxes and cc-only Macs). For a change to the
+  `Cost_model` terms the gate's score sums (`operand_deliveries` among them, which are not listed
+  in `seeded-plan`), or when auditing newly added label readers that may lack the marker, use the
+  fallback grep
+  `git grep -lE 'F_sketch|F_swap|Fissioned_chain\.is_' -- 'test/*.ml' ':!test/support' | xargs tools/test-run.sh aliases`
+  (filtering to every-backend / CUDA-capable aliases), run the resulting set on CUDA, and cite the
+  run in the PR body; a red there that the change explains is fixed test-side or in the gate, never
+  left for the loop.
   `model_seeded_anchor`'s CUDA/HIP claim pins the exact count under the shipped gate (the chain's
   seeded plan seeds exactly its two products), so such a change owes a HIP run of it too, on both
   memory models. With the direct-read pricing reverted (`~price_direct_loads:false` in

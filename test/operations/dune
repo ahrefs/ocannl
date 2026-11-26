@@ -1551,6 +1551,7 @@
   (pps ppx_here ppx_ocannl)))
 
 (executable
+ ; ocannl-backend-default: seeded-plan -- CUDA/HIP seeded sweep decides F_swap vs F_sketch singles in slow-autotune_fission_sketch
  (name autotune_fission_sketch)
  (modules autotune_fission_sketch)
  (libraries
@@ -2073,6 +2074,7 @@
 (test
  ; cc-vector-width: independent -- on cc no search runs: the seeded plan is CUDA/HIP-only, gated on
  ; the backend name.
+ ; ocannl-backend-default: seeded-plan -- CUDA/HIP seeded plan governs the seeded-sweep claims
  (name autotune_seeded_seed)
  (package neural_nets_lib)
  (deps
@@ -2105,6 +2107,7 @@
 (test
  ; cc-vector-width: independent -- on cc no search runs: the seeded plan is CUDA/HIP-only, gated on
  ; the backend name, and the structural part derives its plan on synthetic limits.
+ ; ocannl-backend-default: seeded-plan -- CUDA/HIP seeded plan governs F_swap vs F_sketch single claims
  (name autotune_seeded_singles)
  (package neural_nets_lib)
  (deps
@@ -2147,6 +2150,7 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; ocannl-backend-default: seeded-plan -- CUDA/HIP seeded plan decides F_swap vs F_sketch singles counted here
  (name autotune_sketch_placements)
  (package neural_nets_lib)
  (deps
@@ -2215,6 +2219,7 @@
 (test
  ; cc-vector-width: independent -- the structural leg seeds GPU sketches under a synthetic GPU
  ; target, every other claim is gated on a GPU backend, and on cc no search runs.
+ ; ocannl-backend-default: seeded-plan -- CUDA/HIP seeded plan governs fine-search single labels
  (name autotune_staffed_fine)
  (package neural_nets_lib)
  (deps
@@ -11816,6 +11821,7 @@
 ; walk is anchored. Backend-uniform golden.
 
 (test
+ ; ocannl-backend-default: seeded-plan -- CUDA/HIP claim pins the auto gate's exact chain seed count
  (name model_seeded_anchor)
  (package neural_nets_lib)
  (deps
@@ -15038,6 +15044,7 @@
  ; cc-vector-width: independent -- CPU counts derive register-tile twins at each site's extents
  ; from the seeding limits, including its register count and the optional two-row twin. The cvr
  ; leg gates on that same eligibility rather than on the seeds it checks.
+ ; ocannl-backend-default: seeded-plan -- runs Autotune.tune on CUDA/HIP under default seeding (incl. -tf32 variant)
  (name schedule_conv_gemm)
  (package neural_nets_lib)
  (deps
@@ -15457,6 +15464,7 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; ocannl-backend-default: seeded-plan -- CUDA/HIP seeded plan governs fissioned conv search singles
  (name schedule_strided_1x1)
  (package neural_nets_lib)
  (deps
@@ -19474,6 +19482,7 @@
 ; against a fresh lowering, and replay gh-ocannl-2347's saved winner.
 
 (test
+ ; ocannl-backend-default: seeded-plan -- replays CUDA F_swap seeded-plan winner fixtures
  (name winner_fixture_replay)
  (package neural_nets_lib)
  (deps

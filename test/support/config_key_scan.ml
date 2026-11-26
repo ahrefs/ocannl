@@ -198,6 +198,33 @@ let rec pattern_name pattern =
   | Ppat_constraint (inner, _) | Ppat_alias (inner, _) -> pattern_name inner
   | _ -> None
 
+(** Every top-level definition name declared in [content] (value, type, constructor, record field,
+    module, module type, exception, external, class). Used to verify that backend-default marker
+    targets name real top-level definitions in their owning module. *)
+let top_level_definition_names content =
+  let ast = structure_of content in
+  List.concat_map ast ~f:(fun item ->
+      match item.pstr_desc with
+      | Pstr_value (_, bindings) ->
+          List.filter_map bindings ~f:(fun binding -> pattern_name binding.pvb_pat)
+      | Pstr_type (_, decls) ->
+          List.concat_map decls ~f:(fun decl ->
+              let extras =
+                match decl.ptype_kind with
+                | Ptype_variant constrs -> List.map constrs ~f:(fun c -> c.pcd_name.txt)
+                | Ptype_record labels -> List.map labels ~f:(fun l -> l.pld_name.txt)
+                | Ptype_abstract | Ptype_open -> []
+              in
+              decl.ptype_name.txt :: extras)
+      | Pstr_module { pmb_name = { txt = Some name; _ }; _ } -> [ name ]
+      | Pstr_recmodule bindings -> List.filter_map bindings ~f:(fun b -> b.pmb_name.txt)
+      | Pstr_modtype { pmtd_name = { txt; _ }; _ } -> [ txt ]
+      | Pstr_exception { ptyexn_constructor = { pext_name = { txt; _ }; _ }; _ } -> [ txt ]
+      | Pstr_primitive { pval_name = { txt; _ }; _ } -> [ txt ]
+      | Pstr_class decls -> List.map decls ~f:(fun d -> d.pci_name.txt)
+      | _ -> [])
+  |> Set.of_list (module String)
+
 (* A path is flattened defensively here, unlike {!longident_of}: this one runs over MODULE paths,
    where a functor application is a shape the language admits, and a scan that raised on one would
    refuse a file for containing an unrelated [module M = F (X)]. *)
