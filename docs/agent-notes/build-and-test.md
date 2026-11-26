@@ -1182,7 +1182,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   The floor job has a 20-minute ceiling (staging#2320). Two 15-minute attempts stopped
   during `test-affected-tests.sh`, after the same isolated fixture controls took about
   1.4 and 1.6 times as long as on staging#2318. The harness still runs all of its
-  controls at the floor. The refusal-format controls run through `@test/operations/scans`.
+  controls at the floor, and CI passes `--timings` to `tools/test-harnesses.sh` so each
+  job prints per-harness elapsed seconds (including on interruption) without adding
+  timing lines to timing-free default runs used by merge-build shared-red comparisons.
+  The refusal-format controls run through `@test/operations/scans`.
   Both toolchain-installing jobs set `OCANNL_TOOL_HARNESS_STRICT=1`, under which `harness-support.sh`
   reports a skip as a FAIL: a counted skip is right where a host lacks a capability, and a vacuous
   green where the step installed it. setup-ocaml's switch is not on a CI step's PATH, so a harness
