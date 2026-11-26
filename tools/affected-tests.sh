@@ -765,6 +765,7 @@ sub parse_dune {
                 my @bks = split /[ \t]*,[ \t]*/, $bstr;
                 push @$el, ["affected_gpu_backend"] if grep { /^(?:cuda|hip|metal)$/ } @bks;
                 push @$el, ["affected_rule_backends", @bks] if $head eq "rule";
+                push @$el, ["affected_stanza_backends", @bks] if $head ne "rule";
               }
             }
             if (index($comment, "ocannl-backend-default:") >= 0) {
@@ -3932,7 +3933,11 @@ for my $f (grep { $_ ne "" } split /\n/, slurp("$tmp/dune-files")) {
             if $seen_r{$dname}++;
           push @names_r, [$dname, $where];
         }
-        push @default_readers, { dir => $ds->{dir}, kind => $ds->{kind}, x => $ds->{x}, reads => \@names_r };
+        my @sbks = map { @$_ } dfields($ds->{x}, "affected_stanza_backends");
+        push @default_readers, {
+          dir => $ds->{dir}, kind => $ds->{kind}, x => $ds->{x}, reads => \@names_r,
+          stanza_bks => @sbks ? { map { $_ => 1 } @sbks } : undef,
+        };
       }
     }
   } elsif ($has_backend) {
@@ -5418,15 +5423,26 @@ sub declared_touch {   # reached owner index -> arrayref of matched default reco
   return $declared_touch_cache{$o} if exists $declared_touch_cache{$o};
   return $declared_touch_cache{$o} = [] unless $rank_links && @default_readers;
   my %names = map { $_ => 1 } @{$st[$o]{names}};
-  my %read_defaults;
+  my %read_defaults; # dname -> undef (unpinned) or hashref of reader-pinned backends
   for my $dr (@default_readers) {
     next unless $dr->{dir} eq $st[$o]{dir} && $dr->{kind} =~ /^(?:library|executables?|tests?)$/;
     next unless grep { $names{$_} } dnames($dr);
-    $read_defaults{$_->[0]} = 1 for @{$dr->{reads}};
+    for my $r (@{$dr->{reads}}) {
+      my $dn = $r->[0];
+      if (!exists $read_defaults{$dn}) {
+        $read_defaults{$dn} = $dr->{stanza_bks} ? { %{$dr->{stanza_bks}} } : undef;
+      } elsif (defined $read_defaults{$dn}) {
+        if (!$dr->{stanza_bks}) { $read_defaults{$dn} = undef }
+        else { $read_defaults{$dn}{$_} = 1 for keys %{$dr->{stanza_bks}} }
+      }
+    }
   }
   my @hits;
   for my $dname (sort keys %read_defaults) {
     my $def = $default_defs{$dname} // next;
+    my $owner_bks = $read_defaults{$dname};
+    my @eff_bks = $owner_bks ? (grep { $owner_bks->{$_} } @{$def->{backends}}) : @{$def->{backends}};
+    next unless @eff_bks;
     my (@matched_defs, @matched_whole, %witness_paths);
     for my $tg (@{$def->{targets}}) {
       my ($m, $d) = @$tg;
@@ -5456,8 +5472,8 @@ sub declared_touch {   # reached owner index -> arrayref of matched default reco
     push @parts, "whole-module change covering " . join(", ", @matched_whole) if @matched_whole;
     push @hits, {
       name     => $dname,
-      backends => $def->{backends},
-      has_gpu  => $def->{has_gpu},
+      backends => \@eff_bks,
+      has_gpu  => (grep { /^(?:cuda|hip|metal)$/ } @eff_bks) ? 1 : 0,
       paths    => [sort keys %witness_paths],
       why      => join("; ", @parts),
     };
@@ -5487,10 +5503,13 @@ sub alias_default_touches {   # alias, reached owners -> matched default records
   for my $o (@by_owner) {
     for my $hit (@{declared_touch($o)}) {
       next if $seen{$hit->{name}}++;
-      if ($rule_bks) {
-        next unless grep { $rule_bks->{$_} } @{$hit->{backends}};
-      }
-      push @out, $hit;
+      my @eff_bks = $rule_bks ? (grep { $rule_bks->{$_} } @{$hit->{backends}}) : @{$hit->{backends}};
+      next unless @eff_bks;
+      push @out, {
+        %$hit,
+        backends => \@eff_bks,
+        has_gpu  => (grep { /^(?:cuda|hip|metal)$/ } @eff_bks) ? 1 : 0,
+      };
     }
   }
   return @out;

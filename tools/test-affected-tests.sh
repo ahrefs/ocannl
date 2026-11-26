@@ -3220,6 +3220,7 @@ if harness_leg 'backend-default markers'; then
 (library
  ; ocannl-backend-default: plan = cuda,hip Gpu_core.gate -- GPU default seeding gate
  ; ocannl-backend-default: cpu-plan = cc Gpu_core.gate -- CPU default plan
+ ; ocannl-backend-default: mixed-plan = cc,cuda Gpu_core.gate -- mixed CPU/CUDA default plan
  (name gpu_core)
  (modules gpu_core))
 DUNE
@@ -3246,6 +3247,12 @@ DUNE
  (name declared_cc)
  (modules declared_cc)
  (libraries gpu_core))
+(test
+ ; ocannl-backend: cc -- CPU-pinned reader of a cc,cuda default stays out of --gpu-gated
+ ; ocannl-backend-default: mixed-plan -- reads mixed plan on cc only
+ (name cc_mixed)
+ (modules cc_mixed)
+ (libraries gpu_core))
 (executable
  ; ocannl-backend-default: plan -- slow runner inherits from executable owner
  (name exec_reader)
@@ -3267,7 +3274,7 @@ DUNE
  (alias runtest-variant_owner-cc)
  (action (diff variant_owner-cc.expected variant_owner-cc.actual)))
 DUNE
-  for f in declared undeclared declared_cc exec_reader variant_owner; do
+  for f in declared undeclared declared_cc cc_mixed exec_reader variant_owner; do
     printf 'let () = ignore Gpu_core.used\n' >"$repo/tests/$f.ml"
   done
   : >"$repo/tests/variant_owner-cc.expected"
@@ -3289,10 +3296,10 @@ DUNE
      grep -q 'backend-default marker `plan` (cuda,hip) matches changed definition(s) Gpu_core\.gate' "$err"; then
     report 0 '--why explains a backend-default promotion with the default name and matched definition'
   else report 1 '--why explains a backend-default promotion with the default name and matched definition' "$(cat "$err")"; fi
-  # 3. Plain --referenced-only promotes both GPU and CPU default readers, keeping undeclared link-only.
+  # 3. Plain --referenced-only promotes both GPU and CPU default readers (including cc-pinned reader of cc,cuda), keeping undeclared link-only.
   affected --referenced-only HEAD
-  expect 'a CPU-only backend-default promotes to first tier without entering --gpu-gated' 0 \
-    @tests/runtest-declared @tests/runtest-declared_cc @tests/runtest-variant_owner @tests/slow-exec_reader
+  expect 'a CPU-only backend-default and cc-pinned mixed-default reader promote to first tier without entering --gpu-gated' 0 \
+    @tests/runtest-cc_mixed @tests/runtest-declared @tests/runtest-declared_cc @tests/runtest-variant_owner @tests/slow-exec_reader
   # 4. Unfiltered --gpu-gated still omits undeclared, declared_cc, and the cc-pinned variant.
   affected --gpu-gated HEAD
   expect 'unfiltered --gpu-gated omits undeclared, CPU-only default, and cc-pinned variant' 0 \

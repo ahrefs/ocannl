@@ -7678,7 +7678,10 @@ let backend_default_marker_control () =
             incompatible_backend );
           ( "identical stanza sexps in different subdirs check their own backend markers",
             exited 1 subdir_disambiguation
-            && says "does not overlap the backends it can run on" subdir_disambiguation,
+            && says "does not overlap the backends it can run on (cc)" subdir_disambiguation
+            && (not
+                  (says "does not overlap the backends it can run on (cuda)" subdir_disambiguation))
+            && says "FAILED: 1 check did not hold:" subdir_disambiguation,
             subdir_disambiguation );
         ]
       in
