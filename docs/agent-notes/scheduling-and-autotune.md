@@ -2776,8 +2776,9 @@ files.
 - CUDA value-select segment comparisons use byte-identical repeats for each rendering and a common
   device output (gh-ocannl-2385). Independent output allocations can split same-source readings
   even when the readings visit both orders. The row requires balanced admitted rounds and all
-  four cross pairings to clear the repeat envelope in the same direction. The measured floor and
-  the layout and link controls are in the [value-select benchmark](../../benchmarks/README.md#cuda-value-select-benchmark).
+  four cross pairings to clear the repeat envelope in the same direction. The timed witness
+  covers only `where_masked` at both densities and PTX targets. The measured floor and controls
+  are in the [value-select benchmark](../../benchmarks/README.md#cuda-value-select-benchmark).
 - **What the tuner's numbers are a measurement OF is a config choice, and the two objectives do not
   crown the same candidate** (gh-ocannl-755). `Autotune.time_routine` takes a `timing_mode`, from
   config `autotune_timing`: `isolated` is the historical one launch plus one host sync — a lone

@@ -97,7 +97,10 @@ let () =
     (not cross_pair.treatment.resolved);
   let faster = compare ~base:2. ~base_repeat:2.25 ~variant:1.25 ~variant_repeat:1.5 in
   p "controls: a speedup outside the band under every pairing resolves"
-    (faster.treatment.resolved && Float.equal faster.effect_hi 0.75)
+    (faster.treatment.resolved && Float.equal faster.effect_hi 0.75);
+  let slower = compare ~base:1.25 ~base_repeat:1.5 ~variant:2. ~variant_repeat:2.25 in
+  p "controls: a slowdown outside the band under every pairing resolves"
+    (slower.treatment.resolved && Float.equal slower.effect_lo (4. /. 3.))
 
 let () =
   let calls v =

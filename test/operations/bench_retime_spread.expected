@@ -23,6 +23,7 @@ controls: opposing link biases can clear the control band while the repeats agre
 controls: a difference that vanishes on the repeats stays unresolved: true
 controls: a mixed pairing inside the band leaves the comparison unresolved: true
 controls: a speedup outside the band under every pairing resolves: true
+controls: a slowdown outside the band under every pairing resolves: true
 env: an even count of at least min_readings is taken: true
 env: an odd count is refused (the design mirrors every batch): true
 env: a count below min_readings is refused: true
