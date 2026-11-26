@@ -1578,7 +1578,7 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint
         # result line salvaged from a killed process would be a partial run's (gh-ocannl-760).
         print(stdout[-4000:])
         note = (
-            f"TIMED OUT after {timeout:g}s (cap; --cell-timeout raises it, 0 disables) — "
+            f"TIMED OUT after {timeout:g}s (cap) — "
             "killed the cell's whole process group"
         )
         if remaining is not cell_group.GONE:
