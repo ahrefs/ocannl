@@ -1309,6 +1309,12 @@ class Gh2195AbDriverTest(StubRunTest):
         self.assertIn("search_false: expected two clean cold searches", proc.stderr)
         self.assertFalse((raw / "search_true").exists())
 
+    def test_failed_gemm_stops_before_cold_f16_searches(self):
+        proc, raw = self.measure(backend="metal", census="scalar fallback", fixture=True, tuned=True)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("stopping before cold tuned training searches", proc.stdout)
+        self.assertFalse((raw / "search_false").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

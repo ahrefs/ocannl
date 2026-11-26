@@ -281,6 +281,10 @@ for size in "${SIZES[@]}"; do
 done
 python3 "$HERE/gh1051_cells.py" ab "$OUT" "$LABEL" half || FAIL=1
 [ -n "$FIXTURE" ] || exit $FAIL
+if [ "$TUNED" = 1 ] && [ "$FAIL" -ne 0 ]; then
+  echo "stopping before cold tuned training searches: GEMM validation already failed"
+  exit "$FAIL"
+fi
 
 # The training row's cold search (when tuned) and source proof, before training timing.
 TRAIN_ENV=("BENCH_FIXTURE=$FIXTURE" BENCH_MATERIALIZE=0 BENCH_DEBUG=0 BENCH_DOMINANT_KERNEL=0)
