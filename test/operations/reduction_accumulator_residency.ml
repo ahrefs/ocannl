@@ -1026,6 +1026,78 @@ let () =
       (routine.Context.volatility.Cs.volatile_rmw_reads = 0
       && not (String.is_substring source ~substring:"volatile"))
   in
+
+  (* Negative control 5: provably pointwise [Set_dynamic] whose selector is [Embed_index (Iterator
+     i)] over the sole serial loop [i] visits a distinct cell per iteration, so it is not a
+     repeating serial RMW. *)
+  let () =
+    let n = 4 in
+    let src = node_factory ~first_id:9970 ~dims:[| n |] () "res_pw_src" in
+    let acc = node_factory ~first_id:9971 ~dims:[| n |] () "res_pw_acc" in
+    List.iter [ src; acc ] ~f:materialize;
+    let i = sym () in
+    let sel = (embed i, iprec ()) in
+    let guard = lt (embed i) (ic n) in
+    let program =
+      loop_n i n
+        (if_idx guard
+           (scatter_add ~tn:acc
+              ~idcs:[| fixed 0 |]
+              ~dyn_axis:0 ~dyn_value:sel
+              (get src [| iter i |], Ops.single)))
+    in
+    let raw =
+      loop_n i n (set acc [| iter i |] (add (get acc [| iter i |]) (get src [| iter i |])))
+    in
+    let opt = optimize_scoped ~materialized:[ src; acc ] ~name:"res_scat_pw" ~raw program in
+    let ctx, routine = link ~name:"res_scat_pw" opt in
+    let src_vals = [| 1.5; 2.5; 3.5; 4.5 |] in
+    let acc_init = [| 10.; 20.; 30.; 40. |] in
+    let ctx = run_linked (ctx, routine) ~seed:[ (src, src_vals); (acc, acc_init) ] in
+    Verdict.p_all2 "provably pointwise Set_dynamic matches host reference"
+      (Context.get_values ctx acc) [| 11.5; 22.5; 33.5; 44.5 |] ~f:Float.equal;
+    let source = read_routine routine "res_scat_pw" in
+    Verdict.p "provably pointwise Set_dynamic stays unqualified and unrecorded"
+      (routine.Context.volatility.Cs.volatile_rmw_reads = 0
+      && not (String.is_substring source ~substring:"volatile"))
+  in
+
+  (* Negative control 6: selector-only self-read [Set_dynamic] overwrite — [dyn_value] reads row 0
+     of [out] while the stored value reads only [src] — is an overwrite, not an RMW. *)
+  let () =
+    let n = 4 in
+    let src = node_factory ~first_id:9980 ~dims:[| n |] () "res_sow_src" in
+    let out = node_factory ~first_id:9981 ~dims:[| 2; n |] () "res_sow_out" in
+    List.iter [ src; out ] ~f:materialize;
+    let i = sym () in
+    let sel_read = get out [| fixed 0; iter i |] in
+    let guard = cmp_at Ops.single Ops.Cmplt sel_read (ic n) in
+    let program =
+      loop_n i n
+        (if_at Ops.single guard
+           (scatter ~tn:out
+              ~idcs:[| fixed 1; fixed 0 |]
+              ~dyn_axis:1 ~dyn_value:(sel_read, Ops.single)
+              (get src [| iter i |])))
+    in
+    let raw =
+      loop_n i n
+        (set out [| fixed 1; iter i |] (add (get out [| fixed 0; iter i |]) (get src [| iter i |])))
+    in
+    let opt = optimize_scoped ~materialized:[ src; out ] ~name:"res_scat_sow" ~raw program in
+    let ctx, routine = link ~name:"res_scat_sow" opt in
+    let src_vals = [| 11.; 22.; 33.; 44. |] in
+    let out_init = [| 3.; 1.; 4.; 0.; -1.; -2.; -3.; -4. |] in
+    let ctx = run_linked (ctx, routine) ~seed:[ (src, src_vals); (out, out_init) ] in
+    Verdict.p_all2 "selector-only self-read Set_dynamic overwrite matches host reference"
+      (Context.get_values ctx out)
+      [| 3.; 1.; 4.; 0.; 44.; 22.; -3.; 11. |]
+      ~f:Float.equal;
+    let source = read_routine routine "res_scat_sow" in
+    Verdict.p "selector-only self-read Set_dynamic overwrite stays unqualified and unrecorded"
+      (routine.Context.volatility.Cs.volatile_rmw_reads = 0
+      && not (String.is_substring source ~substring:"volatile"))
+  in
   ()
 
 (* {1 The volatility census's own bracket}

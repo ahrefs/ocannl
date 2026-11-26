@@ -4929,15 +4929,26 @@ module C_syntax (B : C_syntax_config) = struct
   (* See {!C_syntax_config.volatile_serial_accumulation}: identify a per-iteration device-memory
      read-modify-write whose target address can repeat across an enclosing serial loop — for [Set],
      all indices free of some enclosing serial loop; for [Set_dynamic], all static axes (axes other
-     than [dyn_axis]) free of some enclosing serial loop, since the runtime dynamic index can repeat
-     across iterations. *)
-  let rmw_volatile_reads ctx ?dyn_axis ~tn ~idcs exprs =
+     than [dyn_axis]) free of some enclosing serial loop, and [dyn_value] not provably injective in
+     that loop symbol alone (an [Embed_index] of [Iterator s] or a single-symbol [Affine] over [s]
+     visits distinct cells per iteration, while data-dependent or multi-symbol selectors can
+     repeat). Like {!Low_level.is_accumulating_write}, only the stored value [llsc] decides whether
+     the write is a read-modify-write. *)
+  let rmw_volatile_reads ctx ?dyn_axis ?dyn_value ~tn ~idcs llsc =
+    let dyn_selector_injective_in s =
+      match dyn_value with
+      | Some (Low_level.Embed_index (Indexing.Iterator s')) -> Indexing.equal_symbol s s'
+      | Some (Low_level.Embed_index (Indexing.Affine { symbols = [ (c, s') ]; _ })) ->
+          c <> 0 && Indexing.equal_symbol s s'
+      | _ -> false
+    in
     B.volatile_serial_accumulation
     && List.exists !(ctx.serial_loop_stack) ~f:(fun s ->
         not
           (Array.existsi idcs ~f:(fun ax idx ->
-               (match dyn_axis with Some d -> ax <> d | None -> true)
-               && Indexing.axis_index_mentions_symbol s idx)))
+               match dyn_axis with
+               | Some d when ax = d -> dyn_selector_injective_in s
+               | _ -> Indexing.axis_index_mentions_symbol s idx)))
     (* Only kernel-parameter-derived device pointers: routine-local scratch is declared as a plain
        local array (not address-castable, and compiler-visible anyway). *)
     && Tn.Placements.is_materialized_force ctx.current_placements tn
@@ -4966,7 +4977,7 @@ module C_syntax (B : C_syntax_config) = struct
       | Tile_mma _ ->
           false
     in
-    List.exists exprs ~f:reads_tn
+    reads_tn llsc
 
   (* Accumulator locals and device-memory RMWs whose updates are controlled by a statement subtree.
      A materialized read in an [If] condition around [Set_local (id, id + constant)] or a serial
@@ -5017,10 +5028,10 @@ module C_syntax (B : C_syntax_config) = struct
           add id value;
           scalar value
       | Set { tn; idcs; llsc; _ } ->
-          if rmw_volatile_reads ctx ~tn ~idcs [ llsc ] then has_rmw := true;
+          if rmw_volatile_reads ctx ~tn ~idcs llsc then has_rmw := true;
           scalar llsc
       | Set_dynamic { tn; idcs; dyn_axis; dyn_value = value, _; llsc; _ } ->
-          if rmw_volatile_reads ctx ~dyn_axis ~tn ~idcs [ value; llsc ] then has_rmw := true;
+          if rmw_volatile_reads ctx ~dyn_axis ~dyn_value:value ~tn ~idcs llsc then has_rmw := true;
           scalar value;
           scalar llsc
       | Set_from_vec { arg = value, _; _ } -> scalar value
@@ -7270,7 +7281,7 @@ module C_syntax (B : C_syntax_config) = struct
         let store_prec = Lazy.force tn.storage_prec in
         (* See {!C_syntax_config.volatile_serial_accumulation}: bracket [pp_scalar] so device reads
            in a serial device-memory RMW acquire expression-level volatile pointer casts. *)
-        let rmw_volatile = rmw_volatile_reads ctx ~tn ~idcs [ llsc ] in
+        let rmw_volatile = rmw_volatile_reads ctx ~tn ~idcs llsc in
         (* gh-487 phase 2: a staging copy into an async-eligible pipelined tile renders as the
            backend's asynchronous copy — the same address arithmetic on both sides (the write-side
            buffer rotation included), byte-for-byte, so the bitwise-identity invariant is untouched;
@@ -7395,7 +7406,7 @@ module C_syntax (B : C_syntax_config) = struct
         let ident_doc = string (get_ident tn) in
         let dims = Lazy.force tn.dims in
         let store_prec = Lazy.force tn.storage_prec in
-        let rmw_volatile = rmw_volatile_reads ctx ~dyn_axis ~tn ~idcs [ iv; llsc ] in
+        let rmw_volatile = rmw_volatile_reads ctx ~dyn_axis ~dyn_value:iv ~tn ~idcs llsc in
         let prec, narrowing = store_precs ~store_prec llsc in
         let (offset_doc, local_defs, val_doc, volatile_read_emitted), emitted_reads =
           capture_stmt_reads ctx (fun () ->

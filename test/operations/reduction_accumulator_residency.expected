@@ -89,6 +89,10 @@ outer guard above repeating serial loop stays unqualified: true
 inner Set_dynamic RMW still qualifies and records iff requested: true
 routine-local Set_dynamic RMW matches host reference: true
 routine-local Set_dynamic RMW stays unqualified and unrecorded: true
+provably pointwise Set_dynamic matches host reference: true
+provably pointwise Set_dynamic stays unqualified and unrecorded: true
+selector-only self-read Set_dynamic overwrite matches host reference: true
+selector-only self-read Set_dynamic overwrite stays unqualified and unrecorded: true
 an inner bracket summarizes only its own sites: true
 the enclosing bracket sees both, in emission order: true
 an inner bracket reports the capability of the compile it bracketed: true
