@@ -1635,7 +1635,6 @@ EOF
   repeat_bin=$env_bin
   argv_probe owed-receipt run --expect-backend cc build "$target" -j 1
   repeat_bin=$saved_repeat_bin
-  unset FLEET_LEG_RECEIPT_DIR
   cc_dir=$argv_dir
   if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
      [ "$argv_calls" = "build --no-buffer $target -j 1" ] &&
@@ -1748,7 +1747,8 @@ EOF
       "foreign=$(readlink "$foreign_link" 2>/dev/null || echo bad) plain=$(ls -ld "$plain_link" 2>/dev/null || echo bad)"
   fi
 
-  unset FLEET_LEG_RUN_RECORD
+  # Bash 3.2 can uncover the caller's exported record when unsetting a local.
+  local -a fixture_launcher=(env -u FLEET_LEG_RUN_RECORD)
   export FLEET_LEG_RECEIPT_LINK="$local_link"
   argv_probe owed-receipt-local run --expect-backend cc build "$target" -j 1
   if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
@@ -1759,9 +1759,15 @@ EOF
     report 1 'a local run records no fleet metadata or receipt symlink' \
       "exit $argv_rc; receipt: $argv_dir; link: $(ls -ld "$local_link" 2>/dev/null || echo absent)"
   fi
-  unset FLEET_LEG_RECEIPT_LINK
 }
-harness_leg_run '125: fleet receipts preserve the binding and the original command #options' leg_125
+
+leg_125_with_caller_record() {
+  # Give ordinary CI the same outer export that a fleet leg supplies.
+  local FLEET_LEG_RUN_RECORD="$TMP/caller-leg-record"
+  export FLEET_LEG_RUN_RECORD
+  leg_125
+}
+harness_leg_run '125: fleet receipts preserve the binding and the original command #options' leg_125_with_caller_record
 
 # Every subcommand that takes options, and both spellings of a value option:
 # the guard sits on one code path, but a future refactor that splits it must

@@ -1244,6 +1244,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Bash coverage. The planted nested nounset empty array passed the base dispatcher
   at widths 1 and 4 and failed the pinned leg at both widths; the same subject
   exited 1 under `/bin/bash` 3.2 and 0 under Homebrew 5.3.
+- Under Bash 3.2, unsetting a function-local variable can uncover a caller's export
+  (gh-ocannl-2483). Use `env -u` at launch when a fixture needs the variable absent
+  from a child. Leg 125 of `tools/test-test-run-options.sh` supplies an outer record
+  even in ordinary CI. The local probe removes that variable at launch and keeps
+  the receipt link set to check that a link alone creates no receipt.
 - A closed standard descriptor can be reopened before a shell script starts. On Linux,
   uutils `env` 0.10.0 reopened each of fd 0, 1 and 2 on `/dev/null` when the caller closed
   it (gh-ocannl-2401). For a Bash script that must preserve those descriptors, a `/bin/sh`
