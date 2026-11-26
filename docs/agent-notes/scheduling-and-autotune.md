@@ -14,6 +14,12 @@ files.
   The prelude runs after seeded split-reduce and before deriving or replaying fission. The packet
   buffer carries its own placement intent, so a refused replay leaves no entry for it in the
   caller's placement table.
+  **Metal keeps one workgroup by measured boundary** (gh-ocannl-2494). On Apple M4 Max, untuned
+  bf16 `gpt2_mini_train`'s serial scatter ranks 18th of 198 (`0.61 ms` vs `1.82–1.84 ms` for the
+  top three), and packetizing moves the step `<1%` within repeat spread (tables on gh-ocannl-2494).
+  Re-open if it enters the three slowest (e.g. seeded/tuned matmuls or larger `seq_len × batch`):
+  gate `Schedule.scatter_packets_enabled` on `Backend_intf.binds_hardware_grid` to isolate it,
+  since flipping `seeds_untuned_default` also enables matmul/conv seeding.
 - Small leading GPU axes can starve the default schedule even when later axes have ample work
   (gh-ocannl-995). `gpu_parallel_suffix` chooses a better-populated pair before
   `analyze_parallel_chains` proves ownership, with the original selection as a conservative

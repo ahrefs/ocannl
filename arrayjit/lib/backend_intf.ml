@@ -1161,7 +1161,9 @@ type backend_facts = {
   seeds_untuned_default : bool;
       (** The untuned compile seeds its plan ([Autotune.seeded_default], gh-ocannl-1183): the
           backends that plan's before/after was measured on. Also scopes the seeded plan's numerics
-          gate in [Schedule_cache.codegen_tag] (gh-ocannl-1405). *)
+          gate in [Schedule_cache.codegen_tag] (gh-ocannl-1405) and gates ordered row-owned
+          embedding scatter packets in [Schedule.scatter_packets_enabled] (gh-ocannl-2443,
+          gh-ocannl-2494). *)
   queued_timing : queued_timing;
   retries_contended_window : bool;
       (** A queued timing window refused as contended is retried once: the device scheduler's
