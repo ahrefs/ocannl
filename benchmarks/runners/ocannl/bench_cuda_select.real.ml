@@ -1,17 +1,17 @@
-(* gh-ocannl-2281, gh-ocannl-2326. Replay fixed CUDA kernel segments with the two value-select
-   renderings at both PTX targets, then compile and time a whole training step (a two-conv
-   classifier with ReLU and 2x2 max pooling, forward, backward and SGD) under each, beside a second
-   short-circuiting compile as its control. Context.compile and Autotune.untuned_compile bypass the
-   schedule cache. The CUDA value-select benchmark section of benchmarks/README.md gives the
-   hermetic invocation and readiness checks.
+(* gh-ocannl-2281, gh-ocannl-2326, gh-ocannl-2385. Replay fixed CUDA segments with the two
+   value-select renderings at both PTX targets, then compile and time a whole training step (a
+   two-conv classifier with ReLU and 2x2 max pooling, forward, backward and SGD) under each, beside
+   a second short-circuiting compile as its control. Context.compile and Autotune.untuned_compile
+   bypass the schedule cache. The CUDA value-select benchmark section of benchmarks/README.md gives
+   the hermetic invocation and readiness checks.
 
    The source check reads only this compile's returned CUDA source. It detects the renderer's first
-   arm local by its declared name and compares the segments' control source byte for byte. The step
-   lowers as well as renders under each choice, so its placements may differ; its check compares the
-   control's source with the short arm's up to what each lowering mints afresh ([canonical] below).
-   Branch instructions and select coverage within a kernel are outside that check. The dry run
-   checks emitted forms, actual PTX targets, and host parity in every cell, and the step's values
-   across the arms, before enabling timings. *)
+   arm local by its declared name and compares each segment rendering to its independently linked
+   repeat byte for byte. The step lowers as well as renders under each choice, so its placements may
+   differ; its check compares the control's source with the short arm's up to what each lowering
+   mints afresh ([canonical] below). Branch instructions and select coverage within a kernel are
+   outside that check. The dry run checks emitted forms, actual PTX targets, and host parity in
+   every cell, and the step's values across the arms, before enabling timings. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -31,7 +31,7 @@ let unwritten = -12345.
 let value i = Float.of_int (1 + (i * 67 % 997)) *. 0.125
 let p fmt = Bench_out.p fmt
 
-type pointwise = Where_zero | Relu_gate | Where_eq | Where_masked | Control
+type pointwise = Where_zero | Relu_gate | Where_eq | Where_masked
 
 let pointwise ~elements ~node kind =
   let open Ll_test in
@@ -41,7 +41,6 @@ let pointwise ~elements ~node kind =
     | Relu_gate -> "relu_gate"
     | Where_eq -> "where_eq"
     | Where_masked -> "where_masked"
-    | Control -> "control"
   in
   let flag = node "flag" and payload = node "payload" and equal_to = node "equal_to" in
   let output = node "output" in
@@ -53,7 +52,6 @@ let pointwise ~elements ~node kind =
   let active = match kind with Where_masked -> elements * 3 / 4 | _ -> elements in
   let expr, materialized =
     match kind with
-    | Control -> (binop_own Ops.Add (at flag) (at payload), [ flag; payload; output ])
     | Where_zero | Where_masked -> (where (at flag), [ flag; payload; output ])
     | Relu_gate -> (binop_own Ops.Relu_gate (at flag) (at payload), [ flag; payload; output ])
     | Where_eq ->
@@ -75,7 +73,7 @@ let pointwise ~elements ~node kind =
     let flags =
       Array.init elements ~f:(fun i ->
           match kind with
-          | Control | Where_eq -> value i
+          | Where_eq -> value i
           | Relu_gate -> if take i then 1. else -1.
           | Where_zero | Where_masked -> if take i then 1. else 0.)
     in
@@ -88,18 +86,11 @@ let pointwise ~elements ~node kind =
       | _ -> seeds
     in
     let want =
-      Array.mapi data ~f:(fun i g ->
-          match kind with
-          | Control -> flags.(i) +. g
-          | _ -> if i >= active then unwritten else if take i then g else 0.)
+      Array.mapi data ~f:(fun i g -> if i >= active then unwritten else if take i then g else 0.)
     in
     { seeds; want }
   in
-  let fixtures =
-    match kind with
-    | Control -> [ ("control", fixture ~dense:false) ]
-    | _ -> [ ("sparse", fixture ~dense:false); ("dense", fixture ~dense:true) ]
-  in
+  let fixtures = [ ("sparse", fixture ~dense:false); ("dense", fixture ~dense:true) ] in
   { name; segment; output; fixtures }
 
 let pool ~root ~elements =
@@ -195,13 +186,17 @@ let compile ~root ~target ~blend work =
       Context.release ctx;
       failwith (work.name ^ ": expected one emitted CUDA source and its PTX target")
 
-let check label (ctx, routine) work { seeds; want } =
-  let ctx = Context.set_values ctx work.output (Array.create ~len:(Array.length want) unwritten) in
+let output_seed fixture = Array.create ~len:(Array.length fixture.want) unwritten
+
+let check label (ctx, routine) work fixture =
+  let ctx = Context.set_values ctx work.output (output_seed fixture) in
   let ctx =
-    List.fold seeds ~init:ctx ~f:(fun ctx (node, values) -> Context.set_values ctx node values)
+    List.fold fixture.seeds ~init:ctx ~f:(fun ctx (node, values) ->
+        Context.set_values ctx node values)
   in
   let ctx = Context.run ctx routine in
   let got = Context.get_values ctx work.output in
+  let want = fixture.want in
   let same_bits a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b) in
   Verdict.pass_fail_all2 (label ^ " host parity") got want ~f:same_bits;
   if Verdict.any_failed () then (
@@ -215,30 +210,24 @@ let check label (ctx, routine) work { seeds; want } =
 let measure (ctx, routine) =
   Autotune.admitted_timing_ms (Autotune.time_routine ~timing:Autotune.Queued ~repeats:3 ctx routine)
 
-(* Each round times every arm once, in an order that rotates by one arm per round and runs backward
-   on every other cycle of [n] rounds, so each arm takes each position in turn: for three arms, six
-   rounds are the six orders. [before k] runs ahead of arm [k]'s timing, outside its clock. [ratios]
-   name numerator and denominator arms by name. *)
-let compare_times ?(before = fun _ -> ()) ~calls ~label
-    ~(arms : (string * (Context.t * Context.routine)) list) ~ratios () =
+(* [before k] runs ahead of arm [k]'s timing, outside its clock. Each round uses the same readings
+   for the treatment and its controls, so a refused reading drops the entire round. *)
+let compare_times ?(before = fun _ -> ()) ?(show_rounds = false) ~calls ~label ~arms () =
   let n = List.length arms in
   let arms = Array.of_list arms in
+  let orders = Bench_design.orders ~arms:n ~batches:calls in
   let rows =
-    Array.init calls ~f:(fun i ->
+    Array.mapi orders ~f:(fun i order ->
         let row = Array.create ~len:n None in
-        let order =
-          List.init n ~f:(fun k ->
-              let k = if i / n % 2 = 0 then k else n - 1 - k in
-              (k + i) % n)
-        in
-        List.iter order ~f:(fun k ->
+        Array.iter order ~f:(fun k ->
             before k;
             row.(k) <- measure (snd arms.(k)));
-        row)
-  in
-  (* Treatment and control have to use the same rounds for their spreads to be comparable. *)
-  let rows =
-    Array.map rows ~f:(fun row ->
+        if show_rounds then
+          p "%s round=%d %s\n" label (i + 1)
+            (Array.to_list order
+            |> List.map ~f:(fun k ->
+                Printf.sprintf "%s_ms=%.6f" (fst arms.(k)) (Option.value row.(k) ~default:Float.nan))
+            |> String.concat ~sep:" ");
         if Array.for_all row ~f:Option.is_some then row else Array.create ~len:n None)
   in
   let column name =
@@ -249,43 +238,111 @@ let compare_times ?(before = fun _ -> ()) ~calls ~label
   let show (name, _) =
     Bench_retime.spread_fields ~name:(name ^ "_ms") (Bench_retime.spread_of (column name))
   in
-  let ratio (num, den) =
+  let ratio num den =
     let r = Bench_retime.paired_ratio ~num:(column num) ~den:(column den) in
     if r.pairs < Bench_retime.min_readings then
       failwith (Printf.sprintf "%s: only %d of %d timing rounds admitted" label r.pairs calls);
-    Bench_retime.ratio_fields ~name:(num ^ "_over_" ^ den) r
+    r
   in
-  p "%s %s %s\n" label
-    (String.concat ~sep:" " (List.map (Array.to_list arms) ~f:show))
-    (String.concat ~sep:" " (List.map ratios ~f:ratio))
+  let admitted_orders =
+    Array.filter_mapi orders ~f:(fun i order -> Option.some_if (Option.is_some rows.(i).(0)) order)
+  in
+  let balance = Bench_design.balance ~arms:n admitted_orders in
+  (String.concat ~sep:" " (List.map (Array.to_list arms) ~f:show), ratio, balance)
 
-let compare_code ~root ~target ~control work f =
-  let short, src_a, cc_a, arch_a = compile ~root ~target ~blend:false work in
+let with_segment_arms ~root ~target ~reverse work f =
+  let order =
+    [ ("short", false); ("blend", true); ("short_repeat", false); ("blend_repeat", true) ]
+  in
+  let link_order = if reverse then List.rev order else order in
+  let linked = ref [] in
   Exn.protect
-    ~finally:(fun () -> Context.release (fst short))
+    ~finally:(fun () -> List.iter !linked ~f:(fun (_, ((ctx, _), _, _, _)) -> Context.release ctx))
     ~f:(fun () ->
+      List.iter link_order ~f:(fun (name, blend) ->
+          let arm = compile ~root ~target ~blend work in
+          linked := (name, arm) :: !linked);
+      let get name = List.Assoc.find_exn !linked ~equal:String.equal name in
+      let _, src_a, cc_a, arch_a = get "short" and _, src_b, _, _ = get "blend" in
+      let _, src_ar, _, _ = get "short_repeat" and _, src_br, _, _ = get "blend_repeat" in
+      let label = Printf.sprintf "%s/%s" arch_a work.name in
       let expected_native = Printf.sprintf "sm_%d" cc_a in
       let is_native = Mma.equal_ptx_target target Mma.Native in
-      if (not is_native) && String.equal arch_a expected_native then
-        failwith
-          (Printf.sprintf
-             "%s: floor and native PTX coincide at %s. This sweep needs distinct targets." work.name
-             arch_a);
-      let blend, src_b, cc_b, arch_b = compile ~root ~target ~blend:true work in
-      Exn.protect
-        ~finally:(fun () -> Context.release (fst blend))
-        ~f:(fun () ->
-          let label = Printf.sprintf "%s/%s" arch_a work.name in
-          let matches =
-            if control then String.equal src_a src_b && not (has_local src_b)
-            else (not (has_local src_a)) && has_local src_b
-          in
-          Verdict.pass_fail (label ^ " emitted rendering") matches;
-          Verdict.pass_fail (label ^ " actual PTX targets")
-            (cc_a = cc_b && String.equal arch_a arch_b
-            && ((not is_native) || String.equal arch_a expected_native));
-          if Verdict.any_failed () then failwith (label ^ ": source or PTX check failed");
-          f ~label short blend))
+      Verdict.pass_fail (label ^ " emitted rendering") ((not (has_local src_a)) && has_local src_b);
+      Verdict.pass_fail
+        (label ^ " repeat source matches byte for byte")
+        (String.equal src_a src_ar && String.equal src_b src_br);
+      Verdict.Claims.p_all (label ^ " actual PTX targets") !linked ~f:(fun (_, (_, _, cc, arch)) ->
+          cc = cc_a && String.equal arch arch_a
+          && Bool.equal is_native (String.equal arch expected_native));
+      if Verdict.any_failed () then failwith (label ^ ": source or PTX check failed");
+      p "%s link_order=%s\n" label (String.concat ~sep:"," (List.map link_order ~f:fst));
+      f ~label
+        (List.map order ~f:(fun (name, _) ->
+             let arm, _, _, _ = get name in
+             (name, arm))))
+
+let check_segment_buffers ~shared_output ~label arms work fixture =
+  let n = List.length arms in
+  let nodes =
+    (work.output, if shared_output then 1 else n)
+    :: List.map fixture.seeds ~f:(fun (node, _) -> (node, 1))
+  in
+  Verdict.Claims.p_all
+    (label ^ if shared_output then " shared device buffers" else " only output buffers separate")
+    nodes
+    ~f:(fun (node, expected_locations) ->
+      let locations =
+        List.filter_map arms ~f:(fun (_, (ctx, _)) -> Context.buffer_location ctx node)
+      in
+      List.length locations = n
+      && List.length (List.dedup_and_sort locations ~compare:Poly.compare) = expected_locations);
+  if Verdict.any_failed () then failwith (label ^ ": segment buffer placement check failed")
+
+let time_segment ~calls ~label ~show_rounds arms =
+  let times, ratio, balance = compare_times ~show_rounds ~calls ~label ~arms () in
+  let short = ratio "short_repeat" "short" and blend = ratio "blend_repeat" "blend" in
+  let control_factor r = Float.max r.Bench_retime.ratio_hi (1. /. r.ratio_lo) in
+  let floor = Float.max 1. (Float.max (control_factor short) (control_factor blend)) in
+  let treatment = ratio "blend" "short" in
+  let balanced = balance.histograms_equal && balance.pairs_exchanged in
+  let resolved =
+    balanced && Float.(treatment.ratio_hi < 1. /. floor || treatment.ratio_lo > floor)
+  in
+  p "%s %s %s %s %s control_factor=%.3f timing_positions_balanced=%b\n" label times
+    (Bench_retime.ratio_fields ~name:"blend_over_short" { treatment with resolved })
+    (Bench_retime.ratio_fields ~name:"short_repeat_over_short" short)
+    (Bench_retime.ratio_fields ~name:"blend_repeat_over_blend" blend)
+    floor balanced
+
+let compare_segment ~root ~target ~dry ~calls ~shared_output ~reverse ~show_rounds work =
+  let first = (snd (List.hd_exn work.fixtures)) () in
+  let run parent =
+    with_segment_arms ~root:parent ~target ~reverse work (fun ~label arms ->
+        check_segment_buffers ~shared_output ~label arms work first;
+        List.iteri work.fixtures ~f:(fun i (density, make_fixture) ->
+            let fixture = if i = 0 then first else make_fixture () in
+            let label = label ^ "/" ^ density in
+            if String.equal density "pool" then
+              p "%s nonzero_gradient=%d/%d\n" label
+                (Array.count fixture.want ~f:(fun v -> Float.(v <> 0.)))
+                (Array.length fixture.want);
+            let arms =
+              List.map arms ~f:(fun (name, arm) ->
+                  (name, check (label ^ "/" ^ name) arm work fixture))
+            in
+            if not dry then time_segment ~calls ~label ~show_rounds arms))
+  in
+  (* Children inherit the parent's inputs in both layouts. Seeding its output as well removes the
+     output placement difference without changing which stream the four links use. *)
+  let parent = ref (Context.cuda ~ordinal:(Context.ordinal root) ()) in
+  Exn.protect
+    ~finally:(fun () -> Context.release !parent)
+    ~f:(fun () ->
+      List.iter first.seeds ~f:(fun (node, values) ->
+          parent := Context.set_values !parent node values);
+      if shared_output then parent := Context.set_values !parent work.output (output_seed first);
+      run !parent)
 
 (* === The training step === *)
 
@@ -443,16 +500,23 @@ let compare_step ~target ~dry ~calls step =
             : Context.t)
       in
       if not dry then
-        compare_times ~before:restore ~calls ~label
-          ~arms:(List.map arms ~f:(fun (name, (c, _, _, _)) -> (name, c)))
-          ~ratios:[ ("blend", "short"); ("control", "short") ]
-          ())
+        let times, ratio, _ =
+          compare_times ~before:restore ~calls ~label
+            ~arms:(List.map arms ~f:(fun (name, (c, _, _, _)) -> (name, c)))
+            ()
+        in
+        p "%s %s %s %s\n" label times
+          (Bench_retime.ratio_fields ~name:"blend_over_short" (ratio "blend" "short"))
+          (Bench_retime.ratio_fields ~name:"control_over_short" (ratio "control" "short")))
 
 let () =
   let args = Bench_args.create "bench_cuda_select" in
   let elements = Bench_args.int args 0 ~name:"elements" ~default:(1 lsl 22) in
   let batch = Bench_args.int args 1 ~flag:"step-batch" ~name:"step-batch" ~default:64 in
   let dry = Bench_args.flag args ~name:"dry-run" in
+  let masked_only = Bench_args.flag args ~name:"where-masked-only" in
+  let shared_output = not (Bench_args.flag args ~name:"separate-segment-outputs") in
+  let reverse = Bench_args.flag args ~name:"reverse-segment-link-order" in
   if elements % 256 <> 0 then invalid_arg "elements must be a multiple of 256";
   if not (String.equal (Utils.get_global_arg ~arg_name:"cuda_kernel_cache_mib" ~default:"64") "0")
   then invalid_arg "set OCANNL_CUDA_KERNEL_CACHE_MIB=0 to witness every PTX compile";
@@ -463,48 +527,32 @@ let () =
       let backend = Context.backend_name root in
       if not (String.equal backend "cuda") then
         invalid_arg "bench_cuda_select requires --ocannl_backend=cuda";
-      let calls = Bench_retime.calls_of_env () in
+      let calls = Bench_retime.calls_of_env ~default:8 () in
       p
-        "backend=%s elements=%d pool_images=%d mask_density=1/32,31/32 step=cifar_conv \
-         step_batch=%d timing=queued calls=%d dry_run=%b\n"
-        backend elements (elements / 16) batch calls dry;
+        "backend=%s elements=%d mask_density=1/32,31/32 timing=queued calls=%d dry_run=%b \
+         where_masked_only=%b shared_segment_output=%b\n"
+        backend elements calls dry masked_only shared_output;
+      p "%s\n" (Bench_design.describe ~arms:4 ~batches:calls);
       let node = Ll_test.node_factory ~first_id:20000 ~dims:[| elements |] () in
-      let control = pointwise ~elements ~node Control in
-      let workloads =
-        List.map [ Where_zero; Relu_gate; Where_eq; Where_masked ] ~f:(pointwise ~elements ~node)
-        @ [ pool ~root ~elements ]
+      let segment target =
+        compare_segment ~root ~target ~dry ~calls ~shared_output ~reverse ~show_rounds:masked_only
       in
-      let step = build_step ~root ~batch in
-      (* Released after the step arms, which each release their own context first. *)
-      Exn.protect
-        ~finally:(fun () -> Context.release step.init_ctx)
-        ~f:(fun () ->
-          List.iter [ Mma.Floor; Mma.Native ] ~f:(fun target ->
-              compare_code ~root ~target ~control:true control
-                (fun ~label control_short control_blend ->
-                  let fixture = (snd (List.hd_exn control.fixtures)) () in
-                  let control_short = check (label ^ "/short") control_short control fixture in
-                  let control_blend = check (label ^ "/blend") control_blend control fixture in
-                  List.iter workloads ~f:(fun work ->
-                      compare_code ~root ~target ~control:false work (fun ~label short blend ->
-                          List.iter work.fixtures ~f:(fun (density, fixture) ->
-                              let label = label ^ "/" ^ density in
-                              let fixture = fixture () in
-                              if String.equal density "pool" then
-                                p "%s nonzero_gradient=%d/%d\n" label
-                                  (Array.count fixture.want ~f:(fun v -> Float.(v <> 0.)))
-                                  (Array.length fixture.want);
-                              let short = check (label ^ "/short") short work fixture in
-                              let blend = check (label ^ "/blend") blend work fixture in
-                              if not dry then
-                                compare_times ~calls ~label
-                                  ~arms:
-                                    [
-                                      ("short", short);
-                                      ("control_short", control_short);
-                                      ("blend", blend);
-                                      ("control_blend", control_blend);
-                                    ]
-                                  ~ratios:[ ("blend", "short"); ("control_blend", "control_short") ]
-                                  ()))));
-              compare_step ~target ~dry ~calls step)))
+      let targets = [ Mma.Floor; Mma.Native ] in
+      if masked_only then
+        let work = pointwise ~elements ~node Where_masked in
+        List.iter targets ~f:(fun target -> segment target work)
+      else
+        let step_calls = Bench_retime.calls_of_env () in
+        p "pool_images=%d step=cifar_conv step_batch=%d step_calls=%d\n" (elements / 16) batch
+          step_calls;
+        let workloads =
+          List.map [ Where_zero; Relu_gate; Where_eq; Where_masked ] ~f:(pointwise ~elements ~node)
+          @ [ pool ~root ~elements ]
+        in
+        let step = build_step ~root ~batch in
+        Exn.protect
+          ~finally:(fun () -> Context.release step.init_ctx)
+          ~f:(fun () ->
+            List.iter targets ~f:(fun target ->
+                List.iter workloads ~f:(segment target);
+                compare_step ~target ~dry ~calls:step_calls step)))

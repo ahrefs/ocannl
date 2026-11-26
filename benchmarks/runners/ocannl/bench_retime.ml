@@ -35,11 +35,11 @@ open Base
 
 let min_readings = 4
 
-(** [calls_of_env ()]: [BENCH_RETIME_CALLS] (default 6), the timing calls per routine. Even, because
-    {!Bench_design} mirrors every batch, and at least {!min_readings}. *)
-let calls_of_env () =
+(** [calls_of_env ()]: [BENCH_RETIME_CALLS] (defaults to 6), the timing calls per routine. Even,
+    because {!Bench_design} mirrors every batch, and at least {!min_readings}. *)
+let calls_of_env ?(default = 6) () =
   match Stdlib.Sys.getenv_opt "BENCH_RETIME_CALLS" with
-  | None -> 6
+  | None -> default
   | Some s -> (
       match Int.of_string_opt (String.strip s) with
       | Some n when n >= min_readings && n % 2 = 0 -> n
@@ -174,7 +174,7 @@ let read_once ?(timing = configured_timing ()) ((ctx, routine) : Context.t * Con
     (Autotune.time_routine ~timing ~repeats:(configured_repeats ()) ctx routine)
 
 let retime ?calls (routines : (Context.t * Context.routine) list) =
-  let calls = Option.value_or_thunk calls ~default:calls_of_env in
+  let calls = Option.value_or_thunk calls ~default:(fun () -> calls_of_env ()) in
   let timing = configured_timing () in
   let routines = Array.of_list routines in
   let arms = Array.length routines in

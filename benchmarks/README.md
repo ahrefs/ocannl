@@ -1198,8 +1198,18 @@ pooling, forward, backward and SGD) compiled under each rendering, the choice re
 guard as well as the renderer, beside a second short-circuiting compile whose source must equal
 the first's (up to the names each lowering mints) as its control. The step's values are compared
 across the arms within a stated tolerance, since placements may differ; `BENCH_SELECT_SOURCES=<dir>`
-writes each arm's step source there. It generates its inputs in memory. Build the executable and verify
-the emitted forms, targets and host parity with a dry run before requesting a measurement window.
+writes each arm's step source there.
+
+Each segment rendering has its own byte-identical, separately linked repeat. All four routines
+bind the same device buffers by default. A timed row reports the widest admitted repeat ratio in
+either direction as `control_factor`. The blend/short range resolves if it lies wholly below
+`1/control_factor` or wholly above `control_factor` and the admitted rounds balance the positions
+and pair orders. Segments default to eight rounds. Use a multiple of four rounds to balance the
+planned order when overriding the default. A refused timing drops its entire round and can leave
+the row unbalanced. The step retains its own control.
+
+The benchmark generates its inputs in memory. Build the executable and verify the emitted forms,
+targets, buffer placement and host parity with a dry run before requesting a measurement window.
 From the checkout, give the cell driver an empty scratch directory in `RUN_DIR`.
 
 ```sh
@@ -1207,7 +1217,7 @@ dune build benchmarks/runners/ocannl/bench_cuda_select.exe
 python3 -B benchmarks/cells.py cell --backend cuda --dir "$RUN_DIR" --timeout 900 \
   --expect cuda_fast_math=true --expect cuda_kernel_cache_mib=0 \
   --expect output_debug_files_in_build_directory=false -- \
-  BENCH_RETIME_CALLS=6 _build/default/benchmarks/runners/ocannl/bench_cuda_select.exe \
+  _build/default/benchmarks/runners/ocannl/bench_cuda_select.exe \
   --ocannl_cuda_fast_math=true --ocannl_cuda_kernel_cache_mib=0 \
   --ocannl_output_debug_files_in_build_directory=false --dry-run
 ```
@@ -1222,6 +1232,14 @@ Use a fresh scratch directory for the timed run and omit `--dry-run`. The cell d
 ambient settings, verifies the resolved configuration, and captures the paired medians and ranges
 in `$RUN_DIR/stdout`. Accept results from a successful cell whose recorded floor and native targets
 are distinct.
+
+For the masked segment alone, add `--where-masked-only` to both the dry and timed runs. It emits
+each round's arm timings in visit order. To investigate link and buffer effects, repeat in fresh
+cells with `--reverse-segment-link-order` and with `--separate-segment-outputs`, individually and
+together. Reversing the links preserves the timing order. The separate-output case still shares
+the inputs, as sibling links do when the root caches their read-only inputs. A failed dry run or
+readiness check stops measurement until the failing check passes. A timed cell that fails or
+exhausts its cap needs a fresh directory after the failure is addressed.
 
 ## Measurement boxes
 
