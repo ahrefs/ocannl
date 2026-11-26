@@ -78,8 +78,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/box-gate.sh"
 box_gate_args "$@"
 shift "$box_gate_shift"
-USAGE="usage: $0 [--box BOX | --skip-box-check] [--repeats N] [--training-fixture PATH [--tuned-training] | --untuned-fixture PATH] <repo-root> <backend cuda|hip|metal> <memory-label> [rounds] [sizes...]"
+USAGE="usage: $0 [--box BOX | --skip-box-check] [--repeats N] [--search-timeout S] [--training-fixture PATH [--tuned-training] | --untuned-fixture PATH] <repo-root> <backend cuda|hip|metal> <memory-label> [rounds] [sizes...]"
 REPEATS=10
+SEARCH_TIMEOUT=7200
 FIXTURE=
 TUNED=0
 while [ $# -gt 0 ]; do
@@ -89,6 +90,14 @@ while [ $# -gt 0 ]; do
       REPEATS=$2
       if [[ "$REPEATS" = *[!0-9]* || "$REPEATS" != *[1-9]* ]]; then
         echo "repeats must be a positive integer, got '$REPEATS'"
+        exit 2
+      fi
+      shift 2 ;;
+    --search-timeout)
+      [ $# -ge 2 ] || { echo "$USAGE"; exit 2; }
+      SEARCH_TIMEOUT=$2
+      if [[ "$SEARCH_TIMEOUT" = *[!0-9]* || "$SEARCH_TIMEOUT" != *[1-9]* ]]; then
+        echo "search-timeout must be a positive integer, got '$SEARCH_TIMEOUT'"
         exit 2
       fi
       shift 2 ;;
@@ -255,48 +264,8 @@ else
   echo "auto (schedule_bench, f16): matches neither arm's sources ($(n_sources "$AUTO") files written)"
 fi
 
-# The training row's proof, before any timing.
-TRAIN_ENV=()
-if [ -n "$FIXTURE" ]; then
-  TRAIN_ENV=("BENCH_FIXTURE=$FIXTURE" BENCH_MATERIALIZE=0 BENCH_DEBUG=0 BENCH_DOMINANT_KERNEL=0)
-  TRAIN_ARGS=(--ocannl_model_default_schedule=false
-    --ocannl_gpu_default_seed_narrow_storage=false --ocannl_autotune_log=true)
-  TRAIN_MODE=untuned
-  if [ "$TUNED" = 1 ]; then
-    TRAIN_MODE=tuned
-    # Both placement arms of each policy search cold. The replay pins search off so a missing
-    # cache entry cannot silently run a new search in a timed process.
-    for arm in false true; do
-      python3 "$HERE/cells.py" cell --backend "$BACKEND" --dir "$OUT/search_$arm" --timeout 3600 \
-        --expect fp16_arithmetic="$arm" --expect autotune_search=true -- \
-        "${TRAIN_ENV[@]}" BENCH_TUNE=1 BENCH_PRECISION=f16 "$GPT" "${TRAIN_ARGS[@]}" \
-        --ocannl_fp16_arithmetic="$arm" --ocannl_autotune_search=true \
-        --ocannl_autotune_cache_dir="$OUT/cache-$arm" || exit $?
-      python3 "$HERE/gh1051_cells.py" tuned-search "$OUT/search_$arm" half || exit $?
-    done
-  fi
-  for prec in single half; do
-    bench_prec=f32
-    [ "$prec" = half ] && bench_prec=f16
-    for arm in false true; do
-      tune=0
-      replay=()
-      if [ "$TUNED" = 1 ] && [ "$prec" = half ]; then
-        tune=1
-        replay=(--ocannl_autotune_cache_dir="$OUT/cache-$arm")
-      fi
-      identity_run train "$prec" "$arm" "" "${TRAIN_ENV[@]}" BENCH_TUNE="$tune" \
-        "BENCH_PRECISION=$bench_prec" "$GPT" "${TRAIN_ARGS[@]}" --ocannl_autotune_search=false \
-        ${replay[@]+"${replay[@]}"}
-    done
-  done
-  prove train bench_gpt
-  if [ "$TUNED" = 1 ]; then
-    [ "$FAIL" -eq 0 ] || exit "$FAIL"
-    python3 "$HERE/gh1051_cells.py" tuned-proof "$OUT" "$LABEL" half || exit $?
-  fi
-fi
-
+# Run the GEMM timing cells before any multi-hour cold training search so GEMM readings are
+# reported immediately.
 for size in "${SIZES[@]}"; do
   arms=()
   for arm in false true; do
@@ -312,6 +281,45 @@ for size in "${SIZES[@]}"; do
 done
 python3 "$HERE/gh1051_cells.py" ab "$OUT" "$LABEL" half || FAIL=1
 [ -n "$FIXTURE" ] || exit $FAIL
+
+# The training row's cold search (when tuned) and source proof, before training timing.
+TRAIN_ENV=("BENCH_FIXTURE=$FIXTURE" BENCH_MATERIALIZE=0 BENCH_DEBUG=0 BENCH_DOMINANT_KERNEL=0)
+TRAIN_ARGS=(--ocannl_model_default_schedule=false
+  --ocannl_gpu_default_seed_narrow_storage=false --ocannl_autotune_log=true)
+TRAIN_MODE=untuned
+if [ "$TUNED" = 1 ]; then
+  TRAIN_MODE=tuned
+  # Both placement arms of each policy search cold. The replay pins search off so a missing
+  # cache entry cannot silently run a new search in a timed process.
+  for arm in false true; do
+    python3 "$HERE/cells.py" cell --backend "$BACKEND" --dir "$OUT/search_$arm" --timeout "$SEARCH_TIMEOUT" \
+      --expect fp16_arithmetic="$arm" --expect autotune_search=true -- \
+      "${TRAIN_ENV[@]}" BENCH_TUNE=1 BENCH_PRECISION=f16 "$GPT" "${TRAIN_ARGS[@]}" \
+      --ocannl_fp16_arithmetic="$arm" --ocannl_autotune_search=true \
+      --ocannl_autotune_cache_dir="$OUT/cache-$arm" || exit $?
+    python3 "$HERE/gh1051_cells.py" tuned-search "$OUT/search_$arm" half || exit $?
+  done
+fi
+for prec in single half; do
+  bench_prec=f32
+  [ "$prec" = half ] && bench_prec=f16
+  for arm in false true; do
+    tune=0
+    replay=()
+    if [ "$TUNED" = 1 ] && [ "$prec" = half ]; then
+      tune=1
+      replay=(--ocannl_autotune_cache_dir="$OUT/cache-$arm")
+    fi
+    identity_run train "$prec" "$arm" "" "${TRAIN_ENV[@]}" BENCH_TUNE="$tune" \
+      "BENCH_PRECISION=$bench_prec" "$GPT" "${TRAIN_ARGS[@]}" --ocannl_autotune_search=false \
+      ${replay[@]+"${replay[@]}"}
+  done
+done
+prove train bench_gpt
+if [ "$TUNED" = 1 ]; then
+  [ "$FAIL" -eq 0 ] || exit "$FAIL"
+  python3 "$HERE/gh1051_cells.py" tuned-proof "$OUT" "$LABEL" half || exit $?
+fi
 
 # The training row: one bin_cells run (not under n*/, which gh1051_cells.py reads as sizes).
 TRAIN="$OUT/$TRAIN_MODE"
