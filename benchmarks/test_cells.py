@@ -1230,5 +1230,85 @@ class Gh1051AbDriverTest(StubRunTest):
         self.assertIsNone(raw)
 
 
+# Stubs for gh2195_f16_ab.sh: same structure as Gh1051AbDriverTest at fp16_arithmetic / half / f16.
+F16_SCHEDULE_BODY = (
+    SCHEDULE_BODY.replace('opt["bf16_arithmetic"]', 'opt["fp16_arithmetic"]')
+    .replace('prec == "bfloat16"', 'prec == "half"')
+    .replace('acc=" + ("bf16"', 'acc=" + ("f16"')
+)
+F16_TRAIN_BODY = (
+    TRAIN_BODY.replace('opt["bf16_arithmetic"]', 'opt["fp16_arithmetic"]')
+    .replace('prec == "bf16"', 'prec == "f16"')
+    .replace('acc=" + ("bf16"', 'acc=" + ("f16"')
+)
+
+
+@POSIX_ONLY
+class Gh2195AbDriverTest(StubRunTest):
+    def measure(self, backend="metal", census="Mma_intrinsics 2", same_f16=False, fixture=False,
+                tuned=False, repeats=None, bad_search=False):
+        ext = {"cuda": "cu", "hip": "hip", "metal": "metal"}[backend]
+        root = self.dir / "root"
+        write_stub(root / "_build/default/bin/schedule_bench.exe",
+                   F16_SCHEDULE_BODY.replace("MMA_CENSUS", census).replace("EXT", ext)
+                   .replace("SAME_BF16", repr(same_f16))
+                   .replace("NO_NARROW_SOURCE", "False"))
+        write_stub(root / "_build/default/benchmarks/runners/ocannl/bench_gpt.exe",
+                   F16_TRAIN_BODY.replace("EXT", ext).replace("BAD_REPLAY", "False")
+                   .replace("BAD_SEARCH", repr(bad_search)).replace("BAD_IDENTITY", "False")
+                   .replace("VARY_F32_CENSUS", "False"))
+        dune = self.fakebin / "dune"
+        dune.write_text("#!/bin/sh\nexit 0\n")
+        dune.chmod(0o755)
+        tmp = self.dir / "tmp"
+        tmp.mkdir(exist_ok=True)
+        lead = []
+        if fixture:
+            fx = self.dir / "fx.safetensors"
+            header = json.dumps({"__metadata__": {"mode": "train"}}).encode()
+            fx.write_bytes(struct.pack("<Q", len(header)) + header)
+            lead = ["--skip-box-check", "--training-fixture", str(fx)]
+        if tuned:
+            lead.append("--tuned-training")
+        if repeats is not None:
+            lead.extend(["--repeats", repeats])
+        proc = self.run_tool([box_gate.BASH, str(shell_driver_path("gh2195_f16_ab.sh")), *lead, str(root),
+                              backend, "stub", "4", "64"],
+                             {"TMPDIR": str(tmp), "OCANNL_FP16_ARITHMETIC": "auto"})
+        m = re.search(r"raw=(.+) training-fixture=", proc.stdout)
+        return proc, (Path(m.group(1)) if m else None)
+
+    def test_metal_tuned_f16_arms_replay_crowns_beside_untuned_f32_control(self):
+        proc, raw = self.measure(backend="metal", fixture=True, tuned=True, repeats="50")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("os: macOS", proc.stdout)
+        self.assertIn("drift control (schedule_bench): 1 generated f32 kernels", proc.stdout)
+        self.assertIn("treatment reach (schedule_bench): 1 of 1 generated f16 sources differ",
+                      proc.stdout)
+        self.assertIn("auto (schedule_bench, f16): byte-identical to the wide arm (false)",
+                      proc.stdout)
+        self.assertIn("stub tuned wide f16: placement A shipped sketch-A", proc.stdout)
+        self.assertIn("stub tuned narrow f16: placement B shipped sketch-B", proc.stdout)
+        self.assertIn("| stub | fx | f16 | 10.000 | 12.600 | 1.200 (1.100-1.300) | 4 of 4 |",
+                      proc.stdout)
+        self.assertIn("| stub | fx | f32 | 12.500 | 12.500 | 1.000 (1.000-1.000) | 0 of 4 |",
+                      proc.stdout)
+        self.assertEqual({r["argv"][-6] for r in self.records(raw / "n64")}, {"50"})
+        self.assertTrue(all(r["config"]["fp16_arithmetic"]["value"] == r["arm"].split("-")[0]
+                            for r in self.records(raw / "n64")))
+
+    def test_metal_f16_treatment_unreached_stops_driver(self):
+        proc, raw = self.measure(backend="metal", same_f16=True)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("TREATMENT UNREACHED (schedule_bench)", proc.stdout)
+        self.assertFalse((raw / "n64").exists())
+
+    def test_invalid_wide_f16_search_stops_before_narrowing(self):
+        proc, raw = self.measure(backend="metal", fixture=True, tuned=True, bad_search=True)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("search_false: expected two clean cold searches", proc.stderr)
+        self.assertFalse((raw / "search_true").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

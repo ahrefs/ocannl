@@ -43,6 +43,7 @@
    gh1279_cells.sh
    gh1343_ab.sh
    gh1557_cells.sh
+   gh2195_f16_ab.sh
    gh612_cells.sh
    gh740_cells.sh)
   ../scripts/process-group.sh

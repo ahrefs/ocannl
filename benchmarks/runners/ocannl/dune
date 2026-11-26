@@ -145,6 +145,24 @@
  (modes exe))
 
 (executable
+ (name bench_bf16_crown)
+ (modules bench_bf16_crown)
+ (libraries
+  base
+  bench_args
+  bench_checksum
+  bench_out
+  bench_retime
+  ocannl
+  stdio
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl))
+ (modes exe))
+
+(executable
  (name bench_cuda_select)
  (modules bench_cuda_select)
  (libraries
