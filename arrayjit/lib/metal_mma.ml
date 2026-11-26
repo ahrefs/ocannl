@@ -22,11 +22,16 @@ let bf16_accum_wide () =
   | Numerics.Bf16_auto | Numerics.Bf16_wide -> true
   | Numerics.Bf16_narrow -> false
 
-(* Whether [Numerics.Fp16_auto] resolves wide on this backend: no (gh-ocannl-2195). The
-   storage-width [simdgroup_half8x8] accumulate and the half serial loop are both per-step half FMAs
-   on the M4 Max (gh-ocannl-2151's census), bitwise equal, so the narrow auto is schedule-uniform
-   here; CUDA and HIP, whose f16-accumulate tensor units narrow at other points, resolve it wide.
-   Published to seeding as [capability.mma_f16_auto_wide]. *)
+(* Whether [Numerics.Fp16_auto] resolves wide on this backend: no (gh-ocannl-2195, reaffirmed by
+   gh-ocannl-2372). The storage-width [simdgroup_half8x8] accumulate and the half serial loop are
+   both per-step half FMAs on the M4 Max (gh-ocannl-2151's census), bitwise equal, so the narrow
+   auto is schedule-uniform here; CUDA and HIP, whose f16-accumulate tensor units narrow at other
+   points, resolve it wide. Even after gh-ocannl-2372's per-simdgroup scratch boundary made wide f16
+   n=2048 GEMM tiles 4.2x faster than narrow tiles (0.864x vs narrow's fastest regtile), tuned
+   [gpt2_mini_train] f16 training on M4 Max (mac-studio, macOS 27.2.1) showed no gain (88.416 ms
+   wide vs 87.531 ms narrow, paired 1.011 [0.989-1.040], f32 control 0.998 [0.992-1.006]), so
+   [Fp16_auto] stays narrow while explicit [Fp16_wide] carries the fast wide tile. Published to
+   seeding as [capability.mma_f16_auto_wide]. *)
 let fp16_auto_wide = false
 
 (* Whether this backend floors [Numerics.Fp16_prefer_narrow] (the profiles' request) to its auto: no
