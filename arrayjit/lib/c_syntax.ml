@@ -1150,10 +1150,6 @@ module type C_syntax_config = sig
 
   val binop_syntax : Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.document
 
-  val binop_arg1_uses : Ops.binop -> int
-  (** Number of occurrences of the first operand when the binary rendering evaluates it. Projections
-      bypass the renderer. *)
-
   val builtin_param_guards : param_guard_dialect option
   (** The dialect of the builtin parameter guards a kernel's prelude carries under the test seam
       {!Param_guards.with_guards} (gh-ocannl-1768); [None] (the {!Pure_C_config} default) guards
@@ -1935,6 +1931,7 @@ let op_syntax_idents ~ternop_syntax ~binop_syntax ~unop_syntax ~vec_unop_syntax 
     - a projection ([Only_first] / [Only_second]) must not mention its discarded operand -- every
       backend rejects one outright, which satisfies this trivially, and {!C_syntax.pp_scalar} emits
       the selected operand alone before [binop_syntax] is ever reached;
+    - [Both_operands] / [Gated_second] must render their first operand exactly once;
     - [Gated_second] must place one of those constructs before its second operand;
     - [Both_operands] / [All_three] must emit none of them anywhere -- an [Ops.Max] spelled
       [(a > b ? a : b)] would evaluate [a] twice and [b] conditionally, and the cost model's floor
@@ -1946,8 +1943,7 @@ let op_syntax_idents ~ternop_syntax ~binop_syntax ~unop_syntax ~vec_unop_syntax 
     The operator sweep is [Ops]' derived enumeration, so an operator added to {!Ops.binop} or
     {!Ops.ternop} is checked here without anyone remembering to list it. A (precision, operator)
     pair the backend rejects with [Invalid_argument] or [Utils.User_error] contributes nothing. *)
-let operand_conditionality_violations ~ternop_syntax ~binop_syntax ~binop_arg1_uses
-    ~select_blend_syntax =
+let operand_conditionality_violations ~ternop_syntax ~binop_syntax ~select_blend_syntax =
   let violations = ref [] in
   let report what msg = violations := Printf.sprintf "%s: %s" what msg :: !violations in
   let a1 = PPrint.string "$1" and a2 = PPrint.string "$2" and a3 = PPrint.string "$3" in
@@ -1991,11 +1987,9 @@ let operand_conditionality_violations ~ternop_syntax ~binop_syntax ~binop_arg1_u
                      let uses =
                        List.length (String.substr_index_all s ~may_overlap:false ~pattern:"$1")
                      in
-                     if uses <> binop_arg1_uses op then
+                     if uses <> 1 then
                        report what
-                         (Printf.sprintf
-                            "first operand occurs %d times but its renderer declares %d" uses
-                            (binop_arg1_uses op)));
+                         (Printf.sprintf "first operand occurs %d times, expected one" uses));
                   match (cond, i2) with
                   | _, None -> report what "the second operand is not rendered"
                   | Ops.Gated_second, Some i2 ->
@@ -3412,7 +3406,6 @@ struct
       ^^ string op_suffix)
 
   let binop_syntax = default_binop_syntax
-  let binop_arg1_uses _ = 1
   let select_blend_policy () = Backend_intf.No_blend
   let select_blend_syntax _prec = None
   let builtin_param_guards = None
@@ -3685,7 +3678,7 @@ module C_syntax (B : C_syntax_config) = struct
   let () =
     match
       operand_conditionality_violations ~ternop_syntax:B.ternop_syntax ~binop_syntax:B.binop_syntax
-        ~binop_arg1_uses:B.binop_arg1_uses ~select_blend_syntax:B.select_blend_syntax
+        ~select_blend_syntax:B.select_blend_syntax
     with
     | [] -> ()
     | violations ->
@@ -4048,9 +4041,6 @@ module C_syntax (B : C_syntax_config) = struct
         | _, None -> group (B.binop_syntax prec op e1 e2))
     | _ -> group (B.binop_syntax prec op e1 e2)
 
-  let repeat_reads n reads =
-    if n <= 0 || List.is_empty reads then [] else List.concat (List.init n ~f:(fun _ -> reads))
-
   (* gh-ocannl-2145: a short-circuiting gated operator ([Ops.Gated_second]: the gates, [&&], [||])
      evaluates its second operand only where its own test selects it. The definitions there that run
      under a [Where]'s condition keep that condition behind the operator's test -- that the second
@@ -4066,7 +4056,7 @@ module C_syntax (B : C_syntax_config) = struct
         ^^ string " != "
         ^^ parens (B.binop_syntax prec op e1 (lit 0.))
       in
-      { doc; reads = repeat_reads (2 * B.binop_arg1_uses op) r1 }
+      { doc; reads = r1 @ r1 }
     in
     Low_level.Scope_order.gate
       ~key:(Gate { op; prec; first = v1; first_prec })
@@ -4091,7 +4081,7 @@ module C_syntax (B : C_syntax_config) = struct
         Option.is_none (blend_for ~serial_loop_kernel prec ~cond:v1 ~arms:[ (v2, prec) ])
     | _ -> true
 
-  let pp_scalar_op_at ~serial_loop_kernel ~operand ~capture_reads ~charge_reads (prec : Ops.prec)
+  let pp_scalar_op_at ~serial_loop_kernel ~operand ~capture_reads (prec : Ops.prec)
       (vcomp : Low_level.scalar_t) : local_def list * PPrint.document =
     let open PPrint in
     match vcomp with
@@ -4144,40 +4134,18 @@ module C_syntax (B : C_syntax_config) = struct
               Low_level.operand_eval_precisions ~eval:prec (Ops.Binop op)
                 (Array.map [| v1_prec; v2_prec |] ~f:comp_prec)
             in
-            let blended =
-              match op with
-              | Ops.Relu_gate | Ops.Satur01_gate ->
-                  not (short_circuits ~serial_loop_kernel ~prec vcomp)
+            let gated =
+              match Ops.binop_conditionality op with
+              | Ops.Gated_second -> short_circuits ~serial_loop_kernel ~prec vcomp
               | _ -> false
             in
-            let extra_arg1_uses =
-              match
-                ( op,
-                  if blended then blend_for ~serial_loop_kernel prec ~cond:v1 ~arms:[ (v2, prec) ]
-                  else None )
-              with
-              | (Ops.Relu_gate | Ops.Satur01_gate), Some (Blend_truth _) -> 0
-              | _ -> B.binop_arg1_uses op - 1
-            in
-            let needs_r1 =
-              extra_arg1_uses > 0
-              || (not blended)
-                 &&
-                 match Ops.binop_conditionality op with
-                 | Ops.Gated_second -> true
-                 | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> false
-            in
             let (d1, e1), r1 =
-              if needs_r1 then capture_reads (fun () -> operand ps.(0) v1)
-              else (operand ps.(0) v1, [])
+              if gated then capture_reads (fun () -> operand ps.(0) v1) else (operand ps.(0) v1, [])
             in
-            if extra_arg1_uses > 0 then charge_reads (repeat_reads extra_arg1_uses r1);
             let d2, e2 = operand ps.(1) v2 in
             let defs =
-              match Ops.binop_conditionality op with
-              | Ops.Gated_second when not blended ->
-                  d1 @ gate_entries prec op ~v1 ~first_prec:ps.(0) ~d1 ~r1 e1 d2
-              | _ -> List.concat [ d1; d2 ]
+              if gated then d1 @ gate_entries prec op ~v1 ~first_prec:ps.(0) ~d1 ~r1 e1 d2
+              else d1 @ d2
             in
             let expr = binop_expr ~serial_loop_kernel prec op ~v1 ~v2 e1 e2 in
             (defs, expr))
@@ -4220,7 +4188,7 @@ module C_syntax (B : C_syntax_config) = struct
      ([blend_for]), and this one is an integer. An operator with no float-valued operand renders
      through the integer tables as it always did, so the integer tables only ever meet integer
      operands. *)
-  let rec integer_op ~operand ~capture_reads ~charge_reads p (vcomp : Low_level.scalar_t) :
+  let rec integer_op ~operand ~capture_reads p (vcomp : Low_level.scalar_t) :
       local_def list * PPrint.document =
     let f = int_math_prec in
     let fv = Low_level.float_valued in
@@ -4229,9 +4197,7 @@ module C_syntax (B : C_syntax_config) = struct
       | _ -> false
     in
     (* A homogeneous operand at [p], left unconverted: typed [f] exactly when it is float-valued. *)
-    let sub v =
-      if is_op v then integer_op ~operand ~capture_reads ~charge_reads p v else operand p v
-    in
+    let sub v = if is_op v then integer_op ~operand ~capture_reads p v else operand p v in
     let widen v =
       let d, e = sub v in
       if fv v then (d, e) else (d, convert_doc ~from:p ~to_:f e)
@@ -4240,9 +4206,7 @@ module C_syntax (B : C_syntax_config) = struct
       let d, e = sub v in
       if fv v then (d, convert_doc ~from:f ~to_:p e) else (d, e)
     in
-    let table () =
-      pp_scalar_op_at ~serial_loop_kernel:false ~operand ~capture_reads ~charge_reads p vcomp
-    in
+    let table () = pp_scalar_op_at ~serial_loop_kernel:false ~operand ~capture_reads p vcomp in
     match vcomp with
     | Unop (op, (v, _)) -> (
         match Ops.unop_integer_valuation op with
@@ -4259,22 +4223,15 @@ module C_syntax (B : C_syntax_config) = struct
     | Binop (op, (v1, _), (v2, _)) -> (
         let any = fv v1 || fv v2 in
         let both ~at render =
-          let extra_arg1_uses = B.binop_arg1_uses op - 1 in
-          let needs_r1 =
-            extra_arg1_uses > 0
-            ||
-            match Ops.binop_conditionality op with
-            | Ops.Gated_second -> true
-            | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> false
+          let gated =
+            match Ops.binop_conditionality op with Ops.Gated_second -> true | _ -> false
           in
           let (d1, e1), r1 =
-            if needs_r1 then capture_reads (fun () -> render v1) else (render v1, [])
+            if gated then capture_reads (fun () -> render v1) else (render v1, [])
           in
-          if extra_arg1_uses > 0 then charge_reads (repeat_reads extra_arg1_uses r1);
           let d2, e2 = render v2 in
-          match Ops.binop_conditionality op with
-          | Ops.Gated_second -> (d1 @ gate_entries at op ~v1 ~first_prec:p ~d1 ~r1 e1 d2, e1, e2)
-          | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> (d1 @ d2, e1, e2)
+          if gated then (d1 @ gate_entries at op ~v1 ~first_prec:p ~d1 ~r1 e1 d2, e1, e2)
+          else (d1 @ d2, e1, e2)
         in
         match Ops.binop_integer_valuation op with
         | Real_valued ->
@@ -4304,7 +4261,7 @@ module C_syntax (B : C_syntax_config) = struct
             let (d1, e1), r1 =
               capture_reads (fun () ->
                   if Ops.is_integer v1_prec && is_op v1 then
-                    integer_op ~operand ~capture_reads ~charge_reads v1_prec v1
+                    integer_op ~operand ~capture_reads v1_prec v1
                   else operand v1_prec v1)
             in
             let arms_prec, render = if fv v2 || fv v3 then (f, widen) else (p, sub) in
@@ -4329,14 +4286,13 @@ module C_syntax (B : C_syntax_config) = struct
 
   (* The operator arms of [pp_scalar]: at an integer compute precision through {!integer_op},
      converting a float-valued result to the precision once, here. *)
-  let pp_scalar_op ~serial_loop_kernel ?(capture_reads = fun f -> (f (), []))
-      ?(charge_reads = fun _ -> ()) ~operand (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
-      local_def list * PPrint.document =
+  let pp_scalar_op ~serial_loop_kernel ?(capture_reads = fun f -> (f (), [])) ~operand
+      (prec : Ops.prec) (vcomp : Low_level.scalar_t) : local_def list * PPrint.document =
     if Ops.is_integer prec then
-      let defs, doc = integer_op ~operand ~capture_reads ~charge_reads prec vcomp in
+      let defs, doc = integer_op ~operand ~capture_reads prec vcomp in
       if Low_level.float_valued vcomp then (defs, convert_doc ~from:int_math_prec ~to_:prec doc)
       else (defs, doc)
-    else pp_scalar_op_at ~serial_loop_kernel ~operand ~capture_reads ~charge_reads prec vcomp
+    else pp_scalar_op_at ~serial_loop_kernel ~operand ~capture_reads prec vcomp
 
   (* The signature's coupling contract: an accumulator resides at least as wide as the arithmetic
      that feeds it. The failure mode this catches is an [include]-time stale pairing — a backend
@@ -6931,10 +6887,6 @@ module C_syntax (B : C_syntax_config) = struct
     if !(ctx.render_census_enabled) then
       match !(ctx.render_stmt_reads) with Some acc -> acc := tn.Tn.uid :: !acc | None -> ()
 
-  let charge_stmt_reads ctx reads =
-    if !(ctx.render_census_enabled) && not (List.is_empty reads) then
-      match !(ctx.render_stmt_reads) with Some acc -> acc := reads @ !acc | None -> ()
-
   (* Capture the direct reads emitted while rendering a sub-expression, keeping them in the
      enclosing statement's read list (the expression itself is emitted once) and returning them so
      callers that replay the rendered document (such as hoisted scope guards) can charge each
@@ -9072,8 +9024,7 @@ module C_syntax (B : C_syntax_config) = struct
                     | Binop _ | Unop _ | Ternop _ ->
                         let _no_defs, doc =
                           pp_scalar_op ~serial_loop_kernel:ctx.serial_loop_kernel
-                            ~capture_reads:(capture_expr_reads ctx)
-                            ~charge_reads:(charge_stmt_reads ctx) ~operand:lane_operand prec llsc
+                            ~capture_reads:(capture_expr_reads ctx) ~operand:lane_operand prec llsc
                         in
                         doc
                     | Local_scope _ | Get_local _ | Get_merge_buffer _ | Get_dynamic _
@@ -10244,8 +10195,7 @@ module C_syntax (B : C_syntax_config) = struct
         ([], expr)
     | Ternop _ | Binop _ | Unop _ ->
         pp_scalar_op ~serial_loop_kernel:ctx.serial_loop_kernel
-          ~capture_reads:(capture_expr_reads ctx) ~charge_reads:(charge_stmt_reads ctx)
-          ~operand:(pp_scalar ctx) prec vcomp
+          ~capture_reads:(capture_expr_reads ctx) ~operand:(pp_scalar ctx) prec vcomp
 
   and debug_float ctx ?guard (prec : Ops.prec) (value : Low_level.scalar_t) :
       PPrint.document * PPrint.document list =

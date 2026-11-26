@@ -671,4 +671,5 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
       [ "uint4x32_t"; "arrayjit_threefry4x32_light" ] );
   ]
 
-let builtins = Builtins_cc.cuda_like_power_builtins @ builtins
+let builtins =
+  Builtins_cc.cuda_like_power_builtins @ Builtins_cc.cuda_like_sat01_builtins @ builtins

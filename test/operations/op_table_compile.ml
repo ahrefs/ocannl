@@ -796,6 +796,7 @@ let unguarded_functions =
       [
         ((table, "ocannl_max"), "a template comparing operands in their common type");
         ((table, "ocannl_min"), "a template comparing operands in their common type");
+        ((table, "ocannl_sat01_open"), "a template deducing the condition and comparison types");
         ( (table, "threefry_round"),
           "state passed by reference, internal to guarded threefry functions" );
       ])

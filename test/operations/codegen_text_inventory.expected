@@ -101,7 +101,7 @@ roots scanned: arrayjit/test, test
 arrayjit/test/test_cross_cse.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_cross_cse]
 arrayjit/test/test_cuda_like_config.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_cuda_like_config; also pins text this scan cannot name: untraced callback, mutation or unseen buffer write]
     "? ocannl_sel_a__ : 0.0f"
-    "x > 0.0f && x < 1.0f"
+    "ocannl_sat01_open((x), 0.0f, 1.0f)"
 arrayjit/test/test_local_scope_init.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_local_scope_init]
 arrayjit/test/test_render_context.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_render_context; also pins text this scan cannot name: untraced callback, opaque aggregate component]
     "] = (float)(0.0)"

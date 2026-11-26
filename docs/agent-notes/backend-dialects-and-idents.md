@@ -144,9 +144,12 @@ files.
   of 2^32. `tensor/operation.ml` uses the gate for the backward pass of `sat01`, whose gradient
   at zero is now zero on cc. `sat01_gradient_endpoints` checks the tensor backward pass at both
   endpoints and at 0.5 with a nonzero upstream gradient.
-  Metal evaluates the condition once in `ocannl_sat01_open` and leaves the payload in the
-  ternary. The helper deduces the condition's type, so it preserves integer promotions.
-  `branchless_select` counts condition reads in the emitted Metal kernel.
+  Metal, CUDA and HIP evaluate the condition once in a typed predicate. CUDA and HIP share
+  `ocannl_sat01_open` and `ocannl_sat01_open_half`. The half helper has its own key so selecting
+  the generic helper preserves CUDA's architecture floor. The ternary guards the payload and
+  determines the result type. `test_cuda_like_config` checks the PTX target after prelude
+  selection for f32 and f16. `branchless_select` counts condition reads in the emitted kernels,
+  including an inlined integer expression.
 - Metal has no `double`, and f64 stays rejected in `typ_of_prec` — a declared double buffer must
   fail rather than be silently degraded; only scalar expression casts render as `float`. So a
   backend-agnostic test must never reach for `double` just to have a second precision:

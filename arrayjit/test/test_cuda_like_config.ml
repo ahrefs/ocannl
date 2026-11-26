@@ -168,13 +168,12 @@ let () =
     ~f:(String.is_prefix ~prefix:"(__nv_fp8_e5m2)(");
   p_all "both shared dialects preserve operand evaluation contracts"
     [
-      (Cuda.binop_syntax, Cuda.ternop_syntax, Cuda.binop_arg1_uses, Cuda.select_blend_syntax);
-      (Hip.binop_syntax, Hip.ternop_syntax, Hip.binop_arg1_uses, Hip.select_blend_syntax);
+      (Cuda.binop_syntax, Cuda.ternop_syntax, Cuda.select_blend_syntax);
+      (Hip.binop_syntax, Hip.ternop_syntax, Hip.select_blend_syntax);
     ]
-    ~f:(fun (binop_syntax, ternop_syntax, binop_arg1_uses, select_blend_syntax) ->
+    ~f:(fun (binop_syntax, ternop_syntax, select_blend_syntax) ->
       List.is_empty
-        (Cs.operand_conditionality_violations ~binop_syntax ~ternop_syntax ~binop_arg1_uses
-           ~select_blend_syntax));
+        (Cs.operand_conditionality_violations ~binop_syntax ~ternop_syntax ~select_blend_syntax));
   (* gh-ocannl-1695: HIP blends a value select over [auto] locals at every float compute precision
      but fp8, CUDA at none (ptxas if-converts the short-circuiting spelling itself), and the blend's
      truth is the dialect's own spelling of the open unit interval. *)
@@ -268,7 +267,7 @@ let () =
   in
   p "the GPU Satur01 blend binds its operand, then keeps the dialect's own test over the local"
     (String.is_prefix gate ~prefix:"[&]() { auto ocannl_sel_a__ = g;"
-    && String.is_substring gate ~substring:"x > 0.0f && x < 1.0f"
+    && String.is_substring gate ~substring:"ocannl_sat01_open((x), 0.0f, 1.0f)"
     && String.is_substring gate ~substring:"? ocannl_sel_a__ : 0.0f"
     && String.is_prefix gate_stmt ~prefix:"({ auto ocannl_sel_a__ = g;"
     && String.is_suffix gate_stmt ~suffix:"; })");
@@ -333,3 +332,17 @@ let () =
     ~f:(fun name ->
       String.equal (Cuda_syntax.kernel_ident name) name
       && String.equal (Hip_syntax.kernel_ident name) name)
+
+(* The floor policy reads the rendered predicate and the prelude it selects. *)
+let () =
+  let source prec =
+    let proc_doc = Cuda.binop_syntax prec Ops.Satur01_gate a b in
+    Cuda_syntax.filter_and_prepend_builtins ~routine_names:[] ~includes:""
+      ~builtins:Builtins_cuda.builtins ~proc_doc ()
+  in
+  let arch_options = Ir.Cuda_mma.gpu_arch_options ~target:Floor ~device_cc:70 in
+  let single = source Ops.single in
+  p_empty "CUDA f32 Satur01_gate keeps the default PTX target" ~over:[ single ]
+    (arch_options single);
+  p "CUDA f16 Satur01_gate selects the half arithmetic target"
+    (List.equal String.equal (arch_options (source Ops.half)) [ "--gpu-architecture=compute_70" ])

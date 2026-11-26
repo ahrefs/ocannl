@@ -19,13 +19,14 @@
    at f32, f64, a half-precision condition beside an f32 result, and bf16 storage computing at f32;
    and, on cc, a gate and a [Where] composed into further arithmetic, whose rounding follows the
    [?:] spelling's C type (a gate's [0.0f] literal and a [Where] of floats both stay float). -
-   Emission, on cc: those legs call the blend and keep no [?:] spelling of their select. On Metal,
-   count the condition-buffer reads in the generated statements for the two [Satur01_gate] fixtures.
-   Guards, on cc: an index-guarded out-of-range read and a value-guarded [Get_dynamic] gather (its
-   index runs far out of range on the inactive lanes) keep [?:]; a value select over an index guard
-   blends outside and keeps the inner guard. Executed with the hazardous reads inactive. - Assembly,
-   on cc's own compiler and kernel flags: no conditional branch is attributed to a select's source
-   lines, and those lines carry instructions, the realistic leg's included (gh-ocannl-1660); on CUDA
+   Emission, on cc: those legs call the blend and keep no [?:] spelling of their select. Count the
+   condition-buffer reads in the generated statements for the two [Satur01_gate] fixtures. The count
+   covers the direct and volatile-cast subscript spellings of the condition buffer. Guards, on cc:
+   an index-guarded out-of-range read and a value-guarded [Get_dynamic] gather (its index runs far
+   out of range on the inactive lanes) keep [?:]; a value select over an index guard blends outside
+   and keeps the inner guard. Executed with the hazardous reads inactive. - Assembly, on cc's own
+   compiler and kernel flags: no conditional branch is attributed to a select's source lines, and
+   those lines carry instructions, the realistic leg's included (gh-ocannl-1660); on CUDA
    (gh-ocannl-1695), the same claim of the code object the run compiled (SASS through [ptxas] and
    [nvdisasm]). HIP keeps loaded arms conditional and blends the register-only gate
    (gh-ocannl-2427), whose AMDGPU code object is read through [llvm-objdump]. On Metal
@@ -805,20 +806,18 @@ let () =
         ~f:Fn.id)
 
 let () =
-  let prefix = (Context.backend_facts_of_name backend_name).Ir.Backend_intf.node_ident_prefix in
   List.iter [ "bs_sat01_gate"; "bs_sat01_gate_int32" ] ~f:(fun name ->
       let leg = List.find_exn legs ~f:(fun leg -> String.equal leg.name name) in
-      in_legf ~leg:air_leg "%s: Metal reads the condition once" name (fun label ->
-          let condition, _ = List.hd_exn leg.seed in
-          let text = kernel_text name in
-          p label
-            (Option.value_map condition.Tn.code_name ~default:false ~f:(fun ident ->
-                 let ident = prefix ^ ident in
-                 let reads suffix =
-                   List.length
-                     (String.substr_index_all text ~may_overlap:false ~pattern:(ident ^ suffix))
-                 in
-                 reads "[" + reads ")[" = 1))))
+      let condition, _ = List.hd_exn leg.seed in
+      let text = kernel_text name in
+      pf "%s: reads the condition once" name
+        (Option.value_map condition.Tn.code_name ~default:false ~f:(fun ident ->
+             let ident = facts.node_ident_prefix ^ ident in
+             let reads suffix =
+               List.length
+                 (String.substr_index_all text ~may_overlap:false ~pattern:(ident ^ suffix))
+             in
+             reads "[" + reads ")[" = 1)))
 
 (* The assembly claim, on the shapes of the backward pass: [where cond g 0], a [Relu_gate] and the
    max-pool gate's float equality, each gating a load from a buffer argument (which the compiler
