@@ -7365,6 +7365,24 @@ let make () =
 let leg = Verdict.leg ~on:"cuda" ~when_:(((fun () -> make ()) ()).ok) ()
 let () = in_leg ~leg "projected named helper body" (fun label -> p label true)|ocaml},
       [ "call:Autotune.detect_conv" ] );
+    ( "refuses an eager ambient read passed to an immediately applied anonymous function that \
+       consumes it inside an explicit Ll_test.advertised policy",
+      {ocaml|open Verdict.Claims
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:
+      ((fun x ->
+          Ll_test.advertised
+            ~policy:{ (Ir.Numerics.get ()) with Ir.Numerics.tf32_matmuls = x }
+            ~backend_name:"cuda" ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single
+            ~d_prec:Ir.Ops.single ())
+         (Ir.Numerics.get ()).tf32_matmuls)
+    ()
+let () =
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg "explicit policy inline arg" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
   ]
 
 let run_leg_gate_controls () =

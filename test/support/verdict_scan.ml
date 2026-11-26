@@ -8673,8 +8673,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
       method inspect_gate ~is_sub_leg ~leg_scopes env expr =
         let seen_val_projs = Hash_set.create (module String) in
         let visited_whole_ambient = Hash_set.create (module Int) in
-        let visited_whole_wrapped = Hash_set.create (module Int) in
-        let in_policy_wrapper = ref false in
+        let visited_whole_explicit = Hash_set.create (module Int) in
         let seen_param_calls = Hash_set.create (module String) in
         let active_fn_calls = Hash_set.create (module Int) in
         let found_disallowed = ref [] in
@@ -8710,16 +8709,11 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
           current_eval_kind <- Some ek;
           Exn.protect ~finally:(fun () -> current_eval_kind <- saved) ~f
         in
-        let with_policy_wrapper f =
-          let saved = !in_policy_wrapper in
-          in_policy_wrapper := true;
-          Exn.protect ~finally:(fun () -> in_policy_wrapper := saved) ~f
-        in
         let rec scan_unused_inline_args ~eval_kind ~in_explicit_policy all_args extra_args
             whole_arg_ids scrut_opt =
           let was_visited_whole id =
             Hash_set.mem visited_whole_ambient id
-            || ((!in_policy_wrapper || in_explicit_policy) && Hash_set.mem visited_whole_wrapped id)
+            || (in_explicit_policy && Hash_set.mem visited_whole_explicit id)
           in
           (match scrut_opt with
           | Some (scrut, scrut_env, scrut_eval, scrut_whole_ids)
@@ -8744,7 +8738,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
           let visit_val v =
             if List.is_empty v.lg_proj then
               Hash_set.add
-                (if !in_policy_wrapper then visited_whole_wrapped else visited_whole_ambient)
+                (if in_explicit_policy then visited_whole_explicit else visited_whole_ambient)
                 v.lg_id;
             let vkey =
               Printf.sprintf "%d:%b:%s:" v.lg_id in_explicit_policy (eval_kind_key eval_kind)
@@ -8807,7 +8801,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
               match split_policy_wrapper_call env expr with
               | Some (_, non_cb, cb) ->
                   List.iter non_cb ~f:(walk ~eval_kind ~in_explicit_policy env);
-                  with_policy_wrapper (fun () -> walk ~eval_kind ~in_explicit_policy:true env cb)
+                  walk ~eval_kind ~in_explicit_policy:true env cb
               | None -> (
                   (* Classify [Ll_test.advertised], [Ll_test.tensorized_capability], and
                      [Ll_test.tensorized_matmul_capability] across local value aliases and
