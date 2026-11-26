@@ -680,6 +680,7 @@ env_var_deps.ml: [scanner-refusal:4b254ada2beaa28473ff82577bf198ee] undeclared a
 env_var_deps.ml: [scanner-refusal:1692b7fcf8f2e58a4884d397c7d39c9c] non-default select arm (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:f1f5e5ad4613c408d71f8a02b4462be9] non-default select arm (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:4112d0c301944346aa5b2b228db48361] non-default select arm (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:c32893cb68f676d5b920e664ddd544a1] default-module-set stanza discovers (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 refused_action_streams.ml has exactly the explicitly assigned refusal controls: true
 ll_test_ratchet.ml has exactly the explicitly assigned refusal controls: true
 exact_partials_ratchet.ml has exactly the explicitly assigned refusal controls: true

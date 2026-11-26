@@ -2594,7 +2594,9 @@ let main () =
       let policy_listed = ref [] in
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
-          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
+          let directory_modules =
+            Scan.directory_modules ~stanzas:group ~dir:here (List.map source_files ~f:fst)
+          in
           (* The ambient gate's own aliases are the one entry no member answers for: every family
              stanza lists one, so the stanza is rerun when the environment changes. *)
           let gates =
@@ -3108,7 +3110,9 @@ let main () =
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
           let directory = if String.is_empty here then "." else here in
-          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
+          let directory_modules =
+            Scan.directory_modules ~stanzas:group ~dir:here (List.map source_files ~f:fst)
+          in
           List.iter group ~f:(fun stanza ->
               match
                 Scan.stanza_programs ~subdir ~runner_stanzas:all_group_runners ~directory_modules
@@ -3459,7 +3463,9 @@ let main () =
          calling it passes, which is the point. *)
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
-          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
+          let directory_modules =
+            Scan.directory_modules ~stanzas:group ~dir:here (List.map source_files ~f:fst)
+          in
           List.iter group ~f:(fun stanza ->
               match Scan.head stanza with
               | Some "library" ->
@@ -3509,7 +3515,9 @@ let main () =
          tomorrow is asked for its alias the day it lands. *)
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
-          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
+          let directory_modules =
+            Scan.directory_modules ~stanzas:group ~dir:here (List.map source_files ~f:fst)
+          in
           let where =
             if String.is_empty subdir then dune_file
             else Printf.sprintf "%s, in `(subdir %s …)`" dune_file subdir
@@ -6946,6 +6954,42 @@ let select_arm_control () =
           ~real_src:"let%expect_test \"arm\" = print_string \"x\"; [%expect {| x |}]\n"
           ~generated_src:"let () = ()\n" ()
       in
+      let default_set_dune =
+        {dune|(rule
+ ; ocannl-backend: none -- synthetic ambient-gate control fixture.
+ (alias runtest-gate)
+ (deps ocannl_config (universe))
+ (action (run %{dep:gate.exe})))
+
+(executable
+ (name gate)
+ (modules gate)
+ (link_flags -linkall)
+ (libraries arrayjit.utils))
+
+(alias
+ (name runtest)
+ (deps (alias runtest-gate)))
+
+(test
+ ; ocannl-backend: cc -- synthetic default-module-set select-arm control fixture.
+ (name probe)
+ (deps ocannl_config)
+ (libraries base (select helper.ml from (cudajit.cuda -> helper.real.ml) (-> helper.missing.ml))))
+|dune}
+      in
+      let default_set_arm =
+        write_file (Stdlib.Filename.concat root "t/dune") default_set_dune;
+        write_file (Stdlib.Filename.concat root "t/gate.ml") "let () = ()\n";
+        write_file (Stdlib.Filename.concat root "t/probe.ml") "let () = ()\n";
+        write_file (Stdlib.Filename.concat root "t/helper.real.ml") "let _ = Autotune.tune ()\n";
+        write_file (Stdlib.Filename.concat root "t/helper.missing.ml") "let () = ()\n";
+        let paths =
+          "t/dune" :: "t/gate.ml" :: "t/probe.ml" :: "t/helper.real.ml" :: "t/helper.missing.ml"
+          :: context_paths
+        in
+        run_checker ~root ~exe ("." :: paths)
+      in
       let clean_ok = exited 0 clean in
       let gate_ok =
         exited 1 gate_arm
@@ -6958,6 +7002,7 @@ let select_arm_control () =
       let search_ok = exited 1 search_arm && says "starts a search" search_arm in
       let pinned_ok = exited 0 pinned_search_arm in
       let inline_ok = exited 1 inline_arm && says "`probe.ml` holds inline tests" inline_arm in
+      let default_set_ok = exited 1 default_set_arm && says "starts a search" default_set_arm in
       List.iter
         [
           ("clean", clean_ok, clean);
@@ -6966,6 +7011,7 @@ let select_arm_control () =
           ("search", search_ok, search_arm);
           ("pinned_search", pinned_ok, pinned_search_arm);
           ("inline", inline_ok, inline_arm);
+          ("default_set", default_set_ok, default_set_arm);
         ]
         ~f:(fun (label, ok, (status, text)) ->
           if not ok then
@@ -6979,7 +7025,9 @@ let select_arm_control () =
         env_ok;
       Verdict.p "an unpinned search in a non-default select arm is refused" search_ok;
       Verdict.p "a pinned search in a non-default select arm passes" pinned_ok;
-      Verdict.p "an inline test in a non-default select arm requires a per-module alias" inline_ok)
+      Verdict.p "an inline test in a non-default select arm requires a per-module alias" inline_ok;
+      Verdict.p "a default-module-set stanza discovers a select target and checks its arms"
+        default_set_ok)
 
 let () =
   match Array.to_list argv with

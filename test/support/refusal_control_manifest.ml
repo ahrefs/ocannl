@@ -898,6 +898,7 @@ let raw_entries =
         "[scanner-refusal:1692b7fcf8f2e58a4884d397c7d39c9c] non-default select arm";
         "[scanner-refusal:f1f5e5ad4613c408d71f8a02b4462be9] non-default select arm";
         "[scanner-refusal:4112d0c301944346aa5b2b228db48361] non-default select arm";
+        "[scanner-refusal:c32893cb68f676d5b920e664ddd544a1] default-module-set stanza discovers";
       ] );
     ( "ocamlformat_ignore_scan.ml",
       [

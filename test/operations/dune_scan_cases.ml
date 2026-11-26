@@ -1570,7 +1570,7 @@ let render_programs ~sources source =
     List.filter_map placed ~f:(fun (subdir, stanza) ->
         Option.some_if (String.is_empty subdir) stanza)
   in
-  let directory_modules = Scan.directory_modules ~dir:"" sources in
+  let directory_modules = Scan.directory_modules ~stanzas:group ~dir:"" sources in
   let words = function [] -> "-" | words -> String.concat ~sep:" " words in
   List.concat_map group ~f:(fun stanza ->
       match Scan.stanza_programs ~runner_stanzas:placed ~directory_modules group stanza with
@@ -1617,6 +1617,13 @@ let stanza_programs_cases =
         "tests first: modules first common; no implementation -; run by itself";
         "tests second: modules second common; no implementation -; run by itself";
       ] );
+    (* gh-ocannl-2482: dotted select arms are not modules of their own; the logical select target
+       joins the directory's default module set even when the generated `.ml` is excluded. *)
+    ( "a default-module-set stanza gets a select's logical target module rather than its dotted arms",
+      [ "probe.ml"; "helper.real.ml"; "helper.missing.ml" ],
+      {dune|(test (name probe)
+ (libraries base (select helper.ml from (cudajit.cuda -> helper.real.ml) (-> helper.missing.ml))))|dune},
+      [ "test probe: modules probe helper; no implementation -; run by itself" ] );
   ]
 
 (* The dumb reading against the placed one, in the contract's own three counts: the whole text, the

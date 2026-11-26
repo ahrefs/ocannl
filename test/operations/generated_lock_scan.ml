@@ -226,7 +226,9 @@ let analyze ~fail ~dune_files ~sources =
               if String.equal o.dune_file s.dune_file && String.equal o.dir s.dir then Some o.sexp
               else None)
         in
-        let directory_modules = Scan.directory_modules ~dir:s.dir (List.map sources ~f:fst) in
+        let directory_modules =
+          Scan.directory_modules ~stanzas:group ~dir:s.dir (List.map sources ~f:fst)
+        in
         (* [Some] under the [program_heads] guard above, which is the list it answers for. *)
         let programs =
           Option.value_exn
