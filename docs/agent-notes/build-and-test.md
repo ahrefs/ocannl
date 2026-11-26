@@ -1559,6 +1559,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   dune-list check printed `PASS`. A new real-dune check therefore lands as a dune-list line, and
   its leg's number in the selector if it is a new leg -- the job names the check it did not see
   pass. A nested run of a harness copy unsets the record variable with the others.
+  `tools/test-real-dune-registrations.sh` enforces both registrations locally and in the merge
+  build: Leg 1 scans every manifest harness for live `harness_real_dune` calls and verifies exact
+  agreement with `real_dune_legs`, Leg 2 runs every discovered leg under
+  `OCANNL_TOOL_HARNESS_NO_DUNE=1` and holds the emitted hidden-dune skips equal to
+  `tools/harness-skips-ci-shell-dune.txt`, and Leg 3 pins dropped, stale, over-selected and
+  unattributed controls (gh-ocannl-2486).
 
 - The three gh-ocannl-2140 fixtures separate a response verdict from teardown
   and later publication. `wait_signal_race.py` keeps its five-second cancellation
