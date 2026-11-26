@@ -23,3 +23,13 @@ val host_capabilities : unit -> (string * string) list
 
 val host_capabilities_from : system_version_plist:string -> (string * string) list
 (** Same probes with a supplied system version plist, for testing build changes in isolation. *)
+
+val with_select_rendering_policy :
+  policy:Ir.Backend_intf.select_blend_policy -> (unit -> 'a) -> 'a * string list
+(** Run a synchronous comparison on the calling domain with Metal's value selects rendered under
+    [policy] ({!Ir.Backend_intf.with_select_rendering_policy}) and return the full emitted source of
+    each compile in order. *)
+
+val with_select_rendering : blend:bool -> (unit -> 'a) -> 'a * string list
+(** Shorthand for {!with_select_rendering_policy} with [Blend_speculable] when [blend] is true and
+    [No_blend] otherwise (gh-ocannl-2326, gh-ocannl-2400). *)

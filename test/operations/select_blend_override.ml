@@ -15,8 +15,9 @@
    pool, backward: blended and short-circuiting, the same gradient, bitwise, with the blend emitted
    only where stated.
 
-   Emission claims run in a leg open where the renderer has a blend (cc, CUDA, HIP); Metal renders
-   none, so they skip there, while the placement and value claims run on every backend. *)
+   Emission claims run in a leg open where the renderer has a blend (cc, CUDA, HIP, Metal under
+   [Blend_over_locals] with [`Stmt_expr], gh-ocannl-2400), while the placement and value claims run
+   on every backend. *)
 
 (* cc-fp-contract: exact-operands -- sums of small integers, and a pool gradient selecting dyadic
    weights *)
@@ -146,7 +147,25 @@ let () =
         && not
              (String.is_substring
                 (Generated.main_logic (Generated.read name))
-                ~substring:blend_marker)))
+                ~substring:blend_marker)));
+  let serial_loop_leg =
+    Verdict.leg ~when_:(String.equal (Context.backend_name ctx) "metal") ~on:backend_name ()
+  in
+  Verdict.in_leg ~leg:serial_loop_leg "Metal defaults to serial-loop blending" (fun claim ->
+      p claim
+        (BI.equal_select_blend_policy (Context.backend_facts ctx).BI.select_blend_policy
+           Blend_serial_loop));
+  Verdict.in_leg ~leg:serial_loop_leg
+    "Metal's default policy leaves a two-loaded-arm select within the cap and blends in a serial \
+     loop" (fun claim ->
+      let name = "sbo_eq_serial_loop" in
+      let materialized, virtual_, lv = run_program ~name ~compile:(fun f -> f ctx) in
+      p claim
+        ((not materialized) && virtual_
+        && Array.length lv = 1
+        && Float.equal lv.(0) expected_loss
+        && String.is_substring (Generated.main_logic (Generated.read name)) ~substring:blend_marker
+        ))
 
 (* === The realistic composition: ReLU into a 2x2 max pool, backward === *)
 

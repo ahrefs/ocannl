@@ -390,7 +390,7 @@ let row_blend () =
   let source = Generated.main_logic (Generated.read name) in
   let ctx = Context.auto () in
   let blends =
-    Ir.Backend_intf.charges_select_arm_union (Context.backend_facts ctx)
+    Ir.Backend_intf.blends_serial_loop_selects (Context.backend_facts ctx)
     && Option.is_some ((Context.codegen_capabilities ctx).Ir.Backend_intf.select_blend single)
   in
   (* One claim name on every backend: the golden is backend-uniform. *)

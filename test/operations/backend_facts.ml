@@ -31,8 +31,11 @@ let () =
   p "the facts bind a hardware grid exactly where the device bounds a workgroup's threads"
     (Bool.equal (BI.binds_hardware_grid facts) (Option.is_some limits.max_threads_per_workgroup));
   let caps = Context.codegen_capabilities ctx in
+  let blend_precs =
+    if String.equal name "metal" then [ Ir.Ops.single ] else [ Ir.Ops.single; Ir.Ops.double ]
+  in
   p_all "codegen_capabilities.select_blend at f32 and f64 agrees with the select blend policy"
-    [ Ir.Ops.single; Ir.Ops.double ] ~f:(fun prec ->
+    blend_precs ~f:(fun prec ->
       Bool.equal
         (Option.is_some (caps.BI.select_blend prec))
         (not (BI.equal_select_blend_policy facts.BI.select_blend_policy No_blend)));
@@ -149,4 +152,6 @@ let () =
         { f with BI.select_blend_policy = No_blend } ))
     ~decide:materializes;
   p_none "load-free blending keeps the loaded select within the fan-in cap" bases ~f:(fun f ->
-      materializes { f with BI.select_blend_policy = Blend_load_free })
+      materializes { f with BI.select_blend_policy = Blend_load_free });
+  p_none "serial-loop blending keeps the loaded select within the fan-in cap" bases ~f:(fun f ->
+      materializes { f with BI.select_blend_policy = Blend_serial_loop })

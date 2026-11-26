@@ -7314,6 +7314,7 @@ let leg_gate_allowed_paths =
       "Ir.Backend_intf.advertises_mma_format";
       "Ir.Backend_intf.advertises_mma_format_in_scope";
       "Ir.Backend_intf.binds_hardware_grid";
+      "Ir.Backend_intf.blends_serial_loop_selects";
       "Ir.Backend_intf.charges_select_arm_union";
       "Ir.Backend_intf.compute_prec";
       "Ir.Backend_intf.equal_mma_emission_scope";

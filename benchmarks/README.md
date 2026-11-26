@@ -1266,6 +1266,36 @@ the inputs, as sibling links do when the root caches their read-only inputs. A f
 readiness check stops measurement until the failing check passes. A timed cell that fails or
 exhausts its cap needs a fresh directory after the failure is addressed.
 
+### Metal value-select benchmark
+
+`bench_metal_select` is the Metal counterpart of `bench_cuda_select` (gh-ocannl-2400). It checks
+and times short-circuiting `[?:]` against local-value blending (`C_syntax.Blend_over_locals` with
+`` `Stmt_expr ``, via `Metal_backend.with_select_rendering_policy`) across fixed parallel pointwise
+segments (`where_zero`, `relu_gate`, `where_eq`, `where_masked`) over five densities
+(`uniform_zero`, `uniform_half`, `sparse`, `half_div`, `dense`), a causal-mask score-load segment
+(`causal_mask`), a register-only arm (`reg_arm`), a single-threaded serial accumulation loop
+(`serial_relu_accum`), the realistic `pool_backward` kernel, and the `cifar_conv` training step
+(batch 64, comparing `No_blend`, `Blend_serial_loop`, `Blend_speculable`, and a `No_blend` control
+with the parameter snapshot restored before every synchronized step; `--step-segments` also gives
+isolated per-segment leads, and `--step-only` runs only the step). It generates its inputs in
+memory; `BENCH_SELECT_SOURCES=<dir>` writes each arm's emitted `.metal` sources. Build and verify
+with a dry run before requesting an exclusive `mac-studio` (M4 Max) measurement window:
+
+```sh
+dune build benchmarks/runners/ocannl/bench_metal_select.exe
+python3 -B benchmarks/cells.py cell --backend metal --dir "$DRY_DIR" --timeout 600 \
+  --expect metal_kernel_cache_mib=0 --expect output_debug_files_in_build_directory=false -- \
+  BENCH_RETIME_CALLS=8 _build/default/benchmarks/runners/ocannl/bench_metal_select.exe \
+  --ocannl_metal_kernel_cache_mib=0 --ocannl_output_debug_files_in_build_directory=false --dry-run
+```
+
+Start the exclusive window on `mac-studio` with `benchmarks/check-box.sh --box m4-max
+--generated-inputs --box-only` and proceed only on exit 0; then point `--dir` at a fresh empty
+directory (`"$RUN_DIR"`) — `cells.py` rejects a nonempty directory left by the dry run — and run
+without `--dry-run` (use a multiple of 4 for `BENCH_RETIME_CALLS` so the four-arm comparisons
+have equal position histograms; add `--step-segments` for isolated per-segment leads). Every Mac
+reading names its Mac (`mac-studio` M4 Max vs `macbook-pro` M4 Pro).
+
 ## Measurement boxes
 
 **Start every measurement session with `benchmarks/check-box.sh`** (gh-ocannl-1062), from the
