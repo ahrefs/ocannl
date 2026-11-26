@@ -4475,6 +4475,14 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     Option.iter !capture ~f:(fun (owner, hits) ->
         ignore (Hashtbl.add hits ~key:owner ~data:hit : [ `Ok | `Duplicate ]))
   in
+  (* The direct read checks before footprint dispatch, whose retraction can leave it uninstantiated.
+     A nested replay checks at its own read site. *)
+  let capture_reads_inherited_merge tn =
+    if Option.is_some !capture && Hash_set.mem inherited_merge_tainted tn then (
+      record_hit (Capture_reads_merge tn);
+      true)
+    else false
+  in
   let owner_hit tn = Option.bind !capture ~f:(fun (_, hits) -> Hashtbl.find hits tn) in
   (* gh-ocannl-1620: outside a capture walk, a read of routine-local scratch that this routine's own
      writes cover executes where it stands, but a template holding it would carry it to every read
@@ -4620,26 +4628,123 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     | Some candidate when (not (Tn.equal candidate tn)) && not will_store -> fun _ -> false
     | _ -> opaque
   in
-  (* The ordinary inlining of a read: the node's stored template instantiated at the read's indices,
-     as a scope local. [None] from [inline_computation] means the read site could not be served and
-     the node was committed [Never_virtual] there; the read then stays a buffer read. *)
-  let inline_get (traced : traced_array) indices ~enclosing : scalar_t =
+  (* gh-ocannl-1469: the loops whose extent may decide a [Where] condition in the walked code —
+     every enclosing loop except the [opaque] ones. Code that executes where it stands holds every
+     loop's extent; code the walk is producing as a node's stored template replays with the read
+     site's index substituted for the template's write-index symbols, which need not lie in the
+     producer's extent, so the capture of a [For_loop] candidate (phase 1 below) makes those symbols
+     [opaque] (the rule [elide_unevaluated_operands] applies to a template, gh-ocannl-625). Any
+     other enclosing loop -- every loop around a statement stored on its own, its write-index loops
+     included -- is outside the stored code, and a template mentioning its symbol is refused at its
+     store ([Non_virtual 9] / [10]): an emitted decision resting on it never reaches a stored
+     template, and its extent holds where the code runs. *)
+  let decision_loops ~opaque enclosing = List.filter enclosing ~f:(fun (s, _) -> not (opaque s)) in
+  let walk_where ~opaque ~enclosing ~loop cond yes no =
+    let arg (value, prec) = (loop value, prec) in
+    let cond = arg cond in
+    (* A dead arm must not instantiate an inherited computation or register its inputs. Walk the
+       condition and the live arms in program order (gh-ocannl-2052). *)
+    match decide_where ~loops:(decision_loops ~opaque enclosing) cond with
+    | Some true -> Ternop (Ops.Where, cond, arg yes, elided_operand)
+    | Some false -> Ternop (Ops.Where, cond, elided_operand, arg no)
+    | None ->
+        let yes = arg yes in
+        let no = arg no in
+        Ternop (Ops.Where, cond, yes, no)
+  in
+  (* gh-ocannl-2493: a shared-loop capture can retain a read of a later candidate. Once inherited,
+     it needs to be served at the instantiated indices, after sibling setters and omitted components
+     have been dropped. A node written here can acquire local components even if it has an inherited
+     prefix. Expanding its retained reads, or expanding a retained read using that node's current
+     components, could bind an earlier read to a later local write. *)
+  let written_here (traced : traced_array) = traced.has_assignment || traced.zeroed_out in
+  let instantiate_read ~(traced : traced_array) indices ~enclosing ~id =
     let tn = traced.tn in
-    let id = fresh_scope tn in
-    (* gh-ocannl-1551: during a capture walk, an inherited computation that cannot be instantiated
-       here is a hit (see [capture]), not a refusal. *)
     let on_inherited_unservable =
       Option.map !capture ~f:(fun _ code -> record_hit (Capture_read_uninlinable (tn, code)))
     in
-    (* gh-ocannl-1896: the read site's loops, innermost first, so an inner binder shadows. *)
     let call_range s = List.Assoc.find enclosing s ~equal:Indexing.equal_symbol in
-    Option.value ~default:(Get (tn, indices))
-    @@ Option.map
-         (inline_computation ~fresh_symbol ?on_inherited_unservable ~call_range ~id
-            ~inherited_merge_tainted ~inherited_tns optim_ctx traced static_indices indices)
-         ~f:(fun body ->
-           if Hash_set.mem inherited_tns tn then record_spliced_reads body;
-           Local_scope { id; body; orig_indices = indices; mint = Inlined_computation })
+    inline_computation ~fresh_symbol ?on_inherited_unservable ~call_range ~id
+      ~inherited_merge_tainted ~inherited_tns optim_ctx traced static_indices indices
+  in
+  let replay_scope id orig_indices body =
+    Local_scope { id; body; orig_indices; mint = Inlined_computation }
+  in
+  let rec close_replay ~opaque ~process_for ~enclosing (code : t) : t =
+    let proc = close_replay ~opaque ~process_for ~enclosing in
+    match code with
+    | Seq (a, b) ->
+        let a = proc a in
+        let b = proc b in
+        Seq (a, b)
+    | For_loop ({ index; from_; to_; body; _ } as loop) ->
+        let body =
+          close_replay ~opaque ~process_for ~enclosing:((index, (from_, to_)) :: enclosing) body
+        in
+        For_loop { loop with body }
+    | Set_local (id, value) ->
+        Set_local (id, close_replay_scalar ~opaque ~process_for ~enclosing value)
+    | Noop | Comment _ | Staged_compilation _ -> code
+    | Scan_loop _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _ | Declare_local _
+    | Workgroup_barrier | Tile_mma _ | If _ ->
+        (* Instantiation emits a scalar computation with local writes. *)
+        assert false
+  and close_replay_scalar ~opaque ~process_for ~enclosing (value : scalar_t) : scalar_t =
+    let loop = close_replay_scalar ~opaque ~process_for ~enclosing in
+    let arg (value, prec) = (loop value, prec) in
+    match value with
+    | Get (tn, indices)
+      when Hash_set.mem inherited_tns tn
+           && Tn.Placements.known_virtual plc tn
+           && not (Set.mem process_for tn) -> (
+        let traced = get_node traced_store tn in
+        if written_here traced || capture_reads_inherited_merge tn then value
+        else
+          let id = fresh_scope tn in
+          match instantiate_read ~traced indices ~enclosing ~id with
+          | None -> value
+          | Some body ->
+              let body =
+                close_replay ~opaque ~process_for:(Set.add process_for tn) ~enclosing body
+              in
+              replay_scope id indices body)
+    | Local_scope opts when not (scope_retracts_to_buffer plc opts.id.tn) ->
+        let body =
+          close_replay ~opaque ~process_for:(Set.add process_for opts.id.tn) ~enclosing opts.body
+        in
+        Local_scope { opts with body }
+    | Get_dynamic opts -> Get_dynamic { opts with dyn_value = arg opts.dyn_value }
+    | Ternop (Ops.Where, cond, yes, no) -> walk_where ~opaque ~enclosing ~loop cond yes no
+    | Ternop (op, a, b, c) ->
+        let a = arg a in
+        let b = arg b in
+        let c = arg c in
+        Ternop (op, a, b, c)
+    | Binop (op, a, b) ->
+        let a = arg a in
+        let b = arg b in
+        Binop (op, a, b)
+    | Unop (op, a) -> Unop (op, arg a)
+    | Constant _ | Constant_bits _ | Get _ | Get_local _ | Get_merge_buffer _ | Embed_index _
+    | Local_scope _ ->
+        value
+  in
+  let instantiate_at_read ~opaque ~process_for ~(traced : traced_array) indices ~enclosing ~id =
+    Option.map (instantiate_read ~traced indices ~enclosing ~id) ~f:(fun body ->
+        if Hash_set.mem inherited_tns traced.tn then (
+          let body =
+            if written_here traced then body
+            else close_replay ~opaque ~process_for:(Set.add process_for traced.tn) ~enclosing body
+          in
+          record_spliced_reads body;
+          body)
+        else body)
+  in
+  let inline_get ~opaque ~process_for (traced : traced_array) indices ~enclosing =
+    let id = fresh_scope traced.tn in
+    match instantiate_at_read ~opaque ~process_for ~traced indices ~enclosing ~id with
+    | Some body -> replay_scope id indices body
+    | None -> Get (traced.tn, indices)
   in
   (* gh-ocannl-616: footprint-scoped materialization of a read. The prologues minted while a
      top-level statement is walked are spliced ahead of it by the driver at the bottom; the
@@ -4656,7 +4761,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     Set.of_list (module Indexing.Symbol)
     @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
   in
-  let footprint_prologue (traced : traced_array) (indices : Indexing.axis_index array) ~enclosing =
+  let footprint_prologue ~opaque ~process_for (traced : traced_array)
+      (indices : Indexing.axis_index array) ~enclosing =
     let tn = traced.tn in
     let mentioned =
       Array.fold indices
@@ -4707,17 +4813,10 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         in
         let call_args = Array.map indices ~f:substitute in
         let id = fresh_scope tn in
-        let call_range f =
-          List.find_map fresh ~f:(fun (_, f', to_) ->
-              Option.some_if (Indexing.equal_symbol f f') (0, to_))
-        in
-        match
-          inline_computation ~fresh_symbol ~call_range ~id ~inherited_merge_tainted ~inherited_tns
-            optim_ctx traced static_indices call_args
-        with
+        let enclosing = List.rev_map fresh ~f:(fun (_, f, to_) -> (f, (0, to_))) in
+        match instantiate_at_read ~opaque ~process_for ~traced call_args ~enclosing ~id with
         | None -> `Rejected
         | Some body ->
-            if Hash_set.mem inherited_tns tn then record_spliced_reads body;
             let dims =
               match fresh with
               | [] -> [| 1 |]
@@ -4782,7 +4881,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
      ([footprint_ok]), or at a site the prologue builder cannot shape, the decision retracts: to the
      cap's own materialization for a local producer (recorded so the decision surface does not offer
      the flip again), to plain inlining for an inherited node or an explicit preference. *)
-  let footprint_get ~footprint_ok (traced : traced_array) indices ~enclosing : scalar_t =
+  let footprint_get ~opaque ~process_for ~footprint_ok (traced : traced_array) indices ~enclosing :
+      scalar_t =
     let tn = traced.tn in
     let retract () =
       match Hashtbl.find_exn footprint_scoped tn with
@@ -4791,11 +4891,11 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           Hashtbl.remove footprint_scoped tn;
           Hash_set.add footprint_retracted tn;
           Get (tn, indices)
-      | None -> inline_get traced indices ~enclosing
+      | None -> inline_get ~opaque ~process_for traced indices ~enclosing
     in
     if not footprint_ok then retract ()
     else
-      match footprint_prologue traced indices ~enclosing with
+      match footprint_prologue ~opaque ~process_for traced indices ~enclosing with
       | `Footprinted read -> read
       | `Rejected -> Get (tn, indices)
       | `Unsupported -> retract ()
@@ -4826,17 +4926,6 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     | Tile_mma _ | Set_dynamic _ ->
         false
   in
-  (* gh-ocannl-1469: the loops whose extent may decide a [Where] condition in the walked code —
-     every enclosing loop except the [opaque] ones. Code that executes where it stands holds every
-     loop's extent; code the walk is producing as a node's stored template replays with the read
-     site's index substituted for the template's write-index symbols, which need not lie in the
-     producer's extent, so the capture of a [For_loop] candidate (phase 1 below) makes those symbols
-     [opaque] (the rule [elide_unevaluated_operands] applies to a template, gh-ocannl-625). Any
-     other enclosing loop -- every loop around a statement stored on its own, its write-index loops
-     included -- is outside the stored code, and a template mentioning its symbol is refused at its
-     store ([Non_virtual 9] / [10]): an emitted decision resting on it never reaches a stored
-     template, and its extent holds where the code runs. *)
-  let decision_loops ~opaque enclosing = List.filter enclosing ~f:(fun (s, _) -> not (opaque s)) in
   (* [process_for] holds tensors whose [Get]s must be left untouched (self/recursive references,
      replaced by [Get_local] during the tensor's own [inline_computation]). [owned] holds tensors
      whose whole-loop computation is captured at an enclosing [For_loop]: their per-statement
@@ -4934,7 +5023,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                  provider chains). [owned'] suppresses per-statement auto-store for every
                  shared-loop candidate; [in_storage_pass] stops nested re-storage.
                  [check_and_store]/[inline_computation] filter the stored body to [k]'s own setters,
-                 so the irrelevant sibling setters left un-rewritten here are dropped. *)
+                 so the irrelevant sibling setters left un-rewritten here are dropped. A raw read of
+                 a later candidate in [k]'s own setter is served when the template is inherited. *)
               List.iteri candidates ~f:(fun k tn ->
                   if stores tn then (
                     let node : traced_array = get_node traced_store tn in
@@ -5128,7 +5218,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         (* [Get_local] will replace this [Get] during [inline_computation] if [tn] remains
            virtual. *)
         llsc
-    | Get (tn, indices) -> (
+    | Get (tn, indices) ->
         let traced = get_node traced_store tn in
         if Tn.Placements.known_non_virtual plc traced.tn then (
           (* Review round 13: [Local] is non-virtual yet does NOT persist across routines — a node
@@ -5151,17 +5241,10 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                    then record_local_dependent tn)
                  else raise (Utils.User_error (inherited_local_read_rejection tn)));
           llsc)
-        else
-          match !capture with
-          | Some _ when Hash_set.mem inherited_merge_tainted tn ->
-              (* gh-ocannl-1514: a hit, see [capture]. Ahead of the footprint arm too, which in a
-                 capture walk retracts an inherited node to [inline_get]. *)
-              record_hit (Capture_reads_merge tn);
-              llsc
-          | _ ->
-              if Hashtbl.mem footprint_scoped tn then
-                footprint_get ~footprint_ok traced indices ~enclosing
-              else inline_get traced indices ~enclosing)
+        else if capture_reads_inherited_merge tn then llsc
+        else if Hashtbl.mem footprint_scoped tn then
+          footprint_get ~opaque ~process_for ~footprint_ok traced indices ~enclosing
+        else inline_get ~opaque ~process_for traced indices ~enclosing
     | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, prec } ->
         (* Review round 12: a dynamically-indexed read cannot be served by recomputation (the gather
            index is only known at runtime), so a LOCAL table materializes — but an INHERITED table
@@ -5206,23 +5289,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     | Get_local _ -> llsc
     | Get_merge_buffer (_, _) -> llsc
     | Embed_index _ -> llsc
-    (* gh-ocannl-1469: the arm of a [Where] whose condition is decided is never evaluated — do not
-       descend into it, as for a projection's discarded operand below: inlining there could reject
-       the routine for code that never runs (a merge-tainted inherited computation), mint a scope,
-       or register a spliced read. It becomes {!elided_operand}, the form
-       [elide_unevaluated_operands] gives a stored template (gh-ocannl-625), so the condition and
-       the live arm are still walked and kept exactly. *)
-    | Ternop (Ops.Where, (cnd, cprec), (llv2, prec2), (llv3, prec3)) -> (
-        let cond = (loop cnd, cprec) in
-        match decide_where ~loops:(decision_loops ~opaque enclosing) cond with
-        | Some true -> Ternop (Ops.Where, cond, (loop llv2, prec2), elided_operand)
-        | Some false -> Ternop (Ops.Where, cond, elided_operand, (loop llv3, prec3))
-        | None ->
-            (* gh-ocannl-2052: the condition was walked first; mint arm scopes and prologues left to
-               right too. Pin: [operand_walk_order]. *)
-            let v2 = loop llv2 in
-            let v3 = loop llv3 in
-            Ternop (Ops.Where, cond, (v2, prec2), (v3, prec3)))
+    | Ternop (Ops.Where, cond, yes, no) -> walk_where ~opaque ~enclosing ~loop cond yes no
     | Ternop (op, (llv1, prec1), (llv2, prec2), (llv3, prec3)) ->
         let v1 = loop llv1 in
         let v2 = loop llv2 in
@@ -5571,6 +5638,13 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
            surviving reads to [Never_virtual] (a node read here but only written under a virtualized
            setter is decided right now), so this update is the commitment point, not a redundant
            re-assertion. Mirrors the [Get_dynamic] arm just below. Provenance 17. *)
+        if Tn.Placements.known_virtual plc a then
+          raise
+            (Utils.User_error
+               [%string
+                 "a buffer read of %{Tn.debug_name a} survived inlining, but the node is virtual \
+                  (%{Tn.Placements.debug plc a}) and has no buffer. Mark %{Tn.debug_name a} as \
+                  materialized (e.g. via Train.set_materialized) in the routine that computes it."]);
         Tn.Placements.update plc a Never_virtual Surviving_read;
         assert (
           Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));

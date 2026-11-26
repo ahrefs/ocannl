@@ -19089,7 +19089,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules virtual_decision_coverage)
- (libraries base ocannl arrayjit.verdict ll_test arrayjit.ir))
+ (libraries base ocannl arrayjit.verdict ll_test arrayjit.ir arrayjit.utils))
 
 (test
  (name virtual_diagonal)
