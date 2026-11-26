@@ -9,6 +9,7 @@ open Ocannl.Operation.DSL_modules
 module FI = Ir.Resource_fault_injection
 module AC = Ir.Alloc_census
 module SC = Ir.Schedule_cache
+module SO = Ir.Schedule_outcome
 open Verdict.Claims
 module Cache_plant = Test_utils.Cache_plant
 
@@ -181,6 +182,112 @@ let () =
     (Context.get_values unwind_ctx uy.Tensor.value)
     expected ~tol;
   Context.release unwind_ctx;
+
+  p_all "the test pool cap must be a positive power of two" [ -64; 0; 4097 ] ~f:(fun cap ->
+      match FI.with_pool_cap cap ~f:(fun () -> ()) with
+      | () -> false
+      | exception Invalid_argument _ -> true);
+
+  (* Independent observable outputs belong to the same working group, and each fits in one small
+     pool. *)
+  let elements = 16 in
+  let pool_bytes = elements * Ir.Ops.prec_in_bytes Ir.Ops.single in
+  let pool_output label values =
+    let x = TDSL.ndarray ~prec:Ir.Ops.single values ~label:[ label ] ~output_dims:[ elements ] () in
+    let%op y = relu x in
+    (y, Train.forward y)
+  in
+  let left_values = Array.init elements ~f:(fun i -> Float.of_int (i - 8)) in
+  let right_values = Array.init elements ~f:(fun i -> Float.of_int (5 - i)) in
+  let left, left_code = pool_output "rfi_pool_left" left_values in
+  let right, right_code = pool_output "rfi_pool_right" right_values in
+  let pool_comp = Ir.Assignments.sequence [ left_code; right_code ] in
+  let free = 7 in
+  let allocations = ref 0 in
+  let at_refusal = ref None in
+  let before = AC.snapshot () in
+  let refused =
+    let inject = function
+      | FI.Delta_pool_before_allocate ->
+          Int.incr allocations;
+          if !allocations = 2 then (
+            at_refusal := Some (AC.snapshot ());
+            raise
+              (SO.Device_memory_exhausted
+                 {
+                   backend = "simulated";
+                   requested = pool_bytes;
+                   free = Some free;
+                   detail = "test device full";
+                 }))
+      | _ -> ()
+    in
+    FI.with_pool_cap pool_bytes ~f:(fun () ->
+        FI.with_callback inject ~f:(fun () ->
+            Context.compile_outcome ~name:"rfi_split_refusal" ~provenance:SO.User_schedule
+              (Context.cpu ()) pool_comp Ir.Indexing.Empty))
+  in
+  let after = AC.snapshot () in
+  p "the second working pool was refused while exactly one pool of its group was live"
+    (Option.exists !at_refusal ~f:(fun held ->
+         working_allocated before held = 1
+         && live_working_delta before held = 1
+         && held.AC.live_working_bytes - before.AC.live_working_bytes = pool_bytes));
+  p "the link refusal preserves the device-memory cause and identifies its group and earlier pool"
+    (match refused with
+    | Error
+        (SO.Classified
+           {
+             phase = Backend_link;
+             cause = Resource_exceeded { resource = Device_memory; requested; limit; detail };
+             execution_effect = No_device_writes;
+           }) ->
+        requested = pool_bytes
+        && Option.equal Int.equal limit (Some free)
+        && String.is_substring detail ~substring:"test device full"
+        && String.is_substring detail
+             ~substring:
+               (Printf.sprintf "pool 2 of 2 of rfi_split_refusal's working delta of %d bytes"
+                  (2 * pool_bytes))
+        && String.is_substring detail
+             ~substring:
+               (Printf.sprintf "1 earlier pool(s), %d bytes, were still allocated" pool_bytes)
+    | Error _ -> false
+    | Ok (ctx, _) ->
+        Context.release ctx;
+        false);
+  p "the refusal freed exactly the one pool it held"
+    (working_allocated before after = 1
+    && pools_freed before after = 1
+    && live_working_delta before after = 0
+    && after.AC.live_working_bytes = before.AC.live_working_bytes);
+
+  let before = AC.snapshot () in
+  let pool_ctx, pool_routine =
+    FI.with_pool_cap pool_bytes ~f:(fun () ->
+        Context.compile ~name:"rfi_split_delta" (Context.cpu ()) pool_comp Ir.Indexing.Empty)
+  in
+  let pool_ctx = Context.run pool_ctx pool_routine in
+  let after = AC.snapshot () in
+  p "small cap splits the working group into two pools"
+    (working_allocated before after = 2
+    && after.AC.live_working_bytes - before.AC.live_working_bytes = 2 * pool_bytes);
+  let relu_values = Array.map ~f:(Float.max 0.) in
+  p_close "split delta computes the left output"
+    (Context.get_values pool_ctx left.Tensor.value)
+    (relu_values left_values) ~tol;
+  p_close "split delta computes the right output"
+    (Context.get_values pool_ctx right.Tensor.value)
+    (relu_values right_values) ~tol;
+  Context.release pool_ctx;
+  let before = AC.snapshot () in
+  let default_pool_ctx, _ =
+    Context.compile ~name:"rfi_default_delta" (Context.cpu ()) pool_comp Ir.Indexing.Empty
+  in
+  let after = AC.snapshot () in
+  p "outside the test scope the working group uses the ordinary cap"
+    (working_allocated before after = 1);
+  Context.release default_pool_ctx;
 
   (* A fresh host-transfer destination is the second shared allocation site. Failure after allocate
      but before copy must not leave the pool-table entry rooted. *)

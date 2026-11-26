@@ -170,7 +170,7 @@ files.
   and was reverted.
 - Rewind restores the graph-root maps WHOLESALE from the checkpoint (the last closure's, or an
   explicit one, gh-ocannl-903) and resets the restored roots' handout markers — a `Taken` marker
-  does not mean "handed to a caller": `%cd` embedding calls `take_forward_code` too
+  does not mean "handed to a caller": `%cd` embedding calls `embed_forward_code` too
   (gh-ocannl-1301), but only on a root, so the roots' markers are all a window can set. External
   handouts (`consume_*_code`) are recorded as they happen in `handouts`, which a rewind subtracts
   from the saved roots and no rewind takes back; `with_unchanged_roots` restores it with the maps.
@@ -243,7 +243,7 @@ files.
   owner's liveness does not enter; a `Gc_witness` probe found the dropped owner still reachable
   before initialization, so it is not a variant). Forward code follows the same rule
   (gh-ocannl-2157): `with_seed_fetches` is the one transformer, and every forward handout
-  (`consume_forward_code`, both branches, and `take_forward_code`, `%cd`'s embedding) returns it
+  (`consume_forward_code`, both branches, and `embed_forward_code`, `%cd`'s embedding) returns it
   applied, memoized per tensor record when it changed anything (`forward_handouts`, held weakly by
   the record, never by its node, which outlives a dropped tensor), because repeated handouts are pinned
   `phys_equal`. `forward_reads` reads the repaired handout, so a

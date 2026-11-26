@@ -219,14 +219,14 @@ let timing () =
       unop ~op_asn:fail_before ~grad_asn:no_grad closed);
   case "grad_asn failing after registration" ~expect_taint:true (fun () ->
       unop ~op_asn:copy_asn ~grad_asn:fail_grad ~grad_spec:Tensor.Require_grad closed);
-  (* An [op_asn] that embeds a closed root through [%cd] ([take_forward_code]: a root-map change
+  (* An [op_asn] that embeds a closed root through [%cd] ([embed_forward_code]: a root-map change
      only, no solver write) and then fails before registering: the session is tainted, and the
      rewind gives the root back. *)
   let root = leaf "rw_root" [| 1.; 2. |] in
   ignore (Lazy.force root.Tensor.value.Ir.Tnode.dims : int array);
   let embed_then_fail ~t:_ ~t1:_ ~projections:_ =
     (* What [%cd] generates for a tensor filler that is a forward root. *)
-    if Tensor.is_fwd_root root then ignore (Tensor.take_forward_code root : Ir.Assignments.comp);
+    if Tensor.is_fwd_root root then ignore (Tensor.embed_forward_code root : Ir.Assignments.comp);
     failwith "rw: op_asn failure after a %cd embedding"
   in
   p "a closed root is a forward root" (Tensor.is_fwd_root root);

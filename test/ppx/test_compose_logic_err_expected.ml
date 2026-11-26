@@ -15,11 +15,11 @@ let test_div_compose a b =
                Ir.Assignments.Noop in
            let __cd_fwd2 =
              if Tensor.is_fwd_root a
-             then Tensor.take_forward_code a
+             then Tensor.embed_forward_code a
              else Ir.Assignments.empty_comp in
            let __cd_fwd3 =
              if Tensor.is_fwd_root b
-             then Tensor.take_forward_code b
+             then Tensor.embed_forward_code b
              else Ir.Assignments.empty_comp in
            [__cd_fwd1;
            __cd_fwd2;
@@ -62,11 +62,11 @@ let test_pow_compose a b =
                Ir.Assignments.Noop in
            let __cd_fwd2 =
              if Tensor.is_fwd_root a
-             then Tensor.take_forward_code a
+             then Tensor.embed_forward_code a
              else Ir.Assignments.empty_comp in
            let __cd_fwd3 =
              if Tensor.is_fwd_root b
-             then Tensor.take_forward_code b
+             then Tensor.embed_forward_code b
              else Ir.Assignments.empty_comp in
            [__cd_fwd1;
            __cd_fwd2;
@@ -109,11 +109,11 @@ let test_div_alias_compose a b =
                Ir.Assignments.Noop in
            let __cd_fwd2 =
              if Tensor.is_fwd_root a
-             then Tensor.take_forward_code a
+             then Tensor.embed_forward_code a
              else Ir.Assignments.empty_comp in
            let __cd_fwd3 =
              if Tensor.is_fwd_root b
-             then Tensor.take_forward_code b
+             then Tensor.embed_forward_code b
              else Ir.Assignments.empty_comp in
            [__cd_fwd1;
            __cd_fwd2;
@@ -156,11 +156,11 @@ let test_pow_alias_compose a b =
                Ir.Assignments.Noop in
            let __cd_fwd2 =
              if Tensor.is_fwd_root a
-             then Tensor.take_forward_code a
+             then Tensor.embed_forward_code a
              else Ir.Assignments.empty_comp in
            let __cd_fwd3 =
              if Tensor.is_fwd_root b
-             then Tensor.take_forward_code b
+             then Tensor.embed_forward_code b
              else Ir.Assignments.empty_comp in
            [__cd_fwd1;
            __cd_fwd2;
@@ -203,11 +203,11 @@ let test_add_compose_accepted a b =
                Ir.Assignments.Noop in
            let __cd_fwd2 =
              if Tensor.is_fwd_root a
-             then Tensor.take_forward_code a
+             then Tensor.embed_forward_code a
              else Ir.Assignments.empty_comp in
            let __cd_fwd3 =
              if Tensor.is_fwd_root b
-             then Tensor.take_forward_code b
+             then Tensor.embed_forward_code b
              else Ir.Assignments.empty_comp in
            [__cd_fwd1;
            __cd_fwd2;

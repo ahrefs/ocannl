@@ -49,9 +49,13 @@ let show (d : Context.link_delta) =
   Printf.sprintf "%d working + %d constant bytes in %d pool(s)" d.ld_working_bytes
     d.ld_constant_bytes d.ld_pools
 
-let count_hits f =
+let count_hits ?point f =
   let hits = ref 0 in
-  let result = FI.with_callback (fun _ -> Int.incr hits) ~f in
+  let result =
+    FI.with_callback
+      (fun seen -> if Option.for_all point ~f:(FI.equal_point seen) then Int.incr hits)
+      ~f
+  in
   (result, !hits)
 
 (* A device with no room for the probe's [nth] pool (1-based): the shared seam refuses that
@@ -128,7 +132,9 @@ let floor_of ~what ctx (o : Ir.Low_level.optimized) =
          modes_before (modes ()));
   p (what ^ ": the floor asks for at least one pool") (f.lf_pools >= 1);
   let before = AC.snapshot () in
-  let probed, hits = count_hits (fun () -> Context.probe_link_floor ctx o) in
+  let probed, hits =
+    count_hits ~point:FI.Delta_pool_allocated (fun () -> Context.probe_link_floor ctx o)
+  in
   let after = AC.snapshot () in
   p
     (what ^ ": the floor's probe allocates exactly its pools, and frees them all")
@@ -178,7 +184,10 @@ let compile_and_estimate ?(probe = false) ~what ~form ctx comp =
     estimate := Some d;
     if probe then (
       let before = AC.snapshot () in
-      let probed, hits = count_hits (fun () -> Context.probe_link_delta ctx o segments) in
+      let probed, hits =
+        count_hits ~point:FI.Delta_pool_allocated (fun () ->
+            Context.probe_link_delta ctx o segments)
+      in
       let after = AC.snapshot () in
       p (what ^ ": the probe plans what the estimate plans") (Context.equal_link_delta probed d);
       p

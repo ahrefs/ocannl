@@ -1,5 +1,5 @@
 (* gh-ocannl-1770: [%cd] builds a statement sequence in source order. A statement naming a
-   forward-root tensor embeds that tensor's forward code ([Tensor.take_forward_code]), and the
+   forward-root tensor embeds that tensor's forward code ([Tensor.embed_forward_code]), and the
    statements run in list order, so the FIRST statement naming the root has to be the one that
    embeds it. The sequence used to be a list literal, which OCaml evaluates right to left: the LAST
    statement embedded the root, and every earlier statement read it before it was computed -- a
