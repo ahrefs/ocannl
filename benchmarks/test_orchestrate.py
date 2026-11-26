@@ -2975,7 +2975,7 @@ class FixtureDigestTest(unittest.TestCase):
         digests = HERE / "fixtures" / fixture_digest.DIGEST_FILE
 
         declared = fixture_digest.declared_measurement_boxes(digests)
-        self.assertEqual(declared, ["m4-max", "minix", "rog-nv", "tuf"])
+        self.assertEqual(declared, ["m4-max", "m4-pro", "minix", "rog-nv", "tuf"])
 
         with contextlib.redirect_stdout(io.StringIO()) as out:
             code = fixture_digest._main(
@@ -3019,12 +3019,21 @@ class FixtureDigestTest(unittest.TestCase):
         lenet = {"lenet.safetensors"}
         on_tuf = {name for name, recorded in entries.items() if any(e.origin == "tuf" for e in recorded)}
         self.assertEqual(on_tuf, expected | lenet, "TUF must record every GPT fixture copy and lenet")
+        on_m4_pro = {name for name, recorded in entries.items() if any(e.origin == "m4-pro" for e in recorded)}
+        self.assertEqual(
+            on_m4_pro,
+            (expected - {"gpt2_mini_b1.safetensors"}) | resnet | lenet,
+            "m4-pro must record its store's copies of m4-max fixtures",
+        )
         copied = expected | resnet | lenet
-        # Which boxes hold each family's copies: TUF's GPT copies, the resnet leg's three boxes,
-        # and lenet's re-recorded rows plus TUF's copy.
-        copy_boxes = {name: {"m4-max", "tuf"} for name in expected}
-        copy_boxes.update({name: {"m4-max", "minix", "rog-nv"} for name in resnet})
-        copy_boxes.update({name: {"m4-max", "minix", "rog-nv", "tuf"} for name in lenet})
+        # Which boxes hold each family's copies: TUF's GPT copies, m4-pro's store copies (all GPT
+        # except gpt2_mini_b1, plus resnet and lenet), the resnet leg's boxes, and lenet's rows.
+        copy_boxes = {
+            name: {"m4-max", "tuf"} | ({"m4-pro"} if name != "gpt2_mini_b1.safetensors" else set())
+            for name in expected
+        }
+        copy_boxes.update({name: {"m4-max", "m4-pro", "minix", "rog-nv"} for name in resnet})
+        copy_boxes.update({name: {"m4-max", "m4-pro", "minix", "rog-nv", "tuf"} for name in lenet})
         recovered = {f"{n}.safetensors" for n in ("cifar_conv", "cifar_stride", "mlp_small", "mlp_wide")}
         recovered_boxes = {"minix", "rog-nv"}
         self.assertFalse(recovered & copied, "a recovered fixture is no m4-max copy")
@@ -7607,6 +7616,7 @@ class BoxNameTest(unittest.TestCase):
         self.assertEqual(ap.parse_args(["--box", "rog-nv-linux"]).box, "rog-nv")
         self.assertEqual(ap.parse_args(["--box", "minix-amd-linux"]).box, "minix")
         self.assertEqual(ap.parse_args(["--box", "mac-studio"]).box, "m4-max")
+        self.assertEqual(ap.parse_args(["--box", "macbook-pro"]).box, "m4-pro")
 
     def test_a_box_id_and_an_unknown_name_stay_as_given(self):
         # The unknown one is check-box.sh's to refuse, when the gate runs it.

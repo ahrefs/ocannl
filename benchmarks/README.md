@@ -205,10 +205,13 @@ single-threaded segments that sum to the serial step
   the original file bytes, and `--record` migrates only the named box's available files to
   `content-v1`. They are kept visibly legacy until their original files are available; relabelling
   an old raw digest as canonical would invent evidence the digest cannot contain.
-  The current declaration names `m4-max` (the Apple M4 Max/macOS measurement host), `minix`, and
+  The current declaration names `m4-max` (the Apple M4 Max/macOS measurement host, `mac-studio`),
+  `m4-pro` (the 14-inch Apple M4 Pro/macOS measurement host, `macbook-pro`), `minix`, and
   `rog-nv`, plus `tuf` (HIP gfx1102 with discrete VRAM). Historical Metal reports have [unverifiable fixture provenance](#historical-metal-fixture-provenance):
   later m4-max records establish new baselines, not recovered historical measurements.
-  Absent records mean missing attribution, not an omitted measurement host. TUF has
+  Absent records mean missing attribution, not an omitted measurement host. `m4-pro` records
+  copies unchanged from `m4-max` for the 17 fixtures in its store (every `m4-max` fixture except
+  `gpt2_mini_b1`). TUF has
   transformer records only, copied unchanged from m4-max, including the two new batch
   endpoints generated with the mac-studio bench venv; its non-transformer absences are
   likewise explicit missing-record warnings.
@@ -1070,7 +1073,7 @@ benchmarks/.venv/bin/python benchmarks/orchestrate.py --box <box> --gpu <backend
 ```
 
 `--box` names the measurement box (see [Measurement boxes](#measurement-boxes)). Set `--gpu cuda`
-for rog-nv, `--gpu hip` for minix or tuf, or `--gpu metal` for m4-max. For measurements outside
+for rog-nv, `--gpu hip` for minix or tuf, or `--gpu metal` for m4-max or m4-pro. For measurements outside
 a declared measurement box, use `--skip-box-check` in place of `--box <box>`.
 
 For the launch command above, `benchmarks/.venv` can be a symlink to the box's shared venv
@@ -1262,14 +1265,19 @@ benchmarks/check-box.sh --box rog-nv --fixture gpt2_mini_train --fixture gpt2_mi
 ```
 
 `--box` is the box's ID in `fixtures/DIGESTS.txt`'s `measurement-boxes` field, or the fleet's
-name for it (`mac-studio` m4-max, `rog-nv-linux` rog-nv, `minix-amd-linux` minix, `tuf-amd-linux`
-tuf; `check-box.sh --fleet-names` prints the table, the check says which box a fleet name
-resolved to before its items, and a driver given one records the box's ID; gh-ocannl-1433). The
-table also holds the fleet's box that measures nothing, `macbook-pro` (the M4 Pro MacBook, a
-Metal correctness box), as `-`, so the roster matches the fleet's, and `--box macbook-pro` is
-refused as no measurement box (exit 2). The script's
-`box_profile` names what that box's torch must reach (cuda on rog-nv, hip on minix and tuf, mps on
-m4-max) and the toolchain its drivers compile with (`nvcc`, `hipcc`, the macOS SDK). It prints one
+name for it (`mac-studio` m4-max, `macbook-pro` m4-pro, `rog-nv-linux` rog-nv, `minix-amd-linux`
+minix, `tuf-amd-linux` tuf; `check-box.sh --fleet-names` prints the table, the check says which
+box a fleet name resolved to before its items, and a driver given one records the box's ID;
+gh-ocannl-1433, gh-ocannl-1832). Any fleet box mapped to `-` in `fleet_row` is a non-measuring box
+refused by name (exit 2). The script's `box_profile` names what that box's torch must reach (cuda
+on rog-nv, hip on minix and tuf, mps on m4-max and m4-pro) and the toolchain its drivers compile
+with (`nvcc`, `hipcc`, the macOS SDK). **An `m4-pro` (M4 Pro) reading never stands in for an
+`m4-max` (M4 Max) one**: every Mac reading names its Mac and chip, and the two Macs are distinct
+measurement boxes. `check-box.sh` checks box environment readiness only and does not judge host
+idle load or sleep assertions: `macbook-pro` wakes over Wi-Fi and sleeps on request, so idle
+exclusivity and sleep prevention (`caffeinate -i -s`, held by `fleet-worker.sh execution slot` /
+`hold`) belong to the measurement window rather than `check-box.sh`, and `default-kernel` skips on
+macOS as on `m4-max`. It prints one
 `ok`/`GAP`/`skip` line per item -- the venv (`~/.venvs/ocannl-bench`, `--venv` moves it), its
 packages, `pip freeze` against the `~/.venvs/ocannl-bench.requirements.txt` provisioning recorded,
 one tensor round-tripped through the device (minix's rocm7.1 torch passed `is_available()` and
@@ -1303,8 +1311,7 @@ lukstafi/ludics-lite's `scripts/install-linux.sh --bench-venv [nvidia|amd]` (the
 recorded freeze, the `benchmarks/.venv` link and the anchor's top-level fixtures copied into
 `~/ocannl-staging/benchmarks/fixtures`, never its `by-origin/` copies: an absent fixture's repair
 names where the box's own bytes are kept, per *Where each box's fixture bytes are kept* under
-[Setup](#setup)); on
-m4-max the venv is built by hand per [Setup](#setup).
+[Setup](#setup)); on m4-max and m4-pro the venv is built by hand per [Setup](#setup).
 A fresh worktree's `fixtures/` holds only `DIGESTS.txt`, so copy or link the session's fixtures
 in from the box's store and re-run the check, or pass `--fixture-dir` to check the store a driver
 reads (`gh1133_cells.sh`'s `FIXTURE_DIR`) -- never regenerate one to get past a GAP (see above).
@@ -1340,7 +1347,8 @@ when it was checked since. Every box passed venv, packages, recorded freeze, dev
 
 | Box | torch (device) | Toolchain | Fixture gaps (recorded for the box, absent from its store) | Rows the bytes on disk no longer match |
 | --- | --- | --- | --- | --- |
-| m4-max (mac-studio) | 2.13.0 (mps) | macOS SDK (CommandLineTools) | `gpt2_mini_b1`, `gpt2_mini_train_b256` | none |
+| m4-max (mac-studio; M4 Max, readings do not stand in for m4-pro) | 2.13.0 (mps) | macOS SDK (CommandLineTools) | `gpt2_mini_b1`, `gpt2_mini_train_b256` | none |
+| m4-pro (macbook-pro, 2026-11-26, READY: 26 items; 14-inch M4 Pro, readings never stand in for m4-max) | 2.13.0 (mps) | macOS SDK (Xcode MacOSX27.2.sdk) | none (17 recorded fixtures present; `gpt2_mini_b1` unrecorded) | none |
 | rog-nv (2026-11-19, ace31a22, READY: 31 items) | 2.14.0+cu130 (RTX 5070 Ti Laptop) | nvcc 13.5 | none | none |
 | minix (2026-11-19, ace31a22, READY: 31 items) | 2.14.1+rocm7.2 (Radeon 8060S, gfx1151) | hipcc (HIP 7.1) | none | none |
 | tuf (2026-11-19) | 2.13.0+rocm7.1 (RX 7700S, gfx1102) | hipcc (HIP 7.1) | none | none |

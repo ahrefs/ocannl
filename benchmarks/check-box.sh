@@ -23,9 +23,10 @@
 #   - BOX: a measurement box declared in the DIGESTS file's `# measurement-boxes:` header AND
 #     listed in box_profile below, which names the device torch must reach and the toolchain
 #     the box's drivers compile with. A declared box missing here is refused, not defaulted.
-#     Or the fleet's name for one (`rog-nv-linux` for rog-nv; fleet_row below, gh-ocannl-1433),
-#     which a line before the items resolves to its box; the verdict names the box. A fleet box
-#     that measures nothing (macbook-pro) is refused by name, as no measurement box.
+#     Or the fleet's name for one (`rog-nv-linux` for rog-nv, `macbook-pro` for m4-pro;
+#     fleet_row below, gh-ocannl-1433, gh-ocannl-1832), which a line before the items resolves
+#     to its box; the verdict names the box. A fleet box that measures nothing (mapped to `-`
+#     in fleet_row) is refused by name, as no measurement box.
 #   - NAME: the stem of a spec in benchmarks/workloads/*.json (`gpt2_mini_train`, not the file
 #     name). Without --fixture, every fixture DIGESTS records under BOX's origin is required.
 #   - --generated-inputs: for drivers that create every input in memory. Uses the declared box
@@ -55,8 +56,11 @@
 # fixture_digest.py --check MATCHes it against DIGESTS).
 #
 # What it does not judge: whether a fixture is THIS box's recorded bytes when BOX has a row for it
-# (the ok line names whose they are; reports carry the same origin), the speed of anything, or a
-# driver's own arms (torch.compile, tinygrad's GPU device) beyond their imports.
+# (the ok line names whose they are; reports carry the same origin), the speed of anything, a
+# driver's own arms (torch.compile, tinygrad's GPU device) beyond their imports, or host idle
+# load and sleep assertions (including on laptops such as m4-pro that wake over Wi-Fi and sleep on
+# request -- idle exclusivity and caffeinate/sleep assertions belong to the exclusive measurement
+# window, not this readiness check).
 
 set -u
 
@@ -70,7 +74,7 @@ die() { echo "check-box: $*" >&2; exit 2; }
 # prerequisite and is not checked.
 box_profile() {
   case $1 in
-    m4-max) echo "mps metal-sdk" ;;
+    m4-max | m4-pro) echo "mps metal-sdk" ;;
     rog-nv) echo "cuda nvcc" ;;
     minix | tuf) echo "hip hipcc" ;;
     *) return 1 ;;
@@ -93,7 +97,7 @@ fleet_row() {
     rog-nv-linux) echo rog-nv ;;
     minix-amd-linux) echo minix ;;
     tuf-amd-linux) echo tuf ;;
-    macbook-pro) echo - ;; # the M4 Pro MacBook: Metal correctness runs, no published measurement
+    macbook-pro) echo m4-pro ;;
     *) return 1 ;;
   esac
 }

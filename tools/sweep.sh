@@ -1041,6 +1041,19 @@ else
   rm -f "$matrix_document"
 fi
 
+# Declared measurement boxes with no remote lane in UNITS (gh-ocannl-1832):
+# m4-pro (macbook-pro) is a second macOS/Apple Silicon measurement box (Wi-Fi
+# laptop) whose OS/Metal environment is covered by the local macOS lane (m4-max).
+# Excluded from the sweep's environment-completeness matrix unless this run is
+# executing locally on it (when it is already in scheduled_boxes). Any other
+# declared box missing from UNITS is still refused at startup.
+unswept_measurement_box() {
+  case $1 in
+    m4-pro) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # The declaration owns which boxes constitute completeness; UNITS owns how to
 # reach them. Relate the two so adding or renaming a declared box cannot leave a
 # matrix member that no sweep unit can ever satisfy. Units absent from a historical
@@ -1051,10 +1064,21 @@ if [ ${#known_boxes[@]} -gt 0 ]; then
     IFS=: read -r box _ <<<"$unit"
     contains "$box" "${scheduled_boxes[@]:-}" || scheduled_boxes+=("$box")
   done
+  swept_known_boxes=()
   for box in "${known_boxes[@]}"; do
-    contains "$box" "${scheduled_boxes[@]}" ||
+    if contains "$box" "${scheduled_boxes[@]}"; then
+      swept_known_boxes+=("$box")
+    elif unswept_measurement_box "$box"; then
+      :
+    else
       die "declared measurement box '$box' has no sweep unit"
+    fi
   done
+  if [ ${#swept_known_boxes[@]} -gt 0 ]; then
+    known_boxes=("${swept_known_boxes[@]}")
+  else
+    known_boxes=()
+  fi
 fi
 
 # Where a unit's per-action verdict records live: beside the worktree, like its

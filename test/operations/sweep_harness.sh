@@ -54,7 +54,7 @@ on_error() {
     environment_executed partial_matrix singleton_fail repeated_backend_fail \
     repeated_backend_pass mixed_scope_fail mixed_scope_cleared historical_matrix \
     undeclared_cleared undeclared_skipped undeclared_only rerun_cleared rerun_red completion_red \
-    retry_agrees retry_executes retry_skips bystander no_records future_kind local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
+    retry_agrees retry_executes retry_skips bystander no_records future_kind local_identity_error unsafe_identity_error only_typo_error matrix_error unswept_matrix state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in dest_wsl dest_linux dest_missing dest_local_only \
     dest_bogus dest_no_kind_of dest_half dest_override dest_override_wins dest_bad_override \
@@ -4653,6 +4653,20 @@ grep -q '^missing boxes: minix, rog-nv$' "$historical_report"
 grep -q '^environment status: insufficient (0 of 2 declared boxes completed; need at least 2 unless the matrix is complete)$' \
   "$historical_report"
 grep -q '^environment result: NOT AGGREGATED$' "$historical_report"
+
+# A declared unswept measurement box (m4-pro, gh-ocannl-1832) is accepted on a
+# m4-max sweep without requiring a sweep unit of its own and is excluded from
+# the environment matrix's missing boxes.
+printf '# measurement-boxes: m4-max m4-pro minix rog-nv\n' \
+  >"$main/benchmarks/fixtures/DIGESTS.txt"
+git -C "$main" add benchmarks/fixtures/DIGESTS.txt
+git -C "$main" commit -qm 'add unswept declared box m4-pro'
+git -C "$main" push -q origin master
+unswept_matrix=$(run_sweep --force)
+unswept_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$unswept_matrix" | tail -1)
+grep -q '^completed boxes: m4-max$' "$unswept_report"
+grep -q '^missing boxes: minix, rog-nv$' "$unswept_report"
+absent 'm4-pro' "$unswept_report"
 
 # Negative control for the one-list contract: changing only the declaration to
 # add a box with no execution unit makes the sweep refuse before claiming any
