@@ -1748,7 +1748,8 @@ EOF
       "foreign=$(readlink "$foreign_link" 2>/dev/null || echo bad) plain=$(ls -ld "$plain_link" 2>/dev/null || echo bad)"
   fi
 
-  unset FLEET_LEG_RUN_RECORD
+  # Bash 3.2 can uncover the caller's exported record when unsetting a local.
+  local -a fixture_launcher=(env -u FLEET_LEG_RUN_RECORD)
   export FLEET_LEG_RECEIPT_LINK="$local_link"
   argv_probe owed-receipt-local run --expect-backend cc build "$target" -j 1
   if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
