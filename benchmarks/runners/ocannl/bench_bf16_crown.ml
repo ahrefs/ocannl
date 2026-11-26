@@ -1,5 +1,7 @@
 (* gh-ocannl-2372: in-process mirrored re-timing of the n = 1024 (or configured n) bf16 GEMM
-   finalists beside a byte-identical f32 drift control.
+   finalists beside a byte-identical f32 drift control. Launch through
+   [benchmarks/gh2372_bf16_crown.py] (or [benchmarks/cells.py cell]) so the OCaml process starts in
+   a private working directory before [Utils] runs its startup cleanup.
 
    gh-ocannl-2321 timed wide vs narrow n = 1024 bf16 GEMMs across processes via [schedule_bench]
    (where each process compiles all five variants) and observed a wide/narrow ratio of 1.128
@@ -628,25 +630,105 @@ let () =
     if Array.length reference <> Array.length vals then (
       p "INVALID: narrow-bf16 length %d <> oracle %d\n" (Array.length vals) (Array.length reference);
       Stdlib.exit 1);
-    let max_ref = ref 0.0 and max_got = ref 0.0 and big = ref 0 and same_sign = ref 0 in
+    (* Exact rounding-aware spot reference on 64 spread cells across the whole matrix: - Metal mma_*
+       (simdgroup_bfloat8x8): accumulates each 8-deep k-block in f32 and rounds to bf16 once per
+       block (gh-ocannl-2029). - Serial (parallel/smem/regtile): per-step bf16 FMA. *)
+    let round_bf16 = Ir.Ops.round_to_prec Ir.Ops.bfloat16 in
+    let spot_check ~block_size =
+      let stride = Int.max 1 (n / 8) in
+      for ii = 0 to 7 do
+        let i = ((ii * stride) + (ii * 7)) % n in
+        for jj = 0 to 7 do
+          let j = ((jj * stride) + (jj * 11)) % n in
+          let expected =
+            if block_size = 1 then (
+              let acc = ref 0.0 in
+              for k = 0 to n - 1 do
+                let a = round_bf16 mav.((i * n) + k) in
+                let b = round_bf16 mbv.((k * n) + j) in
+                acc := round_bf16 (!acc +. (a *. b))
+              done;
+              !acc)
+            else
+              let acc = ref 0.0 in
+              let k0 = ref 0 in
+              while !k0 < n do
+                let blk = ref 0.0 in
+                for dk = 0 to block_size - 1 do
+                  let k = !k0 + dk in
+                  let a = round_bf16 mav.((i * n) + k) in
+                  let b = round_bf16 mbv.((k * n) + j) in
+                  blk := !blk +. (a *. b)
+                done;
+                acc := round_bf16 (!acc +. !blk);
+                k0 := !k0 + block_size
+              done;
+              !acc
+          in
+          let got = vals.((i * n) + j) in
+          let diff = Float.abs (got -. expected) in
+          (* Allow 2.5 bf16 ulps for FMA/block-order variations; a 2x-scaled or corrupted cell fails
+             immediately. *)
+          let limit = Float.max (0.02 *. Float.abs expected) 0.25 in
+          if (not (Float.is_finite got)) || Float.(diff > limit) then (
+            p
+              "INVALID: narrow-bf16 spot cell (%d,%d) = %.10g departs from rounding-aware model \
+               %.10g (|diff|=%.4g > %.4g)\n"
+              i j got expected diff limit;
+            Stdlib.exit 1)
+        done
+      done
+    in
+    if not (String.is_prefix narrow_variant ~prefix:"mma") then spot_check ~block_size:1
+    else if String.is_substring backend ~substring:"metal" then spot_check ~block_size:8;
+    (* Whole-output two-sided bounds across every cell: catches both zeroed/sign-flipped outputs and
+       upward-scaled (e.g. 2x) wrong kernels. Error at cancelled cells scales with the matrix's
+       partial-sum scale [max_ref], not just the cancelled cell's own magnitude. *)
+    let max_ref = Array.fold reference ~init:0.0 ~f:(fun m r -> Float.max m (Float.abs r)) in
+    let max_got = ref 0.0 and big = ref 0 and same_sign = ref 0 in
+    let cell_rel_cap =
+      if
+        String.is_substring backend ~substring:"metal"
+        && String.is_prefix narrow_variant ~prefix:"mma"
+      then 0.15
+      else 0.35
+    in
+    let upper_abs = Float.max (1.25 *. max_ref) 1.0 +. 16.0 in
     Array.iteri vals ~f:(fun t v ->
         if not (Float.is_finite v) then (
           p "INVALID: narrow-bf16 cell [%d] is non-finite (%g)\n" t v;
           Stdlib.exit 1);
         let r = reference.(t) in
-        max_ref := Float.max !max_ref (Float.abs r);
+        if Float.(Float.abs v > upper_abs) then (
+          p
+            "INVALID: narrow-bf16 cell [%d] = %.10g exceeds two-sided upper bound %.10g (ref=%.10g)\n"
+            t v upper_abs r;
+          Stdlib.exit 1);
+        (if
+           (not (String.is_prefix narrow_variant ~prefix:"mma"))
+           || String.is_substring backend ~substring:"metal"
+         then
+           let diff = Float.abs (v -. r) in
+           let scale = Float.max (Float.abs r) (0.25 *. max_ref) in
+           let lim = Float.max (cell_rel_cap *. scale) 16.0 in
+           if Float.(diff > lim) then (
+             p
+               "INVALID: narrow-bf16 cell [%d] = %.10g departs from oracle %.10g (|diff|=%.4g > \
+                %.4g)\n"
+               t v r diff lim;
+             Stdlib.exit 1));
         max_got := Float.max !max_got (Float.abs v);
         if Float.(Float.abs r > 1.0) then (
           Int.incr big;
           if Float.(v *. r > 0.0) then Int.incr same_sign));
     if
-      Float.(!max_got < 0.1 *. !max_ref)
+      Float.(!max_got < 0.1 *. max_ref || !max_got > 1.25 *. max_ref)
       || (!big > 0 && Float.(Float.of_int !same_sign < 0.5 *. Float.of_int !big))
     then (
       p
-        "INVALID: narrow-bf16 output degenerate cell-wise (max |got|=%.4g vs max |ref|=%.4g, \
+        "INVALID: narrow-bf16 output outside two-sided envelope (max |got|=%.4g vs max |ref|=%.4g, \
          sign-match %d/%d)\n"
-        !max_got !max_ref !same_sign !big;
+        !max_got max_ref !same_sign !big;
       Stdlib.exit 1)
   in
   let wide_max_cell_rel = check_wide_cells ~reference:oracle_vals vals_wbf16_pre in
@@ -707,8 +789,25 @@ let () =
   let s_nbf16 = Bench_retime.spread_of r_nbf16_ms in
   let s_wf32 = Bench_retime.spread_of r_wf32_ms in
   let s_nf32 = Bench_retime.spread_of r_nf32_ms in
-  let ratio_bf16 = Bench_retime.paired_ratio ~num:r_wbf16_ms ~den:r_nbf16_ms in
-  let ratio_f32 = Bench_retime.paired_ratio ~num:r_wf32_ms ~den:r_nf32_ms in
+  (* Compute treatment and f32 control ratios from the EXACT same complete mirrored round pairs (2k,
+     2k+1) where all four arms were admitted, so the control observes every round that enters the
+     treatment ratio and position balance is preserved. *)
+  let complete_round i =
+    Option.is_some r_wbf16_ms.(i)
+    && Option.is_some r_nbf16_ms.(i)
+    && Option.is_some r_wf32_ms.(i)
+    && Option.is_some r_nf32_ms.(i)
+  in
+  let keep_round = Array.create ~len:calls false in
+  for pair = 0 to (calls / 2) - 1 do
+    let a = 2 * pair and b = (2 * pair) + 1 in
+    if complete_round a && complete_round b then (
+      keep_round.(a) <- true;
+      keep_round.(b) <- true)
+  done;
+  let mask arr = Array.mapi arr ~f:(fun i v -> if keep_round.(i) then v else None) in
+  let ratio_bf16 = Bench_retime.paired_ratio ~num:(mask r_wbf16_ms) ~den:(mask r_nbf16_ms) in
+  let ratio_f32 = Bench_retime.paired_ratio ~num:(mask r_wf32_ms) ~den:(mask r_nf32_ms) in
   p "arm %-12s (%s): %s\n" "wide-bf16" wide_variant (Bench_retime.spread_fields ~name:"ms" s_wbf16);
   p "arm %-12s (%s): %s\n" "narrow-bf16" narrow_variant
     (Bench_retime.spread_fields ~name:"ms" s_nbf16);

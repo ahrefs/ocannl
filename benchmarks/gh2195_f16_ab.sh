@@ -321,11 +321,18 @@ for prec in single half; do
 done
 prove train bench_gpt
 if [ "$TUNED" = 1 ]; then
-  # Also prove fp16_arithmetic reaches bench_gpt codegen holding the schedule fixed (untuned),
-  # so a schedule difference between two independent cold searches cannot masquerade as policy reach.
+  # Also prove fp16_arithmetic reaches bench_gpt codegen holding the schedule fixed (untuned,
+  # schedule_fission=false disables Autotune.seeded_default on CUDA/HIP too), so a schedule
+  # difference between two independent cold searches or policy-sensitive seeding cannot masquerade
+  # as policy reach.
   for arm in false true; do
     identity_run train_fixed half "$arm" "" "${TRAIN_ENV[@]}" BENCH_TUNE=0 \
-      BENCH_PRECISION=f16 "$GPT" "${TRAIN_ARGS[@]}" --ocannl_autotune_search=false
+      BENCH_PRECISION=f16 "$GPT" "${TRAIN_ARGS[@]}" --ocannl_schedule_fission=false \
+      --ocannl_autotune_search=false
+    if grep -q "seeded_default:" "$OUT/identity_run_train_fixed_half_$arm/stderr" 2>/dev/null; then
+      echo "TREATMENT REACH INVALID (bench_gpt fixed-schedule): seeded_default ran on $arm despite schedule_fission=false"
+      exit 1
+    fi
   done
   n_fix_w=$(n_sources "$OUT/identity_train_fixed_half_false")
   n_fix_n=$(n_sources "$OUT/identity_train_fixed_half_true")
