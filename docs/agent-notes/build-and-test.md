@@ -3245,10 +3245,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   unread. Most of its mutation runs exit 4, not 1: the ratchet's trailing
   `OK:` row prints only on success (the manifest's gh-ocannl-1289 section says how they were
   read).
-- `Verdict_scan.leg_gate_census` (gh-ocannl-2434) enforces two further invariants on `Verdict.leg`
+- `Verdict_scan.leg_gate_census` (gh-ocannl-2434, gh-ocannl-2470) enforces two further invariants on `Verdict.leg`
   and `Verdict.sub_leg` conditions (`~when_`): (1) every external qualified call or capability
   record field projection reachable from `~when_` (following destructured bindings, local helper
-  call sites, `List`/`Array` iterator callbacks, and unqualified projections on values bound from
+  call sites, immediately applied anonymous functions, `List`/`Array` iterator callbacks, and
+  unqualified projections on values bound from
   `Context.codegen_capabilities`/`hardware_limits`/`backend_facts`; unresolved gate parameters are
   reported as `<unresolved-param:name>`) must belong to the closed independent-gate allowlist
   (`leg_gate_allowed_paths`) or carry a counted exemption with a stated independent reason in
@@ -3257,14 +3258,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   evaluates an ambient-policy reader (`Ll_test.advertised` at full application without a supplied
   pinned `~policy` — missing, `?policy:None`, or unchanged `Ir.Numerics.get ()` — plus
   `Ll_test.tensorized_capability` and `Ir.Numerics.get`) outside an enclosing `Test_utils.with_*`
-  policy-wrapper callback (inline or named, eager reads tracked at their binding site and deferred
-  `sub_leg` `lazy` reads tracked at their force sites, across inline and named `sub_leg` parents)
-  cannot be used by `in_leg`/`in_legf` inside that wrapper (pass a pinned `~policy` explicitly to
-  `Ll_test.advertised`, or evaluate the gate inside the wrapper). Capability-descriptor queries
-  (`Ir.Backend_intf.advertises_mma_format_in_scope`, `Ir.Backend_intf.mma`, `Ll_test.advertised`)
-  stay allowlisted because GPU execution legs legitimately gate on hardware ISA capability, so a
-  descriptor-gated leg still needs an independently hardware-gated descriptor claim. The reader's
-  header in `test/support/verdict_scan.ml` states its closed allowlist and boundary.
+  policy-wrapper callback (inline or named, eager reads tracked at their binding site, deferred
+  `sub_leg` `lazy` reads tracked at their force sites with each named `lazy` binding replayed only
+  on its first force, and helper-returned legs indexed by construction-invocation identity across
+  inline and named `sub_leg` parents) cannot be used by `in_leg`/`in_legf` inside that wrapper
+  (pass a pinned `~policy` explicitly to `Ll_test.advertised`, or evaluate the gate inside the
+  wrapper). Capability-descriptor queries (`Ir.Backend_intf.advertises_mma_format_in_scope`,
+  `Ir.Backend_intf.mma`, `Ll_test.advertised`) stay allowlisted because GPU execution legs
+  legitimately gate on hardware ISA capability, so a descriptor-gated leg still needs an
+  independently hardware-gated descriptor claim. The reader's header in
+  `test/support/verdict_scan.ml` states its closed allowlist and boundary.
 - Every glob-fed OCaml scan reads Dune `(select …)` alternatives under their own checked-in file
   names on every box and drops the generated target (`<dir>/<stem>.ml`) via
   `Test_scan.Config_key_scan.sources_among` (`select_target_of_arm`), so exemptions, stale-exemption
