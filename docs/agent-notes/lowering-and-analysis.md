@@ -273,9 +273,13 @@ files.
   `codegen_not_traced` statically against `Test_scan.Codegen_stage_modules.modules` (shared with
   `digest_completeness`, gh-ocannl-2440) -- so a new codegen-stage read, including a GPU-only one,
   owes `emitted_flips` (or `emitted_exemptions`/`codegen_not_traced`) a row and fails on `cc`
-  before merge. `digest_identity_flips` calibrates one representative per
-  class against a real compile; when picking a code-borne representative note that many optimizer
-  keys (`virtualize_max_visits` and its neighbors) are read ONCE into `Low_level.virtualize_settings`
+  before merge. Every compile of the probe runs under `Ir.Kernel_code_cache.with_cold_caches`
+  (gh-ocannl-2478), so the traced compile and each flip miss the kernel cache and reach
+  post-compile and split settings; this is pinned by `kernels_compiled > 0 && kernels_reused = 0`
+  and, on `cc`, by every per-compile oracle-class `cc_backend.ml` key outside `codegen_not_traced`
+  being traced. `digest_identity_flips` calibrates one representative per class against a real
+  compile; when picking a code-borne representative note that many optimizer keys
+  (`virtualize_max_visits` and its neighbors) are read ONCE into `Low_level.virtualize_settings`
   at module init, so poking `Utils.config_file_args` at runtime does not move them. Caches with an
   identity of their own still state their own extra inputs (the analysis cache's
   `inline_complex_computations`, the cc probe cache's compiler/arch/simd settings).

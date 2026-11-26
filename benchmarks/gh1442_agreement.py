@@ -95,6 +95,17 @@ class Timing(NamedTuple):
     ms: float
 
 
+def uses_preset(plan, digest, label):
+    preset_plan = plan is not None and plan.startswith("F_preset[")
+    if label == "seeded":
+        return preset_plan
+    return label == "default" and (preset_plan or digest is not None)
+
+
+def uses_seeded_plan(plan, label):
+    return label == "seeded" and plan is not None and plan.startswith("F_seeded[")
+
+
 class StockTiming(NamedTuple):
     plan: str | None
     digest: str | None
@@ -102,15 +113,10 @@ class StockTiming(NamedTuple):
     preset: Timing | None
 
     def uses_preset(self, label):
-        preset_plan = self.plan is not None and self.plan.startswith("F_preset[")
-        if label == "seeded":
-            return preset_plan
-        return label == "default" and (preset_plan or self.digest is not None)
+        return uses_preset(self.plan, self.digest, label)
 
     def uses_seeded_plan(self, label):
-        return (label == "seeded"
-                and self.plan is not None
-                and self.plan.startswith("F_seeded["))
+        return uses_seeded_plan(self.plan, label)
 
 
 # The rank-site lines are read by bench_output's one reader of them (gh-ocannl-1767): fields by
@@ -244,16 +250,19 @@ def stock_attribution(paths):
     return next(iter(plans), None), next(iter(digests), None)
 
 
-def measured(path, attribution, *, allow_mixed=False):
-    times = {}
-    preset = None
+def calibration_rows(path, attribution=None, *, allow_mixed=False,
+                     missing_snapshot_hint="supply the separate stock snapshot with --stock-tsv"):
+    """Yield (label, ms, attributed) for each timing row in a calibration TSV.
+
+    Refuses a marked mixed TSV unless allow_mixed is set. An attributed row is a current
+    12-column row whose digest matches attribution with a finite positive time.
+    """
     with open(path) as f:
         for line in f:
             line = line.rstrip("\n")
             if line.startswith("#"):
                 if line == STOCK_SNAPSHOT_REQUIRED and not allow_mixed:
-                    raise ValueError(f"{path}: stock_snapshot_missing: supply the separate stock"
-                                     " snapshot with --stock-tsv")
+                    raise ValueError(f"{path}: stock_snapshot_missing: {missing_snapshot_hint}")
                 continue
             cols = line.split("\t")
             if len(cols) < 5:
@@ -262,14 +271,20 @@ def measured(path, attribution, *, allow_mixed=False):
                 ms = float(cols[4])
             except ValueError:
                 continue
-            label = cols[3]
-            times[label] = min(ms, times.get(label, float("inf")))
-            # A label can cover several digests. Keep the attributed reading independently
-            # so a faster namesake cannot stand in for it.
-            if attribution is not None and len(cols) == CALIBRATION_COLUMNS \
-                    and cols[1] == attribution and math.isfinite(ms) and ms > 0:
-                if preset is None or ms < preset.ms:
-                    preset = Timing(label, ms)
+            attributed = (attribution is not None and len(cols) == CALIBRATION_COLUMNS
+                          and cols[1] == attribution and math.isfinite(ms) and ms > 0)
+            yield cols[3], ms, attributed
+
+
+def measured(path, attribution, *, allow_mixed=False):
+    times = {}
+    preset = None
+    for label, ms, attributed in calibration_rows(path, attribution, allow_mixed=allow_mixed):
+        times[label] = min(ms, times.get(label, float("inf")))
+        # A label can cover several digests. Keep the attributed reading independently
+        # so a faster namesake cannot stand in for it.
+        if attributed and (preset is None or ms < preset.ms):
+            preset = Timing(label, ms)
     return times, preset
 
 

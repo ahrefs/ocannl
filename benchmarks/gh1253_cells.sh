@@ -88,8 +88,9 @@
 # so one timing TSV gives each term's effect -- and TIME_REPEATS=N (default 1) times every candidate
 # N times into the same TSV, so benchmarks/gh1600_txn_fit.py, run on the `notxn` listing at the
 # shipped rate (TXN_RATE=R, the backend's advisory; unset: no transaction-term check), judges the
-# rate on stock medians (from .tsv.stock when a profile timing cell appended) against the measured
-# spread (p90/p10 of the fastest admitted candidate);
+# rate on stock medians (from .tsv.stock when a profile timing cell appended, with the stock timing
+# censuses passed via --census for preset-digest attribution) against the measured spread (p90/p10
+# of the fastest admitted candidate);
 # NO_COALESCED=1 for a backend that does not admit the coalesced layouts.
 # gh-ocannl-1821: and a `nostg` arm (model_staged_copy_rate none: no staged-copy term, a continuous
 # launch fill, and no coalesced layouts admitted through the copy rate) -- the fill-only reference
@@ -467,6 +468,7 @@ for site in $sites; do
   rows="$out/rank_${name}.tsv"
   stock_rows="$rows"
   timing_census=()
+  txn_census=()
   for rep in $(seq 1 "${TIME_REPEATS:-1}"); do
     suffix=""
     if [[ $rep -gt 1 ]]; then suffix="_r$rep"; fi
@@ -475,6 +477,7 @@ for site in $sites; do
       --ocannl_autotune_keep_fraction=1 --ocannl_autotune_log_seeding=true \
       "--ocannl_autotune_calibration_file=$rows" ${model[@]+"${model[@]}"}
     timing_census+=(--census "$out/rank_${name}_time$suffix.err")
+    txn_census+=(--census "$name=$out/rank_${name}_time$suffix.err")
     if ! $last_ok; then timed=false; fi
   done
   cell "rank_${name}_${fitted_arm}" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
@@ -591,10 +594,12 @@ for site in $sites; do
       tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))
     if [[ -n "${TXN_RATE:-}" ]]; then
       # gh-ocannl-1600: the shipped transaction rate, judged on the stock medians (held out from
-      # the cells it was fitted on) against the stock measured spread; uses .tsv.stock when mixed.
+      # the cells it was fitted on) against the stock measured spread; uses .tsv.stock when mixed
+      # and the stock timing censuses for preset-digest attribution.
       nocoal=()
       if [[ ${NO_COALESCED:-0} == 1 ]]; then nocoal=(--no-coalesced); fi
       python3 "$root/benchmarks/gh1600_txn_fit.py" --rate "$TXN_RATE" --show ${nocoal[@]+"${nocoal[@]}"} \
+        ${txn_census[@]+"${txn_census[@]}"} \
         "$name=$stock_rows,$out/rank_${name}_notxn.out" |
         tee "$out/rank_${name}_txn.txt" || failed=$((failed + 1))
     fi

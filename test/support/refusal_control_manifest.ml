@@ -847,6 +847,8 @@ let raw_entries =
         "[scanner-refusal:1941f1fd1c6d01e76c592bdab3261140] search item invalidates";
         "[scanner-refusal:4aeee97cadd279f1e1d00bd64a116077] search item invalidates";
         "[scanner-refusal:c3b6672a6f1e65c6ba16b1c987d1a8cb] invalidates an earlier";
+        "[scanner-refusal:aa2e14b6af61751440ba04ff7709d6e6] invalidates an initialization";
+        "[scanner-refusal:88245fbc788612e3501d835011df08f2] interface-only sibling module";
         "[scanner-refusal:4b7124f3852d2e10d4a830de32bdedde] carrying cc-vector-width independent";
         "[scanner-refusal:974939e6b89b36d455f0e19ff70a42d3] pinning the variable";
         "[scanner-refusal:687a8e82db5772147024b757deca3cd3] program whose initialization";
