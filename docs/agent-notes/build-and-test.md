@@ -434,8 +434,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (gh-ocannl-2439). The orchestrator alias passes its named dependency group to the tests,
   which check that the drivers they launch are declared. `ShellDriverDeclarationTest` checks
   literal Bash argument lists and tuples in `test_cells.py` and `test_orchestrate.py` with a
-  script as the first operand, requiring `shell_driver_path` there (gh-ocannl-2485).
-  Direct paths to `gh612_cells.sh` with its named dependency removed passed the old alias through
+  script as the first operand, requiring `shell_driver_path` there (gh-ocannl-2485). Each file
+  must contribute at least one launch so a change in launcher spelling cannot empty the census
+  silently. Direct paths to `gh612_cells.sh` with its named dependency removed passed the old alias through
   the glob and fail the source check.
   The control uses the same script path in a launch and a source read. Scan-only scripts stay
   glob inputs and earn no coverage credit.

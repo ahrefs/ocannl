@@ -53,11 +53,12 @@ class ShellDriverDeclarationTest(unittest.TestCase):
     """
 
     @staticmethod
-    def unchecked_argv(source, filename):
+    def scan_argv(source, filename):
         def calls(expr, name):
             return (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name)
                     and expr.func.id == name)
 
+        launches = 0
         unchecked = []
         for node in ast.walk(ast.parse(source, filename=filename)):
             if not isinstance(node, (ast.List, ast.Tuple)) or len(node.elts) < 2:
@@ -72,17 +73,19 @@ class ShellDriverDeclarationTest(unittest.TestCase):
             if (isinstance(script, ast.Constant) and isinstance(script.value, str)
                     and script.value.startswith("-")):
                 continue
+            launches += 1
             if calls(script, "str") and len(script.args) == 1 and not script.keywords:
                 script = script.args[0]
             if not calls(script, "shell_driver_path"):
                 unchecked.append(node.lineno)
-        return [f"{filename}:{line}" for line in sorted(unchecked)]
+        return launches, [f"{filename}:{line}" for line in sorted(unchecked)]
 
     def test_bash_launches_use_the_declaration_check(self):
-        unchecked = []
         for name in ("test_cells.py", "test_orchestrate.py"):
-            unchecked.extend(self.unchecked_argv((HERE / name).read_bytes(), name))
-        self.assertEqual(unchecked, [], "pass the Bash script through shell_driver_path")
+            with self.subTest(source=name):
+                launches, unchecked = self.scan_argv((HERE / name).read_bytes(), name)
+                self.assertGreater(launches, 0, "expected at least one recognized Bash script launch")
+                self.assertEqual(unchecked, [], "pass the Bash script through shell_driver_path")
 
     def test_bash_launch_and_scan_only_controls(self):
         source = """\
@@ -94,7 +97,7 @@ self.run_tool([box_gate.BASH, str(shell_driver_path(name, root=self.root / "benc
 argv = [box_gate.BASH] + [str(shell_driver_path(name))]
 subprocess.run(["bash", "-c", "true"])
 """
-        self.assertEqual(self.unchecked_argv(source, "probe.py"), ["probe.py:2", "probe.py:3"])
+        self.assertEqual(self.scan_argv(source, "probe.py"), (4, ["probe.py:2", "probe.py:3"]))
 
 
 # The record `Utils.config_record_to_json` prints (config_records.py's schema) for every
