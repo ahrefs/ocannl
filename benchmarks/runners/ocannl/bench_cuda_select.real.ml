@@ -238,17 +238,14 @@ let compare_times ?(before = fun _ -> ()) ?(show_rounds = false) ~calls ~label ~
   let show (name, _) =
     Bench_retime.spread_fields ~name:(name ^ "_ms") (Bench_retime.spread_of (column name))
   in
-  let ratio num den =
-    let r = Bench_retime.paired_ratio ~num:(column num) ~den:(column den) in
-    if r.pairs < Bench_retime.min_readings then
-      failwith (Printf.sprintf "%s: only %d of %d timing rounds admitted" label r.pairs calls);
-    r
-  in
   let admitted_orders =
     Array.filter_mapi orders ~f:(fun i order -> Option.some_if (Option.is_some rows.(i).(0)) order)
   in
+  let admitted = Array.length admitted_orders in
+  if admitted < Bench_retime.min_readings then
+    failwith (Printf.sprintf "%s: only %d of %d timing rounds admitted" label admitted calls);
   let balance = Bench_design.balance ~arms:n admitted_orders in
-  (String.concat ~sep:" " (List.map (Array.to_list arms) ~f:show), ratio, balance)
+  (String.concat ~sep:" " (List.map (Array.to_list arms) ~f:show), column, balance)
 
 let with_segment_arms ~root ~target ~reverse work f =
   let order =
@@ -300,20 +297,20 @@ let check_segment_buffers ~shared_output ~label arms work fixture =
   if Verdict.any_failed () then failwith (label ^ ": segment buffer placement check failed")
 
 let time_segment ~calls ~label ~show_rounds arms =
-  let times, ratio, balance = compare_times ~show_rounds ~calls ~label ~arms () in
-  let short = ratio "short_repeat" "short" and blend = ratio "blend_repeat" "blend" in
-  let control_factor r = Float.max r.Bench_retime.ratio_hi (1. /. r.ratio_lo) in
-  let floor = Float.max 1. (Float.max (control_factor short) (control_factor blend)) in
-  let treatment = ratio "blend" "short" in
-  let balanced = balance.histograms_equal && balance.pairs_exchanged in
-  let resolved =
-    balanced && Float.(treatment.ratio_hi < 1. /. floor || treatment.ratio_lo > floor)
+  let times, column, balance = compare_times ~show_rounds ~calls ~label ~arms () in
+  let r =
+    Bench_retime.controlled_ratio ~base:(column "short") ~base_repeat:(column "short_repeat")
+      ~variant:(column "blend") ~variant_repeat:(column "blend_repeat")
   in
-  p "%s %s %s %s %s control_factor=%.3f timing_positions_balanced=%b\n" label times
-    (Bench_retime.ratio_fields ~name:"blend_over_short" { treatment with resolved })
-    (Bench_retime.ratio_fields ~name:"short_repeat_over_short" short)
-    (Bench_retime.ratio_fields ~name:"blend_repeat_over_blend" blend)
-    floor balanced
+  let balanced = balance.histograms_equal && balance.pairs_exchanged in
+  let treatment = { r.treatment with resolved = balanced && r.treatment.resolved } in
+  p
+    "%s %s %s %s %s effect_lo=%.3f effect_hi=%.3f control_factor=%.3f timing_positions_balanced=%b\n"
+    label times
+    (Bench_retime.ratio_fields ~name:"blend_over_short" treatment)
+    (Bench_retime.ratio_fields ~name:"short_repeat_over_short" r.base_control)
+    (Bench_retime.ratio_fields ~name:"blend_repeat_over_blend" r.variant_control)
+    r.effect_lo r.effect_hi r.control_factor balanced
 
 let compare_segment ~root ~target ~dry ~calls ~shared_output ~reverse ~show_rounds work =
   let first = (snd (List.hd_exn work.fixtures)) () in
@@ -500,14 +497,15 @@ let compare_step ~target ~dry ~calls step =
             : Context.t)
       in
       if not dry then
-        let times, ratio, _ =
+        let times, column, _ =
           compare_times ~before:restore ~calls ~label
             ~arms:(List.map arms ~f:(fun (name, (c, _, _, _)) -> (name, c)))
             ()
         in
+        let ratio name = Bench_retime.paired_ratio ~num:(column name) ~den:(column "short") in
         p "%s %s %s %s\n" label times
-          (Bench_retime.ratio_fields ~name:"blend_over_short" (ratio "blend" "short"))
-          (Bench_retime.ratio_fields ~name:"control_over_short" (ratio "control" "short")))
+          (Bench_retime.ratio_fields ~name:"blend_over_short" (ratio "blend"))
+          (Bench_retime.ratio_fields ~name:"control_over_short" (ratio "control")))
 
 let () =
   let args = Bench_args.create "bench_cuda_select" in

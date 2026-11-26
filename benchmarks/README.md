@@ -1202,9 +1202,10 @@ writes each arm's step source there.
 
 Each segment rendering has its own byte-identical, separately linked repeat. All four routines
 bind the same device buffers by default. A timed row reports the widest admitted repeat ratio in
-either direction as `control_factor`. The blend/short range resolves if it lies wholly below
-`1/control_factor` or wholly above `control_factor` and the admitted rounds balance the positions
-and pair orders. Segments default to eight rounds. Use a multiple of four rounds to balance the
+either direction as `control_factor`. The range from `effect_lo` to `effect_hi` spans the four
+blend/short link pairings. The row resolves when that whole range lies below `1/control_factor`
+or above `control_factor` and the admitted rounds balance the positions and pair orders.
+Segments default to eight rounds. Use a multiple of four rounds to balance the
 planned order when overriding the default. A refused timing drops its entire round and can leave
 the row unbalanced. The step retains its own control.
 
@@ -1212,10 +1213,10 @@ On `rog-nv-linux` (RTX 5070 Ti Laptop, `sm_75` and `sm_120`, 4,194,304 elements,
 rounds), the `where_masked` controls gave `control_factor` values of 1.241–1.383 with separate
 outputs and 1.047–1.097 with a shared output across both mask densities and link orders. With
 separate outputs the short repeat stayed faster and the blend repeat stayed slower in both
-timing orders, even after reversing the links. Sharing the output narrowed the gap.
-Use about 1.10 (0.91 in the faster direction)
-as a planning floor for those shared-output rows, then use the row's own control range when
-reading a run. The physical address or alignment mechanism remains undetermined.
+timing orders, even after reversing the links. Sharing the output narrowed the gap. Use about
+1.10 (0.91 in the faster direction) as a planning floor for those shared-output rows, then use
+the row's own control range when reading a run. The physical address or alignment mechanism
+remains undetermined.
 [#2385](https://github.com/ahrefs/ocannl/issues/2385)
 
 The benchmark generates its inputs in memory. Build the executable and verify the emitted forms,

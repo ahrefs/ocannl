@@ -82,6 +82,24 @@ let () =
     ((not few.R.resolved) && Float.is_nan few.R.ratio_lo && Float.is_nan few.R.ratio_hi)
 
 let () =
+  let compare ~base ~base_repeat ~variant ~variant_repeat =
+    let rounds ms = Array.create ~len:R.min_readings (Some ms) in
+    R.controlled_ratio ~base:(rounds base) ~base_repeat:(rounds base_repeat)
+      ~variant:(rounds variant) ~variant_repeat:(rounds variant_repeat)
+  in
+  let equal_repeats = compare ~base:0.9375 ~base_repeat:1. ~variant:1.0625 ~variant_repeat:1. in
+  p "controls: opposing link biases can clear the control band while the repeats agree"
+    Float.(equal_repeats.treatment.ratio_lo > equal_repeats.control_factor);
+  p "controls: a difference that vanishes on the repeats stays unresolved"
+    (not equal_repeats.treatment.resolved);
+  let cross_pair = compare ~base:1. ~base_repeat:1.125 ~variant:1.25 ~variant_repeat:1.40625 in
+  p "controls: a mixed pairing inside the band leaves the comparison unresolved"
+    (not cross_pair.treatment.resolved);
+  let faster = compare ~base:2. ~base_repeat:2.25 ~variant:1.25 ~variant_repeat:1.5 in
+  p "controls: a speedup outside the band under every pairing resolves"
+    (faster.treatment.resolved && Float.equal faster.effect_hi 0.75)
+
+let () =
   let calls v =
     Unix.putenv "BENCH_RETIME_CALLS" v;
     match R.calls_of_env () with n -> Some n | exception Failure _ -> None
