@@ -1041,15 +1041,15 @@ else
   rm -f "$matrix_document"
 fi
 
-# Declared measurement boxes with no remote lane in UNITS (gh-ocannl-1832):
-# m4-pro (macbook-pro) is a second macOS/Apple Silicon measurement box (Wi-Fi
-# laptop) whose OS/Metal environment is covered by the local macOS lane (m4-max).
-# Excluded from the sweep's environment-completeness matrix unless this run is
-# executing locally on it (when it is already in scheduled_boxes). Any other
-# declared box missing from UNITS is still refused at startup.
+# Declared Mac peer boxes (gh-ocannl-1832): m4-max and m4-pro share the local
+# macOS/Metal lane; whichever recognized Mac owns LOCAL_BOX has its peer
+# exempted from UNITS. Any misconfigured LOCAL_BOX or non-Mac box missing from
+# UNITS is still refused loudly at startup, and any exempted box is reported to
+# aggregate-skips.sh via --unswept-box so completeness is stated over the
+# required sweep boxes rather than every declared box.
 unswept_measurement_box() {
-  case $1 in
-    m4-pro) return 0 ;;
+  case $LOCAL_BOX:$1 in
+    m4-max:m4-pro | m4-pro:m4-max) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -1058,6 +1058,7 @@ unswept_measurement_box() {
 # reach them. Relate the two so adding or renaming a declared box cannot leave a
 # matrix member that no sweep unit can ever satisfy. Units absent from a historical
 # target's declaration still contribute backend evidence but not environment evidence.
+unswept_boxes=()
 if [ ${#known_boxes[@]} -gt 0 ]; then
   scheduled_boxes=()
   for unit in "${UNITS[@]}"; do
@@ -1069,7 +1070,7 @@ if [ ${#known_boxes[@]} -gt 0 ]; then
     if contains "$box" "${scheduled_boxes[@]}"; then
       swept_known_boxes+=("$box")
     elif unswept_measurement_box "$box"; then
-      :
+      unswept_boxes+=("$box")
     else
       die "declared measurement box '$box' has no sweep unit"
     fi
@@ -3352,6 +3353,9 @@ if [ "$FORCE" = 1 ] && [ -z "$TARGET" ]; then
   done <<<"$known_backends"
   for box in "${known_boxes[@]:-}"; do
     [ -n "$box" ] && aggregate_args+=(--known-box "$box")
+  done
+  for box in "${unswept_boxes[@]:-}"; do
+    [ -n "$box" ] && aggregate_args+=(--unswept-box "$box")
   done
   for ((i = 0; i < ${#SKIP_RUN_BACKENDS[@]}; i++)); do
     aggregate_args+=(--run "${SKIP_RUN_BACKENDS[$i]}" "${SKIP_RUN_BOXES[$i]}" \

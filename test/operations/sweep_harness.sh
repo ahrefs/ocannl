@@ -54,7 +54,7 @@ on_error() {
     environment_executed partial_matrix singleton_fail repeated_backend_fail \
     repeated_backend_pass mixed_scope_fail mixed_scope_cleared historical_matrix \
     undeclared_cleared undeclared_skipped undeclared_only rerun_cleared rerun_red completion_red \
-    retry_agrees retry_executes retry_skips bystander no_records future_kind local_identity_error unsafe_identity_error only_typo_error matrix_error unswept_matrix state_first state_same \
+    retry_agrees retry_executes retry_skips bystander no_records future_kind local_identity_error unsafe_identity_error only_typo_error matrix_error unswept_matrix unswept_pro unswept_bogus unswept_complete_fail unswept_overlap state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in dest_wsl dest_linux dest_missing dest_local_only \
     dest_bogus dest_no_kind_of dest_half dest_override dest_override_wins dest_bad_override \
@@ -4654,9 +4654,10 @@ grep -q '^environment status: insufficient (0 of 2 declared boxes completed; nee
   "$historical_report"
 grep -q '^environment result: NOT AGGREGATED$' "$historical_report"
 
-# A declared unswept measurement box (m4-pro, gh-ocannl-1832) is accepted on a
-# m4-max sweep without requiring a sweep unit of its own and is excluded from
-# the environment matrix's missing boxes.
+# A declared Mac peer box (m4-pro on an m4-max sweep, and reciprocally m4-max on
+# an m4-pro sweep; gh-ocannl-1832) is accepted without a remote sweep unit, named
+# as unswept in the skip-coverage report, and excluded from the required sweep
+# box count so the report never claims coverage over an excluded box.
 printf '# measurement-boxes: m4-max m4-pro minix rog-nv\n' \
   >"$main/benchmarks/fixtures/DIGESTS.txt"
 git -C "$main" add benchmarks/fixtures/DIGESTS.txt
@@ -4666,7 +4667,57 @@ unswept_matrix=$(run_sweep --force)
 unswept_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$unswept_matrix" | tail -1)
 grep -q '^completed boxes: m4-max$' "$unswept_report"
 grep -q '^missing boxes: minix, rog-nv$' "$unswept_report"
-absent 'm4-pro' "$unswept_report"
+grep -q '^unswept declared boxes (excluded from required matrix): m4-pro$' "$unswept_report"
+grep -q '^environment status: insufficient (1 of 3 required sweep boxes completed; need at least 2 unless the matrix is complete)$' \
+  "$unswept_report"
+
+# Reciprocal: running locally on m4-pro exempts its Mac peer m4-max and reports
+# m4-max as unswept.
+unswept_pro=$(SWEEP_TEST_LOCAL_BOX=m4-pro run_sweep --force)
+unswept_pro_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$unswept_pro" | tail -1)
+grep -q '^completed boxes: m4-pro$' "$unswept_pro_report"
+grep -q '^missing boxes: minix, rog-nv$' "$unswept_pro_report"
+grep -q '^unswept declared boxes (excluded from required matrix): m4-max$' "$unswept_pro_report"
+grep -q '^environment status: insufficient (1 of 3 required sweep boxes completed; need at least 2 unless the matrix is complete)$' \
+  "$unswept_pro_report"
+
+# Negative control for Mac-peer scoping: an unrecognized local box exempts
+# neither Mac, so m4-max is still refused as having no sweep unit.
+set +e
+unswept_bogus=$(SWEEP_TEST_LOCAL_BOX=bogus run_sweep 2>&1)
+unswept_bogus_rc=$?
+set -e
+[ "$unswept_bogus_rc" -eq 2 ]
+grep -q "^sweep: declared measurement box 'm4-max' has no sweep unit$" <<<"$unswept_bogus"
+
+# Complete-matrix wording with --unswept-box: aggregate-skips reports the
+# excluded box and scopes its complete/FAIL/PASS wording to required sweep boxes.
+records_of "$verdict_probe" "$tmp/unswept-cc.log" cc
+set +e
+unswept_complete_fail=$("$aggregate" --known cc --known metal \
+  --known-box m4-max --unswept-box m4-pro \
+  --run cc m4-max "$tmp/unswept-cc.log" 2>&1)
+unswept_complete_fail_rc=$?
+set -e
+[ "$unswept_complete_fail_rc" -eq 1 ]
+grep -q '^unswept declared boxes (excluded from required matrix): m4-pro$' <<<"$unswept_complete_fail"
+grep -q '^environment status: complete (1 of 1 required sweep boxes completed)$' <<<"$unswept_complete_fail"
+grep -q '^environment result: FAIL -- 1 claim(s) skipped on every required sweep box$' <<<"$unswept_complete_fail"
+grep -q '^FAIL: skipped on every required sweep box: verdict_skip_probe.exe: common environment-gated claim$' \
+  <<<"$unswept_complete_fail"
+records_of "$verdict_probe" "$tmp/unswept-cc.log" cc execute-environment
+unswept_complete_pass=$("$aggregate" --known cc --known metal \
+  --known-box m4-max --unswept-box m4-pro \
+  --run cc m4-max "$tmp/unswept-cc.log")
+grep -q '^unswept declared boxes (excluded from required matrix): m4-pro$' <<<"$unswept_complete_pass"
+grep -q '^environment result: PASS -- no claim was skipped on every required sweep box$' <<<"$unswept_complete_pass"
+set +e
+unswept_overlap=$("$aggregate" --known cc --known-box m4-max --unswept-box m4-max \
+  --run cc m4-max "$tmp/unswept-cc.log" 2>&1)
+unswept_overlap_rc=$?
+set -e
+[ "$unswept_overlap_rc" -eq 2 ]
+grep -q "cannot be both known and unswept" <<<"$unswept_overlap"
 
 # Negative control for the one-list contract: changing only the declaration to
 # add a box with no execution unit makes the sweep refuse before claiming any
