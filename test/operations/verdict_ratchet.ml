@@ -7198,6 +7198,44 @@ let leg =
     ()
 let () = in_leg ~leg "aligned" (fun label -> p label true)|ocaml},
       [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
+    ( "refuses a disallowed call in an unused argument of an immediately applied anonymous function",
+      {ocaml|open Verdict.Claims
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:((fun _ -> true) (Option.is_some (Autotune.detect_conv llc)))
+    ()
+let () = in_leg ~leg "unused arg" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses a lazy policy-wrapper force after a conditional first force and an unwrapped claim",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let run =
+  lazy
+    (Test_utils.with_policy
+       (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+       (fun () -> in_leg ~leg:sub "tf32 conditional" (fun label -> p label true)))
+let () =
+  if flag then Lazy.force run;
+  in_leg ~leg:sub "outside" (fun label -> p label true);
+  Lazy.force run|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "accepts separately allocated sub_legs returned through a nested local factory helper",
+      {ocaml|open Verdict.Claims
+let parent = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let make () =
+  let alloc () =
+    Verdict.sub_leg parent ~on:"tf32" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+  in
+  alloc ()
+let () =
+  let first = make () in
+  in_leg ~leg:first "outside" (fun label -> p label true);
+  let second = make () in
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg:second "inside" (fun label -> p label true))|ocaml},
+      [] );
   ]
 
 let run_leg_gate_controls () =

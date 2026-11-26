@@ -7980,7 +7980,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
       val mutable in_uninvoked_fn_def : bool = false
       val active_fn_rewalks : int Hash_set.t = Hash_set.create (module Int)
       val active_lazy_rewalks : string Hash_set.t = Hash_set.create (module String)
-      val executed_lazy_vals : int Hash_set.t = Hash_set.create (module Int)
+      val mutable executed_lazy_vals : Set.M(Int).t = Set.empty (module Int)
       val fn_replay_count : (int, int) Hashtbl.t = Hashtbl.create (module Int)
       val call_inv_by_key : (string, int) Hashtbl.t = Hashtbl.create (module String)
       val leg_by_key : (string, lg_leg_rec) Hashtbl.t = Hashtbl.create (module String)
@@ -8288,7 +8288,8 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
         in
         go env expr
 
-      method bind_local_call ?(arg_inv_id = current_inv_id) ?arg_wids fn_env params all_args =
+      method bind_local_call ?(arg_inv_id = current_inv_id) ?arg_wids
+          ?(on_whole_arg = fun _ _ -> ()) fn_env params all_args =
         let nolabel_args =
           List.filter_map all_args ~f:(fun (albl, aexpr, aenv, aeval) ->
               match albl with Ppxlib.Asttypes.Nolabel -> Some (aexpr, aenv, aeval) | _ -> None)
@@ -8330,6 +8331,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
               in
               let acc = self#forget acc (Lexical_scope.pattern_unpacks [ pat ]) in
               let pairs = extract_pat_projs pat in
+              let is_whole_var = match pairs with [ (_, []) ] -> true | _ -> false in
               if List.is_empty pairs then acc
               else
                 let frame =
@@ -8344,14 +8346,16 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                           v.lg_inv_id <- arg_inv_id;
                           v.lg_rhs <- Some (aexpr, aenv);
                           v.lg_proj <- proj;
-                          v.lg_cap_record <- List.is_empty proj && expr_is_cap_record aenv aexpr
+                          v.lg_cap_record <- List.is_empty proj && expr_is_cap_record aenv aexpr;
+                          if is_whole_var then on_whole_arg aexpr v.lg_id
                       | Some (aexpr, aenv, None) ->
                           v.lg_is_call_arg <- true;
                           v.lg_inv_id <- arg_inv_id;
                           v.lg_arg_wids <- arg_wids;
                           v.lg_rhs <- Some (aexpr, aenv);
                           v.lg_proj <- proj;
-                          v.lg_cap_record <- List.is_empty proj && expr_is_cap_record aenv aexpr
+                          v.lg_cap_record <- List.is_empty proj && expr_is_cap_record aenv aexpr;
+                          if is_whole_var then on_whole_arg aexpr v.lg_id
                       | None -> v.lg_is_call_arg <- true);
                       Map.set m ~key:name ~data:v)
                 in
@@ -8559,6 +8563,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
          site). *)
       method inspect_gate ~is_sub_leg ~leg_scopes env expr =
         let seen_val_projs = Hash_set.create (module String) in
+        let visited_vals = Hash_set.create (module Int) in
         let seen_param_calls = Hash_set.create (module String) in
         let active_fn_calls = Hash_set.create (module Int) in
         let found_disallowed = ref [] in
@@ -8597,6 +8602,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
         let rec walk ~eval_kind ~in_explicit_policy env expr =
           let line = expr.pexp_loc.loc_start.pos_lnum in
           let visit_val v =
+            Hash_set.add visited_vals v.lg_id;
             let vkey =
               Printf.sprintf "%d:%b:%s:" v.lg_id in_explicit_policy (eval_kind_key eval_kind)
             in
@@ -8845,22 +8851,40 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                             | _ -> false)
                         | _ -> false
                       in
-                      let walk_applied_fn fn_env params body all_args =
-                        let call_env, extra_args = self#bind_local_call fn_env params all_args in
-                        match ((strip body).pexp_desc, extra_args) with
+                      let walk_applied_fn ~scan_unused_args fn_env params body all_args =
+                        let whole_arg_ids = ref [] in
+                        let call_env, extra_args =
+                          self#bind_local_call
+                            ~on_whole_arg:(fun aexpr id ->
+                              whole_arg_ids := (aexpr, id) :: !whole_arg_ids)
+                            fn_env params all_args
+                        in
+                        let handled_scrut = ref None in
+                        (match ((strip body).pexp_desc, extra_args) with
                         | ( Pexp_function ([], _, Pfunction_cases (cases, _, _)),
                             (scrut, scrut_env, scrut_eval) :: rest ) ->
+                            handled_scrut := Some (scrut, scrut_env, scrut_eval);
                             let case_eval = Option.value scrut_eval ~default:eval_kind in
                             let scrut_cap = expr_is_cap_record scrut_env scrut in
+                            let scrut_whole_ids = ref [] in
                             List.iter cases ~f:(fun c ->
                                 if scrut_cap then check_cap_pat scrut_env c.pc_lhs;
                                 let c_env =
                                   self#bind_match_pattern_in ~eval_kind:case_eval ~scrut_env
                                     call_env scrut c.pc_lhs
                                 in
+                                (match extract_pat_projs c.pc_lhs with
+                                | [ (name, []) ] ->
+                                    Option.iter (Lexical_scope.lookup c_env name) ~f:(fun v ->
+                                        scrut_whole_ids := v.lg_id :: !scrut_whole_ids)
+                                | _ -> ());
                                 Option.iter c.pc_guard
                                   ~f:(walk ~eval_kind ~in_explicit_policy c_env);
                                 walk ~eval_kind ~in_explicit_policy c_env c.pc_rhs);
+                            if
+                              scan_unused_args
+                              && not (List.exists !scrut_whole_ids ~f:(Hash_set.mem visited_vals))
+                            then walk ~eval_kind:case_eval ~in_explicit_policy scrut_env scrut;
                             List.iter rest ~f:(fun (aexpr, aenv, aeval) ->
                                 walk
                                   ~eval_kind:(Option.value aeval ~default:eval_kind)
@@ -8868,6 +8892,23 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                         | _ ->
                             walk ~eval_kind ~in_explicit_policy call_env body;
                             List.iter extra_args ~f:(fun (aexpr, aenv, aeval) ->
+                                walk
+                                  ~eval_kind:(Option.value aeval ~default:eval_kind)
+                                  ~in_explicit_policy aenv aexpr));
+                        if scan_unused_args then
+                          List.iter all_args ~f:(fun (_, aexpr, aenv, aeval) ->
+                              let in_extra =
+                                List.exists extra_args ~f:(fun (e, _, _) -> phys_equal e aexpr)
+                              in
+                              let is_scrut =
+                                Option.exists !handled_scrut ~f:(fun (e, _, _) ->
+                                    phys_equal e aexpr)
+                              in
+                              let visited_whole =
+                                List.exists !whole_arg_ids ~f:(fun (e, id) ->
+                                    phys_equal e aexpr && Hash_set.mem visited_vals id)
+                              in
+                              if (not in_extra) && (not is_scrut) && not visited_whole then
                                 walk
                                   ~eval_kind:(Option.value aeval ~default:eval_kind)
                                   ~in_explicit_policy aenv aexpr)
@@ -8890,9 +8931,10 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                             Hash_set.add active_fn_calls fn_id;
                             Exn.protect
                               ~finally:(fun () -> Hash_set.remove active_fn_calls fn_id)
-                              ~f:(fun () -> walk_applied_fn fn_env params body all_args))
+                              ~f:(fun () ->
+                                walk_applied_fn ~scan_unused_args:false fn_env params body all_args))
                       | Some (`Inline (params, body, all_args)) ->
-                          walk_applied_fn env params body all_args
+                          walk_applied_fn ~scan_unused_args:true env params body all_args
                       | None -> (
                           let base, iter_all_args = flatten_apply expr in
                           match iterator_kind env base with
@@ -9332,6 +9374,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                   | _ -> ());
                   match lookup_local_val env txt with
                   | Some v ->
+                      Hash_set.add visited_vals v.lg_id;
                       let vkey =
                         Printf.sprintf "%d:%b:%s:%s" v.lg_id in_explicit_policy
                           (eval_kind_key eval_kind) (proj_key proj)
@@ -9536,11 +9579,11 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
         | Some _ as hit -> hit
         | None -> if inv_id <> 0 then try_with_inv 0 else None
 
-      method find_call_inv ~caller_inv ~wrapper_ids ~fn_id ~site_pos =
+      method find_call_inv ~caller_inv ~wrapper_ids ~fn_pos ~site_pos =
         let rec try_suffixes = function
-          | [] -> Hashtbl.find call_inv_by_key (call_inv_key caller_inv [] fn_id site_pos)
+          | [] -> Hashtbl.find call_inv_by_key (call_inv_key caller_inv [] fn_pos site_pos)
           | _ :: tl as ids -> (
-              match Hashtbl.find call_inv_by_key (call_inv_key caller_inv ids fn_id site_pos) with
+              match Hashtbl.find call_inv_by_key (call_inv_key caller_inv ids fn_pos site_pos) with
               | Some inv -> Some inv
               | None -> try_suffixes tl)
         in
@@ -9677,10 +9720,11 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                         ~f:(fun () ->
                           let site_pos = expr.pexp_loc.loc_start.pos_cnum in
                           let callee_inv =
-                            Option.value
-                              (self#find_call_inv ~caller_inv:inv_id ~wrapper_ids:wids ~fn_id
-                                 ~site_pos)
-                              ~default:0
+                            Option.bind (Hashtbl.find fn_expr_by_id fn_id) ~f:(fun (fn_expr, _) ->
+                                let fn_pos = (strip fn_expr).pexp_loc.loc_start.pos_cnum in
+                                self#find_call_inv ~caller_inv:inv_id ~wrapper_ids:wids ~fn_pos
+                                  ~site_pos)
+                            |> Option.value ~default:0
                           in
                           let call_env, _ =
                             self#bind_local_call ~arg_inv_id:inv_id ~arg_wids:wids fn_env params
@@ -9795,10 +9839,11 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                         ~f:(fun () ->
                           let site_pos = expr.pexp_loc.loc_start.pos_cnum in
                           let callee_inv =
-                            Option.value
-                              (self#find_call_inv ~caller_inv:inv_id ~wrapper_ids:wids ~fn_id
-                                 ~site_pos)
-                              ~default:0
+                            Option.bind (Hashtbl.find fn_expr_by_id fn_id) ~f:(fun (fn_expr, _) ->
+                                let fn_pos = (strip fn_expr).pexp_loc.loc_start.pos_cnum in
+                                self#find_call_inv ~caller_inv:inv_id ~wrapper_ids:wids ~fn_pos
+                                  ~site_pos)
+                            |> Option.value ~default:0
                           in
                           let call_env, _ =
                             self#bind_local_call ~arg_inv_id:inv_id ~arg_wids:wids fn_env params
@@ -9945,9 +9990,9 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                           match lazy_id with
                           | `Named id ->
                               ( Printf.sprintf "named:%d" id,
-                                Hash_set.mem executed_lazy_vals id,
+                                Set.mem executed_lazy_vals id,
                                 true,
-                                fun () -> Hash_set.add executed_lazy_vals id )
+                                fun () -> executed_lazy_vals <- Set.add executed_lazy_vals id )
                           | `Inline pos ->
                               let lkey =
                                 Printf.sprintf "lazy:%d:%s:%d:%d" current_inv_id
@@ -10326,8 +10371,9 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
             (* Track enclosing policy-wrapper calls ([Test_utils.with_policy], ...), scoping ONLY
                the callback (including named callbacks) and NOT the policy-adjuster argument. *)
             let rewalk_local_under_wrappers ~site_pos fn_id fn_expr fn_env =
+              let fn_pos = (strip fn_expr).pexp_loc.loc_start.pos_cnum in
               let wkey =
-                call_inv_key current_inv_id (List.map active_wrappers ~f:fst) fn_id site_pos
+                call_inv_key current_inv_id (List.map active_wrappers ~f:fst) fn_pos site_pos
               in
               let prior_count = Option.value (Hashtbl.find fn_replay_count fn_id) ~default:0 in
               if
@@ -10401,18 +10447,34 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                         | _ -> cb_env
                       in
                       walk_wrapper_cb inner_env body
-                  | Pexp_ifthenelse (cond, t, f) ->
+                  | Pexp_ifthenelse (cond, t, f) -> (
                       ignore (self#expression cb_env cond : expression);
+                      let saved_lazy = executed_lazy_vals in
                       walk_wrapper_cb cb_env t;
-                      Option.iter f ~f:(walk_wrapper_cb cb_env)
+                      let after_t = executed_lazy_vals in
+                      match f with
+                      | Some else_expr ->
+                          executed_lazy_vals <- saved_lazy;
+                          walk_wrapper_cb cb_env else_expr;
+                          executed_lazy_vals <- Set.inter after_t executed_lazy_vals
+                      | None -> executed_lazy_vals <- saved_lazy)
                   | Pexp_match (scrutinee, cases) ->
                       ignore (self#expression cb_env scrutinee : expression);
-                      List.iter cases ~f:(fun c ->
-                          ignore (self#pattern cb_env c.pc_lhs : pattern);
-                          let c_env = self#bind_match_pattern cb_env scrutinee c.pc_lhs in
-                          Option.iter c.pc_guard ~f:(fun g ->
-                              ignore (self#expression c_env g : expression));
-                          walk_wrapper_cb c_env c.pc_rhs)
+                      let saved_lazy = executed_lazy_vals in
+                      let branch_sets =
+                        List.map cases ~f:(fun c ->
+                            executed_lazy_vals <- saved_lazy;
+                            ignore (self#pattern cb_env c.pc_lhs : pattern);
+                            let c_env = self#bind_match_pattern cb_env scrutinee c.pc_lhs in
+                            Option.iter c.pc_guard ~f:(fun g ->
+                                ignore (self#expression c_env g : expression));
+                            walk_wrapper_cb c_env c.pc_rhs;
+                            executed_lazy_vals)
+                      in
+                      executed_lazy_vals <-
+                        (match branch_sets with
+                        | [] -> saved_lazy
+                        | first :: rest -> List.fold rest ~init:first ~f:Set.inter)
                   | Pexp_function _ ->
                       let wid = self#fresh_wrapper_id in
                       let saved = active_wrappers in
@@ -10551,7 +10613,17 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                               :: !pending_uses
                         | None -> ())
                     | _ -> ()));
-                let res = super#expression env expr in
+                let res =
+                  match ((strip callee).pexp_desc, arguments) with
+                  | Pexp_ident { txt = Lident ("&&" | "||"); _ }, [ (Nolabel, lhs); (Nolabel, rhs) ]
+                    ->
+                      ignore (self#expression env lhs : expression);
+                      let saved_lazy = executed_lazy_vals in
+                      ignore (self#expression env rhs : expression);
+                      executed_lazy_vals <- saved_lazy;
+                      expr
+                  | _ -> super#expression env expr
+                in
                 (* Propagate execution scopes (wrapped and unwrapped) through saturated local helper
                    calls and synchronous iterator callbacks AFTER walking arguments (call-by-value
                    order), so deferred [sub_leg] force-order and policy-wrapper checks observe
@@ -10568,18 +10640,71 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                 res)
         | Pexp_lazy inner ->
             let saved_uninvoked = in_uninvoked_fn_def in
+            let saved_lazy = executed_lazy_vals in
             in_uninvoked_fn_def <- true;
             Exn.protect
-              ~finally:(fun () -> in_uninvoked_fn_def <- saved_uninvoked)
+              ~finally:(fun () ->
+                in_uninvoked_fn_def <- saved_uninvoked;
+                executed_lazy_vals <- saved_lazy)
               ~f:(fun () -> ignore (self#expression env inner : expression));
+            expr
+        | Pexp_ifthenelse (cond, t, f) ->
+            ignore (self#expression env cond : expression);
+            let saved_lazy = executed_lazy_vals in
+            ignore (self#expression env t : expression);
+            let after_t = executed_lazy_vals in
+            (match f with
+            | Some else_expr ->
+                executed_lazy_vals <- saved_lazy;
+                ignore (self#expression env else_expr : expression);
+                executed_lazy_vals <- Set.inter after_t executed_lazy_vals
+            | None -> executed_lazy_vals <- saved_lazy);
             expr
         | Pexp_match (scrutinee, cases) ->
             ignore (self#expression env scrutinee : expression);
-            List.iter cases ~f:(fun c ->
-                ignore (self#pattern env c.pc_lhs : pattern);
-                let c_env = self#bind_match_pattern env scrutinee c.pc_lhs in
-                Option.iter c.pc_guard ~f:(fun g -> ignore (self#expression c_env g : expression));
-                ignore (self#expression c_env c.pc_rhs : expression));
+            let saved_lazy = executed_lazy_vals in
+            let branch_sets =
+              List.map cases ~f:(fun c ->
+                  executed_lazy_vals <- saved_lazy;
+                  ignore (self#pattern env c.pc_lhs : pattern);
+                  let c_env = self#bind_match_pattern env scrutinee c.pc_lhs in
+                  Option.iter c.pc_guard ~f:(fun g -> ignore (self#expression c_env g : expression));
+                  ignore (self#expression c_env c.pc_rhs : expression);
+                  executed_lazy_vals)
+            in
+            executed_lazy_vals <-
+              (match branch_sets with
+              | [] -> saved_lazy
+              | first :: rest -> List.fold rest ~init:first ~f:Set.inter);
+            expr
+        | Pexp_try (body, cases) ->
+            let saved_lazy = executed_lazy_vals in
+            ignore (self#expression env body : expression);
+            let after_body = executed_lazy_vals in
+            let handler_sets =
+              List.map cases ~f:(fun c ->
+                  executed_lazy_vals <- saved_lazy;
+                  ignore (self#pattern env c.pc_lhs : pattern);
+                  let c_env = self#bind_patterns env [ c.pc_lhs ] in
+                  Option.iter c.pc_guard ~f:(fun g -> ignore (self#expression c_env g : expression));
+                  ignore (self#expression c_env c.pc_rhs : expression);
+                  executed_lazy_vals)
+            in
+            executed_lazy_vals <- List.fold handler_sets ~init:after_body ~f:Set.inter;
+            expr
+        | Pexp_for (pat, lo, hi, _, body) ->
+            ignore (self#expression env lo : expression);
+            ignore (self#expression env hi : expression);
+            let saved_lazy = executed_lazy_vals in
+            ignore (self#pattern env pat : pattern);
+            ignore (self#expression (self#bind_patterns env [ pat ]) body : expression);
+            executed_lazy_vals <- saved_lazy;
+            expr
+        | Pexp_while (cond, body) ->
+            ignore (self#expression env cond : expression);
+            let saved_lazy = executed_lazy_vals in
+            ignore (self#expression env body : expression);
+            executed_lazy_vals <- saved_lazy;
             expr
         | _ -> super#expression env expr
     end
