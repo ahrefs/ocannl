@@ -6243,10 +6243,6 @@ let exempt_leg_gate_calls : (string * int * string) list =
       2,
       "local bracket helper with_probe passes a Ctypes Dl.dlopen handle of a standalone host C \
        compiler probe, independent of OCANNL codegen" );
-    ( "test/operations/cost_model_fill.ml:Autotune.ranking_fill_model",
-      1,
-      "known dependent gate (pre-existing): gates fill_leg on Autotune.ranking_fill_model while \
-       claiming about Autotune.ranking_ms; tracked for follow-up" );
     ( "test/operations/launch_predicate_parity.ml:Autotune.c_a",
       1,
       "reads the conv site's input precision node from the test fixture lowering for \

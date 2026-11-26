@@ -6419,8 +6419,7 @@
   arrayjit.verdict
   ll_test
   arrayjit.context
-  arrayjit.autotune
-  arrayjit.utils)
+  arrayjit.autotune)
  (preprocess
   (pps ppx_ocannl)))
 

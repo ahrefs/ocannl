@@ -2961,7 +2961,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   turned a seeder that lost its twins into two skips; gate on the invariant that decides whether
   the population exists (`schedule_conv_gemm`'s cvr leg reads `Register_tile.alternatives` at the
   site's own extents; `ptx_target_parity` reads that the backend is the one compiling PTX, and
-  claims the PTX was recorded). The two-branch form is refused too: `verdict_ratchet` reads every
+  claims the PTX was recorded). The `cost_model_fill` leg uses the presence of the backend's
+  two advisory inputs (`multiprocessors` and `fill_threads`) and asserts that the model resolves
+  and both rankings exist. Before gh-ocannl-2477, losing the resolved model made the ranking
+  comparison skip even when the backend advertised both inputs.
+  The two-branch form is refused too: `verdict_ratchet` reads every
   `skipped` the resolver reads as `Verdict`'s, or a `let` binds to one (`Verdict_scan.skip_list_census`) and
   refuses one handed to a collection-module iteration, a callback or loop body that only skips,
   and a branch of an `if`/`match` applying two or more; the sites that predate the rule are

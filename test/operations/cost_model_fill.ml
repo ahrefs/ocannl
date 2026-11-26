@@ -647,25 +647,31 @@ let () =
      at the gh-1479 cells): under the running backend's own limits -- cc's, or CUDA's on its leg --
      every leaf ranks bitwise as under the thread-only fill. Setting a backend's [fill_chains] turns
      this claim red: that is the change that needs its own evidence. *)
-  let own = Context.hardware_limits (Context.auto ()) in
+  let running_ctx = Context.auto () in
+  let own = Context.hardware_limits running_ctx in
   let thread_only = { own with fill_chains = Some 1 } in
+  let fill_model = Autotune.ranking_fill_model ~limits:own in
   Stdio.eprintf "cost_model_fill: the running backend's fill model: %s (not part of the golden)\n"
-    (Option.value_map (Autotune.ranking_fill_model ~limits:own) ~default:"none" ~f:(fun fm ->
+    (Option.value_map fill_model ~default:"none" ~f:(fun fm ->
          Sexp.to_string (CM.sexp_of_fill_model fm)));
   let fill_leg =
     Verdict.leg
-      ~when_:(Option.is_some (Autotune.ranking_fill_model ~limits:own))
-      ~on:(match Utils.get_global_arg ~arg_name:"backend" ~default:"" with "" -> "cc" | b -> b)
+      ~when_:(Option.is_some own.multiprocessors && Option.is_some own.fill_threads)
+      ~on:(Context.backend_name running_ctx)
       ()
   in
+  in_leg ~leg:fill_leg "the running backend's advertised fill inputs resolve to a launch fill model"
+    (fun label -> p label (Option.is_some fill_model));
   in_leg ~leg:fill_leg
     "the running backend advises no ILP cap: every leaf ranks bitwise as under the thread-only fill"
     (fun label ->
       p_all ~min:4 label scored ~f:(fun (_, _, _, _, post) ->
-          Option.equal
-            (fun (r1, b1) (r2, b2) -> Float.equal r1 r2 && Float.equal b1 b2)
-            (Autotune.ranking_ms ~limits:own [ post ])
-            (Autotune.ranking_ms ~limits:thread_only [ post ])));
+          match
+            ( Autotune.ranking_ms ~limits:own [ post ],
+              Autotune.ranking_ms ~limits:thread_only [ post ] )
+          with
+          | Some (r1, b1), Some (r2, b2) -> Float.equal r1 r2 && Float.equal b1 b2
+          | _ -> false));
   let scored = List.map scored ~f:(fun (p, r, b, o, _) -> (p, r, b, o)) in
   List.iter scored ~f:(fun (p, rank, bound, off) ->
       Stdio.eprintf
