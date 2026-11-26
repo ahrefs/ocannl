@@ -7317,6 +7317,7 @@ let leg_gate_allowed_paths =
       "Ir.Backend_intf.compute_prec";
       "Ir.Backend_intf.equal_mma_emission_scope";
       "Ir.Backend_intf.equal_mma_format_triple";
+      "Ir.Backend_intf.fill_threads";
       "Ir.Backend_intf.max_resident_threads";
       "Ir.Backend_intf.max_thread_private_bytes";
       "Ir.Backend_intf.max_workgroup_memory_bytes";
@@ -7326,6 +7327,7 @@ let leg_gate_allowed_paths =
       "Ir.Backend_intf.mma_format_tiles";
       "Ir.Backend_intf.mma_kernel_workgroup_bytes";
       "Ir.Backend_intf.mma_staged_layouts";
+      "Ir.Backend_intf.multiprocessors";
       "Ir.Backend_intf.native_fp16_arithmetic";
       "Ir.Backend_intf.no_hardware_limits";
       "Ir.Backend_intf.parse_static_properties";

@@ -55,6 +55,7 @@ every scheduled blocktile leaf's reduction carries its register tile's tm*tn cha
 a 16-chain leaf ranks bitwise as thread-only under a cap of 8: true
 a fewer-chain leaf ranks no lower under a cap of 8: true
 some under-filled fewer-chain leaf ranks strictly higher under a cap of 8: true
+the running backend's advertised fill inputs resolve to a launch fill model: true
 the running backend advises no ILP cap: every leaf ranks bitwise as under the thread-only fill: true
 with the fill constants every plain leaf ranks strictly above its bgrid twin: true
 without them the twins tie, as before the launch fill: true

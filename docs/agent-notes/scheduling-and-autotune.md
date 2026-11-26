@@ -1018,22 +1018,28 @@ files.
   0, no cache tier, against threshold 32 and is CUDA/HIP only; on cc the seeded default is off
   altogether.
 - **A change to what the `auto` gate seeds owes a CUDA run of the singles readers**
-  (gh-ocannl-2306). Where the seeded plan has a segmentation of its own, a search's default
-  seeded sweep times `F_swap` singles of the plan in place of the staffed `F_sketch` ones
+  (gh-ocannl-2306, gh-ocannl-2382). Where the seeded plan has a segmentation of its own, a search's
+  default seeded sweep times `F_swap` singles of the plan in place of the staffed `F_sketch` ones
   (gh-ocannl-1664), so a ranking change flips what every-backend tests counting those labels
   exercise on CUDA alone: staging#2115 (gh-ocannl-2279) made the gate seed both products of a
   two-matmul chain there, and `autotune_sketch_placements` went red on master, seen only by the
-  CUDA integration loop (fixed test-side in staging#2134). `affected` cannot route it: these tests
-  name `Autotune` but none of the gate's definitions, so a change inside `seeded_ranker` ranks
-  them LINK-ONLY (`model_seeded_anchor`, whose claim's comment names `seeded_ranker`, is
-  REFERENCED), and `--gpu-gated` drops the every-backend ones, whose code holds no GPU gate, by
-  design: what flips is a backend's default, which no reach reading names can see. So a change to
-  `seeded_ranker`, `seeded_default_gate`, `seeded_segment_judgment` or the `Cost_model` terms the
-  gate's score sums (`operand_deliveries` among them) runs, on CUDA, the set this derives
-  (the tests reading single labels, `slow-autotune_fission_sketch` among them):
-  `git grep -lE 'F_sketch|F_swap|Fissioned_chain\.is_' -- 'test/*.ml' ':!test/support' | xargs tools/test-run.sh aliases`,
-  and says so in the PR body; a red there that the change explains is fixed test-side or in the
-  gate, never left for the loop.
+  CUDA integration loop (fixed test-side in staging#2134). Because what flips is a backend default
+  that link reach cannot see, `arrayjit/lib/dune` defines the `seeded-plan` backend-default marker
+  (`; ocannl-backend-default: seeded-plan = cuda,hip Autotune.seeded_ranker,Autotune.seeded_default_gate,Autotune.seeded_segment_judgment -- ...`)
+  and every CUDA-capable single-label reader in `test/operations/dune` declares
+  `; ocannl-backend-default: seeded-plan -- ...` (all 9 every-backend readers / 10 aliases,
+  `slow-autotune_fission_sketch` and `runtest-schedule_conv_gemm-tf32` included; the 5
+  `ocannl-backend: cc` single-label readers never run on CUDA and stay out of `--gpu-gated`). For
+  a change inside `seeded_ranker`, `seeded_default_gate`, or `seeded_segment_judgment`,
+  `tools/test-run.sh affected --gpu-gated --referenced-only --since <base>` now mechanically routes
+  to those declared CUDA readers (on both CUDA boxes and cc-only Macs). For a change to the
+  `Cost_model` terms the gate's score sums (`operand_deliveries` among them, which are not listed
+  in `seeded-plan`), or when auditing newly added label readers that may lack the marker, use the
+  fallback grep
+  `git grep -lE 'F_sketch|F_swap|Fissioned_chain\.is_' -- 'test/*.ml' ':!test/support' | xargs tools/test-run.sh aliases`
+  (filtering to every-backend / CUDA-capable aliases), run the resulting set on CUDA, and cite the
+  run in the PR body; a red there that the change explains is fixed test-side or in the gate, never
+  left for the loop.
   `model_seeded_anchor`'s CUDA/HIP claim pins the exact count under the shipped gate (the chain's
   seeded plan seeds exactly its two products), so such a change owes a HIP run of it too, on both
   memory models. With the direct-read pricing reverted (`~price_direct_loads:false` in
@@ -2773,6 +2779,12 @@ files.
   Depth 256 won only on CUDA's 16-row small-output site (1.43x), where the search's crown was
   the split of the merged k (partials plus combine, 0.0096 ms) instead.
 ## Timing objectives and calibration
+- CUDA value-select segment comparisons use byte-identical repeats for each rendering and a common
+  device output (gh-ocannl-2385). Independent output allocations can split same-source readings
+  even when the readings visit both orders. The row requires balanced admitted rounds and all
+  four cross pairings to clear the repeat envelope in the same direction. The timed witness
+  covers only `where_masked` at both densities and PTX targets. The measured floor and controls
+  are in the [value-select benchmark](../../benchmarks/README.md#cuda-value-select-benchmark).
 - **What the tuner's numbers are a measurement OF is a config choice, and the two objectives do not
   crown the same candidate** (gh-ocannl-755). `Autotune.time_routine` takes a `timing_mode`, from
   config `autotune_timing`: `isolated` is the historical one launch plus one host sync — a lone
@@ -3101,6 +3113,12 @@ files.
   against a spinner-generated load ladder (`_build/default/test/operations/`, `OCANNL_BACKEND=...`
   pinned) yields the distribution directly — and CPU-backend depths sit at the 200 cap, Metal's at
   31-80, HIP's at 200-750 and CUDA's at ~1700, so one box cannot stand in for the fleet.
+- **Discrete HIP `gfx1102` sequential candidate timing can misrank 32-WG-multiple grids**
+  (gh-ocannl-2384). Because in-process `Autotune.tune` candidates share one HSA AQL hardware queue,
+  a candidate whose grid is a multiple of 32 workgroups locks into the per-WGP SIMD-pair phase left
+  by prior non-32-WG-multiple candidates and can read ~20-40% slower than its phase-0 timing,
+  misranking the crowned choice. See `training-and-performance.md` (gh-ocannl-2384) for the
+  mechanism, the `GPU_MAX_HW_QUEUES` separate-stream control, and surviving reading methods.
 ## Cache regimes and placement replay
 - The schedule-cache directory carries one key-regime stamp, independent of the serialized entry's
   `entry_version` (gh-ocannl-835). Bump `Schedule_cache.cache_regime_version` whenever

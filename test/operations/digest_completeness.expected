@@ -83,6 +83,9 @@ keyed: codegen -- a GPU compile knob (gh-ocannl-1710, gh-ocannl-1779): it picks 
   cuda_fast_math [read at codegen]
   hip_fast_math [read at codegen]
 
+keyed: codegen -- a HIP diagnostic compile knob (gh-ocannl-2344): whitespace-separated flags appended to every hiprtc compile after the backend's math, target and debug switches, so compiler-flag A/B experiments need no source edit; the HIP tag carries the parsed options (and any contraction pin they flip) as components
+  hip_extra_compile_options [read at codegen]
+
 keyed: codegen -- a Metal compile knob (gh-ocannl-2406): when off, the Metal kernel header emits [#pragma STDC FP_CONTRACT OFF], pinning floating-point contraction off and rendering a [Tile_mma] fallback unfused, after the lowered code the digest names; Metal's tag carries the contraction regime and [mma-fallback-unfused] as components derived from the pin
   metal_fp_contract [read at codegen]
 

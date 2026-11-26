@@ -90,6 +90,12 @@ let allowed =
          concatenation with a computed tail; its digits are that text";
     };
     {
+      golden = Golden "test/operations/codegen_text_inventory.expected";
+      pattern =
+        {|^env OCANNL_BACKEND=hip tools/test-run\.sh run --expect-backend hip --cap 900 build @test/operations/slow-[a-z0-9_-]+ -j 4 # about |};
+      reason = "the fixed runner cap of a single HIP batch";
+    };
+    {
       golden = Golden "test/operations/config_usage_scan_control.expected";
       pattern = {|^FAIL: [a-z_]+\.fixture:[0-9]+:|};
       reason = "the line of the synthetic fixture a refusal names, moving only with that fixture";

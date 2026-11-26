@@ -19,7 +19,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #group-alive (1, 2-3, 4, 5), #stop (6-8, 67, 101), #queries (39), #options (26-28, 37, 89, 120, 107, 103, 94, 119, 95, 96, 98, 125), #hermetic (70).
+# Groups: #group-alive (1, 2-3, 4, 5), #stop (6-8, 67, 101), #queries (39), #options (26-28, 37, 89, 120, 107, 103, 94, 119, 95, 96, 98, 125, 126), #hermetic (70).
 #
 # Legs:
 # 107. capped single-test builds retain stderr before timeout, with plan boundaries.
@@ -53,6 +53,8 @@
 # 125. fleet receipt metadata preserves the invocation path and the request
 #      before Dune's argv changes. The explicit cc form and fleet path are
 #      required.
+# 126. unset or empty LANG/LC_ALL exports LANG=C to child Dune processes while
+#      preserving LC_CTYPE and caller-supplied LANG/LC_ALL (gh-ocannl-2484).
 #  39. read-only paths and lock-status: absent state, invalid input, physical
 #      paths, recorded and legacy paths, held/released and uninspectable locks.
 #  89-90 sit after leg 79 (gh-ocannl-1448).
@@ -3602,5 +3604,66 @@ cp "$SRC" "$repeat_root/tools/test-run.sh"
 rm -f "$pp_stub"
 }
 harness_leg_run '98: prepush runs affected'\''s list without slow-/train- members #options' leg_98
+
+leg_126() {
+  shared_through repeat_root
+  local loc_bin="$TMP/leg126-locale-bin" loc_out="$TMP/leg126-locale-seen" rc
+  mkdir -p "$loc_bin"
+  cat >"$loc_bin/dune" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1-}" = show ] && [ "${2-}" = aliases ]; then
+  printf 'runtest-focused\n'
+  exit 0
+fi
+if [ -n "${LEG126_LOCALE_OUT:-}" ] && [ ! -e "$LEG126_LOCALE_OUT" ]; then
+  printf 'LANG=%s LC_ALL=%s LC_CTYPE=%s\n' "${LANG-<unset>}" "${LC_ALL-<unset>}" "${LC_CTYPE-<unset>}" >"$LEG126_LOCALE_OUT"
+fi
+exit 0
+EOF
+  chmod +x "$loc_bin/dune"
+  run_tr_locale() { # ENV_ARGS... --
+    local env_args=()
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do env_args+=("$1"); shift; done
+    shift
+    rc=0
+    rm -f "$loc_out"
+    (cd "$repeat_root" && env ${env_args[@]+"${env_args[@]}"} \
+      PATH="$loc_bin:$PATH" \
+      OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none \
+      OCANNL_TOOL_TEST_RUNS="$TMP/leg126-runs" \
+      LEG126_LOCALE_OUT="$loc_out" \
+      "$BASH" tools/test-run.sh run --expect-backend cc build @test/operations/runtest-focused -j 1) \
+      >"$TMP/leg126.out" 2>"$TMP/leg126.err" || rc=$?
+  }
+  run_tr_locale -u LANG -u LC_ALL LC_CTYPE=UTF-8 --
+  if [ "$rc" = 0 ] && [ "$(cat "$loc_out" 2>/dev/null)" = 'LANG=C LC_ALL=<unset> LC_CTYPE=UTF-8' ]; then
+    report 0 'unset LANG/LC_ALL exports LANG=C to child dune while preserving LC_CTYPE'
+  else
+    report 1 'unset LANG/LC_ALL exports LANG=C to child dune while preserving LC_CTYPE' \
+      "exit $rc; locale=$(cat "$loc_out" 2>/dev/null); stderr=$(cat "$TMP/leg126.err")"
+  fi
+  run_tr_locale LANG= LC_ALL= LC_CTYPE=UTF-8 --
+  if [ "$rc" = 0 ] && [ "$(cat "$loc_out" 2>/dev/null)" = 'LANG=C LC_ALL= LC_CTYPE=UTF-8' ]; then
+    report 0 'empty LANG/LC_ALL exports LANG=C to child dune while preserving LC_CTYPE'
+  else
+    report 1 'empty LANG/LC_ALL exports LANG=C to child dune while preserving LC_CTYPE' \
+      "exit $rc; locale=$(cat "$loc_out" 2>/dev/null); stderr=$(cat "$TMP/leg126.err")"
+  fi
+  run_tr_locale -u LC_ALL LANG=en_US.UTF-8 LC_CTYPE=UTF-8 --
+  if [ "$rc" = 0 ] && [ "$(cat "$loc_out" 2>/dev/null)" = 'LANG=en_US.UTF-8 LC_ALL=<unset> LC_CTYPE=UTF-8' ]; then
+    report 0 'caller-supplied LANG is preserved untouched'
+  else
+    report 1 'caller-supplied LANG is preserved untouched' \
+      "exit $rc; locale=$(cat "$loc_out" 2>/dev/null); stderr=$(cat "$TMP/leg126.err")"
+  fi
+  run_tr_locale -u LANG LC_ALL=POSIX LC_CTYPE=UTF-8 --
+  if [ "$rc" = 0 ] && [ "$(cat "$loc_out" 2>/dev/null)" = 'LANG=<unset> LC_ALL=POSIX LC_CTYPE=UTF-8' ]; then
+    report 0 'caller-supplied LC_ALL is preserved untouched'
+  else
+    report 1 'caller-supplied LC_ALL is preserved untouched' \
+      "exit $rc; locale=$(cat "$loc_out" 2>/dev/null); stderr=$(cat "$TMP/leg126.err")"
+  fi
+}
+harness_leg_run '126: unset locale exports LANG=C without clobbering caller locale #options' leg_126
 
 test_run_close

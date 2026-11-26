@@ -71,6 +71,7 @@ benchmarks/test-gh834-cells.sh	scripts/process-group.sh
 benchmarks/test-gh834-cells.sh	tools/opam-env.sh
 scripts/test-harness-support.sh	scripts/harness-support.sh
 scripts/test-harness-support.sh	scripts/test-harness-support.sh
+scripts/test-harness-support.sh	tools/*.sh	declares	-
 scripts/test-harness-support.sh	tools/opam-env.sh
 scripts/test-process-group.sh	scripts/harness-support.sh
 scripts/test-process-group.sh	scripts/process-group.sh

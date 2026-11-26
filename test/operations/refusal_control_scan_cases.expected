@@ -292,6 +292,9 @@ census_total_ratchet.ml: [scanner-refusal:fef03fd6e82a5c2c2c628b5a571c8299] cens
 census_total_ratchet.ml: [scanner-refusal:531d64a37eb2ccc8b4c3fee2c5a2fac9] quoted-source entry spans (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:22c73fdc7f08c48d003aabefe9f59d17] checked in contributes (claim) is catalogued beside census_total_ratchet.expected: true
 codegen_text_inventory.ml has exactly the explicitly assigned refusal controls: true
+codegen_text_inventory.ml: [scanner-refusal:78fef1ba5a8812597666a8c7a41cf736] the eligible inventory (direct failure) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
+codegen_text_inventory.ml: [scanner-refusal:bbee5d2953722bf625614fa7741f472a] the required inventory (direct failure) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
+codegen_text_inventory.ml: [scanner-refusal:6428d3507ac51411ea25280739f681fd] HIP batch estimate (direct failure) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
 codegen_text_inventory.ml: [scanner-refusal:83dfdd0395c402128515f27b2f3b1b1c] the exclusion for (direct failure) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
 codegen_text_inventory.ml: [scanner-refusal:24dcaa782a3b33780918bb1933206e78] the compiler entry (direct failure) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
 codegen_text_inventory.ml: [scanner-refusal:3f0b314f29005911be716581fa1a4f10] the scan raised (direct failure) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
@@ -300,6 +303,7 @@ codegen_text_inventory.ml: [scanner-refusal:8cd31f89229d140f44ef65da81a353ed] is
 codegen_text_inventory.ml: [scanner-refusal:564de56163a842792f2175c0c12d75d5] Utils.build_files_dir (direct failure) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
 codegen_text_inventory.ml: [scanner-refusal:d4306fe9c227b85db951de0b64f85ad8] Test_utils.Generated.main_logic (direct failure) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
 codegen_text_inventory.ml: [scanner-refusal:6eb14f027a4be6648748900004341e36] the after-marker exemption (direct failure) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
+codegen_text_inventory.ml: [scanner-refusal:bdce0b6c9330d52290dc2dce205f1b0b] cover every eligible (claim) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
 codegen_text_inventory.ml: [scanner-refusal:b1a8055bff15f499f2f143975afca3d7] reaches the stale-exclusion (claim) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
 codegen_text_inventory.ml: [scanner-refusal:ae3ea5e30f52522fe3ba79794609f56f] reaches the stale-entry (claim) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
 codegen_text_inventory.ml: [scanner-refusal:2c67621c20b4be85e0176da0370f83cb] reaches the scanner-defect (claim) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
@@ -482,6 +486,11 @@ env_var_deps.ml: [scanner-refusal:533fc9999ad0841992e0c1734d9c1f5d] env_var (dir
 env_var_deps.ml: [scanner-refusal:7336dd5a712b0c3a578b64d7defb1654] between stanzas declares (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:1aaab6e3cd8f4615e1cd1d0321e309a1] times and only (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:f11c09a8318b3a7863444256973f57d4] running an executable (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:6d4652d347d64362ce0c9b3c1498abb9] carries a backend-default (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:eeabf0209c60b38c2cf243f1fcbaac4a] backend-default marker that (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:f75580a3f9d63e77e8203a3df984bb9c] times and only (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:942031ff44cb018ae2d7eee70ed6327a] the backend default (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:95919586e2a2b25eaaf13ca8093ab584] repository-wide scan rule (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -515,6 +524,13 @@ env_var_deps.ml: [scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-t
 env_var_deps.ml: [scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:ffa1cdde8b0746fcdb7a1ac0b406107a] the backend default (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:2d95d96433c72c5c970b888087a59832] the backend default (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:6c8e61d2480bca6f93d3fd99b945e5ad] the backend default (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:04f8a4dfd1058a7595117f80bc1fcb0c] the backend default (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:66742d7bb3766af11b75ab38bf798fdb] the backend default (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:b0d8f5f604f61eb8ecc4829d93f24a83] the backend-default reader (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:afd2f461af706b40bf4582f1b0a30b01] the backend-default reader (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:77d0be0fe2fca9a97da8be7f833d9c6e] is spelled without (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:25657f61eca857f6fd2f34de66e81eaf] scanner refusal (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true

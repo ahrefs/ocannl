@@ -216,6 +216,7 @@ let keyed_flips =
     ("gpu_graph_capture", config ~scope:Cuda_hip flag);
     ("cuda_fast_math", config ~scope:Cuda flag);
     ("hip_fast_math", config ~scope:Hip flag);
+    ("hip_extra_compile_options", config ~scope:Hip [ "-fapprox-func"; "-freciprocal-math" ]);
     ("metal_fp_contract", config ~scope:Metal [ "auto"; "off" ]);
     ("cuda_ptx_target", config ~scope:Cuda [ "floor"; "native" ]);
     ("gpu_elide_covered_zeros", config ~scope:Gpu flag);

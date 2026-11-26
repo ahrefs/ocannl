@@ -131,6 +131,7 @@ let known_config_keys =
       "cuda_compile_program_min_kernels";
       "cuda_fast_math";
       "hip_fast_math";
+      "hip_extra_compile_options";
       "metal_fp_contract";
       "cuda_ptx_target";
       "cc_kernel_cache_mib";
@@ -424,6 +425,12 @@ let config_key_classification : (config_key_class * string * string list) list =
        rendered and compiled, after the lowered code the digest names; the backend's tag carries \
        the math regime as a component derived from those switches",
       [ "cuda_fast_math"; "hip_fast_math" ] );
+    ( Keyed "codegen",
+      "a HIP diagnostic compile knob (gh-ocannl-2344): whitespace-separated flags appended to \
+       every hiprtc compile after the backend's math, target and debug switches, so compiler-flag \
+       A/B experiments need no source edit; the HIP tag carries the parsed options (and any \
+       contraction pin they flip) as components",
+      [ "hip_extra_compile_options" ] );
     ( Keyed "codegen",
       "a Metal compile knob (gh-ocannl-2406): when off, the Metal kernel header emits [#pragma \
        STDC FP_CONTRACT OFF], pinning floating-point contraction off and rendering a [Tile_mma] \

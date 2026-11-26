@@ -993,6 +993,24 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   instance alongside the default entry points (gh-ocannl-2405). Its control checks the same
   search with and without a marker, and checks that an initialization pin precedes the search.
   The scanner's width-rule header gives the source forms it reads.
+- **Backend-default dependency markers** (`; ocannl-backend-default:`, gh-ocannl-2382) declare that
+  a test's result flips with a backend default whose governing definitions link reach cannot see.
+  Two forms share `Dune_stanza_scan.contained_marker_contract` and the `marker_backends` vocabulary
+  without `none`: a definition form inside a `(library)` stanza
+  (`; ocannl-backend-default: <name> = <backend>[,...] <Module.def>[,...] -- <reason>`, with no
+  spaces inside either comma list, `<name>` matching `[a-z][a-z0-9-]*`, and each `<Module.def>` a
+  top-level definition in `<dir>/<module>.ml` or a `(select)` arm for it), and a reader form inside
+  a `(test)`, `(tests)`, `(executable)`, `(executables)`, or inline-test `(library)` stanza
+  (`; ocannl-backend-default: <name> -- <reason>`). `env_var_deps` holds both forms: single
+  definition per name, every reader resolves to a defined name, every defined default has at least
+  one reader, every `Module.def` resolves to a real top-level definition, and every reader stanza
+  (or an executable's runner rule) must be able to run on at least one backend named by that
+  default (refusing e.g. a `cuda,hip` default on a `; ocannl-backend: cc` stanza).
+  `tools/affected-tests.sh` enforces the same closed syntax fail-closed (exit 2), promotes reached
+  readers from LINK-ONLY to first-tier REFERENCED when a diff touches a listed `Module.def` (or
+  changes `Module` as a whole; never comment-only or sibling-definition edits), and selects
+  matching GPU-backend defaults under `--gpu-gated` (while respecting a variant `(rule)`'s own
+  `; ocannl-backend:` override).
 - A ratchet whose corpus is the repository's own test sources will scan its OWN fixture, and a
   fixture that pins a shape has to spell that shape out to pin it — so the fixture matches, every
   time, by construction (gh-ocannl-668). Exempt the FILE rather than its matches one at a time: the
@@ -1360,6 +1378,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is set (e.g. macOS Terminal/SSH with only `LC_CTYPE=UTF-8`, gh-ocannl-2462); standalone
   scripts that do not source `harness-support.sh` therefore export `LANG=C` before forking
   (which alone stops the lookup, with `env LC_ALL=C` as a defensive guard in subshells).
+  `scripts/test-harness-support.sh` audits standalone Bash scripts under `tools/*.sh` with
+  non-comment locale assignments for this startup guard (gh-ocannl-2484), alongside unset-locale
+  regression checks in the per-script harnesses.
 - `tools/test-ci-durations.sh` prints each failed subject's exit status, stderr,
   API-call diff and stdout (a golden diff for selector checks), before scratch cleanup
   (gh-ocannl-1993). Read these before guessing API ordering: the fetch loop is sequential.
@@ -2970,7 +2991,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   turned a seeder that lost its twins into two skips; gate on the invariant that decides whether
   the population exists (`schedule_conv_gemm`'s cvr leg reads `Register_tile.alternatives` at the
   site's own extents; `ptx_target_parity` reads that the backend is the one compiling PTX, and
-  claims the PTX was recorded). The two-branch form is refused too: `verdict_ratchet` reads every
+  claims the PTX was recorded). The `cost_model_fill` leg uses the presence of the backend's
+  two advisory inputs (`multiprocessors` and `fill_threads`) and asserts that the model resolves
+  and both rankings exist. The test action pins advisory mode for those two inputs and the ILP cap
+  so the gate and claims use the supplied hardware limits. Before gh-ocannl-2477, losing the
+  resolved model made the ranking comparison skip even when the backend advertised both inputs.
+  The two-branch form is refused too: `verdict_ratchet` reads every
   `skipped` the resolver reads as `Verdict`'s, or a `let` binds to one (`Verdict_scan.skip_list_census`) and
   refuses one handed to a collection-module iteration, a callback or loop body that only skips,
   and a branch of an `if`/`match` applying two or more; the sites that predate the rule are
@@ -3933,6 +3959,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   fails the run, as a text member does. `codegen_text_scan_cases` pins each route beside its near
   miss, including the negative control: a fixture whose staged callback writes a node by its bare
   label.
+- **On minix-amd-linux, run the inventory's slow HIP batches one at a time** (gh-ocannl-2343).
+  The `slow HIP batches on minix-amd-linux` section gives one backend-pinned command per widened
+  oracle shard, the widened scope generator and HIP scratch tuning. Omit those aliases from
+  combined HIP batches. They remain listed with the other codegen routes, whose lists still accept
+  `--targets-file`. Use the inventory's estimates to budget test action time, plus build and
+  slot acquisition. The oracle shards serialize on the training lock, and the combined 900 s
+  batch in staging#2105 stopped after three shards. Each recipe sets its own runner cap.
 - **Count compiles with `Context.backend_compiles`, not a wrapper around `Context.compile`**
   (gh-ocannl-1882). A test-local function that shadows or wraps `Context.compile` and forwards
   `?prelowered` is read as the second route above, so the census lists its file as a prelowered
@@ -4535,10 +4568,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     gh-ocannl-1765), 6 named a changed definition with the module (4 listed with `Tn` beside a
     re-exporter such as `Context` or `Tensor`, but each also names `Tnode`, so the stricter
     re-export reading keeps them), 4 of them through a `test/support` helper definition.
-  - `affected --gpu-gated` (gh-ocannl-2074) filters that same ranked reach by declarations
-    in an alias's owner sources (`binds_hardware_grid`, `on_gpu`, or `leg`/`in_leg`/`skipped`
-    beside `on_cuda`, `on_hip`, `on_metal` or a literal GPU backend) or a GPU `ocannl-backend` marker inside its
-    owner or own rule.
+  - `affected --gpu-gated` (gh-ocannl-2074, gh-ocannl-2382) filters that same ranked reach by
+    declarations in an alias's owner sources (`binds_hardware_grid`, `on_gpu`, or
+    `leg`/`in_leg`/`skipped` beside `on_cuda`, `on_hip`, `on_metal` or a literal GPU backend), a
+    GPU `ocannl-backend` marker inside its owner or own rule, or a matching GPU
+    `; ocannl-backend-default:` marker whose listed `Module.def` targets overlap the current diff
+    (which also promotes the reached alias from LINK-ONLY to first-tier REFERENCED, so
+    `--gpu-gated --referenced-only` selects it directly).
     Use `--referenced-only` with it for direct mentions; omit that option to retain GPU-gated
     link-only consumers too. Stdout is aliases ready for a backend run; stderr names the gate
     evidence for exactly those aliases. This is the GPU-specific minimum: ungated every-backend
@@ -6033,6 +6069,12 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   checkpoint. ship-pr's scratch repository has no remote, so the merge build fetches the ref from
   that URL itself, bounded (60 s), and refuses when it cannot read it. A merge owing nothing
   reads no record.
+- **Transport cleanup (gh-ocannl-2481).** `owed-run.sh` gives unattended Git transports a
+  private process group whose leader holds its identity through TERM and KILL even if Git exits.
+  Scratch files keep the bound independent of transport pipe EOF. Manual terminal pushes keep
+  Git's existing foreground timeout so its prompt can read the terminal. The shared benchmark
+  runner already uses `cell_group` to cancel during the active wait and confirms the group is
+  gone before unwinding. The fixtures for both tools plant descendants that ignore TERM.
 - **What.** A finished, exit-0, clean-at-launch tools/test-run.sh run under `--expect-backend cc`
   of `runtest`, `build @runtest [@train]`, `build @train` or `build @test/training/train-NAME...`
   (each with an optional `-j N`), on the PR's head itself. Keyed by the head, not the merged

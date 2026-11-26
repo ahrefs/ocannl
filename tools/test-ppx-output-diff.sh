@@ -176,6 +176,49 @@ leg3() {
   has "the renderings were counted, not vacuously equal" "$err" \
     "ppx-output-diff: no difference between $(git -C "$R" rev-parse --short=12 planted) and $(git -C "$R" rev-parse --short=12 planted) over 3 rendering(s)"
   untouched
+  # Unset-locale startup guard (gh-ocannl-2484): verify LANG=C is exported to
+  # child tools when LANG/LC_ALL are unset or empty while preserving LC_CTYPE
+  # and caller-supplied LANG/LC_ALL, and that the full run succeeds under unset locale.
+  local loc_bin="$TMP/ppx-locale-bin" loc_out="$TMP/ppx-locale-seen" real_git
+  mkdir -p "$loc_bin"
+  real_git=$(command -v git)
+  cat >"$loc_bin/git" <<EOF
+#!/bin/sh
+if [ -n "\${PPX_LOCALE_OUT:-}" ] && [ ! -e "\$PPX_LOCALE_OUT" ]; then
+  printf 'LANG=%s LC_ALL=%s LC_CTYPE=%s\n' "\${LANG-<unset>}" "\${LC_ALL-<unset>}" "\${LC_CTYPE-<unset>}" >"\$PPX_LOCALE_OUT"
+fi
+exec "$real_git" "\$@"
+EOF
+  chmod +x "$loc_bin/git"
+  rc=0
+  rm -f "$loc_out"
+  env -u LANG -u LC_ALL LC_CTYPE=UTF-8 CLICOLOR_FORCE=1 PATH="$loc_bin:$PATH" \
+    PPX_LOCALE_OUT="$loc_out" TMPDIR="$TMP/subject-tmp" \
+    "$subject" -C "$R" planted planted -- src >"$out" 2>"$err" || rc=$?
+  expect_rc "a revision against itself under unset LANG/LC_ALL and LC_CTYPE=UTF-8" 0
+  if [ "$(cat "$loc_out" 2>/dev/null)" = 'LANG=C LC_ALL=<unset> LC_CTYPE=UTF-8' ]; then
+    report 0 "unset LANG/LC_ALL exports LANG=C to child git while preserving LC_CTYPE"
+  else report 1 "unset LANG/LC_ALL exports LANG=C to child git while preserving LC_CTYPE" "locale=$(cat "$loc_out" 2>/dev/null)"
+  fi
+  has "unset-locale run counts renderings" "$err" \
+    "ppx-output-diff: no difference between $(git -C "$R" rev-parse --short=12 planted) and $(git -C "$R" rev-parse --short=12 planted) over 3 rendering(s)"
+  untouched
+  for spec in \
+    "empty LANG/LC_ALL exports LANG=C while preserving LC_CTYPE|LANG= LC_ALL= LC_CTYPE=UTF-8|LANG=C LC_ALL= LC_CTYPE=UTF-8" \
+    "caller-supplied LANG is preserved untouched|-u LC_ALL LANG=en_US.UTF-8 LC_CTYPE=UTF-8|LANG=en_US.UTF-8 LC_ALL=<unset> LC_CTYPE=UTF-8" \
+    "caller-supplied LC_ALL is preserved untouched|-u LANG LC_ALL=POSIX LC_CTYPE=UTF-8|LANG=<unset> LC_ALL=POSIX LC_CTYPE=UTF-8"
+  do
+    local lbl=${spec%%|*} rest=${spec#*|}
+    local ev=${rest%%|*} want_loc=${rest#*|}
+    rm -f "$loc_out"
+    # shellcheck disable=SC2086 # intentional word splitting of fixed env args
+    env $ev PATH="$loc_bin:$PATH" PPX_LOCALE_OUT="$loc_out" TMPDIR="$TMP/subject-tmp" \
+      "$subject" -C "$R" base no-such-revision >"$out" 2>"$err" || :
+    if [ "$(cat "$loc_out" 2>/dev/null)" = "$want_loc" ]; then
+      report 0 "$lbl"
+    else report 1 "$lbl" "locale=$(cat "$loc_out" 2>/dev/null) (want $want_loc)"
+    fi
+  done
 }
 harness_leg_run '3: a revision against itself exits 0 over a counted corpus, whatever DUNE_BUILD_DIR says' leg3
 

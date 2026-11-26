@@ -515,6 +515,8 @@
 # what happened (gh-ocannl-662).
 
 set -u
+# Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462, gh-ocannl-2484).
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
 
 die() { echo "test-run: $*" >&2; exit 2; }
 
@@ -4453,7 +4455,7 @@ digest() {
   # grep stays cheap at any size; the line-start test is awk's, over its hits.
   local wedged=
   if [ "$rc" != 0 ]; then
-    wedged=$(LC_ALL=C grep -a -F -- "$device_init_deadline_tag" "$dir/log" 2>/dev/null |
+    wedged=$(env LC_ALL=C grep -a -F -- "$device_init_deadline_tag" "$dir/log" 2>/dev/null |
              awk -v tag="$device_init_deadline_tag" 'index($0, tag) == 1' | sort -u | head -n 3)
     [ -z "$wedged" ] || [ "$verdict" != FAIL ] ||
       verdict="WEDGED DEVICE (a GPU device initialization outlived device_init_deadline and died by SIGALRM; not judged)"

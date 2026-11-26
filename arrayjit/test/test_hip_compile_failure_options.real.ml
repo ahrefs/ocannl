@@ -22,7 +22,9 @@ let expected_suffix =
          ~rocwmma_include_options:[] ~uses_rocwmma:false
          ~fast_math:(Ir.Cuda_like_config.hip_fast_math ())
          ~with_debug:(Utils.with_runtime_debug ())
-         ~with_line_info:Utils.settings.output_debug_files_in_build_directory ()
+         ~with_line_info:Utils.settings.output_debug_files_in_build_directory
+         ~extra_options:(Ir.Cuda_like_config.hip_extra_compile_options ())
+         ()
      in
      "\nhiprtc options: " ^ Ir.Compiler_options.render expected_options)
 

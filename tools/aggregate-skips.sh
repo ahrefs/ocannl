@@ -42,6 +42,8 @@
 # member may have evaluated the claim. Malformed input exits 2.
 
 set -uo pipefail
+# Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462, gh-ocannl-2484).
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
 
 known=()
 known_boxes=()
@@ -242,7 +244,7 @@ extract_claims() {
         else print claim
       }
     }
-  ' scope="$scope" "$records" | LC_ALL=C sort -u
+  ' scope="$scope" "$records" | env LC_ALL=C sort -u
 }
 
 intersect_claims() {

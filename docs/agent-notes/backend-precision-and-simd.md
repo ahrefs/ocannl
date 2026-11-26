@@ -2895,6 +2895,17 @@ files.
   `cache_key_agreement` pins that relationship; `test_hip_compile_options` pins both vectors.
   `division_special_values` and `unary_math_special_values` require the exact contracts under
   both policies. `branchless_select` checks all five HIP NaN-condition cases.
+- **Diagnostic HIP compiler-option A/Bs use `hip_extra_compile_options` without editing source**
+  (gh-ocannl-2344): whitespace-separated flags (ASCII whitespace only, no shell quoting) are
+  appended at the end of `Compiler_options.hiprtc`, after `hip_math_options`, target workarounds
+  and debug/line-info flags, so clang's left-to-right option processing lets appended flags
+  override earlier switches (e.g. `bin_cells.py --arm approx='--ocannl_hip_extra_compile_options="-freciprocal-math -fapprox-func"'`).
+  `Cuda_like_config.Hip.compiler_contraction_off` inspects `hip_math_options @ extra_options`, so
+  contraction overrides move `Tile_mma` fallback fusion and `/mma-fallback-unfused` together;
+  non-empty parsed options append `/hiprtc-extra:<rendered>` at the end of HIP's `codegen_tag`
+  (omitted when empty, keeping default keys valid) and enter the kernel code cache key via
+  `hiprtc_options`. Pinned by `arrayjit/test/test_hip_compile_options`, `cache_key_agreement` and
+  `test/operations/hip_extra_compile_options`.
 - **HIP fmod must classify either NaN operand by bits** (gh-ocannl-1909): ROCm returned
   the dividend for a NaN divisor under fast math plus `-fhonor-nans`, at f32, half, bfloat16
   and f64 on gfx1151. `Builtins_hip.ocannl_fmodf` and `ocannl_fmod` now select NaN for

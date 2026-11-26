@@ -355,6 +355,7 @@
  (modes best))
 
 (library
+ ; ocannl-backend-default: seeded-plan = cuda,hip Autotune.seeded_ranker,Autotune.seeded_default_gate,Autotune.seeded_segment_judgment -- CUDA/HIP auto seeding gate decides whether searches time F_swap or F_sketch singles
  (name autotune)
  (public_name arrayjit.autotune)
  (libraries base stdio unix mtime mtime.clock.os utils ir context)

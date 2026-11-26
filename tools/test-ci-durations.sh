@@ -14,6 +14,10 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$TMP/bin" "$TMP/runs"
 cat >"$TMP/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
+if [ -n "${FAKE_LOCALE_OUT:-}" ] && [ ! -e "$FAKE_LOCALE_OUT" ]; then
+  printf 'LANG=%s LC_ALL=%s LC_CTYPE=%s\n' \
+    "${LANG-<unset>}" "${LC_ALL-<unset>}" "${LC_CTYPE-<unset>}" >"$FAKE_LOCALE_OUT"
+fi
 printf '%s\n' "$*" >>"$FAKE_CALLS"
 case "$*" in
   'api --method GET repos/lukstafi/ocannl-staging/actions/workflows/ci.yml/runs -f status=completed -f branch=master -f per_page=8 -f page=1 --jq .workflow_runs[].id') printf '1\n2\n3\n4\n5\n6\n7\n8\n' ;;
@@ -175,4 +179,54 @@ elif [ "$(cat "$TMP/runs/skipped-alternative/rc")" = 0 ] \
   && grep -q 'step: 3 0.0 10.0 18.0' "$TMP/runs/skipped-alternative/stdout"; then
   report 0 "negative control: skipped alternatives change the measured population"
 else report 1 "skip mutation rejected for unrelated reason" "$(subject_detail skipped-alternative "$TMP/expected")"; fi
+
+# Unset-locale startup guard (gh-ocannl-2484): urlenc runs inside $(...) with
+# local LC_ALL=C, so standalone invocations with unset or empty LANG/LC_ALL must
+# export LANG=C while preserving LC_CTYPE, caller LANG/LC_ALL, and bytewise
+# UTF-8 percent-encoding.
+run_locale() { # LABEL ENV_ARGS... -- EXTRA_SUBJECT_ARGS...
+  local label=$1; shift
+  local env_args=() rc=0
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do env_args+=("$1"); shift; done
+  shift
+  mkdir -p "$TMP/runs/$label"
+  : >"$TMP/runs/$label/calls"
+  rm -f "$TMP/runs/$label/locale"
+  env ${env_args[@]+"${env_args[@]}"} PATH="$TMP/bin:$PATH" \
+    FAKE_CALLS="$TMP/runs/$label/calls" FIXTURES="$TMP" FAKE_LOCALE_OUT="$TMP/runs/$label/locale" \
+    bash "$HERE/ci-durations.sh" --branch master -n 8 "$@" \
+    >"$TMP/runs/$label/stdout" 2>"$TMP/runs/$label/stderr" || rc=$?
+  printf '%s\n' "$rc" >"$TMP/runs/$label/rc"
+}
+run_locale locale-unset -u LANG -u LC_ALL LC_CTYPE=UTF-8 -- --job '^Ubuntu$' --step 'Build and test|Dune checks'
+if [ "$(cat "$TMP/runs/locale-unset/rc")" = 0 ] &&
+   cmp -s "$TMP/expected" "$TMP/runs/locale-unset/stdout" &&
+   [ "$(cat "$TMP/runs/locale-unset/locale" 2>/dev/null)" = 'LANG=C LC_ALL=<unset> LC_CTYPE=UTF-8' ]; then
+  report 0 'unset LANG/LC_ALL exports LANG=C while preserving LC_CTYPE and exact output'
+else report 1 'unset LANG/LC_ALL exports LANG=C while preserving LC_CTYPE and exact output' \
+  "locale=$(cat "$TMP/runs/locale-unset/locale" 2>/dev/null); $(subject_detail locale-unset "$TMP/expected")"; fi
+run_locale locale-empty LANG= LC_ALL= LC_CTYPE=UTF-8 -- --job '^Ubuntu$' --step 'Build and test|Dune checks'
+if [ "$(cat "$TMP/runs/locale-empty/rc")" = 0 ] &&
+   [ "$(cat "$TMP/runs/locale-empty/locale" 2>/dev/null)" = 'LANG=C LC_ALL= LC_CTYPE=UTF-8' ]; then
+  report 0 'empty LANG/LC_ALL exports LANG=C while preserving LC_CTYPE'
+else report 1 'empty LANG/LC_ALL exports LANG=C while preserving LC_CTYPE' \
+  "locale=$(cat "$TMP/runs/locale-empty/locale" 2>/dev/null); $(subject_detail locale-empty)"; fi
+run_locale locale-lang -u LC_ALL LANG=en_US.UTF-8 LC_CTYPE=UTF-8 -- --job '^Ubuntu$' --step 'Build and test|Dune checks'
+if [ "$(cat "$TMP/runs/locale-lang/rc")" = 0 ] &&
+   [ "$(cat "$TMP/runs/locale-lang/locale" 2>/dev/null)" = 'LANG=en_US.UTF-8 LC_ALL=<unset> LC_CTYPE=UTF-8' ]; then
+  report 0 'caller-supplied LANG is preserved untouched'
+else report 1 'caller-supplied LANG is preserved untouched' \
+  "locale=$(cat "$TMP/runs/locale-lang/locale" 2>/dev/null); $(subject_detail locale-lang)"; fi
+run_locale locale-lcall -u LANG LC_ALL=POSIX LC_CTYPE=UTF-8 -- --job '^Ubuntu$' --step 'Build and test|Dune checks'
+if [ "$(cat "$TMP/runs/locale-lcall/rc")" = 0 ] &&
+   [ "$(cat "$TMP/runs/locale-lcall/locale" 2>/dev/null)" = 'LANG=<unset> LC_ALL=POSIX LC_CTYPE=UTF-8' ]; then
+  report 0 'caller-supplied LC_ALL is preserved untouched'
+else report 1 'caller-supplied LC_ALL is preserved untouched' \
+  "locale=$(cat "$TMP/runs/locale-lcall/locale" 2>/dev/null); $(subject_detail locale-lcall)"; fi
+non_ascii_wf=$(printf 'ci#\303\251.yml')
+run_locale locale-urlenc -u LANG -u LC_ALL LC_CTYPE=UTF-8 -- --workflow "$non_ascii_wf" --job '^Ubuntu$'
+if grep -q 'actions/workflows/ci%23%C3%A9\.yml/runs' "$TMP/runs/locale-urlenc/calls"; then
+  report 0 'urlenc percent-encodes non-ASCII bytes under unset LANG/LC_ALL and LC_CTYPE=UTF-8'
+else report 1 'urlenc percent-encodes non-ASCII bytes under unset LANG/LC_ALL and LC_CTYPE=UTF-8' \
+  "calls=$(cat "$TMP/runs/locale-urlenc/calls"); rc=$(cat "$TMP/runs/locale-urlenc/rc")"; fi
 finish

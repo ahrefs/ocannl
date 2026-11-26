@@ -44,6 +44,10 @@
 # `gh`; any API failure aborts, so an empty table is never printed as a result.
 
 set -euo pipefail
+# Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462, gh-ocannl-2484):
+# urlenc runs inside $(...) with local LC_ALL=C, which triggers Homebrew Bash's
+# libintl_setlocale SIGSEGV when neither LANG nor LC_ALL is set.
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
 
 repo=lukstafi/ocannl-staging
 workflow=ci.yml
