@@ -481,10 +481,6 @@ struct
     | _, 1 -> typ_of_prec prec
     | _ -> invalid_arg (Dialect.error_prefix ^ ".vec_typ_of_prec: invalid combination")
 
-  (* The device ternary uses the condition in both comparisons of the open interval. HIP's blend
-     binds the payload, so its condition has the same multiplicity. *)
-  let binop_arg1_uses = function Ops.Satur01_gate -> 2 | _ -> 1
-
   let rec binop_syntax prec v =
     (* The match stays exhaustive over (op, prec) -- that is what catches a newly added operator
        here -- but arms whose spelling is plain C delegate to {!C_syntax.default_binop_syntax}
@@ -499,6 +495,21 @@ struct
     let widened_powf ~widen ~narrow v1 v2 =
       let w v = string widen ^^ parens v in
       group (string narrow ^^ parens (func "ocannl_pow_f32" (w v1) (w v2)))
+    in
+    (* The predicate consumes the condition once. The ternary still guards the payload and
+       determines the result type. *)
+    let sat01_gate ~zero predicate v2 =
+      group
+        (parens
+           (group predicate
+           ^^ nest 2 (break 1 ^^ string "? " ^^ v2 ^^ break 1 ^^ string (": " ^ zero))))
+    in
+    let sat01_compare ?(convert = "") lower upper ~zero v1 =
+      let predicate =
+        string "ocannl_sat01_open"
+        ^^ parens (string convert ^^ parens v1 ^^ string (", " ^ lower ^ ", " ^ upper))
+      in
+      sat01_gate ~zero predicate
     in
     match (v, prec) with
     | Ops.Arg1, _ -> invalid_arg (Dialect.error_prefix ^ ".binop_syntax: Arg1 is not an operator")
@@ -615,128 +626,20 @@ struct
                        (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
                       ^^ string "0"))))
     | Satur01_gate, Byte_prec _ ->
-        fun v1 v2 ->
-          group
-            (parens
-               (group
-                  (parens
-                     (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
-                    ^^ string " < 1.0f"))
-               ^^ ifflat
-                    (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                   ^^ string "(unsigned char)0")
-                    (nest 2
-                       (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                      ^^ string "(unsigned char)0"))))
+        sat01_compare ~convert:"(float)" "0.0f" "1.0f" ~zero:"(unsigned char)0"
     | Satur01_gate, Half_prec _ ->
-        fun v1 v2 ->
-          group
-            (parens
-               (group
-                  (parens
-                     (string "__hgt(" ^^ v1 ^^ comma
-                     ^^ string " __ushort_as_half((unsigned short)0x0000U)) && __hlt("
-                     ^^ v1 ^^ comma
-                     ^^ string " __ushort_as_half((unsigned short)0x3C00U))"))
-               ^^ ifflat
-                    (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                    ^^ string "__ushort_as_half((unsigned short)0x0000U)")
-                    (nest 2
-                       (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                       ^^ string "__ushort_as_half((unsigned short)0x0000U)"))))
-    | Satur01_gate, Single_prec _ ->
-        fun v1 v2 ->
-          group
-            (parens
-               (group (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f"))
-               ^^ ifflat
-                    (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                   ^^ string "0.0f")
-                    (nest 2
-                       (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                      ^^ string "0.0f"))))
-    | Satur01_gate, Double_prec _ ->
-        fun v1 v2 ->
-          group
-            (parens
-               (group (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0"))
-               ^^ ifflat
-                    (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                   ^^ string "0.0")
-                    (nest 2
-                       (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                      ^^ string "0.0"))))
+        fun v1 ->
+          sat01_gate ~zero:"__ushort_as_half((unsigned short)0x0000U)"
+            (string "ocannl_sat01_open_half" ^^ parens v1)
+    | Satur01_gate, Single_prec _ -> sat01_compare "0.0f" "1.0f" ~zero:"0.0f"
+    | Satur01_gate, Double_prec _ -> sat01_compare "0.0" "1.0" ~zero:"0.0"
     | Satur01_gate, Uint16_prec _ ->
-        fun v1 v2 ->
-          group
-            (parens
-               (group
-                  (parens
-                     (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
-                    ^^ string " < 1.0f"))
-               ^^ ifflat
-                    (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                   ^^ string "(unsigned short)0")
-                    (nest 2
-                       (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                      ^^ string "(unsigned short)0"))))
-    | Satur01_gate, Int32_prec _ ->
-        fun v1 v2 ->
-          group
-            (parens
-               (group
-                  (parens
-                     (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
-                    ^^ string " < 1.0f"))
-               ^^ ifflat
-                    (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                   ^^ string "0")
-                    (nest 2
-                       (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                      ^^ string "0"))))
-    | Satur01_gate, Int64_prec _ ->
-        fun v1 v2 ->
-          group
-            (parens
-               (group
-                  (parens
-                     (string "(double)" ^^ v1 ^^ string " > 0.0 && (double)" ^^ v1
-                    ^^ string " < 1.0"))
-               ^^ ifflat
-                    (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                   ^^ string "0LL")
-                    (nest 2
-                       (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                      ^^ string "0LL"))))
-    | Satur01_gate, Uint4x32_prec _ ->
-        fun v1 v2 ->
-          group
-            (parens
-               (group
-                  (parens
-                     (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
-                    ^^ string " < 1.0f"))
-               ^^ ifflat
-                    (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                   ^^ string "0u")
-                    (nest 2
-                       (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                      ^^ string "0u"))))
+        sat01_compare ~convert:"(float)" "0.0f" "1.0f" ~zero:"(unsigned short)0"
+    | Satur01_gate, Int32_prec _ -> sat01_compare ~convert:"(float)" "0.0f" "1.0f" ~zero:"0"
+    | Satur01_gate, Int64_prec _ -> sat01_compare ~convert:"(double)" "0.0" "1.0" ~zero:"0LL"
+    | Satur01_gate, Uint4x32_prec _ -> sat01_compare ~convert:"(float)" "0.0f" "1.0f" ~zero:"0u"
     | Satur01_gate, Bfloat16_prec _ ->
-        fun v1 v2 ->
-          group
-            (parens
-               (group
-                  (parens
-                     (string "__bfloat162float(" ^^ v1
-                     ^^ string ") > 0.0f && __bfloat162float("
-                     ^^ v1 ^^ string ") < 1.0f"))
-               ^^ ifflat
-                    (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                   ^^ string "__float2bfloat16(0.0f)")
-                    (nest 2
-                       (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                      ^^ string "__float2bfloat16(0.0f)"))))
+        sat01_compare ~convert:"__bfloat162float" "0.0f" "1.0f" ~zero:"__float2bfloat16(0.0f)"
     (* Through the builtins' [ocannl_max] / [ocannl_min] templates, which compare in the operands'
        common type and are typed that (gh-ocannl-1883): the overloaded [max]/[min] resolve for the
        operand pairs they list only, and an integer arm's operand is a read, an integer-promoted
@@ -809,28 +712,8 @@ struct
                     (nest 2
                        (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
                       ^^ string "0ULL"))))
-    | Satur01_gate, Uint32_prec _ ->
-        fun v1 v2 ->
-          group
-            (parens
-               (group (parens (v1 ^^ string " > 0u && " ^^ v1 ^^ string " < 1u"))
-               ^^ ifflat
-                    (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                   ^^ string "0u")
-                    (nest 2
-                       (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                      ^^ string "0u"))))
-    | Satur01_gate, Uint64_prec _ ->
-        fun v1 v2 ->
-          group
-            (parens
-               (group (parens (v1 ^^ string " > 0ULL && " ^^ v1 ^^ string " < 1ULL"))
-               ^^ ifflat
-                    (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                   ^^ string "0ULL")
-                    (nest 2
-                       (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                      ^^ string "0ULL"))))
+    | Satur01_gate, Uint32_prec _ -> sat01_compare "0u" "1u" ~zero:"0u"
+    | Satur01_gate, Uint64_prec _ -> sat01_compare "0ULL" "1ULL" ~zero:"0ULL"
 
   let rec unop_syntax prec v =
     let open PPrint in

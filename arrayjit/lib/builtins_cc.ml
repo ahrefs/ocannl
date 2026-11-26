@@ -138,6 +138,24 @@ let integer_power_builtins ~prefix ~supports_double ~dialect =
     ]
   else [ single ]
 
+(* Keep the bounds typed at the call site. Give half its own builtin key because CUDA chooses its
+   architecture floor from the intrinsics in the selected prelude. *)
+let cuda_like_sat01_builtins =
+  [
+    ( "ocannl_sat01_open",
+      {|template <typename T, typename Bound>
+__device__ __forceinline__ bool ocannl_sat01_open(T x, Bound lo, Bound hi) {
+  return x > lo && x < hi;
+}|},
+      [] );
+    ( "ocannl_sat01_open_half",
+      {|__device__ __forceinline__ bool ocannl_sat01_open_half(__half x) {
+  return __hgt(x, __ushort_as_half((unsigned short)0x0000U))
+      && __hlt(x, __ushort_as_half((unsigned short)0x3C00U));
+}|},
+      [] );
+  ]
+
 (* Floating [pow] for the CUDA-like dialects, whose fast math (CUDA's [--use_fast_math], HIP's
    [-ffast-math]) may lower [powf] to [exp2(y * log2(x))]: NaN for every negative base, integral
    exponents included (gh-ocannl-1240). An integral exponent takes the vendor [pow] of the base's

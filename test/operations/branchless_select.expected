@@ -43,8 +43,8 @@ register-only gradient gate: Metal's AIR function has 0 conditional branches and
 serial-loop loaded gate: values match the select's semantics, bitwise: true
 serial-loop loaded gate: Metal emits the blend inside a serial-only kernel: true
 serial-loop loaded gate: Metal's AIR function has 0 non-loop conditional branches and emits select: true
-bs_sat01_gate: Metal reads the condition once: true
-bs_sat01_gate_int32: Metal reads the condition once: true
+bs_sat01_gate: reads the condition once: true
+bs_sat01_gate_int32: reads the condition once: true
 bs_where_zero: no conditional branch on the select's lines (the backend's compiler) (CUDA: floor PTX target only): true
 bs_where_zero: Metal's AIR keeps the select's short-circuit, 1 conditional branch(es) on its line (pinned on Metal Toolchain 32023.922; gh-ocannl-2400): true
 bs_relu_gate: no conditional branch on the select's lines (the backend's compiler) (CUDA: floor PTX target only): true

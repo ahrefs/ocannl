@@ -638,10 +638,6 @@ module type C_syntax_config = sig
 
   val binop_syntax : Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.document
 
-  val binop_arg1_uses : Ops.binop -> int
-  (** Number of occurrences of the first operand when the binary rendering evaluates it. Projections
-      bypass the renderer. *)
-
   val builtin_param_guards : param_guard_dialect option
   (** The dialect of the builtin parameter guards a kernel's prelude carries under the test seam
       {!Param_guards.with_guards} (gh-ocannl-1768); [None] (the {!Pure_C_config} default) guards
@@ -1112,7 +1108,6 @@ val operand_conditionality_violations :
     PPrint.ToBuffer.document) ->
   binop_syntax:
     (Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.ToBuffer.document) ->
-  binop_arg1_uses:(Ops.binop -> int) ->
   select_blend_syntax:(Ops.prec -> select_blend option) ->
   string List.t
 (** Where a backend's operator renderings break the operand-evaluation contract; [[]] when nowhere.
