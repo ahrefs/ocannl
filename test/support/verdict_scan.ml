@@ -8242,7 +8242,7 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                   if in_inline_fn then
                     List.iter fields ~f:(fun (_, value) -> record_exec ~in_inline_fn ~ek env value);
                   Option.bind base ~f:(find ~in_inline_fn ~ek env))
-          | Pexp_lazy inner -> find ~in_inline_fn:false ~ek env inner
+          | Pexp_lazy inner -> find ~in_inline_fn ~ek env inner
           | Pexp_sequence (a, b) ->
               record_exec ~in_inline_fn ~ek env a;
               find ~in_inline_fn ~ek env b
@@ -8292,6 +8292,10 @@ let leg_gate_census ?(policy_wrappers = default_policy_wrappers) content =
                       Exn.protect
                         ~finally:(fun () -> Hash_set.remove active_fns fn_id)
                         ~f:(fun () ->
+                          if in_inline_fn then
+                            List.iter all_args ~f:(fun (_, aexpr, aenv, aeval) ->
+                                record_exec ~in_inline_fn ~ek:(Option.value aeval ~default:ek) aenv
+                                  aexpr);
                           let call_env, _ = self#bind_local_call fn_env params all_args in
                           find ~in_inline_fn:false ~ek call_env body)
                   | _ -> (

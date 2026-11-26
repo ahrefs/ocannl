@@ -7338,6 +7338,23 @@ let leg =
     ()
 let () = in_leg ~leg "projected inline body" (fun label -> p label true)|ocaml},
       [ "call:Autotune.detect_conv" ] );
+    ( "refuses a disallowed call in a forced lazy sequence prefix inside an immediately applied \
+       anonymous function whose record field is projected",
+      {ocaml|open Verdict.Claims
+type box = { ok : bool }
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:
+      (((fun () ->
+           Lazy.force
+             (lazy
+               (ignore (Autotune.detect_conv llc);
+                { ok = true })))
+          ())
+         .ok)
+    ()
+let () = in_leg ~leg "projected forced lazy body" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
   ]
 
 let run_leg_gate_controls () =
