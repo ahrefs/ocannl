@@ -516,6 +516,7 @@ let raw_entries =
         "[scanner-refusal:82377b15fd7aac93b28c1deb390f5f55] reaches the stale-exemption";
         "[scanner-refusal:9009ac3e9d8c7293fc8dcced2a1d359c] reaches the unplaced-member";
         "[scanner-refusal:73dda4751ce6710ef3af65fa9d15b66a] unselected-route refusal through";
+        "[scanner-refusal:c2effa4a6a8acfb3b5df5bcf40064749] targets combine applicable";
         "[scanner-refusal:123bedafe19167d3536ddb2ca1115d21] cannot say whether";
         "[scanner-refusal:532d3ed986dd6559fec87d780769ee1f] declares module";
         "[scanner-refusal:a59159ac0fd0f431da9519f8016e6762] every scanned root";

@@ -3973,12 +3973,20 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   fails the run, as a text member does. `codegen_text_scan_cases` pins each route beside its near
   miss, including the negative control: a fixture whose staged callback writes a node by its bare
   label.
+- **Feed the non-slow GPU targets to the runner directly** (gh-ocannl-2489). For CUDA, run
+  `dune build test/operations/codegen_text_inventory.cuda.targets`, then
+  `env OCANNL_BACKEND=cuda tools/test-run.sh run --expect-backend cuda --targets-file
+  "${DUNE_BUILD_DIR:-_build}/default/test/operations/codegen_text_inventory.cuda.targets" build`. For HIP or Metal,
+  substitute `hip` or `metal` in the target and backend pin. The inventory rule emits these files
+  alongside its report. Each combines unconditional text routes, conditional text routes that
+  apply to the named backend, kernel-execution routes, and routes calling that backend's
+  compiler. An alias whose name starts with `slow-` belongs in a separate batch. The runner
+  handles aliases Dune disables on the execution host.
 - **On minix-amd-linux, run the inventory's slow HIP batches one at a time** (gh-ocannl-2343).
   The `slow HIP batches on minix-amd-linux` section gives one backend-pinned command per widened
   oracle shard, the widened scope generator and HIP scratch tuning. Omit those aliases from
-  combined HIP batches. They remain listed with the other codegen routes, whose lists still accept
-  `--targets-file`. Use the inventory's estimates to budget test action time, plus build and
-  slot acquisition. The oracle shards serialize on the training lock, and the combined 900 s
+  combined HIP batches. They remain in the inventory report. Use its estimates to budget test
+  action time, plus build and slot acquisition. The oracle shards serialize on the training lock, and the combined 900 s
   batch in staging#2105 stopped after three shards. Each recipe sets its own runner cap.
 - **Count compiles with `Context.backend_compiles`, not a wrapper around `Context.compile`**
   (gh-ocannl-1882). A test-local function that shadows or wraps `Context.compile` and forwards

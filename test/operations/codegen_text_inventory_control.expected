@@ -9,6 +9,7 @@ a test reading after the Main logic banner by hand reaches the after-marker refu
 an after-marker exemption of a file reading no banner reaches the stale-exemption refusal: true
 a golden no rule of its directory diffs reaches the unplaced-member refusal: true
 a snapshot under an extension no backend emits reaches the unselected-route refusal, through the route that diffs it: true
+GPU targets combine applicable text, kernel and compiler aliases once, excluding slow runs: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:78fef1ba5a8812597666a8c7a41cf736] the eligible inventory
@@ -33,6 +34,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:82377b15fd7aac93b28c1deb390f5f55] reaches the stale-exemption
   [scanner-refusal:9009ac3e9d8c7293fc8dcced2a1d359c] reaches the unplaced-member
   [scanner-refusal:73dda4751ce6710ef3af65fa9d15b66a] unselected-route refusal through
+  [scanner-refusal:c2effa4a6a8acfb3b5df5bcf40064749] targets combine applicable
   [scanner-refusal:123bedafe19167d3536ddb2ca1115d21] cannot say whether
   [scanner-refusal:532d3ed986dd6559fec87d780769ee1f] declares module
 End of synthetic controls.

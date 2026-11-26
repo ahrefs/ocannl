@@ -5409,11 +5409,17 @@
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads goldens, test sources and compiled interfaces.
- ; Two targets: the file list is written by dune's own `echo`, which spawns nothing and so has
+ ; The file list is written by dune's own `echo`, which spawns nothing and so has
  ; no length limit, and handed over as a `@<path>` response file -- expanded into argv, a
  ; repository-wide list outgrows Windows' 32,767-character command line, where `CreateProcess`
  ; fails with `No such file or directory` and names neither. See `test/support/scan_argv.ml`.
- (targets codegen_text_inventory.actual codegen_text_inventory.filelist)
+ (alias runtest-codegen_text_inventory)
+ (targets
+  codegen_text_inventory.actual
+  codegen_text_inventory.filelist
+  codegen_text_inventory.cuda.targets
+  codegen_text_inventory.hip.targets
+  codegen_text_inventory.metal.targets)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
@@ -5440,6 +5446,7 @@
     codegen_text_inventory.actual
     (run
      %{dep:codegen_text_inventory.exe}
+     --gpu-targets
      %{workspace_root}
      @codegen_text_inventory.filelist)))))
 
