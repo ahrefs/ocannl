@@ -1226,8 +1226,9 @@ files.
   (`gh1051_boundary_split.sh`, README).
 - **HIP timing on discrete gfx1102: per-hardware-queue WGP/SIMD-pair phase toggle**
   (gh-ocannl-2384, OCANNL probe on `gemini/w1126o-2384-probe` at `465910cc` extending
-  `claude/w1118o-2308-probe` `9b9ce2ef`, paired with standalone HIP `HW_ID1` and stream-pool
-  witnesses recorded on the issue). On discrete gfx1102 (RX 7700S, 16 WGPs / 32 CUs), each HSA
+  `claude/w1118o-2308-probe` `9b9ce2ef`, paired with
+  [standalone HIP `HW_ID1`, period-sweep, and stream-pool witnesses](https://github.com/ahrefs/ocannl/issues/2384#issuecomment-7191082207)).
+  On discrete gfx1102 (RX 7700S, 16 WGPs / 32 CUs), each HSA
   AQL hardware compute queue (HQD) carries a persistent per-WGP starting-SIMD-pair phase
   (`(simd0, simd2)`-first versus `(simd1, simd3)`-first, observed directly via `s_getreg_b32`
   `HW_ID1` in the standalone HIP witness) that advances round-robin across the 16 WGPs with period
@@ -1242,23 +1243,33 @@ files.
   192-WG kernel) moves the HQD off `0 mod 32`. In `rocprofv3` traces on discrete gfx1102 across
   flips, the inter-dispatch gap (`9.16-9.20 us`), `SQ_WAVES` (384), `SQ_INST_CYCLES_VMEM`
   (138,240), `GL2C_HIT` (4,867) and `GL2C_MISS` (3,329) stay identical, while `SQ_WAIT_INST_LDS`
-  jumps 4.7x (`261k-267k` to `1,249k-1,254k` cycles) and kernel duration rises ~43% (`7.8-8.1` to
-  `11.0-11.6` us, shifting batched per-launch wall time from `13.9-14.6` to `16.9-17.7` us).
+  jumps 4.7x (`261k-267k` to `1,249k-1,254k` cycles) and kernel duration (`rocprofv3 --kernel-trace`)
+  rises ~42-43% (fast median `8.12 us`, range `7.88-8.60 us`, to slow median `11.52-11.56 us`,
+  range `11.24-11.84 us` in runs 3/7 and run 11 median `11.52 us`, shifting batched per-launch
+  wall time from `13.9-14.6` to `16.9-17.7` us).
   Unified gfx1151 (20 WGPs / 40 CUs) showed no modes on this pair in gh-ocannl-2308; a consistent
   hypothesis (not directly traced with `HW_ID1` on gfx1151) is that `192 mod 40 = 32` rotates
   across WGPs within every batch rather than locking into one phase. **Surviving reading
   methods:** (1) process-per-arm measurement (`bin_cells.py`, including via `ab.py`, and
-  `orchestrate.py` pass-2 replay), where each process starts on a fresh HQD at phase 0; note that
-  only `bin_cells.py` (and `ab.py` through it) runs the Modes detector for residual per-process
-  modes, while `orchestrate.py` pass-2 replay does not and needs a separate mode check if
-  per-process bimodality is suspected; (2) in-process, a dedicated simultaneously live HIP stream
-  per candidate within `GPU_MAX_HW_QUEUES` (default 4), which assigns distinct AQL hardware queues
-  (`Queue_Id` 2 vs 3) and removes the toggle (0/15 parity flips and 0/11 full-tuner flips at odd
-  `seed1` depths `1` and `617`, while `GPU_MAX_HW_QUEUES=1` forces both streams onto one HQD and
-  restores 15/15 and 11/11 flips). Destroying and recreating a HIP stream does NOT reset the HQD
-  phase: ROCclr recycles the persistent hardware queue with its dirty phase intact. Shared-stream
-  interleaved or sequential multi-candidate timing on discrete gfx1102 does not survive this
-  effect when a 32-WG-multiple candidate shares an HQD with non-32-WG-multiple kernels.
+  `orchestrate.py` pass-2 replay) removes cross-candidate *interleaving* toggles, but does NOT by
+  itself equalize starting phase across arms whose earlier workgroup dispatches in that process
+  (init kernels, warm-up, or an in-process `Autotune` search inside the arm) differ modulo 32: a
+  32-WG-multiple timed kernel locks into whatever phase those earlier dispatches left, so two arms
+  can sit in opposite deterministic modes across every cell without tripping `bin_cells.py`'s Modes
+  detector (a ~20% apparent treatment effect); clean arm-to-arm comparison therefore requires
+  matching pre-timing workgroup totals modulo 32 (e.g., identical preamble, or isolating the timed
+  kernel on its own fresh live stream within `GPU_MAX_HW_QUEUES` before any non-32-WG-multiple work
+  runs on that queue). Note also that only `bin_cells.py` (and `ab.py` through it) runs the Modes
+  detector for residual per-process modes, while `orchestrate.py` pass-2 replay does not and needs
+  a separate mode check if per-process bimodality is suspected; (2) in-process, a dedicated
+  simultaneously live HIP stream per candidate within `GPU_MAX_HW_QUEUES` (default 4), which
+  assigns distinct AQL hardware queues (`Queue_Id` 2 vs 3) and removes the toggle (0/15 parity
+  flips and 0/11 full-tuner flips at odd `seed1` depths `1` and `617`, while `GPU_MAX_HW_QUEUES=1`
+  forces both streams onto one HQD and restores 15/15 and 11/11 flips). Destroying and recreating a
+  HIP stream does NOT reset the HQD phase: ROCclr recycles the persistent hardware queue with its
+  dirty phase intact. Shared-stream interleaved or sequential multi-candidate timing on discrete
+  gfx1102 does not survive this effect when a 32-WG-multiple candidate shares an HQD with
+  non-32-WG-multiple kernels.
 - **Interleaved timing visits arms in `Bench_design`'s spread mirrored rotation** (`bin/bench_design.ml`,
   gh-ocannl-743). Mirroring each batch cancels LINEAR drift (every pair exchanged, equal mean
   positions); it does not equalize each arm's position histogram, which is what a nonlinear effect
