@@ -854,7 +854,7 @@ test/operations/back_to_back_runs.ml [prelowered compile; run by @test/operation
 test/operations/bench_line_samples.ml [through Bench_harness.dominant_kernel; run by @test/operations/runtest-bench_line_readers]
 test/operations/bench_self_test.ml [through Bench_harness.run_self_test; through Bench_harness.time_shipped_segments; run by @test/operations/runtest-bench_self_test]
 test/operations/bf16_subnormal_storage.ml [through Ll_test.execute; run by @test/operations/runtest-bf16_subnormal_storage, @test/operations/runtest-bf16_subnormal_storage-reproducible]
-test/operations/branchless_select.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math, @test/operations/runtest-branchless_select-outlined]
+test/operations/branchless_select.ml [through Ll_test.execute; through Ll_test.optimize_and_execute; run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math, @test/operations/runtest-branchless_select-outlined]
 test/operations/buffer_aliasing.ml [prelowered compile; run by @test/operations/runtest-buffer_aliasing]
 test/operations/byte_uniform_unsigned.ml [through Ll_test.execute; run by @test/operations/runtest-byte_uniform_unsigned]
 test/operations/canonical_render.ml [staged callback; run by @test/operations/runtest-canonical_render]

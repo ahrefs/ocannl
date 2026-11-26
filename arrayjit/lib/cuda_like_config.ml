@@ -36,7 +36,7 @@ module Cuda = struct
   (* gh-ocannl-1695: at the shipping floor PTX target, ptxas (13.4, sm_120) if-converts the value
      selects in [branchless_select]'s census. Native sm_120 PTX instead branches on load-gating
      selects (gh-ocannl-1822); the no-branch claim is floor-target-only. CUDA keeps short-circuiting
-     [?:] and [cuda_facts.blends_value_selects = false]: blending would also change the inline
+     [?:] and [cuda_facts.select_blend_policy = No_blend]: blending would also change the inline
      fan-in guard's load accounting, without performance evidence here. *)
   let bf16_relu = ("__hmax_nan(__ushort_as_bfloat16((unsigned short)0x0000U), ", ")")
 
@@ -160,10 +160,6 @@ module Hip = struct
   let bf16_typ = "__hip_bfloat16"
   let fp8_typ = "__hip_fp8_e5m2"
   let bf16_arithmetic_intrinsics = false
-
-  (* gh-ocannl-1695: AMDGPU branches around a value select's loaded arm ([s_cbranch_scc1] over a
-     uniform condition, an exec-mask [s_cbranch_execz] region over a divergent one), so HIP blends
-     ([hip_facts.blends_value_selects]). *)
   let bf16_relu = ("__float2bfloat16(fmaxf(0.0f, __bfloat162float(", ")))")
   let tanh_approx () = "tanhf"
 
@@ -992,18 +988,17 @@ struct
     | FMA, _ -> func "fma"
     | Mul3, _ -> fun v1 v2 v3 -> group (parens (v1 ^^ string " * " ^^ v2 ^^ string " * " ^^ v3))
 
-  (* gh-ocannl-1695: where the dialect's facts say [blends_value_selects], a value select
-     [Low_level.speculable_select] admits evaluates its arms into [auto] locals first, then selects
-     with the short-circuiting spelling above over the locals. Over an arm that loads a buffer the
-     device compiler cannot prove dereferenceable, that spelling branched on AMDGPU (clang 21,
-     gfx1151): [s_cbranch_scc1] around the load over a uniform condition, an [s_and_saveexec] /
-     [s_cbranch_execz] region over a divergent one. Over values it selects ([v_cndmask_b32]). The
-     locals keep each arm's type and the spelling is the dialect's own, so the type, the value and
-     the gate's test are the [?:]'s, [__half] / [float] mixtures included. Not at fp8, whose
-     operators bridge through [float] and no test exercises a blend of. *)
+  let select_blend_policy () =
+    (Backend_intf.effective_facts Dialect.backend_facts).select_blend_policy
+
+  (* gh-ocannl-1695: an admitted select evaluates its arms into [auto] locals and then selects with
+     the dialect's own spelling. HIP's shipping policy leaves a loaded arm selected by the
+     short-circuiting spelling, where AMDGPU can branch around it (gh-ocannl-2427). The locals keep
+     each arm's type and the spelling is the dialect's own, so the type, the value and the gate's
+     test are the [?:]'s, [__half] / [float] mixtures included. Not at fp8, whose operators bridge
+     through [float] and no test exercises a blend of. *)
   let select_blend_syntax prec =
-    if not (Backend_intf.effective_facts Dialect.backend_facts).Backend_intf.blends_value_selects
-    then None
+    if Backend_intf.equal_select_blend_policy (select_blend_policy ()) No_blend then None
     else
       match prec with
       | Ops.Half_prec _ | Ops.Bfloat16_prec _ | Ops.Single_prec _ | Ops.Double_prec _ ->

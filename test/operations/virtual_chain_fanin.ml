@@ -324,12 +324,12 @@ let phase1b () =
 
 (* === Phase 1c: a value select's arms are charged as the backend renders the select ===
 
-   gh-ocannl-1775: a backend whose [blends_value_selects] fact holds (cc, HIP) renders a select
-   [LL.speculable_select] admits as a blend that evaluates BOTH arms, so the guard charges the union
-   of the arms' loads there; a short-circuiting backend (CUDA, Metal) evaluates one arm and is
-   charged the wider. The flag is the backend's fact in production ([Backends.lower_assignments]);
-   here both readings are optimized explicitly, and each executes on the running backend, whose
-   values cannot depend on the decision. *)
+   gh-ocannl-1775: a backend with the eager blend policy renders a select [LL.speculable_select]
+   admits as a blend that evaluates BOTH arms, so the guard charges the union of the arms' loads
+   there; a short-circuiting backend (CUDA, Metal) evaluates one arm and is charged the wider. The
+   flag is the backend's fact in production ([Backends.lower_assignments]); here both readings are
+   optimized explicitly, and each executes on the running backend, whose values cannot depend on the
+   decision. *)
 
 let phase1c () =
   let mk = node_factory ~first_id:3150 ~dims:[| dim |] () in
@@ -473,11 +473,10 @@ let phase1c () =
    loads where the other runs three. A short-circuiting backend (CUDA, Metal) evaluates one arm, and
    the guard must charge the one that is wider AFTER transitive expansion: mask + 8 = 9, over the
    cap of 8, so the producer is materialized; choosing on direct loads (3 to 1) charged mask + 3 = 4
-   and left it virtual. The blended reading (cc, HIP) is charged the union, mask + 3 + 8 = 12. The
-   control keeps the expanded arm within the cap (5 loads): short-circuiting it is charged one arm
-   (mask + 5 = 6, virtual), blended the union (mask + 3 + 5 = 9, materialized) -- the arms are not
-   joined where only one runs. Each reading executes on the running backend against the
-   reference. *)
+   and left it virtual. The eager blend reading is charged the union, mask + 3 + 8 = 12. The control
+   keeps the expanded arm within the cap (5 loads): short-circuiting it is charged one arm (mask + 5
+   = 6, virtual), blended the union (mask + 3 + 5 = 9, materialized) -- the arms are not joined
+   where only one runs. Each reading executes on the running backend against the reference. *)
 
 let phase1d () =
   let mk = node_factory ~first_id:4100 ~dims:[| dim |] () in
@@ -682,8 +681,8 @@ let phase2 () =
 (* === Phase 2b: the select charge follows the running backend's facts ===
 
    gh-ocannl-1775, end to end: [y = where mask (a1 + a2 + a3) (b1 + ... + b5)] through [Context],
-   whose lowering states the backend's [blends_value_selects] fact. Charged as the backend renders
-   the select -- the union (9) where it blends, the wider arm (6) where it short-circuits -- [y] is
+   whose lowering reads the backend's select blend policy. Charged as the backend renders the select
+   -- the union (9) where it blends, the wider arm (6) where it short-circuits -- [y] is
    materialized by the fan-in cap exactly where the fact holds. Two-sided on every backend. *)
 
 let phase2b () =
@@ -709,8 +708,9 @@ let phase2b () =
   Train.set_materialized loss.Tensor.value;
   Tn.set_observable loss.Tensor.value;
   let ctx = Context.auto () in
-  let blends = (Context.backend_facts ctx).Ir.Backend_intf.blends_value_selects in
-  Stdio.eprintf "phase 2b: on the %s backend, blends_value_selects=%b (not part of the golden)\n%!"
+  let blends = Ir.Backend_intf.charges_select_arm_union (Context.backend_facts ctx) in
+  Stdio.eprintf
+    "phase 2b: on the %s backend, charges_select_arm_union=%b (not part of the golden)\n%!"
     (Context.backend_name ctx) blends;
   let ctx, routine = Context.compile ctx (Train.forward loss) Ir.Indexing.Empty in
   let ctx = Context.run ctx routine in
@@ -736,9 +736,9 @@ let phase2b () =
    gh-ocannl-1874, end to end: [y = where mask (a1 + a2 + a3) (b1 + ... + b8)] through [Context].
    Each arm loads one virtual node directly -- the last link of its sum chain -- so a choice on
    direct loads ties and charges the first arm (mask + 3 = 4, virtual). Expanded, the else-arm
-   replays eight loads: short-circuiting (CUDA, Metal) [y] is charged mask + 8 = 9, blended (cc,
-   HIP) mask + 3 + 8 = 12, so the fan-in cap materializes it on every backend. The backend's fact
-   goes to stderr: a backend-uniform golden cannot say which reading ran. *)
+   replays eight loads: short-circuiting [y] is charged mask + 8 = 9, eagerly blended [y] is charged
+   mask + 3 + 8 = 12, so the fan-in cap materializes it on every backend. The policy goes to stderr:
+   a backend-uniform golden cannot say which reading ran. *)
 
 let phase2c () =
   Utils.settings.fixed_state_for_init <- Some 42;
@@ -764,8 +764,9 @@ let phase2c () =
   Train.set_materialized loss.Tensor.value;
   Tn.set_observable loss.Tensor.value;
   let ctx = Context.auto () in
-  let blends = (Context.backend_facts ctx).Ir.Backend_intf.blends_value_selects in
-  Stdio.eprintf "phase 2c: on the %s backend, blends_value_selects=%b (not part of the golden)\n%!"
+  let blends = Ir.Backend_intf.charges_select_arm_union (Context.backend_facts ctx) in
+  Stdio.eprintf
+    "phase 2c: on the %s backend, charges_select_arm_union=%b (not part of the golden)\n%!"
     (Context.backend_name ctx) blends;
   let ctx, routine = Context.compile ctx (Train.forward loss) Ir.Indexing.Empty in
   let ctx = Context.run ctx routine in
@@ -2093,7 +2094,7 @@ let phase9 () =
    one arm, 3, but keeping the FIRST tied arm for downstream made [c] cost [{m,x,y,w}] = 4 under one
    spelling and [{m,y,z,x,w}] = 5 under the other -- across cap 4. The tied arms are unioned
    downstream, so [c] costs 5 under either spelling (a cell with [m = 0] replays [y+z] beside [x]
-   and [w]: 5 is a read some cell runs). Blended (cc, HIP) [p] is charged the union, 4, and [c] 5.
+   and [w]: 5 is a read some cell runs). With eager blending [p] is charged the union, 4, and [c] 5.
    At cap 3 the short-circuiting [p] stays virtual: its own charge is still per-read. The
    cross-routine leg replays [p] from routine A's stored computation. The successive-selects leg
    pins the node's OWN charge: [q := where m x y + where n (x+w) v] keeps every tied alternative of

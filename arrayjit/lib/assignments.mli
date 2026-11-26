@@ -278,6 +278,7 @@ val lower :
   Indexing.static_symbol list ->
   t ->
   Low_level.optimized
-(** Lowers and optimizes [t]. [blends_value_selects] is the rendering backend's fact, passed on to
-    {!Low_level.optimize} (gh-ocannl-1775), and [accum_prec] its accumulator-residency resolver
-    (gh-ocannl-2444); [Backends.lower_assignments] always states both. *)
+(** Lowers and optimizes [t]. [blends_value_selects] is whether the backend charges the union of a
+    speculable select's arms, passed on to {!Low_level.optimize} (gh-ocannl-1775), and [accum_prec]
+    its accumulator-residency resolver (gh-ocannl-2444); [Backends.lower_assignments] always states
+    both. *)

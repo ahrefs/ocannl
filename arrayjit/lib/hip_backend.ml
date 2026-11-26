@@ -2016,6 +2016,11 @@ end = struct
          match Compiler_options.hip_target_options ~target_archs with
          | [] -> ""
          | options -> "/hiprtc-target:" ^ Compiler_options.render options)
+      (* gh-ocannl-2427: placement and schedule crowns timed with eagerly loaded arms belong to the
+         old renderer. Use the shipping policy even inside the diagnostic override. *)
+      ^ (match Backend_intf.hip_facts.select_blend_policy with
+        | Blend_load_free -> "/load-free-selects"
+        | No_blend | Blend_speculable -> "")
       (* gh-ocannl-1909: key both regimes by the actual switches. The old fast regime had no
          component; adding one invalidates its approximate-division/fast-contraction crowns. *)
       ^

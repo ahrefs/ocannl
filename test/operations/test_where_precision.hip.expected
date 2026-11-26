@@ -25,10 +25,6 @@ extern "C" __global__ void where_fwd(
   /* Main logic. */
   /* where fwd */
   t_where[0] =
-      [&]() { auto ocannl_sel_a__ =
-        (float)(t_a_then_val[0]);
-      auto ocannl_sel_b__ =
-        (float)(__bfloat162float(t_b_else_val[0]));
-      return ((t_cond_condition[0]) ? ocannl_sel_a__ : ocannl_sel_b__); }();
+      ((t_cond_condition[0]) ? (float)(t_a_then_val[0]) : (float)(__bfloat162float(t_b_else_val[0])));
   /* end */
 }

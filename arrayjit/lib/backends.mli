@@ -121,7 +121,7 @@ val lower_assignments :
     consumers (gh-560: {!Context.decision_surface}) that read the optimized code's decision surface
     without backend codegen. [limits], [facts], and [accum_prec] are required so every backend-aware
     lowering resolves device-dependent rewrites, the inline fan-in guard's charge of a value select
-    ([blends_value_selects], gh-ocannl-1775), and narrow-scatter accumulation residency
+    ([select_blend_policy], gh-ocannl-1775), and narrow-scatter accumulation residency
     (gh-ocannl-2444) from the same facts as compilation. *)
 
 val unchecked_lane_bounds_notice :

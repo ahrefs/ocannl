@@ -49,14 +49,14 @@
    so each compiled routine's source is read for the rendering's banner: at one precision the
    rendering takes all of its arms or none, and on every backend some precision takes them. - The
    value-select blends ([select_blend_syntax], gh-ocannl-1622): the [Where] and gate arms already
-   reach them; the sources now show it, every select arm blending or none at a precision, and on cc
-   and HIP some precision blending. - Builtin parameter guards ({!Ir.C_syntax.Param_guards}): the
-   whole sweep compiles with every builtin call on cc, Metal, CUDA and HIP passing its arguments
-   through a guard that fails the compile when the operand's type narrows into the parameter's, so
-   the compile claim covers what gh-ocannl-1704 was (a [half] passed by value to a [uint16_t]). Its
-   negative control plants gh-ocannl-1704 back in the backend's own table, and must compile without
-   the guards and fail with them. Which functions the guards read is checked over all four tables:
-   an unreadable function is named, with why.
+   reach them. Every loaded select arm blends or none does at a precision, and cc's eager policy
+   blends at some precision. - Builtin parameter guards ({!Ir.C_syntax.Param_guards}): the whole
+   sweep compiles with every builtin call on cc, Metal, CUDA and HIP passing its arguments through a
+   guard that fails the compile when the operand's type narrows into the parameter's, so the compile
+   claim covers what gh-ocannl-1704 was (a [half] passed by value to a [uint16_t]). Its negative
+   control plants gh-ocannl-1704 back in the backend's own table, and must compile without the
+   guards and fail with them. Which functions the guards read is checked over all four tables: an
+   unreadable function is named, with why.
 
    gh-ocannl-2117 adds result-type probes ({!Ir.C_syntax.Result_type_probes}): the whole sweep also
    compiles with every scalar node at a float precision that {!Ir.Low_level.typed_at} calls typed --
@@ -360,11 +360,9 @@ let () =
   p_all "at each precision, the select blend renders every select arm or none" cases ~f:(fun case ->
       let arms, seen = blended case in
       seen = 0 || seen = arms);
-  (* cc and HIP blend; CUDA's ptxas if-converts the short-circuiting spelling itself, and Metal's
-     compiler no tool here can read, so both keep [?:] (C_syntax's [select_blend_syntax]). Which of
-     the two a backend does is its [blends_value_selects] fact, which the inline fan-in guard reads
-     before codegen (gh-ocannl-1775): two-sided, on every backend, against the emitted kernels. *)
-  let blends = (Context.backend_facts base_ctx).Ir.Backend_intf.blends_value_selects in
+  (* The sweep gives each select a buffer-read payload. The eager policy alone allows these arms to
+     blend, which is also when the fan-in guard charges their union. *)
+  let blends = Ir.Backend_intf.charges_select_arm_union (Context.backend_facts base_ctx) in
   (* Non-empty first: a sweep that compiled no select arm would make the short-circuiting reading
      pass vacuously. *)
   p_exists "the sweep compiled select arms" cases ~f:(fun case ->

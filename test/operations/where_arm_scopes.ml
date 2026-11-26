@@ -366,9 +366,8 @@ let row_hoist_unconditional () =
       Array.init n ~f:(fun i -> sum2 i +. 1.);
     ]
 
-(* A value select a blending backend evaluates both arms of: no branch is added, so its arm
-   definitions run unconditionally where it blends (cc, HIP), and under its condition where it
-   short-circuits (CUDA, Metal). *)
+(* The definition reads a buffer. It runs unconditionally with eager blending and under the
+   condition on backends that keep loaded arms conditional. *)
 let row_blend () =
   let name = "was_blend" in
   let x = mk "was_blend_x" and m = mk ~dims:[| n |] "was_blend_m" in
@@ -389,9 +388,10 @@ let row_blend () =
   let got = execute ~name o ~seed:[ (x, xs); (m, mask); (out, blank n) ] ~read:[ out ] in
   values name got [ Array.init n ~f:(fun i -> if Float.(mask.(i) < 0.5) then sum2 i else 7.) ];
   let source = Generated.main_logic (Generated.read name) in
+  let ctx = Context.auto () in
   let blends =
-    Option.is_some
-      ((Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.select_blend single)
+    Ir.Backend_intf.charges_select_arm_union (Context.backend_facts ctx)
+    && Option.is_some ((Context.codegen_capabilities ctx).Ir.Backend_intf.select_blend single)
   in
   (* One claim name on every backend: the golden is backend-uniform. *)
   let claim =

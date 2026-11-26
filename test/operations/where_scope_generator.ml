@@ -880,7 +880,7 @@ let () =
             | Add (Sel (Data, Slot (0, Fresh), _), _) -> true
             | _ -> false)
       in
-      let blends = facts.Ir.Backend_intf.blends_value_selects in
+      let blends = Ir.Backend_intf.charges_select_arm_union facts in
       in_leg ~leg:(Verdict.leg ~when_:blends ~on:backend_name ())
         "where the backend blends a data select, its arm definitions render unconditionally"
         (fun label ->

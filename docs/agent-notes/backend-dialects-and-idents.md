@@ -66,9 +66,9 @@ files.
   AIR, one per hand-built census leg (the realistic pool kernel's selects none; its branch is on
   the window guards' line) -- whether Apple's GPU compiler then predicates it is not visible
   there. Blending value selects on Metal, or showing AGX predicates them, is gh-ocannl-2400.
-- HIP blends a value select (`Low_level.speculable_select`) over `auto` locals in an
+- HIP blends a speculable, load-free value select over `auto` locals in an
   immediately-invoked lambda, `[&]() { auto ocannl_sel_a__ = A; ...; return <the dialect's own
-  ?:>; }()` (`Cuda_like_config`'s `blends_value_selects`, `C_syntax.Over_locals`, gh-ocannl-1695):
+  ?:>; }()` (`Cuda_like_config`, `C_syntax.Over_locals`, gh-ocannl-1695):
   AMDGPU branched around an arm's load on every census leg (`s_cbranch_scc1` over a uniform
   condition, an `s_and_saveexec`/`s_cbranch_execz` region over a divergent one). CUDA keeps `?:`:
   ptxas (13.4, sm_120) predicated the load in every OCANNL-emitted shape (serial, `Grid`,
@@ -84,6 +84,11 @@ files.
   `Blend_over_locals` (`bs_nan_fill`). Metal keeps `?:`: its
   offline compiler ships with full Xcode only and Apple's GPU ISA has no public disassembler, so no
   census can say whether it branches.
+- `Low_level.select_arm_is_load_free` governs HIP's select profitability (gh-ocannl-2427). It
+  visits evaluated operands and arm-local definitions, rejects plain, dynamic and merge-buffer
+  reads, and admits already-bound scalar locals. The outer condition can load. The causal
+  score load in approximate GPT-2 inference stays behind its mask, while a register-only
+  gradient gate blends. `branchless_select` pins both and runs the register gate's AMDGPU census.
 - `Satur01_gate` passes its second operand only for `0 < x < 1` (gh-ocannl-1647). cc's
   ternary and branchless blend share an ordered range test over a single copy of the
   condition. The ternary still guards its payload and keeps the result in its arithmetic
