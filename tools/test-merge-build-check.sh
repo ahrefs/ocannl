@@ -2846,6 +2846,31 @@ sys_path_pin_leg() {
   real_exec() {
     perl -MCwd=realpath -e 'my $r = realpath($ARGV[0]); exit 1 unless defined $r; print $r' "$1"
   }
+  check_pin_probe() { # FILE EXPECT_SHEBANG EXPECT_DUNE
+    local f=$1 expect_shebang=$2 expect_dune=$3
+    local line k v sb= pb= pa= a2244= hd= ho=
+    [ -f "$f" ] || return 1
+    while IFS= read -r line; do
+      k=${line%%=*} v=${line#*=}
+      case $k in
+        shebang_bash) sb=$v ;;
+        path_bash) pb=$v ;;
+        path_awk) pa=$v ;;
+        awk_2244) a2244=$v ;;
+        has_dune) hd=$v ;;
+        has_opam) ho=$v ;;
+      esac
+    done <"$f"
+    [ -n "$pb" ] && [ "$(real_exec "$pb")" = "$want_bash" ] &&
+      [ -n "$pa" ] && [ "$(real_exec "$pa")" = "$want_awk" ] &&
+      [ "$a2244" = "$outer_2244" ] && [ "$ho" = "$sys_opam" ] || return 1
+    if [ "$expect_shebang" = 1 ]; then
+      [ -n "$sb" ] && [ "$(real_exec "$sb")" = "$want_bash" ] || return 1
+    fi
+    if [ "$expect_dune" = 1 ]; then
+      [ "$hd" = "$sys_dune" ] || return 1
+    fi
+  }
   outer_bash=$(type -P bash 2>/dev/null || :)
   outer_awk=$(type -P awk 2>/dev/null || :)
   [ -n "$outer_bash" ] && outer_bash=$(real_exec "$outer_bash") || { harness_abandon 'could not resolve caller bash'; return; }
@@ -2877,11 +2902,10 @@ sys_path_pin_leg() {
   git -C "$R" checkout -q side && last x.ml && commit_on side && merge_side
   cat >"$R/tools/fmt-check.sh" <<'PROBE'
 #!/usr/bin/env bash
-real_exec() { perl -MCwd=realpath -e 'my $r = realpath($ARGV[0]); exit 1 unless defined $r; print $r' "$1"; }
 {
-  printf 'shebang_bash=%s\n' "$(real_exec "$BASH")"
-  printf 'path_bash=%s\n' "$(real_exec "$(type -P bash)")"
-  printf 'path_awk=%s\n' "$(real_exec "$(type -P awk)")"
+  printf 'shebang_bash=%s\n' "$BASH"
+  printf 'path_bash=%s\n' "$(type -P bash 2>/dev/null || :)"
+  printf 'path_awk=%s\n' "$(type -P awk 2>/dev/null || :)"
   printf 'awk_2244=%s\n' "$(awk 'BEGIN { a["k"] = ("k" in a) ? a["k"] "; x" : "x"; print "got=[" a["k"] "]" }')"
   printf 'has_opam=%s\n' "$(type -P opam 2>/dev/null || :)"
 } >"$FAKE_PIN_OUT"
@@ -2889,10 +2913,9 @@ exit 0
 PROBE
   cat >"$R/tools/owed-run.sh" <<'PROBE'
 #!/usr/bin/env bash
-real_exec() { perl -MCwd=realpath -e 'my $r = realpath($ARGV[0]); exit 1 unless defined $r; print $r' "$1"; }
 {
-  printf 'path_bash=%s\n' "$(real_exec "$(type -P bash)")"
-  printf 'path_awk=%s\n' "$(real_exec "$(type -P awk)")"
+  printf 'path_bash=%s\n' "$(type -P bash 2>/dev/null || :)"
+  printf 'path_awk=%s\n' "$(type -P awk 2>/dev/null || :)"
   printf 'awk_2244=%s\n' "$(awk 'BEGIN { a["k"] = ("k" in a) ? a["k"] "; x" : "x"; print "got=[" a["k"] "]" }')"
   printf 'has_dune=%s\n' "$(type -P dune 2>/dev/null || :)"
   printf 'has_opam=%s\n' "$(type -P opam 2>/dev/null || :)"
@@ -2901,15 +2924,13 @@ exit 0
 PROBE
   chmod +x "$R/tools/fmt-check.sh" "$R/tools/owed-run.sh"
 
+  # On Linux where /usr/bin/awk is already the caller's awk, these live probes confirm non-leakage
+  # while macOS under test-harnesses.sh (and the controlled stub_dir checks below) discriminate the pin.
   run_out=$TMP/pin-run.out
   rm -f "$run_out"
   FAKE_PIN_OUT=$run_out run "$TMP/dunebin"
   if [ "$rc" = 0 ] && [ ! -e "$TMP/pinbin/dune" ] && [ ! -e "$TMP/pinbin/opam" ] &&
-     [ "$(cat "$run_out" 2>/dev/null)" = "shebang_bash=$want_bash
-path_bash=$want_bash
-path_awk=$want_awk
-awk_2244=$outer_2244
-has_opam=$sys_opam" ]; then
+     check_pin_probe "$run_out" 1 0; then
     report 0 'run() preserves active bash (including env shebang) and awk across SYS_PATH without leaking opam'
   else
     report 1 'run() preserves active bash (including env shebang) and awk across SYS_PATH without leaking opam' \
@@ -2919,12 +2940,7 @@ has_opam=$sys_opam" ]; then
   owed_out=$TMP/pin-owed.out
   rm -f "$owed_out"
   FAKE_PIN_OUT=$owed_out owed "$OWED_EMPTY" url
-  if [ "$orc" = 0 ] &&
-     [ "$(cat "$owed_out" 2>/dev/null)" = "path_bash=$want_bash
-path_awk=$want_awk
-awk_2244=$outer_2244
-has_dune=$sys_dune
-has_opam=$sys_opam" ]; then
+  if [ "$orc" = 0 ] && check_pin_probe "$owed_out" 0 1; then
     report 0 'owed() preserves active bash and awk across SYS_PATH without leaking dune or opam'
   else
     report 1 'owed() preserves active bash and awk across SYS_PATH without leaking dune or opam' \
@@ -3016,18 +3032,22 @@ PROBE
 harness_leg_run 'SYS_PATH resets preserve pinned bash and awk without leaking other tools #sys-path-pin' sys_path_pin_leg
 
 sys_path_mawk_leg() {
-  local host_mawk= cand fallbacks mawk_pin got_pinned got_unpinned
-  cand=$(type -P mawk 2>/dev/null || :)
-  if [ -n "$cand" ] && [ -f "$cand" ] && [ -x "$cand" ]; then
-    host_mawk=$(resolve_exec_path "$cand") || { harness_abandon "could not normalize mawk path: $cand"; return; }
+  local host_mawk= cand mawk_pin got_pinned got_unpinned
+  # Prefer the caller's active awk when it already exhibits mawk #2244 semantics (always true
+  # under tools/test-harnesses.sh on macOS and on mawk-default Linux), else type -P mawk (keeping
+  # standalone and harness-legs-alone runs working without parsing test-harnesses.sh).
+  cand=$(type -P awk 2>/dev/null || :)
+  if [ -n "$cand" ] && [ -f "$cand" ] && [ -x "$cand" ] &&
+     [ "$(awk 'BEGIN { a["k"] = ("k" in a) ? a["k"] "; x" : "x"; print "got=[" a["k"] "]" }')" = 'got=[; x]' ]; then
+    host_mawk=$(resolve_exec_path "$cand") || { harness_abandon "could not normalize awk path: $cand"; return; }
   else
-    fallbacks=$(sed -n 's/^darwin_mawk_fallbacks=(\(.*\))$/\1/p' "$HERE/test-harnesses.sh")
-    for cand in $fallbacks; do
-      if [ -f "$cand" ] && [ -x "$cand" ]; then host_mawk=$cand; break; fi
-    done
+    cand=$(type -P mawk 2>/dev/null || :)
+    if [ -n "$cand" ] && [ -f "$cand" ] && [ -x "$cand" ]; then
+      host_mawk=$(resolve_exec_path "$cand") || { harness_abandon "could not normalize mawk path: $cand"; return; }
+    fi
   fi
   if [ -z "$host_mawk" ]; then
-    harness_not_applicable 'no real mawk installed on this host for the #2244 SYS_PATH control'
+    harness_not_applicable 'no real mawk available on PATH for the #2244 SYS_PATH control'
     return
   fi
   mawk_pin=$TMP/real-mawk-pin
