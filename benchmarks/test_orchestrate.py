@@ -8748,14 +8748,12 @@ class CellSearchBudgetTest(unittest.TestCase):
         self.assertNotIn("tune_call_budget_seconds", orchestrate.sweep_owned_keys())
         workloads = {p.stem for p in (HERE / "workloads").glob("*.json")}
         self.assertGreater(len(orchestrate.CELL_SEARCH_BUDGETS_S), 0)
-        for (workload, backend, variant, precision, regime), budget in (
+        for (workload, backend, variant, regime), budget in (
             orchestrate.CELL_SEARCH_BUDGETS_S.items()
         ):
             self.assertIn(workload, workloads)
             self.assertIn(backend, orchestrate.SWEEP_BACKENDS)
             self.assertEqual(variant, "tuned")
-            if precision not in (None, "f32"):
-                self.assertEqual(orchestrate.precision_spec(precision), precision)
             self.assertIn(regime, orchestrate.REGIMES)
             self.assertIsInstance(budget, (int, float))
             self.assertFalse(isinstance(budget, bool))
@@ -8787,15 +8785,6 @@ class CellSearchBudgetTest(unittest.TestCase):
         ):
             with self.subTest(cell_key=cell_key, regime=regime):
                 self.assertEqual(orchestrate.cell_flags([], cell_key, regime=regime), [])
-
-        # Exact precision entry wins over a None wildcard.
-        budgets = {
-            ("cifar_resnet", "metal", "tuned", None, "approximate"): 1800,
-            ("cifar_resnet", "metal", "tuned", "f32", "approximate"): 1200,
-        }
-        self.assertEqual(
-            orchestrate.cell_search_budget(target, "approximate", budgets=budgets), 1200
-        )
 
     def test_explicit_cell_flag_overrides_or_composes_with_builtin_budget(self):
         target = ("cifar_resnet", "metal", "tuned", "f32")
@@ -8864,7 +8853,16 @@ class CellSearchBudgetTest(unittest.TestCase):
                     "searches": 4 if is_pass1 else 0,
                     "replays": 0 if is_pass1 else 4,
                     "no_searches": 0,
-                    "arms": [],
+                    "arms": [
+                        {
+                            "arm": "B",
+                            "budget_cut": (
+                                "tune_call_budget_seconds" in settings
+                                and settings["tune_call_budget_seconds"]
+                                != "--ocannl_tune_call_budget_seconds=0"
+                            ),
+                        }
+                    ],
                 },
             )
             return row, None
@@ -8941,6 +8939,7 @@ class CellSearchBudgetTest(unittest.TestCase):
         )
         self.assertIn("| tuned +tune_call_budget_seconds=1800 |", report_text)
         self.assertIn("CELL_SEARCH_BUDGETS_S", report_text)
+        self.assertIn("**budget-bounded**", report_text)
 
         # Operator override (=0 for uncapped) replaces the built-in budget with no duplicate flag.
         _, rows_uncapped, report_uncapped = run_sweep(
@@ -8953,6 +8952,7 @@ class CellSearchBudgetTest(unittest.TestCase):
             rows_uncapped[1]["ocannl_flags"], ["--ocannl_tune_call_budget_seconds=0"]
         )
         self.assertIn("| tuned +tune_call_budget_seconds=0 |", report_uncapped)
+        self.assertNotIn("**budget-bounded**", report_uncapped)
 
 
 def markdown_tables(text):

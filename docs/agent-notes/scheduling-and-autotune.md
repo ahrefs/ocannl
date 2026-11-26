@@ -3477,9 +3477,13 @@ files.
   with `BENCH_KERNEL_TABLE=1`, the 1,800 s budget completed in 1,799.93 s search + 336 s pass-2
   replay (`REPLAY`, 4 replays, no ship substitution), reporting step p50 160.636 ms (p10-p90
   160.291-161.411 ms, queued 153.570 ms, parity PASS `7.3e-07`, within exact envelope), dominant
-  kernel `k129/152 15.093 ms (queued) kernel_s1c2.grad n155.grad conv2d_s1c1.grad` (the budget cuts
-  each search before the `F_split` seeds at the end of `phase=seeds`, whereas uncapped `exact`
-  reaches 79.8 ms in 3,155 s).
+  kernel `k129/152 15.093 ms (queued) kernel_s1c2.grad n155.grad conv2d_s1c1.grad`. Because
+  uncapped `exact` needs ~1,575 s/arm to reach the `F_split` seeds at the end of `phase=seeds`
+  (79.8 ms in 3,155 s), even a 2,700 s budget (~675 s/search across four searches) would still
+  cut before `F_split` while spending +15 min of each exclusive window and narrowing worst-case
+  headroom under `--cell-timeout 3600` (with 336 s measured non-search overhead, up to 600 s for
+  the dominant-kernel cap); the budgeted row is therefore **budget-bounded** and not comparable
+  with uncapped `exact`, which `orchestrate.py`'s `report.md` notes on any `budget_cut` row.
 - **A deferred cache hit ships its validated code relinked** (gh-ocannl-1440).
   `Context.compile_outcome ?retain` keeps a successful compile's code, censuses and pre-link
   context (`Context.retained`, no working pools: those are a link's), and

@@ -445,17 +445,20 @@ def flag_applies(flag, cell):
 
 
 # Per-cell default OCANNL search budgets, in seconds (`tune_call_budget_seconds`), keyed by
-# (workload, backend, variant, precision, regime), where precision None matches every precision
-# (gh-ocannl-2430).
+# (workload, backend, variant, regime) (gh-ocannl-2430).
 #
 # `cifar_resnet/metal/tuned/approximate` hit the 3,600 s cell cap on 2026-10-30 and again on
 # 2026-11-20 on m4-max (`exact` took 3,155-3,276 s across its two placement arms, while
 # `approximate` adds Winograd's transformed sites and `tune_inline_flips=2`, doubling the
 # searches to four). A 1,800 s call budget bounds the whole `Train.tune_placements` call
-# (~450 s per search across both arms and both flips) and leaves >1,000 s inside the ResNet
-# sweeps' `--cell-timeout 3600` for parity, timed steps and the dominant-kernel instrument
-# (capped at 600 s). Like uncapped `exact`, the cell requires `--cell-timeout 3600` rather than
-# the 1,800 s default `--cell-timeout`.
+# (~450 s per search across both arms and both flips) inside the ResNet sweeps'
+# `--cell-timeout 3600` (each pass has ~336 s measured non-search overhead on m4-max, up to
+# 600 s when the dominant-kernel instrument hits its cap; like uncapped `exact`, the cell
+# requires `--cell-timeout 3600` rather than the 1,800 s default cap). Uncapped `exact` needs
+# ~1,575 s/arm to reach the `F_split` seeds at the end of `phase=seeds` (79.8 ms), so even a
+# 2,700 s budget (~675 s/search) still cuts before `F_split` while spending +15 min of every
+# exclusive window and shrinking worst-case headroom under 3,600 s; the budgeted row reports
+# ~160.6 ms on m4-max and is therefore budget-bounded and not comparable with uncapped `exact`.
 #
 # Applied as `--ocannl_tune_call_budget_seconds=<seconds>` when the measured checkout's
 # `ocannl_config.reference` supports `tune_call_budget_seconds` and no operator `--cell-flag`
@@ -463,28 +466,21 @@ def flag_applies(flag, cell):
 # recorded in `ocannl_flags`, the variant column and `ambient_ocannl_shadowed` like any other
 # per-cell flag.
 CELL_SEARCH_BUDGETS_S = {
-    ("cifar_resnet", "metal", "tuned", None, "approximate"): 1800,
+    ("cifar_resnet", "metal", "tuned", "approximate"): 1800,
 }
 
 
 def cell_search_budget(cell, regime, budgets=None):
     """Built-in `tune_call_budget_seconds` default for `(cell, regime)`, or None.
 
-    `cell` is `(workload, backend, variant, precision)`. Honours a `None` precision wildcard in
-    `budgets` (default `CELL_SEARCH_BUDGETS_S`), with an exact precision entry winning over a
-    wildcard one.
+    `cell` is `(workload, backend, variant, precision)`; budgets apply across precisions, keyed
+    by `(workload, backend, variant, regime)`.
     """
     if regime is None:
         return None
     budgets = CELL_SEARCH_BUDGETS_S if budgets is None else budgets
-    workload, backend, variant, precision = cell
-    for key in (
-        (workload, backend, variant, precision, regime),
-        (workload, backend, variant, None, regime),
-    ):
-        if key in budgets:
-            return budgets[key]
-    return None
+    workload, backend, variant, _precision = cell
+    return budgets.get((workload, backend, variant, regime))
 
 
 def cell_flags(flags, cell, regime=None, budgets=None):
@@ -2956,6 +2952,18 @@ def report(
                 "profile and the environment, so the row is its regime with that key set. "
                 "The regime gate accepts that declared setting where the runner reports it "
                 "resolved, and nothing else.\n"
+            )
+        if any(
+            arm.get("budget_cut")
+            for r in rows
+            for arm in ((r.get("tune") or {}).get("arms") or [])
+        ):
+            lines.append(
+                "A tuned row whose search hit its wall-clock budget (`budget_cut: true` in "
+                "`results.jsonl`, marked `+tune_call_budget_seconds=...` or "
+                "`+autotune_budget_seconds=...` in `variant`) is **budget-bounded**: its "
+                "search stopped before exploring the full candidate list and is not directly "
+                "comparable with an uncapped tuned row of another regime (gh-ocannl-2430).\n"
             )
         if any(r.get("precision_mismatch") for r in rows):
             lines.append(

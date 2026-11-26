@@ -503,7 +503,11 @@ single-threaded segments that sum to the serial step
   (gh-ocannl-2430: uncapped, its four approximate searches — two placement arms plus two inline
   flips over Winograd's transformed sites — missed the 3,600 s cap on m4-max; like uncapped
   `exact`, it is sized for `--cell-timeout 3600` rather than the 1,800 s default cap, leaving
-  headroom for timed steps and the 600 s dominant-kernel instrument). Built-in budgets are applied
+  headroom for timed steps and the 600 s dominant-kernel instrument). Because the budget stops
+  each of the four searches before the `F_split` seeds at the end of `phase=seeds` (160.6 ms on
+  m4-max against uncapped `exact`'s 79.8 ms in 3,155 s), this row is **budget-bounded** and is
+  not directly comparable with uncapped `exact`; `report.md` notes this whenever any tuned row
+  reports `budget_cut: true`. Built-in budgets are applied
   only when the measured checkout's `ocannl_config.reference` supports `tune_call_budget_seconds`,
   travel as `ocannl_flags`, appear as `+tune_call_budget_seconds=1800` in cell labels and report
   rows (and `+call_budget=1800s` in `gh1161_sites.py`), and yield to an explicit `--cell-flag`
