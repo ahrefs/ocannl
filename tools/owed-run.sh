@@ -164,7 +164,8 @@ bounded() {
     if (!$pid) {
       close $result_r;
       close $life_w;
-      setpgid(0, 0) or die "isolate Git transport: $!";
+      # EOF before the start byte leaves Git unlaunched.
+      sysread($life_r, my $start, 1) or exit 126;
       my $git = fork();
       defined $git or die "fork Git: $!";
       if (!$git) {
@@ -186,11 +187,15 @@ bounded() {
     }
     close $result_w;
     close $life_r;
-    # Either side can establish the group before the supervisor accepts cancellation.
-    if (!setpgid($pid, $pid) && !$!{ESRCH}) {
-      my $error = $!;
-      kill("KILL", -$pid) or kill("KILL", $pid);
-      die "isolate Git transport: $error";
+    # Concurrent setpgid calls can return EPERM on macOS. The supervisor alone creates the group.
+    {
+      local $SIG{PIPE} = "IGNORE";
+      if (!setpgid($pid, $pid) || !syswrite($life_w, "1")) {
+        my $error = $!;
+        kill "KILL", $pid;
+        waitpid($pid, 0);
+        die "isolate Git transport: $error";
+      }
     }
     alarm $cap;
     sigprocmask(SIG_SETMASK, $old) or die "restore signals: $!";
