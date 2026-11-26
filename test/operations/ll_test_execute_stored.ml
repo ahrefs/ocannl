@@ -205,8 +205,10 @@ let () =
          L.execute_with_census ~ctx:(Context.auto ()) ~name:"les_host_census" o
            ~seed:[ (x, xv) ]
            ~read:[ host_only ]));
-  Tn.set_host_constant host_only;
   L.virtualize host_only;
+  p "an uncompiled Virtual node with only mutable host-init data is Not_computed"
+    (match Context.observability raw_ctx host_only with Context.Not_computed -> true | _ -> false);
+  Tn.set_host_constant host_only;
   p "an uncompiled Virtual literal is Host_init"
     (Tn.Placements.known_virtual (Context.placements raw_ctx) host_only
     && match Context.observability raw_ctx host_only with Context.Host_init -> true | _ -> false);

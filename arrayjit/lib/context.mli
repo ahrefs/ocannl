@@ -751,16 +751,17 @@ val observability : t -> Ir.Tnode.t -> observability
 (** Classifies a host read of the node from this context without compiling, from the lineage's
     {!placements}, the context's buffers, the host initialization registry and the stored
     computations. A [Virtual] node is classified from its stored computations or its immutable
-    host-init data, even when a host upload allocated a device buffer for it. The walk follows each
-    stored computation exactly as a replay would read it — the statements the inliner keeps, every
-    operand — into other virtual nodes, and stops at materialized ones. A path ends at the first
-    offending node in program order; when several reasons apply, [Unobservable_local] is reported
-    over [Unobservable_aliased], over [Unobservable_merge], over [Launch_bound], over
-    [Needs_context]. Pure: no placement is decided, nothing is compiled. A [Recomputable] answer
-    describes structure and availability; the recompute's own compile and run keep their checks
-    (e.g. an input no routine of the lineage wrote is refused by {!run}). Refuses a {!release}d
-    context and a discarded node like {!to_host}. Raises [Failure] (an internal error) if a stored
-    computation reads a node this lineage left undecided. *)
+    host-init data, even when a host upload allocated a device buffer for it. For a mutable
+    [Virtual] node, the query returns [Not_computed] until the context inherits its computation. The
+    walk follows each stored computation exactly as a replay would read it — the statements the
+    inliner keeps, every operand — into other virtual nodes, and stops at materialized ones. A path
+    ends at the first offending node in program order; when several reasons apply,
+    [Unobservable_local] is reported over [Unobservable_aliased], over [Unobservable_merge], over
+    [Launch_bound], over [Needs_context]. Pure: no placement is decided, nothing is compiled. A
+    [Recomputable] answer describes structure and availability; the recompute's own compile and run
+    keep their checks (e.g. an input no routine of the lineage wrote is refused by {!run}). Refuses
+    a {!release}d context and a discarded node like {!to_host}. Raises [Failure] (an internal error)
+    if a stored computation reads a node this lineage left undecided. *)
 
 val observability_tag : observability -> string option
 (** A short placeholder for printers, such as [<unobservable: reads Local #7 h>]; [None] for the
