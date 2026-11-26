@@ -1950,6 +1950,9 @@ struct
      ones; the bridged narrow precisions keep [?:]. *)
   let builtin_param_guards = Some C_syntax.C_guards
 
+  let select_blend_policy () =
+    (Backend_intf.effective_facts Backend_intf.cc_facts).select_blend_policy
+
   let select_blend_syntax prec =
     let blend truth a b =
       let open PPrint in
@@ -1962,7 +1965,7 @@ struct
         ^^ string ";" ^^ break 1 ^^ string "OCANNL_SELECT(" ^^ truth
         ^^ string ", ocannl_sel_a__, ocannl_sel_b__); })")
     in
-    if not (Backend_intf.effective_facts Backend_intf.cc_facts).blends_value_selects then None
+    if Backend_intf.equal_select_blend_policy (select_blend_policy ()) No_blend then None
     else
       match prec with
       | Ops.Single_prec _ | Ops.Double_prec _ -> Some (C_syntax.Blend_truth blend)

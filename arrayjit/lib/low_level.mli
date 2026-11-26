@@ -454,8 +454,8 @@ type read_charge = {
 
 and select_charge = {
   speculable : bool;
-      (** {!speculable_select} admits it: a backend whose [blends_value_selects] fact holds renders
-          it as a blend evaluating every arm. *)
+      (** {!speculable_select} admits it: a backend that eagerly blends loaded arms renders it as a
+          blend evaluating every arm. *)
   arms : read_charge list;  (** One per arm, in order; exactly one runs where it short-circuits. *)
 }
 
@@ -481,7 +481,7 @@ val resolve_charge :
   Set.M(Tnode).t list
 (** gh-ocannl-1874: a charge's contributors, each load folded in by [expand] (the transitive guard
     expands a virtual dependency into its own fan-in; {!evaluation_reads} adds the node itself).
-    With [blends] (the backend's [blends_value_selects] fact, gh-ocannl-1775) an admitted select is
+    With [blends] (when the backend charges an arm union, gh-ocannl-1775) an admitted select is
     charged the union of its arms: the blend evaluates both. Any other select evaluates one arm per
     visit and is charged one: the arm whose EXPANDED reads, joined with what the evaluation was
     already charged, are the most -- choosing on direct loads under-counts an arm whose few loads
@@ -675,6 +675,12 @@ val accum_local_update_op : id:scope_id -> scalar_t -> Ops.binop option
     deliberately not part of {!accum_local_update_parts} or of {!scope_updates_reduce_op}'s hoist
     license. *)
 
+val select_arm_is_load_free : scalar_t -> bool
+(** Whether evaluating the arm can be done using literals, indices and scalar locals
+    (gh-ocannl-2427). Inspect evaluated operands and arm-local definitions. A definition in a
+    [Where] arm can move outside its guard when the select blends. Opaque or effectful statements
+    decline. *)
+
 val speculable_select : cond:scalar_t -> arms:scalar_arg list -> bool
 (** Whether a value select — a [Where], or a gated operator ([Relu_gate], [Satur01_gate]) — may
     evaluate every one of its [arms] whatever [cond] says, so that a backend can render it as a
@@ -702,9 +708,9 @@ val speculable_select : cond:scalar_t -> arms:scalar_arg list -> bool
     floors, [Affine]'s [a_gated] stays a conservative over-approximation, and [Cost_model]'s upper
     walk, which charges both arms, stays an upper bound (flagged approximate: it reads no backend,
     and CUDA and Metal still short-circuit). The inline fan-in guard ({!resolve_charge}) charges a
-    single arm, chosen after transitive expansion (gh-ocannl-1874), only where the backend
-    short-circuits: on a backend whose [blends_value_selects] fact holds it charges an admitted
-    select's arms by their union (gh-ocannl-1775). *)
+    single arm, chosen after transitive expansion (gh-ocannl-1874), only where the backend can skip
+    loaded arms. A backend that eagerly blends loaded arms charges an admitted select's arms by
+    their union (gh-ocannl-1775). A load-free blend adds no loads to that charge. *)
 
 val float_valued : scalar_t -> bool
 (** gh-ocannl-1785: whether the expression, evaluated at an INTEGER compute precision, is
@@ -1936,11 +1942,11 @@ val optimize :
   Indexing.static_symbol list ->
   t ->
   optimized
-(** [blends_value_selects] is the rendering backend's fact of that name
-    ({!Backend_intf.backend_facts}; [Backends.lower_assignments] passes it): where true, the inline
-    fan-in guard charges a select {!speculable_select} admits by the union of its arms, which the
-    backend's blend evaluates (gh-ocannl-1775). Default [false], the short-circuiting reading:
-    hand-built IR optimized without a backend in mind.
+(** [blends_value_selects] states whether the backend can eagerly blend loaded arms
+    ([Backends.lower_assignments] derives it from the policy). Where true, the inline fan-in guard
+    charges a select {!speculable_select} admits by the union of its arms, which the backend's blend
+    evaluates (gh-ocannl-1775). Default [false], the short-circuiting reading: hand-built IR
+    optimized without a backend in mind.
 
     [accum_prec] is the backend's accumulator-residency resolver
     ({!Backend_intf.codegen_capabilities.accum_prec}; [Backends.lower_assignments] passes it):

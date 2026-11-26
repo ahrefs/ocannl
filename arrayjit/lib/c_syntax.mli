@@ -644,21 +644,26 @@ module type C_syntax_config = sig
       {!Result_type_probes.with_probes} (gh-ocannl-2117); {!Pure_C_config}'s default is [C_probes],
       so a C++ dialect must say so. *)
 
+  val select_blend_policy : unit -> Backend_intf.select_blend_policy
+  (** The effective backend policy for speculating value select arms. *)
+
   val select_blend_syntax : Ops.prec -> select_blend option
   (** A branchless rendering of a value select at this compute precision (gh-ocannl-1622), in one of
       the {!select_blend} forms: it must evaluate both arms unconditionally — each rendered before
       any [?:], [&&] or [||] ({!operand_conditionality_violations} checks it) — and have exactly the
       C type and value of the short-circuiting spelling it replaces, bit for bit. [pp_scalar_op]
-      uses it for a [Where], [Relu_gate] or [Satur01_gate] that {!Low_level.speculable_select}
-      admits, keeping the condition exactly as the short-circuiting spelling tests it.
+      uses it for a [Where], [Relu_gate] or [Satur01_gate] that the policy and
+      {!Low_level.speculable_select} admit, keeping the condition exactly as the short-circuiting
+      spelling tests it.
 
       Why: C forbids evaluating the unselected arm of [?:], so where an arm holds a load the
       compiler cannot prove dereferenceable it emits a conditional branch, and a step's time follows
       the data (cifar_resnet's inlined ReLU and max-pool backward selects on cc, gh-ocannl-1557).
-      With both arms already values, the compiler if-converts. AMDGPU branches too (gh-ocannl-1695),
-      so HIP blends over [auto] locals. [None] (the {!Pure_C_config} default) keeps the
-      short-circuiting [ternop_syntax] / [binop_syntax] spelling: CUDA's, which ptxas if-converts
-      itself, and Metal's, whose compiler no tool here can read. *)
+      With both arms already values, the compiler if-converts. HIP blends load-free arms over [auto]
+      locals and leaves selected loads behind their condition (gh-ocannl-2427). [None] (the
+      {!Pure_C_config} default) keeps the short-circuiting [ternop_syntax] / [binop_syntax]
+      spelling: CUDA's, which ptxas if-converts itself, and Metal's, whose compiler no tool here can
+      read. *)
 
   val unop_syntax : Ops.prec -> Ops.unop -> PPrint.document -> PPrint.document
   val vec_unop_syntax : Ops.prec -> Ops.vec_unop -> PPrint.document -> PPrint.document

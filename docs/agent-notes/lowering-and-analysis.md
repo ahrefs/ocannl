@@ -53,7 +53,7 @@ files.
   already charges BOTH arms (`sc_split`'s sum, since gh-ocannl-637), flagged approximate because it
   reads no backend (CUDA and Metal short-circuit) (gh-ocannl-1695 pins it in `cost_model_extraction`). The inline fan-in guard's
   collector (`Low_level.eval_reads_traversal`'s `branches` hook) charges the backend's rendering:
-  the union of an admitted select's arms where `backend_facts.blends_value_selects` holds, the wider
+  the union of an admitted select's arms where `Backend_intf.charges_select_arm_union` holds, the wider
   arm elsewhere (gh-ocannl-1775; virtualization-and-inlining.md). Two traps for a test of it
   (`test/operations/branchless_select`): clang if-converts `c ? a[i] : b[i]` on base by selecting
   the ADDRESS, so a branch claim needs a constant arm (`where cond g 0`, the backward shape); and a

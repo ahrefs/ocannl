@@ -2016,6 +2016,9 @@ end = struct
          match Compiler_options.hip_target_options ~target_archs with
          | [] -> ""
          | options -> "/hiprtc-target:" ^ Compiler_options.render options)
+      (* gh-ocannl-2427: a version marker retires placement and schedule crowns timed with eagerly
+         loaded arms. The diagnostic override shares this identity. *)
+      ^ "/load-free-selects"
       (* gh-ocannl-1909: key both regimes by the actual switches. The old fast regime had no
          component; adding one invalidates its approximate-division/fast-contraction crowns. *)
       ^

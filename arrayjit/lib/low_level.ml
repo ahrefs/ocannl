@@ -1054,8 +1054,8 @@ type read_charge = {
 
 and select_charge = {
   speculable : bool;
-      (** {!speculable_select} admits it: a backend whose [blends_value_selects] fact holds renders
-          it as a blend evaluating every arm. *)
+      (** {!speculable_select} admits it: a backend that eagerly blends loaded arms renders it as a
+          blend evaluating every arm. *)
   arms : read_charge list;  (** One per arm, in order; exactly one runs where it short-circuits. *)
 }
 
@@ -1623,6 +1623,39 @@ let same_position ?dyn_axis ~statics_set (m : Indexing.axis_index array)
       | Some fa, Some fb -> [%equal: (int * Indexing.symbol) list * int] fa fb
       | _ -> false)
 
+let select_arm_is_load_free scalar =
+  let open Access_fold in
+  let policy =
+    {
+      discarded_operands = Skip;
+      gated_operands = Visit;
+      dead_loops = Skip;
+      local_scopes = Visit;
+      guards = Ignore;
+      scan_implicit = Visit;
+    }
+  in
+  let hooks =
+    {
+      (hooks ()) with
+      scalar =
+        (fun _ load_free -> function
+          | Get _ | Get_dynamic _ | Get_merge_buffer _ -> Prune false
+          | Local_scope _ | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ | Ternop _
+          | Binop _ | Unop _ ->
+              if load_free then Continue true else Prune false);
+      statement =
+        (fun _ load_free -> function
+          | Staged_compilation _ | Workgroup_barrier | Tile_mma _ | Zero_out _ | Set _
+          | Set_dynamic _ | Set_from_vec _ ->
+              Prune false
+          | Noop | Comment _ | Seq _ | For_loop _ | Scan_loop _ | If _ | Declare_local _
+          | Set_local _ ->
+              if load_free then Continue true else Prune false);
+    }
+  in
+  fold_scalar ~policy ~hooks ~init:true scalar
+
 (* See the interface: the select a backend may render as a branchless blend (gh-ocannl-1622). Ahead
    of the read collector, which charges such a select's arms by their union on a blending backend
    (gh-ocannl-1775). *)
@@ -1830,8 +1863,8 @@ let read_charge_of_proc ~(self : Tn.t) (code : t) : read_charge =
 
 (* gh-ocannl-1874: a charge's contributors, each load folded in by [expand] (the transitive guard
    expands a virtual dependency into its own fan-in; the plain reading adds the node itself). A
-   select [~blends] (the backend's [blends_value_selects] fact, gh-ocannl-1775) renders as a blend
-   -- one {!speculable_select} admits -- evaluates every arm and is charged their union. Any other
+   select [~blends] (when the backend charges an arm union, gh-ocannl-1775) renders as a blend --
+   one {!speculable_select} admits -- evaluates every arm and is charged their union. Any other
    select evaluates exactly one arm per visit, so one arm is charged, not the union -- two arms each
    within the cap must not jointly trip it: the arm whose EXPANDED reads, joined with what this
    evaluation has already been charged, are the most. Choosing after expansion is the point: an arm

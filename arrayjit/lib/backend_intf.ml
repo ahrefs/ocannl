@@ -1145,6 +1145,8 @@ type queued_timing =
           [Schedule_cache.queued_objective_version]). *)
 [@@deriving equal]
 
+type select_blend_policy = No_blend | Blend_load_free | Blend_speculable [@@deriving equal]
+
 type backend_facts = {
   grid_execution : grid_execution;
   workgroup_shared_placement : bool;
@@ -1172,14 +1174,10 @@ type backend_facts = {
           artifact: what each backend's artifact writer appends, and what
           [test/config/config_reads.ml]'s [code_extension] -- linked by tests that link no backend
           -- is held equal to by [test/operations/marker_backend_vocabulary]. *)
-  blends_value_selects : bool;
-      (** The dialect renders a value select that {!Low_level.speculable_select} admits as a
-          branchless blend, evaluating every arm ([C_syntax_config.select_blend_syntax],
-          gh-ocannl-1622, gh-ocannl-1695): cc and HIP, at the float compute precisions their blends
-          cover. CUDA's ptxas if-converts the short-circuiting spelling itself and Metal keeps [?:].
-          The renderers derive their blend from this fact, and the inline fan-in guard reads it
-          before codegen (gh-ocannl-1775): on a blending backend a speculable [Where] is charged the
-          union of its arms' loads, elsewhere its wider arm. *)
+  select_blend_policy : select_blend_policy;
+      (** Which speculable value selects the renderer may blend at supported precisions. cc
+          speculates loaded arms too (gh-ocannl-1622). HIP speculates only load-free arms
+          (gh-ocannl-2427). CUDA and Metal emit short-circuiting selects by default. *)
   renders_lane_bounds_check : bool;
       (** The dialect renders [debug_check_lane_bounds]'s run-time bound check of a packed-uniform
           lane extract's lane operand (gh-ocannl-1867): cc's [OCANNL_CHECKED_LANE], which aborts
@@ -1189,26 +1187,33 @@ type backend_facts = {
 }
 [@@deriving equal]
 
-(* The [with_select_blend] in effect on this domain: the facts record it targets and the
-   [blends_value_selects] it states for them. *)
+(* A load-free blend adds no arm loads, so the wider-arm charge suffices. Only an eager blend of
+   loaded arms needs their union (gh-ocannl-1775). *)
+let charges_select_arm_union facts =
+  equal_select_blend_policy facts.select_blend_policy Blend_speculable
+
+(* The [with_select_blend] in effect on this domain: the facts record it targets and the select
+   policy it states for them. *)
 let select_blend_override = Stdlib.Domain.DLS.new_key (fun () -> None)
 
 (** gh-ocannl-2326, a measurement and test seam: within [f], on the calling domain, the backend
     whose facts are physically [facts] (one of the records below) lowers and renders value selects
-    as if its [blends_value_selects] fact were [blend] -- the lowering's fan-in guard
+    under [Blend_speculable] when [blend] is true and [No_blend] otherwise. The fan-in guard
     ([Backends.lower_assignments], through {!effective_facts}) and the renderers that have a blend
-    (cc, CUDA, HIP) alike, so a compile from assignments is charged as it renders. Not part of the
-    schedule cache's identity, nor of a [Lowering_reuse] cell's: a timing run under it compiles with
-    the cache bypassed, and compiles under different overrides share no reuse cell. *)
+    (cc, CUDA, HIP) read the same policy. Not part of the schedule cache's identity, nor of a
+    [Lowering_reuse] cell's: a timing run under it compiles with the cache bypassed, and compiles
+    under different overrides share no reuse cell. *)
 let with_select_blend ~facts ~blend f =
   let saved = Stdlib.Domain.DLS.get select_blend_override in
-  Stdlib.Domain.DLS.set select_blend_override (Some (facts, blend));
+  let policy = if blend then Blend_speculable else No_blend in
+  Stdlib.Domain.DLS.set select_blend_override (Some (facts, policy));
   Exn.protect ~f ~finally:(fun () -> Stdlib.Domain.DLS.set select_blend_override saved)
 
 (** [facts] under the {!with_select_blend} in effect for them, if any. *)
 let effective_facts facts =
   match Stdlib.Domain.DLS.get select_blend_override with
-  | Some (target, blend) when phys_equal target facts -> { facts with blends_value_selects = blend }
+  | Some (target, select_blend_policy) when phys_equal target facts ->
+      { facts with select_blend_policy }
   | _ -> facts
 
 let binds_hardware_grid facts = equal_grid_execution facts.grid_execution Hardware_grid
@@ -1246,7 +1251,7 @@ let cc_facts =
     host_load_attributable = true;
     node_ident_prefix = "";
     source_extension = ".c";
-    blends_value_selects = true;
+    select_blend_policy = Blend_speculable;
     renders_lane_bounds_check = true;
   }
 
@@ -1260,7 +1265,7 @@ let cuda_facts =
     host_load_attributable = false;
     node_ident_prefix = "t_";
     source_extension = ".cu";
-    blends_value_selects = false;
+    select_blend_policy = No_blend;
     renders_lane_bounds_check = false;
   }
 
@@ -1274,7 +1279,7 @@ let hip_facts =
     host_load_attributable = false;
     node_ident_prefix = "t_";
     source_extension = ".hip";
-    blends_value_selects = true;
+    select_blend_policy = Blend_load_free;
     renders_lane_bounds_check = false;
   }
 
@@ -1288,7 +1293,7 @@ let metal_facts =
     host_load_attributable = false;
     node_ident_prefix = "t_";
     source_extension = ".metal";
-    blends_value_selects = false;
+    select_blend_policy = No_blend;
     renders_lane_bounds_check = false;
   }
 

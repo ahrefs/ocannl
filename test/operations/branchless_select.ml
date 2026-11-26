@@ -26,15 +26,15 @@
    blends outside and keeps the inner guard. Executed with the hazardous reads inactive. - Assembly,
    on cc's own compiler and kernel flags: no conditional branch is attributed to a select's source
    lines, and those lines carry instructions, the realistic leg's included (gh-ocannl-1660); on CUDA
-   and HIP (gh-ocannl-1695; HIP blends, CUDA's ptxas predicates the short-circuiting spelling
-   itself), the same claim of the code object the run compiled (SASS through [ptxas] and [nvdisasm],
-   AMDGPU through [llvm-objdump]); on Metal (gh-ocannl-1828), the AIR the Metal Toolchain compiles
-   the run's [.metal] artifact to under the run's own compile options, which keeps the
-   short-circuit's branch on every leg: pinned as counted, on the toolchain version counted, the
-   zero-branch claim skipping there. - The realistic composition: a ReLU feeding a 2x2 max pool,
-   backward through the default placements (the selects inlined into their consumers) — the gradient
-   emits the blend and equals, bitwise, both an OCaml reference and the same program with inlining
-   off. *)
+   (gh-ocannl-1695), the same claim of the code object the run compiled (SASS through [ptxas] and
+   [nvdisasm]). HIP keeps loaded arms conditional and blends the register-only gate
+   (gh-ocannl-2427), whose AMDGPU code object is read through [llvm-objdump]. On Metal
+   (gh-ocannl-1828), the AIR the Metal Toolchain compiles the run's [.metal] artifact to under the
+   run's own compile options, which keeps the short-circuit's branch on every leg: pinned as
+   counted, on the toolchain version counted, the zero-branch claim skipping there. - The realistic
+   composition: a ReLU feeding a 2x2 max pool, backward through the default placements (the selects
+   inlined into their consumers) — the gradient emits the blend and equals, bitwise, both an OCaml
+   reference and the same program with inlining off. *)
 
 (* cc-fp-contract: exact-operands -- selects, adds and a pool gradient multiplying dyadic weights by
    one *)
@@ -104,6 +104,10 @@ let select_blend prec =
 
 let blends_at prec = Option.is_some (select_blend prec)
 let blends = blends_at single
+let facts = Context.backend_facts_of_name backend_name
+let blends_loaded_arms = Ir.Backend_intf.charges_select_arm_union facts
+let on_hip = String.equal backend_name "hip"
+let hip_leg = Verdict.leg ~when_:on_hip ~on:backend_name ()
 
 (* The loop the census legs' select runs under. On a GPU dialect, a [Grid] loop: one select per
    thread, the shape a parallel backward kernel has (a serial loop's unrolled copies are the other
@@ -114,9 +118,12 @@ let census_axis = if Option.is_some gpu_dialect then LL.Grid else LL.Serial
    answers [None] at the leg's precision (and [on_cc] restricts [cpu_only] legs, whose expected
    values are C-typed): written once (gh-ocannl-1703, gh-ocannl-2386). *)
 let blend_leg ~cpu_only ~prec =
-  Verdict.leg ~when_:(((not cpu_only) || on_cc) && blends_at prec) ~on:backend_name ()
+  Verdict.leg
+    ~when_:(((not cpu_only) || on_cc) && blends_loaded_arms && blends_at prec)
+    ~on:backend_name ()
 
 let single_blend_leg = Verdict.leg ~when_:blends ~on:backend_name ()
+let single_loaded_blend_leg = blend_leg ~cpu_only:false ~prec:single
 
 let over_locals_leg =
   Verdict.leg
@@ -428,6 +435,9 @@ let census_claim ~patterns ~gpu_patterns ~air_claim ~air_skip claim name =
         match gpu_dialect with
         | Some Asm.Air ->
             Verdict.skipped claim ~backend:(Printf.sprintf "metal (%s, %s)" air_skip air_divergence)
+        | Some Asm.Amdgpu ->
+            Verdict.in_leg ~leg:single_loaded_blend_leg claim (fun label ->
+                p_all label (gpu_census Asm.Amdgpu ~patterns:gpu_patterns name) ~f:branch_free)
         | Some dialect ->
             p_all claim (gpu_census dialect ~patterns:gpu_patterns name) ~f:branch_free
         | None ->
@@ -643,6 +653,67 @@ let () =
       in_legf ~leg:leg' "%s: no short-circuiting spelling of the select remains" leg.name
         (fun label -> no_short_circuit_claim ~prec:leg.prec label (Lazy.force text)))
 
+(* The causal fill selects a scaled score when admitted. Loading the score on discarded lanes is the
+   unified-memory HIP regression in gh-ocannl-2427. *)
+let () =
+  let name = "bs_mask_fill" in
+  let mask = mk_single "mask" and score = mk_single "score" and out = mk_single "out" in
+  let i = sym () in
+  let idx = [| iter i |] in
+  let at tn = (get tn idx, single) in
+  let scaled = LL.Binop (Ops.Mul, at score, (c 0.5, single)) in
+  let fill = LL.Ternop (Ops.Where, at mask, (scaled, single), (c (-.inf), single)) in
+  let scores = Array.init n ~f:(fun i -> Float.of_int ((2 * i) + 1)) in
+  let masks = Array.init n ~f:(fun i -> if i % 2 = 0 then 1. else 0.) in
+  let want =
+    Array.map2_exn masks scores ~f:(fun m s -> if Float.(m > 0.) then 0.5 *. s else -.inf)
+  in
+  let llc = loop_n ~axis:census_axis i n (set out idx fill) in
+  let got = execute_leg ~name ~seed:[ (mask, masks); (score, scores) ] ~out llc in
+  p_all2 "causal fill: the mask selects scaled scores and negative infinities" got want ~f:same_bits;
+  in_leg ~leg:hip_leg "causal fill: HIP keeps the score load in the selected arm" (fun claim ->
+      let text = kernel_text name in
+      let ident = Option.value_exn score.Tn.code_name in
+      let score_access = facts.node_ident_prefix ^ ident ^ "[" in
+      let after_question_mark = String.lsplit2 text ~on:'?' in
+      p claim
+        ((not (has text blend_marker))
+        && Option.exists after_question_mark ~f:(fun (before, after) ->
+            (not (has before score_access)) && has after score_access)))
+
+(* The gradient was loaded by an earlier statement, so the gate only selects a register value. *)
+let () =
+  let name = "bs_register_gate" in
+  let mask = mk_single "mask" and grad = mk_single "grad" and out = mk_single "out" in
+  let local = mk_single ~dims:[||] "register_grad" in
+  virtualize local;
+  let id = LL.get_scope local in
+  let i = sym () in
+  let idx = [| iter i |] in
+  let masks = Array.init n ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
+  let grads = Array.init n ~f:(fun i -> Float.of_int (i + 1)) in
+  let gate payload = LL.Binop (Ops.Relu_gate, (get mask idx, single), (payload, single)) in
+  let in_loop body = loop_n ~axis:census_axis i n body in
+  let raw = in_loop (set out idx (gate (get grad idx))) in
+  let scoped =
+    in_loop
+      (seq
+         (LL.Declare_local { id; needs_init = false })
+         (seq (LL.Set_local (id, get grad idx)) (set out idx (gate (LL.Get_local id)))))
+  in
+  List.iter [ mask; grad; out ] ~f:materialize;
+  let optimized = optimize_scoped ~name ~raw scoped in
+  let got =
+    List.hd_exn (execute ~name optimized ~seed:[ (mask, masks); (grad, grads) ] ~read:[ out ])
+  in
+  let want = Array.map2_exn masks grads ~f:(fun m g -> if Float.(m > 0.) then g else 0.) in
+  p_all2 "register-only gradient gate: the selected gradient reaches the output" got want
+    ~f:same_bits;
+  in_leg ~leg:single_blend_leg "register-only gradient gate: the emitter blends" (fun claim ->
+      p claim (has (kernel_text name) blend_marker));
+  in_leg ~leg:hip_leg "register-only gradient gate: HIP emits branch-free selection" (fun claim ->
+      p_all claim (gpu_census Asm.Amdgpu ~patterns:[ "ocannl_sel_" ] name) ~f:branch_free)
+
 let () =
   let prefix = (Context.backend_facts_of_name backend_name).Ir.Backend_intf.node_ident_prefix in
   List.iter [ "bs_sat01_gate"; "bs_sat01_gate_int32" ] ~f:(fun name ->
@@ -720,36 +791,35 @@ let () =
       let text = kernel_text name in
       p claim (has text guard_spelling && not (has text blend_marker)))
 
-(* [out[i] := m[i] != 0 ? s[i] * 0.5 : NAN]: a masked attention's fill, a NaN LITERAL arm. Under
-   HIP's no-NaNs fast math a NaN bound to a local is the optimizer's to drop, and a blended [where
-   mask s NAN] came back finite (gh-ocannl-1695), so the GPU blend leaves such a select
-   short-circuiting; cc's blend selects bit patterns and keeps it. The NaN reaches the masked cells
-   on every backend. *)
+(* The index-derived score keeps both arms load-free, so the NaN literal alone keeps the GPU blend
+   short-circuiting (gh-ocannl-1695). *)
 let () =
   let name = "bs_nan_fill" in
-  let m = mk_single (name ^ "_m") and sv = mk_single (name ^ "_s") in
+  let m = mk_single (name ^ "_m") in
   let out = mk_single (name ^ "_out") in
   let mv = [| 1.; 0.; 1.; 1.; 0.; 0.; 1.; 0. |] in
-  let svv = [| 2.; 4.; -6.; 0.5; 1.; 3.; -0.; 8. |] in
   let i = sym () in
+  let score = LL.Binop (Ops.Add, (LL.Embed_index (iter i), single), (c 1., single)) in
   let sel =
     LL.Ternop
       ( Ops.Where,
         (get m [| iter i |], single),
-        (LL.Binop (Ops.Mul, (get sv [| iter i |], single), (c 0.5, single)), single),
+        (LL.Binop (Ops.Mul, (score, single), (c 0.5, single)), single),
         (c nan, single) )
   in
   let llc = loop_n i n (set out [| iter i |] sel) in
-  let got = execute_leg ~name ~seed:[ (m, mv); (sv, svv) ] ~out llc in
-  let want = Array.init n ~f:(fun i -> if Float.(mv.(i) <> 0.) then svv.(i) *. 0.5 else nan) in
+  let got = execute_leg ~name ~seed:[ (m, mv) ] ~out llc in
+  let want =
+    Array.init n ~f:(fun i -> if Float.(mv.(i) <> 0.) then Float.of_int (i + 1) *. 0.5 else nan)
+  in
   p_all2 (name ^ ": values, the NaN fill reaching the masked cells") got want ~f:same_bits;
   in_leg ~leg:over_locals_leg
     (name ^ ": a NaN-literal arm keeps its [?:] where the blend binds locals") (fun claim ->
       let text = kernel_text name in
       p claim (has text guard_spelling && not (has text blend_marker)))
 
-(* [out[i] := v[i] != 0 ? (i < 4 ? a[i] : 0) : -1] over [i < 6]: the outer, value select blends —
-   its arm's one read sits behind a guard of its own — and the inner index guard stays [?:]. *)
+(* [out[i] := v[i] != 0 ? (i < 4 ? a[i] : 0) : -1] over [i < 6]. The inner index guard protects the
+   read. HIP keeps the outer test too because a nested arm contains a load. *)
 let () =
   let name = "bs_nested_guard" in
   let a = mk_single ~dims:[| 4 |] (name ^ "_a") and v = mk_single ~dims:[| 6 |] (name ^ "_v") in
@@ -763,10 +833,20 @@ let () =
   let llc = loop_n i 6 (set out [| iter i |] outer) in
   let got = execute_leg ~name ~seed:[ (a, a_vals); (v, vv) ] ~out llc in
   p_all2 (name ^ ": values") got [| 1.5; -1.; 3.5; -1.; 0.; 0. |] ~f:same_bits;
-  in_leg ~leg:single_blend_leg (name ^ ": the value select blends around the inner guard's [?:]")
-    (fun claim ->
+  in_leg ~leg:single_loaded_blend_leg
+    (name ^ ": the value select blends around the inner guard's [?:]") (fun claim ->
       let text = kernel_text name in
-      p claim (has text blend_marker && has text guard_spelling))
+      p claim (has text blend_marker && has text guard_spelling));
+  in_leg ~leg:hip_leg (name ^ ": HIP keeps both conditionals around the nested load") (fun claim ->
+      let text = kernel_text name in
+      let store = facts.node_ident_prefix ^ Option.value_exn out.Tn.code_name ^ "[" in
+      let statement =
+        Option.bind (String.substr_index text ~pattern:store) ~f:(fun pos ->
+            String.lsplit2 (String.drop_prefix text pos) ~on:';')
+      in
+      p claim
+        (Option.exists statement ~f:(fun (statement, _) ->
+             (not (has statement blend_marker)) && String.count statement ~f:(Char.equal '?') = 2)))
 
 (* [out[i] := v[i] != 0 ? ((int)a[i] / (int)b[i] == 0 ? g[i] : 0) : -1], and the same with one more
    select between: [v[i] != 0 ? (u[i] != 0 ? (... division select ...) : 0) : -1]. The division's
@@ -887,7 +967,7 @@ let () =
   if outlined then
     Verdict.claim "the forced run rendered the pool kernel outlined"
       (not (List.is_empty (Generated.outlined_parts (Generated.read "bs_pool_inlined"))));
-  in_leg ~leg:single_blend_leg "pool backward: the inlined gradient's selects call the blend"
+  in_leg ~leg:single_loaded_blend_leg "pool backward: the inlined gradient's selects call the blend"
     (fun claim ->
       let text = kernel_text "bs_pool_inlined" in
       p claim (has text blend_marker));

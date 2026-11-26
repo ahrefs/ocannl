@@ -1146,21 +1146,26 @@ module type C_syntax_config = sig
       {!Result_type_probes.with_probes} (gh-ocannl-2117); {!Pure_C_config}'s default is [C_probes],
       so a C++ dialect must say so. *)
 
+  val select_blend_policy : unit -> Backend_intf.select_blend_policy
+  (** The effective backend policy for speculating value select arms. *)
+
   val select_blend_syntax : Ops.prec -> select_blend option
   (** A branchless rendering of a value select at this compute precision (gh-ocannl-1622), in one of
       the {!select_blend} forms: it must evaluate both arms unconditionally — each rendered before
       any [?:], [&&] or [||] ({!operand_conditionality_violations} checks it) — and have exactly the
       C type and value of the short-circuiting spelling it replaces, bit for bit. [pp_scalar_op]
-      uses it for a [Where], [Relu_gate] or [Satur01_gate] that {!Low_level.speculable_select}
-      admits, keeping the condition exactly as the short-circuiting spelling tests it.
+      uses it for a [Where], [Relu_gate] or [Satur01_gate] that the policy and
+      {!Low_level.speculable_select} admit, keeping the condition exactly as the short-circuiting
+      spelling tests it.
 
       Why: C forbids evaluating the unselected arm of [?:], so where an arm holds a load the
       compiler cannot prove dereferenceable it emits a conditional branch, and a step's time follows
       the data (cifar_resnet's inlined ReLU and max-pool backward selects on cc, gh-ocannl-1557).
-      With both arms already values, the compiler if-converts. AMDGPU branches too (gh-ocannl-1695),
-      so HIP blends over [auto] locals. [None] (the {!Pure_C_config} default) keeps the
-      short-circuiting [ternop_syntax] / [binop_syntax] spelling: CUDA's, which ptxas if-converts
-      itself, and Metal's, whose compiler no tool here can read. *)
+      With both arms already values, the compiler if-converts. HIP blends load-free arms over [auto]
+      locals and leaves selected loads behind their condition (gh-ocannl-2427). [None] (the
+      {!Pure_C_config} default) keeps the short-circuiting [ternop_syntax] / [binop_syntax]
+      spelling: CUDA's, which ptxas if-converts itself, and Metal's, whose compiler no tool here can
+      read. *)
 
   val unop_syntax : Ops.prec -> Ops.unop -> PPrint.document -> PPrint.document
   val vec_unop_syntax : Ops.prec -> Ops.vec_unop -> PPrint.document -> PPrint.document
@@ -3379,6 +3384,7 @@ struct
 
   let binop_syntax = default_binop_syntax
   let binop_arg1_uses _ = 1
+  let select_blend_policy () = Backend_intf.No_blend
   let select_blend_syntax _prec = None
   let builtin_param_guards = None
   let result_type_probes = C_probes
@@ -3905,12 +3911,17 @@ module C_syntax (B : C_syntax_config) = struct
     | Local_scope _ | Get_local _ | Get_merge_buffer _ | Get _ | Constant_bits _ | Embed_index _ ->
         false
 
-  (* gh-ocannl-1622: a value select renders as the backend's blend where it has one at this (float)
-     compute precision and evaluating every arm is safe; otherwise it short-circuits. *)
+  (* gh-ocannl-1622: blending needs a spelling at the compute precision and permission to evaluate
+     every arm. Both the expression and the scope-order oracle use this decision. *)
   let blend_for prec ~cond ~arms =
     if not (Ops.is_float prec) then None
     else
       match B.select_blend_syntax prec with
+      | Some _
+        when Backend_intf.equal_select_blend_policy (B.select_blend_policy ()) Blend_load_free
+             && not (List.for_all arms ~f:(fun (arm, _) -> Low_level.select_arm_is_load_free arm))
+        ->
+          None
       | Some (Blend_over_locals _) when List.exists arms ~f:(fun (a, _) -> holds_nan_literal a) ->
           (* gh-ocannl-1695: the GPU dialects compile under no-NaNs fast math (HIP's [-ffast-math]),
              where a NaN literal bound to a local is the one NaN the optimizer can see, and a select
@@ -3924,9 +3935,12 @@ module C_syntax (B : C_syntax_config) = struct
   (* The expression of a ternary operator over its rendered operands at [prec], as {!binop_expr}. *)
   let ternop_expr ?(blend = true) prec op ~v1 ~v2 ~v3 e1 e2 e3 =
     let open PPrint in
-    match
-      (op, if blend then blend_for prec ~cond:v1 ~arms:[ (v2, prec); (v3, prec) ] else None)
-    with
+    let blend =
+      match (op, blend) with
+      | Ops.Where, true -> blend_for prec ~cond:v1 ~arms:[ (v2, prec); (v3, prec) ]
+      | _ -> None
+    in
+    match (op, blend) with
     | Ops.Where, Some (Blend_truth blend) ->
         (* The truth is the short-circuiting spelling's own test ([Ops.ternop_c_syntax]'s float
            arm), so a NaN condition still selects the then-arm. *)

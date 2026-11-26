@@ -876,8 +876,9 @@ let%track6_sexp lower_assignments ~(facts : backend_facts) ~limits ~accum_prec o
   ( name,
     Assignments.lower
       ~rewrite_target:{ online_softmax_auto_block = limits.online_softmax_auto_block }
-      ~blends_value_selects:facts.blends_value_selects ~accum_prec optim_ctx ~unoptim_ll_source
-      ~ll_source ~cd_source ~name (Indexing.bound_symbols bindings) asgns )
+      ~blends_value_selects:(Backend_intf.charges_select_arm_union facts)
+      ~accum_prec optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name
+      (Indexing.bound_symbols bindings) asgns )
 
 (* A node the code needs from a prior context that the linked context does not hold. Structured, so
    that [Context] -- the one caller of [link] -- can name the node in its lineage's terms

@@ -1,6 +1,6 @@
 a live context's facts are the facts its backend's name parses to: true
 the facts bind a hardware grid exactly where the device bounds a workgroup's threads: true
-codegen_capabilities.select_blend at f32 and f64 agrees with blends_value_selects: true
+codegen_capabilities.select_blend at f32 and f64 agrees with the select blend policy: true
 on cc, codegen_capabilities.select_blend reports Blend_truth at f32 and f64 and None elsewhere: true
 under with_select_blend ~blend:false, codegen_capabilities.select_blend answers None: true
 grid_execution alone moves the GPU and CPU search-shaping key reads: true
@@ -10,4 +10,5 @@ queued_timing alone moves the queued batch depth cap: true
 retries_contended_window alone moves the contended-window retry: true
 host_load_attributable alone moves the dispersion policy: true
 renders_lane_bounds_check alone moves whether a compile under the key owes the cc-only notice: true
-blends_value_selects alone moves the inline fan-in cap's decision on a select: true
+speculating loaded arms moves the inline fan-in cap's decision on a select: true
+load-free blending keeps the loaded select within the fan-in cap: true

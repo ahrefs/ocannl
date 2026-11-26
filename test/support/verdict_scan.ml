@@ -7312,7 +7312,7 @@ let leg_gate_allowed_paths =
       "Ir.Backend_intf.advertises_mma_format";
       "Ir.Backend_intf.advertises_mma_format_in_scope";
       "Ir.Backend_intf.binds_hardware_grid";
-      "Ir.Backend_intf.blends_value_selects";
+      "Ir.Backend_intf.charges_select_arm_union";
       "Ir.Backend_intf.compute_prec";
       "Ir.Backend_intf.equal_mma_emission_scope";
       "Ir.Backend_intf.equal_mma_format_triple";
@@ -7332,6 +7332,7 @@ let leg_gate_allowed_paths =
       "Ir.Backend_intf.renders_on_host_pool";
       "Ir.Backend_intf.seeds_untuned_default";
       "Ir.Backend_intf.select_blend";
+      "Ir.Backend_intf.select_blend_policy";
       "Ir.Backend_intf.simd_reduce_lanes_for";
       "Ir.Backend_intf.simd_vector";
       "Ir.Backend_intf.supports_f64";
