@@ -490,4 +490,249 @@ PY
     grep -qF 'no calibration rows in ' "$TMP/runs/mixed-fits/empty-stock.err"
   check 'empty stock snapshot emits no stdout' test ! -s "$TMP/runs/mixed-fits/empty-stock.out"
 fi
+if harness_leg '7: stock fits attribute F_preset and F_seeded incumbents via timing censuses'; then
+  site=rank_wgrad_1x32x32x32
+  stock_sites='SITES=wgrad:1,32,32,32'
+  txn_fit="$tree/benchmarks/gh1600_txn_fit.py"
+  geo_fit="$tree/benchmarks/gh1821_geometry_fit.py"
+
+  drive "$SRC" preset-fits COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" TIME_REPEATS=3 \
+    STUB_MUTATION=stock-seeded-preset PICK_PROFILES=reproducible TXN_RATE=1e12
+  check 'stock-seeded-preset run with TXN_RATE and profile timing cell succeeds' test "$got" = 0
+  pf_out="$TMP/runs/preset-fits/out"
+  check 'gh1253_cells joins seeded preset incumbent in gh1600_txn_fit with preset spread' \
+    grep -qF "wgrad_1x32x32x32: joined=2 spread=1.667 uncovered_accesses=0 off_agreement=100.0% decided=1 off_admitted='seeded'@1.000 off_admitted+coalesced='seeded'@1.000" \
+      "$pf_out/${site}_txn.txt"
+  check 'gh1600_txn_fit driver output attributes seeded median and timed_as to preset digest' \
+    grep -qxF "  wgrad_1x32x32x32: 'seeded' median_ms=0.500000 rank_ms=0.500000 admitted=true uncovered=0 timed_as='W_preset[bs=256]'" \
+      "$pf_out/${site}_txn.txt"
+
+  got=0
+  python3 "$txn_fit" --rate 1e12 --show \
+    --census "$pf_out/${site}_time.err" --census "$pf_out/${site}_time_r2.err" \
+    --census "$pf_out/${site}_time_r3.err" \
+    "wgrad_1x32x32x32=$pf_out/$site.tsv.stock,$pf_out/${site}_notxn.out" \
+    >"$TMP/runs/preset-fits/txn-bare.out" 2>"$TMP/runs/preset-fits/txn-bare.err" || got=$?
+  check 'direct gh1600_txn_fit with bare --census succeeds on single cell' test "$got" = 0
+  check 'direct gh1600_txn_fit matches driver output byte for byte' \
+    cmp "$pf_out/${site}_txn.txt" "$TMP/runs/preset-fits/txn-bare.out"
+
+  eq_dir="$TMP/runs/preset-fits/device=hip"
+  mkdir -p "$eq_dir"
+  cp "$pf_out/${site}_time.err" "$eq_dir/"
+  got=0
+  python3 "$txn_fit" --rate 1e12 --show \
+    --census "$eq_dir/${site}_time.err" \
+    "wgrad_1x32x32x32=$pf_out/$site.tsv.stock,$pf_out/${site}_notxn.out" \
+    >"$TMP/runs/preset-fits/txn-eqpath.out" 2>"$TMP/runs/preset-fits/txn-eqpath.err" || got=$?
+  check 'single-cell bare --census accepts a path containing =' test "$got" = 0
+  check 'single-cell bare --census with = matches driver output byte for byte' \
+    cmp "$pf_out/${site}_txn.txt" "$TMP/runs/preset-fits/txn-eqpath.out"
+
+  got=0
+  python3 "$txn_fit" --rate 1e12 --census "$eq_dir/missing.err" \
+    "wgrad_1x32x32x32=$pf_out/$site.tsv.stock,$pf_out/${site}_notxn.out" \
+    >"$TMP/runs/preset-fits/txn-eqmissing.out" 2>"$TMP/runs/preset-fits/txn-eqmissing.err" || got=$?
+  check 'missing single-cell bare --census path with = fails with OSError' test "$got" = 2
+  check 'missing single-cell bare --census path with = names the missing file' \
+    grep -qF 'No such file or directory' "$TMP/runs/preset-fits/txn-eqmissing.err"
+  check 'missing single-cell bare --census path emits no stdout' \
+    test ! -s "$TMP/runs/preset-fits/txn-eqmissing.out"
+
+  got=0
+  python3 "$txn_fit" --staged-rate 1e12 --listed-staged-rate 1e12 \
+    --census "wgrad_1x32x32x32=$pf_out/${site}_time.err" \
+    --census "wgrad_1x32x32x32=$pf_out/${site}_time_r2.err" \
+    --census "wgrad_1x32x32x32=$pf_out/${site}_time_r3.err" \
+    "wgrad_1x32x32x32=$pf_out/$site.tsv.stock,$pf_out/${site}_notxn.out,$pf_out/${site}_nostg.out" \
+    >"$TMP/runs/preset-fits/txn-staged.out" 2>"$TMP/runs/preset-fits/txn-staged.err" || got=$?
+  check 'gh1600_txn_fit --staged-rate threads --census to the nostg reference too' test "$got" = 0
+  check 'gh1600_txn_fit --staged-rate joins the preset incumbent' \
+    grep -qF "wgrad_1x32x32x32: joined=2 spread=1.667 uncovered_accesses=0 off_agreement=100.0% decided=1 off_admitted='seeded'@1.000 off_admitted+coalesced='seeded'@1.000" \
+      "$TMP/runs/preset-fits/txn-staged.out"
+
+  # Plant a conflicting plan in the profile timing log to verify gh1821_geometry_fit ignores it.
+  printf 'autotune-seeding: plan F_seeded[profile]\n' >>"$pf_out/${site}_time_reproducible.err"
+  got=0
+  python3 "$geo_fit" "$pf_out" \
+    >"$TMP/runs/preset-fits/geo.out" 2>"$TMP/runs/preset-fits/geo.err" || got=$?
+  check 'gh1821_geometry_fit succeeds on stock-seeded-preset and ignores profile stderr' test "$got" = 0
+  check 'gh1821_geometry_fit joins seeded preset incumbent with preset spread' \
+    grep -qxF "F ${site}: agreement=100.0% spread=1.667 argmin='seeded'@1.000 admitted_argmin@1.000 pass=true" \
+      "$TMP/runs/preset-fits/geo.out"
+
+  check 'gh1600_txn_fit and gh1821_geometry_fit keep only the attributed digest replicates' \
+    python3 - "$tree/benchmarks" "$pf_out" "$site" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import gh1600_txn_fit
+import gh1821_geometry_fit
+
+out, site = sys.argv[2], sys.argv[3]
+want = {"seeded": [0.5, 0.25, 0.5], "W_sketch[control]": [1.25, 1.25, 1.25]}
+census = [f"{out}/{site}_time.err", f"{out}/{site}_time_r2.err", f"{out}/{site}_time_r3.err"]
+_, cands, bad, _ = gh1600_txn_fit.load_cell(
+    f"{site}={out}/{site}.tsv.stock,{out}/{site}_notxn.out", census=census)
+assert not bad, bad
+got_txn = {k: v["times"] for k, v in cands.items()}
+assert got_txn == want, f"gh1600 replicates: {got_txn!r} != {want!r}"
+assert cands["seeded"]["timed_as"] == "W_preset[bs=256]", cands["seeded"]
+cells = gh1821_geometry_fit.load(out, "shipped")
+assert len(cells) == 1, cells
+got_geo = {r["label"]: r["times"] for r in cells[0][2]}
+assert got_geo == want, f"gh1821 replicates: {got_geo!r} != {want!r}"
+PY
+
+  drive "$SRC" preset-default COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" \
+    STUB_MUTATION=stock-preset TXN_RATE=1e12
+  check 'stock-preset default incumbent run with TXN_RATE succeeds' test "$got" = 0
+  pd_out="$TMP/runs/preset-default/out"
+  check 'gh1600_txn_fit attributes default incumbent by preset-digest (median 0.375)' \
+    grep -qxF "  wgrad_1x32x32x32: 'default' median_ms=0.375000 rank_ms=0.500000 admitted=true uncovered=0 timed_as='W_preset[bs=256]'" \
+      "$pd_out/${site}_txn.txt"
+  got=0
+  python3 "$geo_fit" "$pd_out" \
+    >"$TMP/runs/preset-default/geo.out" 2>"$TMP/runs/preset-default/geo.err" || got=$?
+  check 'gh1821_geometry_fit joins default preset incumbent' test "$got" = 0
+  check 'gh1821_geometry_fit reports default preset argmin' \
+    grep -qxF "F ${site}: agreement=100.0% spread=1.000 argmin='default'@1.000 admitted_argmin@1.000 pass=true" \
+      "$TMP/runs/preset-default/geo.out"
+
+  drive "$SRC" preset-multi-serial COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" \
+    STUB_MUTATION=stock-serial-ambiguous
+  check 'serial-ambiguous fixture succeeds for multi-cell census check' test "$got" = 0
+  sa_out="$TMP/runs/preset-multi-serial/out"
+  got=0
+  python3 "$txn_fit" --rate 1e12 --show \
+    --census "preset=$pf_out/${site}_time.err" \
+    --census "preset=$pf_out/${site}_time_r2.err" \
+    --census "preset=$pf_out/${site}_time_r3.err" \
+    --census "serial=$sa_out/${site}_time.err" \
+    --census "serial=$sa_out/${site}_time_r2.err" \
+    "preset=$pf_out/$site.tsv.stock,$pf_out/${site}_notxn.out" \
+    "serial=$sa_out/$site.tsv,$sa_out/${site}_notxn.out" \
+    >"$TMP/runs/preset-fits/multi.out" 2>"$TMP/runs/preset-fits/multi.err" || got=$?
+  check 'multi-cell gh1600_txn_fit binds per-cell censuses' test "$got" = 0
+  check 'multi-cell gh1600_txn_fit joins preset incumbent in preset cell' \
+    grep -qF "preset: joined=2 spread=1.667 " "$TMP/runs/preset-fits/multi.out"
+  check 'multi-cell gh1600_txn_fit disambiguates F_seeded[stock] in serial cell' \
+    grep -qF "serial: joined=3 spread=1.000 " "$TMP/runs/preset-fits/multi.out"
+
+  got=0
+  python3 "$txn_fit" --rate 1e12 --census "$pf_out/${site}_time.err" \
+    "preset=$pf_out/$site.tsv.stock,$pf_out/${site}_notxn.out" \
+    "serial=$sa_out/$site.tsv,$sa_out/${site}_notxn.out" \
+    >"$TMP/runs/preset-fits/multi-bare.out" 2>"$TMP/runs/preset-fits/multi-bare.err" || got=$?
+  check 'multi-cell gh1600_txn_fit refuses bare --census' test "$got" = 2
+  check 'bare multi-cell refusal names CELL=TIMING_STDERR' \
+    grep -qF 'CELL=TIMING_STDERR' "$TMP/runs/preset-fits/multi-bare.err"
+  check 'bare multi-cell refusal emits no stdout' test ! -s "$TMP/runs/preset-fits/multi-bare.out"
+
+  got=0
+  python3 "$txn_fit" --rate 1e12 --census "bogus=$pf_out/${site}_time.err" \
+    "preset=$pf_out/$site.tsv.stock,$pf_out/${site}_notxn.out" \
+    "serial=$sa_out/$site.tsv,$sa_out/${site}_notxn.out" \
+    >"$TMP/runs/preset-fits/unknown-cell.out" 2>"$TMP/runs/preset-fits/unknown-cell.err" || got=$?
+  check 'multi-cell gh1600_txn_fit refuses --census naming an unknown cell' test "$got" = 2
+  check 'unknown-cell refusal names the unknown cell' \
+    grep -qF "unknown cell 'bogus'" "$TMP/runs/preset-fits/unknown-cell.err"
+  check 'unknown-cell refusal emits no stdout' test ! -s "$TMP/runs/preset-fits/unknown-cell.out"
+
+  drive "$SRC" preset-unused-fits COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" \
+    STUB_MUTATION=stock-preset-unused TXN_RATE=1e12
+  check 'untimed unused preset still succeeds in gh1600_txn_fit via driver' test "$got" = 0
+  pu_out="$TMP/runs/preset-unused-fits/out"
+  check 'unused preset joins F_seeded[stock] without timed_as' \
+    grep -qxF "  wgrad_1x32x32x32: 'seeded' median_ms=0.500000 rank_ms=0.500000 admitted=true uncovered=0" \
+      "$pu_out/${site}_txn.txt"
+  got=0
+  python3 "$geo_fit" "$pu_out" \
+    >"$TMP/runs/preset-unused-fits/geo.out" 2>"$TMP/runs/preset-unused-fits/geo.err" || got=$?
+  check 'gh1821_geometry_fit succeeds when preset is unused and F_seeded[stock] is timed' test "$got" = 0
+
+  drive "$SRC" preset-needed-fits COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" \
+    STUB_MUTATION=stock-preset-needed
+  pn_out="$TMP/runs/preset-needed-fits/out"
+  got=0
+  python3 "$txn_fit" --rate 1e12 \
+    --census "$pn_out/${site}_time.err" --census "$pn_out/${site}_time_r2.err" \
+    "wgrad_1x32x32x32=$pn_out/$site.tsv,$pn_out/${site}_notxn.out" \
+    >"$TMP/runs/preset-needed-fits/txn.out" 2>"$TMP/runs/preset-needed-fits/txn.err" || got=$?
+  check 'gh1600_txn_fit refuses a missing attributed preset' test "$got" = 2
+  check 'gh1600_txn_fit names preset_unmatched and digest' \
+    grep -qF "preset_unmatched label='default' digest=33333333/cccccccc" \
+      "$TMP/runs/preset-needed-fits/txn.err"
+  check 'gh1600_txn_fit preset_unmatched emits no stdout' test ! -s "$TMP/runs/preset-needed-fits/txn.out"
+
+  got=0
+  python3 "$geo_fit" "$pn_out" \
+    >"$TMP/runs/preset-needed-fits/geo.out" 2>"$TMP/runs/preset-needed-fits/geo.err" || got=$?
+  check 'gh1821_geometry_fit refuses a missing attributed preset' test "$got" = 2
+  check 'gh1821_geometry_fit names preset_unmatched and digest' \
+    grep -qF "preset_unmatched label='default' digest=33333333/cccccccc" \
+      "$TMP/runs/preset-needed-fits/geo.err"
+  check 'gh1821_geometry_fit preset_unmatched emits no stdout' test ! -s "$TMP/runs/preset-needed-fits/geo.out"
+
+  # Legacy (<12-column) rows cannot satisfy a preset-digest join.
+  cut -f1-5 "$pd_out/$site.tsv" >"$TMP/runs/preset-default/legacy.tsv"
+  got=0
+  python3 "$txn_fit" --rate 1e12 \
+    --census "$pd_out/${site}_time.err" --census "$pd_out/${site}_time_r2.err" \
+    "wgrad_1x32x32x32=$TMP/runs/preset-default/legacy.tsv,$pd_out/${site}_notxn.out" \
+    >"$TMP/runs/preset-default/legacy.out" 2>"$TMP/runs/preset-default/legacy.err" || got=$?
+  check 'gh1600_txn_fit refuses a legacy 5-column row for preset-digest join' test "$got" = 2
+  check 'legacy-row refusal names preset_unmatched' \
+    grep -qF "preset_unmatched label='default' digest=33333333/cccccccc" \
+      "$TMP/runs/preset-default/legacy.err"
+  check 'legacy-row refusal emits no stdout' test ! -s "$TMP/runs/preset-default/legacy.out"
+
+  # Truncated F_seeded[stock] with census fails closed in both fit scripts.
+  sa_trunc="$TMP/runs/preset-multi-serial/trunc"
+  mkdir -p "$sa_trunc"
+  cp "$sa_out/${site}_shipped.out" "$sa_out/${site}_notxn.out" \
+    "$sa_out/${site}_time.err" "$sa_out/${site}_time_r2.err" "$sa_trunc/"
+  grep -vF 'F_seeded[stock]' "$sa_out/$site.tsv" >"$sa_trunc/$site.tsv"
+  got=0
+  python3 "$txn_fit" --rate 1e12 \
+    --census "$sa_trunc/${site}_time.err" --census "$sa_trunc/${site}_time_r2.err" \
+    "wgrad_1x32x32x32=$sa_trunc/$site.tsv,$sa_trunc/${site}_notxn.out" \
+    >"$TMP/runs/preset-multi-serial/trunc-txn.out" 2>"$TMP/runs/preset-multi-serial/trunc-txn.err" || got=$?
+  check 'gh1600_txn_fit refuses a missing census-selected F_seeded[stock]' test "$got" = 2
+  check 'gh1600_txn_fit names seeded_plan_unmatched' \
+    grep -qF "seeded_plan_unmatched label='seeded' plan='F_seeded[stock]'" \
+      "$TMP/runs/preset-multi-serial/trunc-txn.err"
+  check 'gh1600_txn_fit seeded_plan_unmatched emits no stdout' \
+    test ! -s "$TMP/runs/preset-multi-serial/trunc-txn.out"
+
+  got=0
+  python3 "$geo_fit" "$sa_trunc" \
+    >"$TMP/runs/preset-multi-serial/trunc-geo.out" 2>"$TMP/runs/preset-multi-serial/trunc-geo.err" || got=$?
+  check 'gh1821_geometry_fit refuses a missing census-selected F_seeded[stock]' test "$got" = 2
+  check 'gh1821_geometry_fit names seeded_plan_unmatched' \
+    grep -qF "seeded_plan_unmatched label='seeded' plan='F_seeded[stock]'" \
+      "$TMP/runs/preset-multi-serial/trunc-geo.err"
+  check 'gh1821_geometry_fit seeded_plan_unmatched emits no stdout' \
+    test ! -s "$TMP/runs/preset-multi-serial/trunc-geo.out"
+
+  drive "$SRC" preset-conflict-fits COMPARE_AUTO_GATE=0 RANK_ONLY=1 "$stock_sites" \
+    STUB_MUTATION=stock-preset-conflict BENCH_PICK=1
+  pc_out="$TMP/runs/preset-conflict-fits/out"
+  got=0
+  python3 "$txn_fit" --rate 1e12 \
+    --census "$pc_out/${site}_time.err" --census "$pc_out/${site}_time_r2.err" \
+    "wgrad_1x32x32x32=$pc_out/$site.tsv,$pc_out/${site}_notxn.out" \
+    >"$TMP/runs/preset-conflict-fits/txn.out" 2>"$TMP/runs/preset-conflict-fits/txn.err" || got=$?
+  check 'gh1600_txn_fit refuses conflicting plans in a census' test "$got" = 2
+  check 'gh1600_txn_fit diagnoses conflicting plans' \
+    grep -qF 'conflicting autotune-seeding: plan values' "$TMP/runs/preset-conflict-fits/txn.err"
+  check 'gh1600_txn_fit conflict emits no stdout' test ! -s "$TMP/runs/preset-conflict-fits/txn.out"
+
+  got=0
+  python3 "$geo_fit" "$pc_out" \
+    >"$TMP/runs/preset-conflict-fits/geo.out" 2>"$TMP/runs/preset-conflict-fits/geo.err" || got=$?
+  check 'gh1821_geometry_fit refuses conflicting plans in a census' test "$got" = 2
+  check 'gh1821_geometry_fit diagnoses conflicting plans' \
+    grep -qF 'conflicting autotune-seeding: plan values' "$TMP/runs/preset-conflict-fits/geo.err"
+  check 'gh1821_geometry_fit conflict emits no stdout' test ! -s "$TMP/runs/preset-conflict-fits/geo.out"
+fi
 finish

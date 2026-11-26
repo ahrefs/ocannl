@@ -302,10 +302,14 @@ files.
   replays take the snapshot via `--stock-tsv` and read stock arms (and `--fit-mma`) from it
   alone; a missing census-selected `F_seeded[...]` incumbent is diagnosed as `seeded_plan_unmatched`
   (exit 1, matching `preset_unmatched`), and an empty snapshot exits 2. Stock fits use the
-  snapshot too: `gh1253_cells.sh` passes `.tsv.stock` to `gh1600_txn_fit.py`, `gh1821_geometry_fit.py`
-  reads `.tsv.stock` when present, and both refuse a marked mixed TSV without its snapshot with
-  `stock_snapshot_missing` (gh-ocannl-2397, gh-ocannl-2456). Older mixed TSVs require the
-  snapshot to be supplied explicitly for direct replay and `gh1600_txn_fit.py`.
+  snapshot too: `gh1253_cells.sh` passes `.tsv.stock` and `--census` to `gh1600_txn_fit.py`,
+  `gh1821_geometry_fit.py` reads `.tsv.stock` and the stock timing censuses (`<cell>_time.err` /
+  `<cell>_time_r<N>.err`) when present, and both refuse a marked mixed TSV without its snapshot
+  with `stock_snapshot_missing` (gh-ocannl-2397, gh-ocannl-2456) and attribute configured preset
+  (`F_preset[...]`) and census-selected `F_seeded[...]` incumbents via `stock_attribution` /
+  `preset-digest`, failing closed on `preset_unmatched` / `seeded_plan_unmatched` (exit 2;
+  gh-ocannl-2476). Older mixed TSVs require the snapshot to be supplied explicitly for direct
+  replay and `gh1600_txn_fit.py`.
 - The ranking score divides by its own rates, never the bound's ceilings (gh-ocannl-1442):
   `issue_rate` (scalar operations, the effective rate of a register-blocktiled kernel with its
   staging) and `dram_bandwidth` (the STREAM rate), `Untimed` fields overridden by
