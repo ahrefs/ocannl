@@ -170,6 +170,32 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(executable
+ (name bench_metal_select)
+ (modules bench_metal_select)
+ (libraries
+  base
+  bench_args
+  bench_harness
+  bench_out
+  bench_retime
+  ocannl
+  arrayjit.autotune
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.utils
+  (select
+   bench_metal_select.ml
+   from
+   (arrayjit.metal_backend
+    ll_test
+    arrayjit.verdict
+    ->
+    bench_metal_select.real.ml)
+   (-> bench_metal_select.missing.ml)))
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; The standalone (OCANNL-free) Metal compiler probes: the two accumulation-miscompile
 ; reproducers, the math-mode reassociation/infinity measurement (gh-ocannl-848), the half math
 ; overloads against their widened forms under both math policies (gh-ocannl-1288), the f32

@@ -944,10 +944,14 @@ type async_copy_syntax = {
       immediately-invoked lambda. The truth is exactly the dialect's own test, and each local keeps
       its arm's type, so the value and type are the short-circuiting spelling's (a lambda returns
       the decayed type of its one [return], the [?:]'s). A lambda rather than cc's GNU statement
-      expression: NVRTC (13.4) rejects [({ ... })] ("expected an expression"). *)
+      expression: NVRTC (13.4) rejects [({ ... })] ("expected an expression").
+    - [Blend_over_locals_stmt decl]: the same local-binding blend in a GNU statement expression
+      [({ decl ocannl_sel_a__ = ...; ...; })] for dialects that accept statement expressions and
+      reject C++ lambdas (MSL 3.1, gh-ocannl-2400). *)
 type select_blend =
   | Blend_truth of (PPrint.document -> PPrint.document -> PPrint.document -> PPrint.document)
   | Blend_over_locals of string
+  | Blend_over_locals_stmt of string
 
 (** How a dialect spells a builtin's parameter guard ({!Param_guards}): [C_guards] a compile-time
     assertion over the operand's [__typeof__] (GNU C), [Cxx_guards] a braced initialization, which
@@ -975,6 +979,7 @@ let blend_local_a = "ocannl_sel_a__"
     line. *)
 module Over_locals : sig
   val blend_where :
+    ?stmt_expr:bool ->
     decl:string ->
     ternop_syntax:
       (Ops.prec ->
@@ -990,6 +995,7 @@ module Over_locals : sig
     PPrint.document
 
   val blend_gate :
+    ?stmt_expr:bool ->
     decl:string ->
     binop_syntax:(Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.document) ->
     Ops.prec ->
@@ -1000,24 +1006,29 @@ module Over_locals : sig
 end = struct
   let blend_local_b = "ocannl_sel_b__"
 
-  let lambda ~decl bindings body =
+  let wrap ~stmt_expr ~decl bindings body =
     let open PPrint in
     let binding (name, value) =
       string decl ^^ space ^^ string name ^^ string " =" ^^ nest 2 (break 1 ^^ value) ^^ string ";"
     in
+    let open_tok, ret_tok, close_tok =
+      if stmt_expr then ("({ ", "", "; })") else ("[&]() { ", "return ", "; }()")
+    in
     group
-      (string "[&]() { "
+      (string open_tok
       ^^ separate (break 1) (List.map bindings ~f:binding)
-      ^^ break 1 ^^ string "return " ^^ body ^^ string "; }()")
+      ^^ break 1 ^^ string ret_tok ^^ body ^^ string close_tok)
 
-  let blend_where ~decl ~ternop_syntax prec cond a b =
+  let blend_where ?(stmt_expr = false) ~decl ~ternop_syntax prec cond a b =
     let open PPrint in
-    lambda ~decl
+    wrap ~stmt_expr ~decl
       [ (blend_local_a, a); (blend_local_b, b) ]
       (ternop_syntax prec Ops.Where cond (string blend_local_a) (string blend_local_b))
 
-  let blend_gate ~decl ~binop_syntax prec op cond v =
-    lambda ~decl [ (blend_local_a, v) ] (binop_syntax prec op cond (PPrint.string blend_local_a))
+  let blend_gate ?(stmt_expr = false) ~decl ~binop_syntax prec op cond v =
+    wrap ~stmt_expr ~decl
+      [ (blend_local_a, v) ]
+      (binop_syntax prec op cond (PPrint.string blend_local_a))
 end
 
 module type C_syntax_config = sig
@@ -1674,7 +1685,7 @@ let codegen_capabilities (module Config : C_syntax_config) =
         match Config.select_blend_syntax prec with
         | None -> None
         | Some (Blend_truth _) -> Some `Blend_truth
-        | Some (Blend_over_locals _) -> Some `Blend_over_locals);
+        | Some (Blend_over_locals _ | Blend_over_locals_stmt _) -> Some `Blend_over_locals);
   }
 
 (** Whether [c] lies exactly halfway between two adjacent f32 values, so that narrowing it to f32 is
@@ -2033,15 +2044,16 @@ let operand_conditionality_violations ~ternop_syntax ~binop_syntax ~binop_arg1_u
       | None -> ()
       | Some (Blend_truth blend) ->
           check_blend (at_prec "select blend") (fun () -> blend a1 a2 a3) ~arms:[ "$2"; "$3" ]
-      | Some (Blend_over_locals decl) ->
+      | Some ((Blend_over_locals decl | Blend_over_locals_stmt decl) as kind) ->
+          let stmt_expr = match kind with Blend_over_locals_stmt _ -> true | _ -> false in
           check_blend
             (at_prec "select blend over a where")
-            (fun () -> Over_locals.blend_where ~decl ~ternop_syntax prec a1 a2 a3)
+            (fun () -> Over_locals.blend_where ~stmt_expr ~decl ~ternop_syntax prec a1 a2 a3)
             ~arms:[ "$2"; "$3" ];
           List.iter [ Ops.Relu_gate; Ops.Satur01_gate ] ~f:(fun op ->
               check_blend
                 (at_prec ("select blend over " ^ Ops.binop_cd_fallback_syntax op))
-                (fun () -> Over_locals.blend_gate ~decl ~binop_syntax prec op a1 a2)
+                (fun () -> Over_locals.blend_gate ~stmt_expr ~decl ~binop_syntax prec op a1 a2)
                 ~arms:[ "$2" ]));
   List.rev !violations
 
@@ -3922,7 +3934,8 @@ module C_syntax (B : C_syntax_config) = struct
              && not (List.for_all arms ~f:(fun (arm, _) -> Low_level.select_arm_is_load_free arm))
         ->
           None
-      | Some (Blend_over_locals _) when List.exists arms ~f:(fun (a, _) -> holds_nan_literal a) ->
+      | Some (Blend_over_locals _ | Blend_over_locals_stmt _)
+        when List.exists arms ~f:(fun (a, _) -> holds_nan_literal a) ->
           (* gh-ocannl-1695: the GPU dialects compile under no-NaNs fast math (HIP's [-ffast-math]),
              where a NaN literal bound to a local is the one NaN the optimizer can see, and a select
              of it is its to drop: blended, a masked attention's [where mask s NAN] came back finite
@@ -3946,7 +3959,9 @@ module C_syntax (B : C_syntax_config) = struct
            arm), so a NaN condition still selects the then-arm. *)
         blend (parens e1 ^^ string " != 0.0") e2 e3
     | Ops.Where, Some (Blend_over_locals decl) ->
-        Over_locals.blend_where ~decl ~ternop_syntax:B.ternop_syntax prec e1 e2 e3
+        Over_locals.blend_where ~stmt_expr:false ~decl ~ternop_syntax:B.ternop_syntax prec e1 e2 e3
+    | Ops.Where, Some (Blend_over_locals_stmt decl) ->
+        Over_locals.blend_where ~stmt_expr:true ~decl ~ternop_syntax:B.ternop_syntax prec e1 e2 e3
     | _ -> group (B.ternop_syntax prec op e1 e2 e3)
 
   (* The expression of a binary operator over its rendered operands [e1], [e2] at [prec]; [v1], [v2]
@@ -3965,7 +3980,9 @@ module C_syntax (B : C_syntax_config) = struct
             let prefix, suffix = Ops.c_sat01_gate_condition in
             blend (string prefix ^^ e1 ^^ string suffix) e2 zero
         | _, Some (Blend_over_locals decl) ->
-            Over_locals.blend_gate ~decl ~binop_syntax:B.binop_syntax prec op e1 e2
+            Over_locals.blend_gate ~stmt_expr:false ~decl ~binop_syntax:B.binop_syntax prec op e1 e2
+        | _, Some (Blend_over_locals_stmt decl) ->
+            Over_locals.blend_gate ~stmt_expr:true ~decl ~binop_syntax:B.binop_syntax prec op e1 e2
         | _, None -> group (B.binop_syntax prec op e1 e2))
     | _ -> group (B.binop_syntax prec op e1 e2)
 

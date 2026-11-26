@@ -201,7 +201,7 @@ let () =
   let kind_of_syntax = function
     | None -> None
     | Some (Cs.Blend_truth _) -> Some `Blend_truth
-    | Some (Cs.Blend_over_locals _) -> Some `Blend_over_locals
+    | Some (Cs.Blend_over_locals _ | Cs.Blend_over_locals_stmt _) -> Some `Blend_over_locals
   in
   let same_blend = Option.equal Poly.equal in
   p_all

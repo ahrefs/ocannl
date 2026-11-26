@@ -5,6 +5,19 @@ module Lazy = Utils.Lazy
 module Me = Metal (* Alias for Metal module *)
 open Backend_intf
 
+let captured_sources = Stdlib.Domain.DLS.new_key (fun () -> None)
+
+let with_select_rendering ~blend f =
+  let saved = Stdlib.Domain.DLS.get captured_sources in
+  let sources = ref [] in
+  Stdlib.Domain.DLS.set captured_sources (Some sources);
+  let result =
+    Exn.protect
+      ~f:(fun () -> Backend_intf.with_select_blend ~facts:Backend_intf.metal_facts ~blend f)
+      ~finally:(fun () -> Stdlib.Domain.DLS.set captured_sources saved)
+  in
+  (result, List.rev !sources)
+
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 0]
@@ -1559,6 +1572,22 @@ module Impl = struct
               (group (string "fma(" ^^ separate comma_sep [ v1; v2; v3 ] ^^ rparen))
       | Mul3 -> fun v1 v2 v3 -> group (parens (v1 ^^ string " * " ^^ v2 ^^ string " * " ^^ v3))
 
+    let select_blend_policy () =
+      (Backend_intf.effective_facts Backend_intf.metal_facts).Backend_intf.select_blend_policy
+
+    (* gh-ocannl-2400: when Metal's effective select policy blends, render an admitted value select
+       over [auto] locals in a GNU statement expression ([Blend_over_locals_stmt], since MSL 3.1
+       rejects C++ lambda expressions while accepting statement expressions). MSL has no [double],
+       so only the native float precisions ([half], [bfloat], [float]) blend; [fp8] computes at
+       [single]. *)
+    let select_blend_syntax prec =
+      if Backend_intf.equal_select_blend_policy (select_blend_policy ()) No_blend then None
+      else
+        match prec with
+        | Ops.Half_prec _ | Ops.Bfloat16_prec _ | Ops.Single_prec _ ->
+            Some (C_syntax.Blend_over_locals_stmt "auto")
+        | _ -> None
+
     let infix_binop op v1 v2 = parens (infix 2 1 (string op) v1 v2)
 
     let binop_syntax prec op =
@@ -2046,10 +2075,13 @@ module Impl = struct
         if String.is_empty prefix then "batch" else prefix
       else symbols.(0)
     in
+    let source = r.assemble (List.init n ~f:Fn.id) in
+    Option.iter (Stdlib.Domain.DLS.get captured_sources) ~f:(fun sources ->
+        sources := source :: !sources);
     ( r.entries,
       {
         artifact_name;
-        source = r.assemble (List.init n ~f:Fn.id);
+        source;
         symbols;
         given_names = names;
         assemble = r.assemble;

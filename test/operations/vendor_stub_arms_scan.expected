@@ -20,6 +20,7 @@ Vendor-gated select arms, each with the stand-in copy that compiles it:
   arrayjit/test/test_metal_alloc.real.ml -> arrayjit/vendor_stubs/arms/test_metal_alloc.ml
   arrayjit/test/test_metal_storage_mode.real.ml -> arrayjit/vendor_stubs/arms/test_metal_storage_mode.ml
   benchmarks/runners/ocannl/bench_cuda_select.real.ml -> arrayjit/vendor_stubs/arms/bench_cuda_select.ml
+  benchmarks/runners/ocannl/bench_metal_select.real.ml -> arrayjit/vendor_stubs/arms/bench_metal_select.ml
   test/operations/cuda_pool_probe.real.ml -> arrayjit/vendor_stubs/arms/cuda_pool_probe.ml
   test/operations/cuda_wmma_floor.real.ml -> arrayjit/vendor_stubs/arms/cuda_wmma_floor.ml
   test/operations/host_capability_fingerprint_metal.real.ml -> arrayjit/vendor_stubs/arms/host_capability_fingerprint_metal.ml
@@ -41,6 +42,8 @@ Select arms gated on no vendor library (no copy demanded):
 Stand-in libraries, each copied module with the genuine stanza it is held to:
   bench_cuda_select_arm
     bench_cuda_select <- (executable bench_cuda_select) of benchmarks/runners/ocannl/dune
+  bench_metal_select_arm
+    bench_metal_select <- (executable bench_metal_select) of benchmarks/runners/ocannl/dune
   cuda_backend_impl_arm
     cuda_backend_impl <- (library context) of arrayjit/lib/dune
   cuda_backend_stub_check

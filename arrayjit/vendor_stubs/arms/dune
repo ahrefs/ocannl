@@ -207,6 +207,34 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; benchmarks/runners/ocannl: bench_metal_select uses the Metal backend's compile scope.
+
+(rule
+ (action
+  (copy#
+   ../../../benchmarks/runners/ocannl/bench_metal_select.real.ml
+   bench_metal_select.ml)))
+
+(library
+ (name bench_metal_select_arm)
+ (modules bench_metal_select)
+ (libraries
+  base
+  bench_args
+  bench_harness
+  bench_out
+  bench_retime
+  ll_test
+  ocannl
+  arrayjit.autotune
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.verdict
+  metal_backend_stub_check)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; test/operations: the CUDA allocator probe used by cuda_launch_reservation.
 
 (copy_files#

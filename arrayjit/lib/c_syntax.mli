@@ -497,8 +497,11 @@ type async_copy_syntax = {
 type select_blend =
   | Blend_truth of (PPrint.document -> PPrint.document -> PPrint.document -> PPrint.document)
   | Blend_over_locals of string
-      (** How a backend renders a select evaluating both arms: a truth blend, or arms bound to
-          locals. *)
+  | Blend_over_locals_stmt of string
+      (** How a backend renders a select evaluating both arms: a truth blend, arms bound to locals
+          in an immediately-invoked lambda (CUDA/HIP, where NVRTC rejects statement expressions), or
+          arms bound to locals in a GNU statement expression (MSL 3.1, where lambdas are
+          unsupported). *)
 
 type param_guard_dialect =
   | C_guards
@@ -1245,6 +1248,7 @@ val with_compiler_options :
     {!operand_conditionality_violations}. *)
 module Over_locals : sig
   val blend_where :
+    ?stmt_expr:bool ->
     decl:string ->
     ternop_syntax:
       (Ops.prec ->
@@ -1260,6 +1264,7 @@ module Over_locals : sig
     PPrint.document
 
   val blend_gate :
+    ?stmt_expr:bool ->
     decl:string ->
     binop_syntax:(Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.document) ->
     Ops.prec ->
