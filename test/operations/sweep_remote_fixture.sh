@@ -692,6 +692,7 @@ for name, target, old, new, oracle in controls:
     for resolved in re.findall(r'^[A-Z_]+=\$SWEEP_TOOLS/([^\s"]+)$', sweep.read_text(), re.M):
         if resolved != aggregate.name:
             shutil.copy2(sweep.parent / resolved, dest / 'tools' / resolved)
+    shutil.copy2(sweep.parent.parent / 'benchmarks/check-box.sh', dest / 'benchmarks/check-box.sh')
     shutil.copy2(sweep.parent.parent / 'benchmarks/fixture_digest.py', dest / 'benchmarks/fixture_digest.py')
     shutil.copy2(harness.parent.parent.parent / 'bin/dune', dest / 'bin/dune')
     # The live test/operations/dune too: the harness commits it into its fixture (gh-ocannl-1104).

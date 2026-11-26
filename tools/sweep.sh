@@ -1041,17 +1041,20 @@ else
   rm -f "$matrix_document"
 fi
 
-# Declared Mac peer boxes (gh-ocannl-1832): m4-max and m4-pro share the local
-# macOS/Metal lane; whichever recognized Mac owns LOCAL_BOX has its peer
-# exempted from UNITS. Any misconfigured LOCAL_BOX or non-Mac box missing from
-# UNITS is still refused loudly at startup, and any exempted box is reported to
-# aggregate-skips.sh via --unswept-box so completeness is stated over the
-# required sweep boxes rather than every declared box.
+# Declared Mac peer boxes (gh-ocannl-1832): derived from benchmarks/check-box.sh's
+# box_profile (`mps metal-sdk`) rather than restated as a second box list here.
+# Whichever recognized Mac owns LOCAL_BOX has its peer Macs exempted from UNITS;
+# a misconfigured LOCAL_BOX or any non-Mac box missing from UNITS still fails
+# loudly at startup, and any exempted box is passed to aggregate-skips.sh via
+# --unswept-box so completeness is stated over the required sweep boxes rather
+# than every declared box.
 unswept_measurement_box() {
-  case $LOCAL_BOX:$1 in
-    m4-max:m4-pro | m4-pro:m4-max) return 0 ;;
-    *) return 1 ;;
-  esac
+  local check_box=$SWEEP_TOOLS/../benchmarks/check-box.sh local_prof peer_prof
+  [ -r "$check_box" ] || return 1
+  local_prof=$(bash "$check_box" --profile "$LOCAL_BOX" 2>/dev/null) || return 1
+  [ "$local_prof" = "mps metal-sdk" ] || return 1
+  peer_prof=$(bash "$check_box" --profile "$1" 2>/dev/null) || return 1
+  [ "$peer_prof" = "mps metal-sdk" ]
 }
 
 # The declaration owns which boxes constitute completeness; UNITS owns how to

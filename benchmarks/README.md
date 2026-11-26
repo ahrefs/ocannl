@@ -1272,8 +1272,9 @@ gh-ocannl-1433, gh-ocannl-1832). Any fleet box mapped to `-` in `fleet_row` is a
 refused by name (exit 2). The script's `box_profile` names what that box's torch must reach (cuda
 on rog-nv, hip on minix and tuf, mps on m4-max and m4-pro) and the toolchain its drivers compile
 with (`nvcc`, `hipcc`, the macOS SDK). **An `m4-pro` (M4 Pro) reading never stands in for an
-`m4-max` (M4 Max) one**: every Mac reading names its Mac and chip, and the two Macs are distinct
-measurement boxes. `check-box.sh` checks box environment readiness only and does not judge host
+`m4-max` (M4 Max) one**: every published Mac reading must name its Mac and chip (`orchestrate.py`
+does not yet stamp `--box` or chip identity into `results.jsonl` or `report.md`), and the two Macs
+are distinct measurement boxes. `check-box.sh` checks box environment readiness only and does not judge host
 idle load or sleep assertions: `macbook-pro` wakes over Wi-Fi and sleeps on request, so idle
 exclusivity and sleep prevention (`caffeinate -i -s`, held by `fleet-worker.sh execution slot` /
 `hold`) belong to the measurement window rather than `check-box.sh`, and `default-kernel` skips on
@@ -1348,7 +1349,7 @@ when it was checked since. Every box passed venv, packages, recorded freeze, dev
 | Box | torch (device) | Toolchain | Fixture gaps (recorded for the box, absent from its store) | Rows the bytes on disk no longer match |
 | --- | --- | --- | --- | --- |
 | m4-max (mac-studio; M4 Max, readings do not stand in for m4-pro) | 2.13.0 (mps) | macOS SDK (CommandLineTools) | `gpt2_mini_b1`, `gpt2_mini_train_b256` | none |
-| m4-pro (macbook-pro, 2026-11-26, READY: 26 items; 14-inch M4 Pro, readings never stand in for m4-max) | 2.13.0 (mps) | macOS SDK (Xcode MacOSX27.2.sdk) | none (17 recorded fixtures present; `gpt2_mini_b1` unrecorded) | none |
+| m4-pro (macbook-pro, 2026-11-26, c007df83, READY: 26 items; 14-inch M4 Pro, readings never stand in for m4-max) | 2.13.0 (mps) | macOS SDK (Xcode MacOSX27.2.sdk) | none (17 recorded fixtures present; `gpt2_mini_b1` unrecorded) | none |
 | rog-nv (2026-11-19, ace31a22, READY: 31 items) | 2.14.0+cu130 (RTX 5070 Ti Laptop) | nvcc 13.5 | none | none |
 | minix (2026-11-19, ace31a22, READY: 31 items) | 2.14.1+rocm7.2 (Radeon 8060S, gfx1151) | hipcc (HIP 7.1) | none | none |
 | tuf (2026-11-19) | 2.13.0+rocm7.1 (RX 7700S, gfx1102) | hipcc (HIP 7.1) | none | none |

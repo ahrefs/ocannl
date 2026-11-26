@@ -3473,6 +3473,7 @@ for lonely_sibling in "$lonely_tools"/*; do
   if [ "$(basename "$lonely_sibling")" = aggregate-skips.sh ]; then continue; fi
   ln -s "$lonely_sibling" "$tmp/lonely/tools/$(basename "$lonely_sibling")"
 done
+ln -s "$lonely_tools/../benchmarks/check-box.sh" "$tmp/lonely/benchmarks/check-box.sh"
 ln -s "$lonely_tools/../benchmarks/fixture_digest.py" "$tmp/lonely/benchmarks/fixture_digest.py"
 [ ! -e "$tmp/lonely/tools/aggregate-skips.sh" ]
 sweep_with_aggregator=$sweep

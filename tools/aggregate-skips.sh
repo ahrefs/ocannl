@@ -27,8 +27,16 @@
 #   tools/aggregate-skips.sh \
 #     --known cc --known multidev_cc --known metal --known cuda --known hip \
 #     --known-box m4-max --known-box minix --known-box rog-nv \
+#     [--unswept-box m4-pro] \
 #     --run cc m4-max /path/to/cc.verdict-records \
 #     --run metal m4-max /path/to/metal.verdict-records
+#
+# `--unswept-box BOX` (repeatable) names a declared measurement box excluded from
+# the sweep's required matrix (for example, a Mac peer covered by the local macOS
+# lane): the report prints `unswept declared boxes (excluded from required matrix)`,
+# scopes its environment completeness and FAIL/PASS wording from "declared boxes"
+# to "required sweep boxes", and refuses a box passed as both `--known-box` and
+# `--unswept-box` (exit 2).
 #
 # An outside-sweep record (`Verdict.skipped ~aggregation:(`Outside_sweep owner)`)
 # carries a fourth field, its owner -- `ci-step:<workflow>:<alias>:<step>` or

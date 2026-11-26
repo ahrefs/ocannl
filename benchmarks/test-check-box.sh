@@ -281,6 +281,14 @@ if harness_leg 'device: hip and mps profiles'; then
   if [ "$rc" = 0 ] && grep -q '^check-box: toolchain: ok -- macOS SDK /fake/MacOSX.sdk' "$TMP/runs/mps-pro"; then
     report 0 'm4-pro uses the mps and macOS SDK profile'
   else report 1 'm4-pro uses the mps and macOS SDK profile' "rc=$rc"; fi
+  got=$("$SUBJECT" --profile m4-max),$("$SUBJECT" --profile m4-pro),$("$SUBJECT" --profile rog-nv),$("$SUBJECT" --profile minix)
+  [ "$got" = "mps metal-sdk,mps metal-sdk,cuda nvcc,hip hipcc" ]
+  report $? '--profile reports each box profile as data' "got $got"
+  rc=0; "$SUBJECT" --profile unknown-box >"$TMP/runs/profile-unknown" 2>&1 || rc=$?
+  [ "$rc" = 1 ] && [ ! -s "$TMP/runs/profile-unknown" ]
+  report $? '--profile exits 1 silently for an unknown box' "rc=$rc"
+  rc=0; "$SUBJECT" --profile >"$TMP/runs/profile-missing" 2>&1 || rc=$?
+  usage_leg '--profile without a value exits 2' profile-missing '--profile takes one box ID'
 fi
 if harness_leg 'gap: python headers'; then
   FAKE_INCLUDEPY=$TMP/absent check headers --box rog-nv

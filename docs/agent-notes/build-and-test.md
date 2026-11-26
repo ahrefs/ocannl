@@ -7235,11 +7235,11 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   obligation: its execution clears an environment claim, but its absence never makes the matrix
   incomplete and it never stands in for a declared box; the report lists it on an
   `undeclared boxes` line. In the other direction, a declared box with no runnable unit
-  is a harness refusal rather than permanent silent non-coverage — except for the symmetric
-  macOS measurement-box peer (`unswept_measurement_box` in `tools/sweep.sh`: `m4-pro` on an
-  `m4-max` sweep and `m4-max` on an `m4-pro` sweep, passed to `aggregate-skips.sh` via
-  `--unswept-box` so the report names the excluded box and scopes completeness to the
-  required sweep boxes; gh-ocannl-1832).
+  is a harness refusal rather than permanent silent non-coverage — except for macOS
+  measurement-box peers derived from `benchmarks/check-box.sh --profile` (`mps metal-sdk`)
+  when `OCANNL_TOOL_SWEEP_LOCAL_BOX` is itself a Mac (`unswept_measurement_box` in
+  `tools/sweep.sh`, passed to `aggregate-skips.sh` via `--unswept-box` so the report names
+  the excluded box and scopes completeness to the required sweep boxes; gh-ocannl-1832).
   A claim another checked run owns uses ``Verdict.skipped ~aggregation:(`Outside_sweep owner)``:
   the announcement and machine-record validation remain, but neither sweep intersection claims
   ownership, so the owner is the claim's only coverage and is named, never left to a comment

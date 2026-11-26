@@ -8,6 +8,7 @@
 #                                            # `<name> -` for a fleet box that measures nothing
 #   benchmarks/check-box.sh --canonical-box NAME  # NAME's measurement box if NAME is a fleet
 #                                                 # name, else NAME itself (box-gate's reading)
+#   benchmarks/check-box.sh --profile BOX         # BOX's `<device> <toolchain>` profile, or exit 1
 #
 # Every measurement session runs it first, from the checkout it will measure in; tools/sweep.sh
 # runs it once per box with --box-only against the box's fixture store. Each item prints one
@@ -139,6 +140,13 @@ while [ $# -gt 0 ]; do
       # as --box below, which judges it -- no fleet name is a declared box (test-check-box.sh).
       [ $# -eq 2 ] && [ -n "$2" ] || die "--canonical-box takes one name and nothing else"
       fleet_box "$2" || printf '%s\n' "$2"
+      exit 0
+      ;;
+    --profile)
+      # The one box_profile table, exposed as data so callers such as tools/sweep.sh derive
+      # peer-profile boxes instead of maintaining a second hard-coded list (gh-ocannl-1832).
+      [ $# -eq 2 ] && [ -n "$2" ] || die "--profile takes one box ID and nothing else"
+      box_profile "$2" || exit 1
       exit 0
       ;;
     -h | --help) usage; exit 0 ;;
