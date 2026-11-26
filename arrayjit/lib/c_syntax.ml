@@ -1389,7 +1389,8 @@ module type C_syntax_config = sig
   val private_array_cell : Ops.prec -> private_array_cell option
   (** Physical cell type and codecs for thread-private arrays that cannot use the native type. The
       codecs act on values at logical storage precision, preserving the existing rounding points.
-      [None] uses the native type directly. *)
+      The cell preserves the native size and alignment, and all-zero bytes encode zero. [None] uses
+      the native type directly. *)
 
   val heap_local_arrays : bool
   (** Whether a [Local]-placement array past the stack budget is declared on the heap
@@ -6462,8 +6463,10 @@ module C_syntax (B : C_syntax_config) = struct
   let heap_local_free (tn : Tn.t) : PPrint.document =
     PPrint.string (heap_local_free_line (get_ident tn))
 
-  let local_array_type prec =
-    match B.private_array_cell prec with None -> B.typ_of_prec prec | Some cell -> cell.cell_type
+  let local_array_type ctx tn =
+    match private_array_cell_of ctx tn with
+    | None -> B.typ_of_prec (Lazy.force tn.Tn.storage_prec)
+    | Some cell -> cell.cell_type
 
   (* Renders a [Local]-placement (routine-scope scratch) array declaration; shared by
      [compile_proc]'s function-scope [local_decls] and the per-chunk declarations of pool-parallel
@@ -6475,14 +6478,12 @@ module C_syntax (B : C_syntax_config) = struct
      into a heap allocation, aligned as the stack array would be: indexing is unchanged, a block
      captures the pointer by value (so no alias is needed), and {!heap_local_free} releases it at
      the end of the declaring scope. *)
-  let local_array_decl ?(alias_ptr = false) ?(heap = false) ~zero_init (tn : Tn.t) : PPrint.document
-      =
+  let local_array_decl ?(alias_ptr = false) ?(heap = false) ~typ ~zero_init (tn : Tn.t) :
+      PPrint.document =
     let open PPrint in
-    let prec = Lazy.force tn.Tn.storage_prec in
     let ident = get_ident tn in
-    if heap then heap_local_decl ~typ:(B.typ_of_prec prec) ~ident ~zero_init tn
+    if heap then heap_local_decl ~typ ~ident ~zero_init tn
     else
-      let typ = local_array_type prec in
       let arr_name = if alias_ptr then derived_name mem_alias_derivation ident else ident in
       let align_doc =
         (* SIMD alignment for plain stack arrays (gh-ocannl-164). *)
@@ -8453,7 +8454,8 @@ module C_syntax (B : C_syntax_config) = struct
           in
           List.fold privatized ~init:decls ~f:(fun acc tn ->
               acc ^^ hardline
-              ^^ local_array_decl ~heap:(Set.mem heap tn) ~zero_init:(zero_init tn) tn)
+              ^^ local_array_decl ~heap:(Set.mem heap tn) ~typ:(local_array_type ctx tn)
+                   ~zero_init:(zero_init tn) tn)
         in
         let inner =
           string (Printf.sprintf "for (%s%s = %s; %s < %s; ++%s)" it ident lo ident hi ident)
@@ -10915,18 +10917,17 @@ module C_syntax (B : C_syntax_config) = struct
                        | Some { Low_level.pt_depth; _ } -> pt_depth
                        | None -> 1))
                ^^ semi ^^ hardline
-             else (
-               outlined_locals :=
-                 (local_array_type (Lazy.force tn.storage_prec), get_ident tn) :: !outlined_locals;
+             else
+               let typ = local_array_type ctx tn in
+               outlined_locals := (typ, get_ident tn) :: !outlined_locals;
                let zero_init = node.Low_level.zero_initialized_by_code in
                let decl =
                  match Map.find scratch_arrays tn with
                  | None ->
                      local_array_decl
                        ~alias_ptr:(Set.mem !(ctx.current_local_ptr_alias) tn)
-                       ~heap:(Set.mem heap tn) ~zero_init tn
+                       ~heap:(Set.mem heap tn) ~typ ~zero_init tn
                  | Some (offset, bytes) ->
-                     let typ = B.typ_of_prec (Lazy.force tn.storage_prec) in
                      let ident = get_ident tn in
                      let decl =
                        string
@@ -10937,7 +10938,7 @@ module C_syntax (B : C_syntax_config) = struct
                        decl ^^ hardline ^^ string (Printf.sprintf "memset(%s, 0, %d);" ident bytes)
                      else decl
                in
-               decl ^^ hardline))
+               decl ^^ hardline)
            declared
     in
     body := !body ^^ local_decls ^^ hardline;

@@ -517,9 +517,10 @@ val blend_local_a : string
 (** The local a [Blend_over_locals] blend binds its first arm to; tests find blends by it. *)
 
 type private_array_cell = { cell_type : string; load_cell : string; store_cell : string }
+(** The physical cell type and its load and store functions for a thread-private array. *)
+
 (** What a backend supplies to the C-family renderer: its dialect's spellings, capabilities and
     hooks. *)
-
 module type C_syntax_config = sig
   val procs : Low_level.t array
   (** The low-level procedures this functor application will render: one per kernel of the
@@ -887,7 +888,8 @@ module type C_syntax_config = sig
   val private_array_cell : Ops.prec -> private_array_cell option
   (** Physical cell type and codecs for thread-private arrays that cannot use the native type. The
       codecs act on values at logical storage precision, preserving the existing rounding points.
-      [None] uses the native type directly. *)
+      The cell preserves the native size and alignment, and all-zero bytes encode zero. [None] uses
+      the native type directly. *)
 
   val heap_local_arrays : bool
   (** Whether a [Local]-placement array past the stack budget is declared on the heap
