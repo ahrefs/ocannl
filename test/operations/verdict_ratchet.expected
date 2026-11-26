@@ -876,6 +876,12 @@ refuses a leg reading an unqualified non-allowlisted field from Context.codegen_
 refuses a leg reading an unqualified capability field through an aliased capability producer: true
 accepts a leg gated on backend identity rather than pinned alignment fields: true
 does not treat a local module shadowing an external module as a disallowed leg-gate call: true
+accepts repeated Lazy.force calls on the same named lazy binding running Test_utils.with_policy: true
+refuses distinct lazy bindings forced across two invocations of a Test_utils.with_policy helper: true
+accepts separately allocated sub_legs returned by distinct invocations of a factory helper: true
+refuses the same factory-allocated sub_leg reused outside and inside Test_utils.with_policy: true
+refuses a leg gating on an unqualified capability field inside an immediately applied anonymous function: true
+refuses a leg gating on a capability field matched by an immediately applied function expression: true
 refuses a non-allowlisted leg-gate call, an ambient-policy mismatch, a stale leg-gate exemption, and a leg-gate reader that raised: true
 a claim reader's exception on a source that parses reaches the scanner-defect refusal, not the parse one: true
 a syntax matrix cell whose reader raises reads as a reader defect, not a parse failure: true

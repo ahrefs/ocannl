@@ -7116,6 +7116,88 @@ end
 let leg = Verdict.leg ~when_:Autotune.ok ~on:"cc" ()
 let () = in_leg ~leg "local" (fun label -> p label true)|ocaml},
       [] );
+    (* gh-ocannl-2470: repeated forces of the same lazy binding, fresh helper-allocated sub_legs,
+       and immediately applied anonymous functions. *)
+    ( "accepts repeated Lazy.force calls on the same named lazy binding running \
+       Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let run =
+  lazy
+    (Test_utils.with_policy
+       (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+       (fun () -> in_leg ~leg:sub "tf32 once" (fun label -> p label true)))
+let () =
+  Lazy.force run;
+  Lazy.force run|ocaml},
+      [] );
+    ( "refuses distinct lazy bindings forced across two invocations of a Test_utils.with_policy \
+       helper",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let check enabled =
+  let run =
+    lazy
+      (Test_utils.with_policy
+         (fun p -> { p with Ir.Numerics.tf32_matmuls = enabled })
+         (fun () -> in_leg ~leg:sub "tf32 replay" (fun label -> p label true)))
+  in
+  Lazy.force run;
+  Lazy.force run
+let () =
+  check false;
+  check true|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "accepts separately allocated sub_legs returned by distinct invocations of a factory helper",
+      {ocaml|open Verdict.Claims
+let parent = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let make () =
+  Verdict.sub_leg parent ~on:"tf32" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let () =
+  let first = make () in
+  in_leg ~leg:first "outside" (fun label -> p label true);
+  let second = make () in
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg:second "inside" (fun label -> p label true))|ocaml},
+      [] );
+    ( "refuses the same factory-allocated sub_leg reused outside and inside Test_utils.with_policy",
+      {ocaml|open Verdict.Claims
+let parent = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let make () =
+  Verdict.sub_leg parent ~on:"tf32" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let () =
+  let first = make () in
+  in_leg ~leg:first "outside" (fun label -> p label true);
+  let _second = make () in
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+    (fun () -> in_leg ~leg:first "inside" (fun label -> p label true))|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
+    ( "refuses a leg gating on an unqualified capability field inside an immediately applied \
+       anonymous function",
+      {ocaml|open Verdict.Claims
+let caps = Context.codegen_capabilities (Context.auto ())
+let leg =
+  Verdict.leg ~on:"metal"
+    ~when_:
+      ((fun (c : Ir.Backend_intf.codegen_capabilities) -> c.workgroup_allocation_alignment = 4)
+         caps)
+    ()
+let () = in_leg ~leg "aligned" (fun label -> p label true)|ocaml},
+      [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
+    ( "refuses a leg gating on a capability field matched by an immediately applied function \
+       expression",
+      {ocaml|open Verdict.Claims
+let caps = Context.codegen_capabilities (Context.auto ())
+let leg =
+  Verdict.leg ~on:"metal"
+    ~when_:((function { workgroup_allocation_alignment = a; _ } -> a = 4) caps)
+    ()
+let () = in_leg ~leg "aligned" (fun label -> p label true)|ocaml},
+      [ "call:Ir.Backend_intf.workgroup_allocation_alignment" ] );
   ]
 
 let run_leg_gate_controls () =
