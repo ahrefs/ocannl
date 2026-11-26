@@ -7285,6 +7285,30 @@ let leg =
     ()
 let () = in_leg ~leg "unused default" (fun label -> p label true)|ocaml},
       [ "call:Autotune.detect_conv" ] );
+    ( "refuses a disallowed call in an eager argument when a destructured result projects only \
+       part of an immediately applied anonymous function",
+      {ocaml|open Verdict.Claims
+let leg =
+  Verdict.leg ~on:"cuda"
+    ~when_:(let ok, _ = (fun x -> x) (true, Option.is_some (Autotune.detect_conv llc)) in ok)
+    ()
+let () = in_leg ~leg "projected inline tuple" (fun label -> p label true)|ocaml},
+      [ "call:Autotune.detect_conv" ] );
+    ( "refuses a lazy policy-wrapper force after a stored anonymous closure force and an unwrapped \
+       claim",
+      {ocaml|open Verdict.Claims
+let gpu = Verdict.leg ~on:"cuda" ~when_:(String.equal backend_name "cuda") ()
+let sub = Verdict.sub_leg gpu ~on:"cuda" ~when_:(lazy (Ir.Numerics.get ()).tf32_matmuls)
+let run =
+  lazy
+    (Test_utils.with_policy
+       (fun p -> { p with Ir.Numerics.tf32_matmuls = true })
+       (fun () -> in_leg ~leg:sub "tf32 stored" (fun label -> p label true)))
+let _stored = Some (fun () -> Lazy.force run)
+let () =
+  in_leg ~leg:sub "outside" (fun label -> p label true);
+  Lazy.force run|ocaml},
+      [ "policy:Test_utils.with_policy:Ir.Numerics.get" ] );
   ]
 
 let run_leg_gate_controls () =
