@@ -20,12 +20,13 @@ val hip_math_options : fast_math:bool -> string list
 
 val clang_contraction_off : string list -> bool
 (** Whether a clang-family option vector (cc's kernel flags split into words, {!hip_math_options}
-    plus any [hip_extra_compile_options]) pins contraction off (gh-ocannl-1457, gh-ocannl-2344): the
-    last of the switches that pin contraction off ([-ffp-contract=off], [-ffp-model=strict]) and the
-    switches that turn contraction on ([-ffast-math], [-Ofast], [-ffp-model=fast],
-    [-ffp-model=precise], [-ffp-contract=fast|on|fast-honor-pragmas]) is a pin-off switch. A vector
-    naming none of them leaves contraction to the toolchain's default, which is not a pin.
-    [C_syntax_config.compiler_contraction_off] reads it. *)
+    plus any [hip_extra_compile_options]) pins contraction off (gh-ocannl-1457, gh-ocannl-2344).
+    Closed Clang driver-switch set, evaluated left-to-right: [-ffp-contract=off] and
+    [-ffp-model=strict] pin contraction off; [-ffast-math], [-Ofast], [-funsafe-math-optimizations],
+    and every other [-ffp-contract=*] or [-ffp-model=*] switch (including [on], [fast],
+    [fast-honor-pragmas], [precise], [aggressive]) clear the pin. A vector naming none of them
+    leaves contraction to the toolchain's default, which is not a pin; backend [-mllvm] flags are
+    outside this boundary. [C_syntax_config.compiler_contraction_off] reads it. *)
 
 val parse_extra_options : string -> string list
 (** Split a whitespace-separated extra-options setting (e.g. [hip_extra_compile_options],

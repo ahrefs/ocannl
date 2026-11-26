@@ -28,6 +28,10 @@ let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~d
 let on_hip = String.equal backend_name "hip"
 let hip_leg = Verdict.leg ~when_:on_hip ~on:backend_name ()
 
+(* Mirrors [Hip_backend.Impl]'s kernel-cache enable condition ([kernel_cache_capacity_bytes] default
+   ["256"], runtime-checked for single-default agreement by [Utils.get_global_arg], and runtime
+   debug off). Spelled through [Utils.settings] rather than [Utils.with_runtime_debug] because
+   [verdict_ratchet]'s [Verdict_scan.leg_gate_allowed_paths] permits [Utils.settings] directly. *)
 let hip_cache_leg =
   Verdict.sub_leg ~aggregation:`Environment hip_leg
     ~when_:

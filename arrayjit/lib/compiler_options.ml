@@ -68,17 +68,22 @@ let hip_math_options ~fast_math =
     ]
 
 (* gh-ocannl-1457, gh-ocannl-2344: whether a clang-family option vector (cc's kernel flags,
-   hiprtc's) pins contraction off. Clang applies floating-point switches left to right:
-   [-ffp-model=strict] implies [-ffp-contract=off], while [-ffast-math], [-Ofast], [-ffp-model=fast]
-   and [-ffp-model=precise] re-enable contraction, so the last contraction-setting switch decides; a
-   vector naming none leaves contraction to the toolchain's default, which is never a pin. *)
+   hiprtc's) pins contraction off. Closed Clang driver-switch set evaluated left-to-right (swept
+   against [clang -x hip -### -ffp-contract=off]): [-ffp-contract=off] and [-ffp-model=strict] pin
+   contraction off; [-ffast-math], [-Ofast], [-funsafe-math-optimizations], and every other
+   [-ffp-contract=*] or [-ffp-model=*] switch (including [fast], [on], [fast-honor-pragmas],
+   [precise], [aggressive]) clear the pin. A vector naming none leaves contraction to the
+   toolchain's default, which is never a pin; [-mllvm] backend switches are outside this
+   boundary. *)
 let clang_contraction_off options =
   List.fold_left
     (fun off option ->
       match option with
       | "-ffp-contract=off" | "-ffp-model=strict" -> true
-      | "-ffast-math" | "-Ofast" | "-ffp-model=fast" | "-ffp-model=precise" | "-ffp-contract=fast"
-      | "-ffp-contract=on" | "-ffp-contract=fast-honor-pragmas" ->
+      | "-ffast-math" | "-Ofast" | "-funsafe-math-optimizations" -> false
+      | s
+        when String.starts_with ~prefix:"-ffp-contract=" s
+             || String.starts_with ~prefix:"-ffp-model=" s ->
           false
       | _ -> off)
     false options
@@ -89,17 +94,9 @@ let is_ascii_space = function ' ' | '\t' | '\n' | '\r' -> true | _ -> false
    tokens. Deliberately does not interpret shell quotes or escapes so token boundaries are identical
    across command line, environment and resolved-configuration records. *)
 let parse_extra_options s =
-  let len = String.length s in
-  let rec skip_spaces i = if i < len && is_ascii_space s.[i] then skip_spaces (i + 1) else i in
-  let rec scan_token i = if i < len && not (is_ascii_space s.[i]) then scan_token (i + 1) else i in
-  let rec loop i acc =
-    let start = skip_spaces i in
-    if start >= len then List.rev acc
-    else
-      let stop = scan_token start in
-      loop stop (String.sub s start (stop - start) :: acc)
-  in
-  loop 0 []
+  String.map (fun c -> if is_ascii_space c then ' ' else c) s
+  |> String.split_on_char ' '
+  |> List.filter (fun token -> token <> "")
 
 let hiprtc ~target_archs ~hip_include_options ~rocwmma_include_options ~uses_rocwmma ~fast_math
     ~with_debug ?(with_line_info = false) ?(extra_options = []) () =

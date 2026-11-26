@@ -226,8 +226,11 @@ let () =
       ("false", "-ffp-contract=on", false);
       ("false", "-ffast-math", false);
       ("false", "-Ofast", false);
+      ("false", "-funsafe-math-optimizations", false);
+      ("false", "-funsafe-math-optimizations -ffp-contract=off", true);
       ("false", "-ffp-model=fast", false);
       ("false", "-ffp-model=precise", false);
+      ("false", "-ffp-model=aggressive", false);
       ("false", "-ffp-model=fast -ffp-model=strict", true);
       ("false", "-ffast-math -ffp-contract=off", true);
     ]
