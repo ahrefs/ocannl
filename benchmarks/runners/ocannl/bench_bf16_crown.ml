@@ -231,9 +231,17 @@ let () =
         (Printf.sprintf "bench_bf16_crown: --%s=%s must be one of %s" flag s
            (String.concat ~sep:"|" (if allow_auto then "auto" :: all_variants else all_variants)))
   in
+  let control_variants = [ "regtile"; "mma_pd1"; "mma_pd2" ] in
   let wide_spec = check_spec ~allow_auto:true "wide" wide_spec in
   let narrow_spec = check_spec ~allow_auto:true "narrow" narrow_spec in
-  let control_spec = Option.map control_spec ~f:(check_spec ~allow_auto:false "control") in
+  let control_spec =
+    Option.map control_spec ~f:(fun s ->
+        if List.mem control_variants s ~equal:String.equal then s
+        else
+          invalid_arg
+            (Printf.sprintf "bench_bf16_crown: --control=%s must be one of %s" s
+               (String.concat ~sep:"|" control_variants)))
+  in
 
   let probe_ctx = Context.auto () in
   let backend = String.lowercase (Context.backend_name probe_ctx) in
@@ -348,7 +356,10 @@ let () =
       screen_fastest ~label:"narrow" ~mode:Numerics.Bf16_narrow
     else narrow_spec
   in
-  let control_variant = Option.value control_spec ~default:wide_variant in
+  let default_control =
+    if List.mem control_variants wide_variant ~equal:String.equal then wide_variant else "mma_pd1"
+  in
+  let control_variant = Option.value control_spec ~default:default_control in
 
   p "bench_bf16_crown: backend=%s n=%d calls=%d timing=%s wide=%s narrow=%s control=%s dry_run=%b\n"
     backend n calls
@@ -358,21 +369,22 @@ let () =
   (* Verify f32 capabilities are invariant across bf16 policies, then compile the identical
      scheduled f32 IR under BOTH policies to prove byte-identical generated source without UID drift
      from repeating [Sched.apply] in one process. *)
-  let caps_for mode =
-    set_arm ~mode ~prec:Ir.Ops.single;
-    Context.codegen_capabilities (Context.auto ())
+  let precs_for mode prec =
+    set_arm ~mode ~prec;
+    let caps = Context.codegen_capabilities (Context.auto ()) in
+    (caps.accum_prec prec, caps.compute_prec prec)
   in
-  let wide_caps = caps_for Numerics.Bf16_wide in
-  let narrow_caps = caps_for Numerics.Bf16_narrow in
+  let wide_f32_acc, wide_f32_cmp = precs_for Numerics.Bf16_wide Ir.Ops.single in
+  let narrow_f32_acc, narrow_f32_cmp = precs_for Numerics.Bf16_narrow Ir.Ops.single in
   if
     not
-      (Ir.Ops.equal_prec (wide_caps.accum_prec Ir.Ops.single) (narrow_caps.accum_prec Ir.Ops.single)
-      && Ir.Ops.equal_prec
-           (wide_caps.compute_prec Ir.Ops.single)
-           (narrow_caps.compute_prec Ir.Ops.single))
+      (Ir.Ops.equal_prec wide_f32_acc narrow_f32_acc
+      && Ir.Ops.equal_prec wide_f32_cmp narrow_f32_cmp)
   then (
     p "INVALID: f32 compute/accum precision changed across bf16 policies\n";
     Stdlib.exit 1);
+  let wide_bf16_acc, _ = precs_for Numerics.Bf16_wide Ir.Ops.bfloat16 in
+  let narrow_bf16_acc, _ = precs_for Numerics.Bf16_narrow Ir.Ops.bfloat16 in
   let ma_f32, mb_f32, mc_f32, comp_f32 = build_problem ~name:"crown_ctrl_f32" ~prec:Ir.Ops.single in
   let ctx_wf32, r_wf32, src_wf32, sched_f32 =
     compile_with_sources ~mode:Numerics.Bf16_wide ~prec:Ir.Ops.single ~variant:control_variant
@@ -385,6 +397,20 @@ let () =
   if List.is_empty src_wf32 || not (sources_equal src_wf32 src_nf32) then (
     p "INVALID: f32 drift control sources are not byte-identical (%d vs %d files)\n"
       (List.length src_wf32) (List.length src_nf32);
+    (match (src_wf32, src_nf32) with
+    | (n1, s1) :: _, (n2, s2) :: _ ->
+        let l1 = String.split_lines s1 and l2 = String.split_lines s2 in
+        let rec show i a b =
+          match (a, b) with
+          | x :: xs, y :: ys ->
+              if String.equal x y then show (i + 1) xs ys
+              else p "  first diff (%s vs %s) line %d:\n  - %s\n  + %s\n" n1 n2 i x y
+          | x :: _, [] -> p "  extra line %d in wide: %s\n" i x
+          | [], y :: _ -> p "  extra line %d in narrow: %s\n" i y
+          | [], [] -> ()
+        in
+        show 1 l1 l2
+    | _ -> ());
     Stdlib.exit 1);
   p "drift control proof: %d generated f32 source(s) byte-identical across bf16 policies\n"
     (List.length src_wf32);
@@ -413,9 +439,7 @@ let () =
     List.is_empty src_wbf16 || List.is_empty src_nbf16 || sources_equal src_wbf16 src_nbf16
     || String.equal wide_variant narrow_variant
        && uses_privatize wide_variant
-       && Ir.Ops.equal_prec
-            (wide_caps.accum_prec Ir.Ops.bfloat16)
-            (narrow_caps.accum_prec Ir.Ops.bfloat16)
+       && Ir.Ops.equal_prec wide_bf16_acc narrow_bf16_acc
   then (
     p "INVALID: bf16 treatment sources did not differ across policies (%d vs %d files)\n"
       (List.length src_wbf16) (List.length src_nbf16);
