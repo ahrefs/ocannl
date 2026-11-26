@@ -87,6 +87,8 @@
 # Exit 0 after reading the log, 2 for a usage error or an unreadable LOG.
 
 set -u
+# Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462, gh-ocannl-2484).
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
 
 github=0
 host=
@@ -136,7 +138,7 @@ tab=$(printf '\t')
 bom=$(printf '\357\273\277')
 # Bytes, not characters: under a UTF-8 locale an awk may read the BOM as one
 # character, or refuse a log's invalid UTF-8.
-LC_ALL=C awk -v esc="$esc" -v tab="$tab" -v bom="$bom" -v github="$github" -v names="$names" '
+env LC_ALL=C awk -v esc="$esc" -v tab="$tab" -v bom="$bom" -v github="$github" -v names="$names" '
 function clean(s, prefix) {
   log_step = ""
   if (index(s, bom) == 1) s = substr(s, length(bom) + 1)

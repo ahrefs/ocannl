@@ -734,6 +734,18 @@ if harness_leg 'a changed job or step closes the block without a completion mark
     fi
   done
 fi
+if harness_leg 'unset or empty LANG/LC_ALL still reads BOM logs cleanly #canned'; then
+  printf '\357\273\277File "fixture/y.ml", line 4, characters 8-9:\n4 | let z = w\n            ^\nError: Unbound value w\n' >"$TMP/bom.log"
+  want='Failed dune rules (1), in the order dune reported them:
+  fixture/y.ml:4  compile error
+      Error: Unbound value w'
+  out=$(cd "$TMP" && env -u LANG -u LC_ALL LC_CTYPE=UTF-8 bash "$SRC" bom.log 2>&1); rc=$?
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want" ]; echo $?)" \
+    'unset LANG/LC_ALL with LC_CTYPE=UTF-8 reads BOM log cleanly' "exit $rc; $out"
+  out=$(cd "$TMP" && env LANG= LC_ALL= LC_CTYPE=UTF-8 bash "$SRC" bom.log 2>&1); rc=$?
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want" ]; echo $?)" \
+    'empty LANG/LC_ALL with LC_CTYPE=UTF-8 reads BOM log cleanly' "exit $rc; $out"
+fi
 if harness_leg 'the green build prints nothing #dune'; then
   write_fixture 0
   build "$TMP/green.log" @runtest; brc=$?

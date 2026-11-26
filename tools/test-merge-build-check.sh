@@ -632,7 +632,71 @@ FAKE
     report 0 '--plan --base on a CROSS-CUTTING branch with unset LANG/LC_ALL prints reason and verdict and exports LANG=C'
   else report 1 '--plan --base on a CROSS-CUTTING branch with unset LANG/LC_ALL prints reason and verdict and exports LANG=C' \
     "exit $rc; locale=$(cat "$TMP/locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
+  # Standalone tools/owed-run.sh unset-locale guard (gh-ocannl-2484): leg-record
+  # runs record_linux_shell inside a forked subshell calling local LC_ALL=C
+  # helpers and git. Run from a fresh clean fixture (where fixture() committed
+  # the real tools/owed-run.sh) and require publication in all four cases.
   git -C "$R" checkout -q base
+  fixture owed-locale
+  owed_locale_bin="$TMP/owed-locale-bin"
+  mkdir -p "$owed_locale_bin" "$TMP/owed-locale-receipt"
+  real_git=$(command -v git)
+  cat >"$owed_locale_bin/git" <<EOF
+#!/bin/sh
+if [ -n "\${OWED_LOCALE_OUT:-}" ] && [ ! -e "\$OWED_LOCALE_OUT" ]; then
+  printf 'LANG=%s LC_ALL=%s LC_CTYPE=%s\n' "\${LANG-<unset>}" "\${LC_ALL-<unset>}" "\${LC_CTYPE-<unset>}" >"\$OWED_LOCALE_OUT"
+fi
+exec "$real_git" "\$@"
+EOF
+  chmod +x "$owed_locale_bin/git"
+  owed_bare="$TMP/owed-locale-bare.git"
+  git init -q --bare "$owed_bare"
+  owed_head=$(git -C "$R" rev-parse HEAD)
+  printf 'linux-shell\n' >"$TMP/owed-locale-receipt/kind"
+  printf '%s\n' "$owed_head" >"$TMP/owed-locale-receipt/head"
+  : >"$TMP/owed-locale-receipt/dirty"
+  printf 'Linux\n' >"$TMP/owed-locale-receipt/os"
+  printf 'member:tools/test-promote.sh\n' >"$TMP/owed-locale-receipt/targets"
+  printf '0\n' >"$TMP/owed-locale-receipt/exit"
+  printf '/tmp/owed-locale-leg\n' >"$TMP/owed-locale-receipt/fleet-leg-run-record"
+  printf 'member:tools/test-promote.sh\n' >"$TMP/owed-locale-receipt/fleet-leg-targets"
+  run_owed_locale() { # ENV_ARGS... -- OWED_ARGS...
+    local env_args=()
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do env_args+=("$1"); shift; done
+    shift
+    rc=0
+    rm -f "$TMP/owed-locale-seen"
+    (cd "$R" && env ${env_args[@]+"${env_args[@]}"} PATH="$owed_locale_bin:$SYS_PATH" \
+      OWED_LOCALE_OUT="$TMP/owed-locale-seen" \
+      FLEET_LEG_RECEIPT_DIR="$TMP/owed-locale-receipt" \
+      OCANNL_TOOL_OWED_RUN_URL="$owed_bare" \
+      OCANNL_TOOL_OWED_RUN_PUSH_RETRIES=0 OCANNL_TOOL_OWED_RUN_PUSH_BACKOFF=0 \
+      "$BASH" tools/owed-run.sh "$@") >"$TMP/out" 2>&1 || rc=$?
+  }
+  run_owed_locale -u LANG -u LC_ALL LC_CTYPE=UTF-8 -- leg-record /tmp/owed-locale-leg req-1 "$owed_head"
+  if [ "$rc" = 0 ] && grep -q 'owed-run: published refs/owed-runs/' "$TMP/out" &&
+     [ "$(cat "$TMP/owed-locale-seen" 2>/dev/null)" = 'LANG=C LC_ALL=<unset> LC_CTYPE=UTF-8' ]; then
+    report 0 'standalone owed-run.sh leg-record with unset LANG/LC_ALL publishes from its subshell and exports LANG=C'
+  else report 1 'standalone owed-run.sh leg-record with unset LANG/LC_ALL publishes from its subshell and exports LANG=C' \
+    "exit $rc; locale=$(cat "$TMP/owed-locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
+  run_owed_locale LANG= LC_ALL= LC_CTYPE=UTF-8 -- leg-record /tmp/owed-locale-leg req-1 "$owed_head"
+  if [ "$rc" = 0 ] && grep -q 'owed-run: published refs/owed-runs/' "$TMP/out" &&
+     [ "$(cat "$TMP/owed-locale-seen" 2>/dev/null)" = 'LANG=C LC_ALL= LC_CTYPE=UTF-8' ]; then
+    report 0 'standalone owed-run.sh with empty LANG/LC_ALL publishes and exports LANG=C while keeping LC_CTYPE'
+  else report 1 'standalone owed-run.sh with empty LANG/LC_ALL publishes and exports LANG=C while keeping LC_CTYPE' \
+    "exit $rc; locale=$(cat "$TMP/owed-locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
+  run_owed_locale -u LC_ALL LANG=en_US.UTF-8 LC_CTYPE=UTF-8 -- leg-record /tmp/owed-locale-leg req-1 "$owed_head"
+  if [ "$rc" = 0 ] && grep -q 'owed-run: published refs/owed-runs/' "$TMP/out" &&
+     [ "$(cat "$TMP/owed-locale-seen" 2>/dev/null)" = 'LANG=en_US.UTF-8 LC_ALL=<unset> LC_CTYPE=UTF-8' ]; then
+    report 0 'standalone owed-run.sh publishes and preserves caller-supplied LANG'
+  else report 1 'standalone owed-run.sh publishes and preserves caller-supplied LANG' \
+    "exit $rc; locale=$(cat "$TMP/owed-locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
+  run_owed_locale -u LANG LC_ALL=POSIX LC_CTYPE=UTF-8 -- leg-record /tmp/owed-locale-leg req-1 "$owed_head"
+  if [ "$rc" = 0 ] && grep -q 'owed-run: published refs/owed-runs/' "$TMP/out" &&
+     [ "$(cat "$TMP/owed-locale-seen" 2>/dev/null)" = 'LANG=<unset> LC_ALL=POSIX LC_CTYPE=UTF-8' ]; then
+    report 0 'standalone owed-run.sh publishes and preserves caller-supplied LC_ALL'
+  else report 1 'standalone owed-run.sh publishes and preserves caller-supplied LC_ALL' \
+    "exit $rc; locale=$(cat "$TMP/owed-locale-seen" 2>/dev/null); $(cat "$TMP/out")"; fi
 fi
 if harness_leg 'the format tier runs first, its scans off, and a red one ends the run #tiers'; then
   R=$APART run "$TMP/dunebin"

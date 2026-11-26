@@ -42,6 +42,8 @@
 # member may have evaluated the claim. Malformed input exits 2.
 
 set -uo pipefail
+# Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462, gh-ocannl-2484).
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
 
 known=()
 known_boxes=()
@@ -242,7 +244,7 @@ extract_claims() {
         else print claim
       }
     }
-  ' scope="$scope" "$records" | LC_ALL=C sort -u
+  ' scope="$scope" "$records" | env LC_ALL=C sort -u
 }
 
 intersect_claims() {
@@ -254,7 +256,7 @@ intersect_claims() {
   for ((i = 1; i < ${#runs[@]}; i++)); do
     extract_claims "$scope" "${runs[$i]}" >"$tmp/next-$scope" ||
       die "cannot extract compatible skip records from ${runs[$i]}"
-    LC_ALL=C comm -12 "$destination" "$tmp/next-$scope" >"$tmp/intersection-$scope" ||
+    env LC_ALL=C comm -12 "$destination" "$tmp/next-$scope" >"$tmp/intersection-$scope" ||
       die "cannot intersect skip records"
     mv "$tmp/intersection-$scope" "$destination" || die "cannot advance skip intersection"
   done
@@ -272,10 +274,10 @@ if [ ${#environment_records[@]} -gt 0 ]; then
     extract_claims environment "$records" >>"$tmp/environment-owned-unsorted" ||
       die "cannot extract compatible skip records from $records"
   done
-  LC_ALL=C sort -u "$tmp/environment-owned-unsorted" >"$tmp/environment-owned" ||
+  env LC_ALL=C sort -u "$tmp/environment-owned-unsorted" >"$tmp/environment-owned" ||
     die "cannot collect environment-owned claims"
   intersect_claims sweep "$tmp/common-sweep" "${environment_records[@]}"
-  LC_ALL=C comm -12 "$tmp/environment-owned" "$tmp/common-sweep" \
+  env LC_ALL=C comm -12 "$tmp/environment-owned" "$tmp/common-sweep" \
     >"$tmp/common-environment" || die "cannot select environment-owned skip records"
 else
   : >"$tmp/common-environment"
@@ -375,7 +377,7 @@ for records in "${run_records[@]}"; do
   extract_claims outside-sweep "$records" >>"$tmp/outside-unsorted" ||
     die "cannot extract compatible skip records from $records"
 done
-LC_ALL=C sort -u "$tmp/outside-unsorted" >"$tmp/outside" ||
+env LC_ALL=C sort -u "$tmp/outside-unsorted" >"$tmp/outside" ||
   die "cannot collect outside-sweep skip records"
 while IFS=$'\t' read -r test_id claim owner; do
   if [ -n "$owner" ]; then

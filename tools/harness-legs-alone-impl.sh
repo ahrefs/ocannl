@@ -50,6 +50,8 @@
 # 2 a usage error, failed manifest discovery, or a named HARNESS that lists no
 # leg. HUP, INT and TERM stop the check and keep their status (129, 130, 143).
 set -u
+# Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462, gh-ocannl-2484).
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P) || exit 2
 # shellcheck source=../scripts/process-group.sh
 . "$root/scripts/process-group.sh"
@@ -231,7 +233,7 @@ for script in "${harnesses[@]}"; do
     continue
   fi
   checked=$((checked + 1))
-  groups=$(printf '%s\n' "$legs" | sed -n 's/.*#\([A-Za-z0-9_-][A-Za-z0-9_-]*\)$/\1/p' | LC_ALL=C sort -u)
+  groups=$(printf '%s\n' "$legs" | sed -n 's/.*#\([A-Za-z0-9_-][A-Za-z0-9_-]*\)$/\1/p' | env LC_ALL=C sort -u)
   printf '\nHARNESS %s: %s leg(s), %s group(s)\n' "$script" "$(printf '%s\n' "$legs" | wc -l | tr -d ' ')" \
     "$(printf '%s' "$groups" | grep -c . | tr -d ' ')"
   if [ "$rc" != 0 ]; then
@@ -243,7 +245,7 @@ for script in "${harnesses[@]}"; do
   full=$rc
   # Each skip as LEG<TAB>LABEL: a label one leg skips in the full run says
   # nothing about another leg skipping it alone.
-  LC_ALL=C sort -u "$logs/$slug/full.skips" -o "$logs/$slug/full.skips"
+  env LC_ALL=C sort -u "$logs/$slug/full.skips" -o "$logs/$slug/full.skips"
   if [ "$full" = 0 ]; then
     printf '  full run: PASS (%s check(s) skipped)\n' "$(wc -l <"$logs/$slug/full.skips" | tr -d ' ')"
     verdict='passes in the full run'
@@ -282,7 +284,7 @@ for script in "${harnesses[@]}"; do
     log="$logs/$slug/alone-$n"
     member "$log" "$script" --only "$regex"
     ran=$(sed -n 's/^  RAN   //p' "$log")
-    new_skips=$(LC_ALL=C sort -u "$log.skips" | LC_ALL=C comm -23 - "$logs/$slug/full.skips")
+    new_skips=$(env LC_ALL=C sort -u "$log.skips" | env LC_ALL=C comm -23 - "$logs/$slug/full.skips")
     if [ "$rc" != 0 ]; then
       findings=$((findings + 1))
       printf '  ALONE FAIL  %s (exit %s; %s): %s\n' "$selection" "$rc" "$verdict" "$log"

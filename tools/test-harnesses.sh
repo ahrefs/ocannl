@@ -162,6 +162,8 @@
 # --list takes no slot, and no probe answer (CI, a machine outside the
 # fleet, OCANNL_TOOL_FLEET_WORKER=none) runs the members directly, silently.
 set -u
+# Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462, gh-ocannl-2484).
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
 # Set only by this script, for the copy of itself it runs inside the fleet
 # slot (take_fleet_slot): the file that says it started and, written only by
 # `exit_with` on explicit exits, its status. Cleared, so no member's own run
@@ -827,7 +829,7 @@ member_ended() { # INDEX RC OUTPUT ELAPSED: ordinary failures count once per mem
       printf 'harnesses: interrupted (exit %s)\n' "$rc" >&2
       exit_with "$rc" ;;
   esac
-  diagnostic=$(LC_ALL=C grep -a -m 1 -E -- "$command_not_found" "$3") || scan_rc=$?
+  diagnostic=$(env LC_ALL=C grep -a -m 1 -E -- "$command_not_found" "$3") || scan_rc=$?
   case $scan_rc in
     0) printf 'harnesses: %s: missing command: %s\n' "$script" "$diagnostic" >&2 ;;
     1) ;;

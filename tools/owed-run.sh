@@ -99,6 +99,10 @@
 # Exit status: 0 done or admitted, 1 record refused (`check`), 2 usage or write/certification error,
 #              3 transport unreadable (`check`).
 set -u
+# Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462, gh-ocannl-2484):
+# with neither LANG nor LC_ALL set, Homebrew Bash's libintl calls CoreFoundation when tearing
+# down a local or temporary locale assignment, which can SIGSEGV inside forked subshells.
+[ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
 me=owed-run
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 # The repository the records live in: the PR repository (AGENTS.md, Pull Requests).
@@ -126,13 +130,13 @@ is_sha() { case $1 in *[!0-9a-f]* | '') return 1 ;; esac; [ "${#1}" = 40 ]; }
 # bounded CMD...: CMD under FETCH_CAP (macOS has no timeout(1); perl's alarm survives exec).
 bounded() { perl -e 'alarm shift; exec @ARGV or exit 127' "$FETCH_CAP" "$@"; }
 # A read never prompts, reads no ambient credential helper's prompt, and keeps English diagnostics.
-rgit() { LC_ALL=C GIT_TERMINAL_PROMPT=0 bounded git -C "$root" "$@"; }
+rgit() { bounded env LC_ALL=C GIT_TERMINAL_PROMPT=0 git -C "$root" "$@"; }
 
 # is_auth_failure STDERR: true when any line matches the closed auth/authorization denylist.
 is_auth_failure() {
   local lc l
   [ -n "$1" ] || return 1
-  lc=$(printf '%s\n' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+  lc=$(printf '%s\n' "$1" | env LC_ALL=C tr '[:upper:]' '[:lower:]')
   while IFS= read -r l; do
     case $l in
       *'authentication failed'* | \
@@ -402,7 +406,7 @@ publish() {
       if [ "$rc" = 0 ]; then
         msg+=$line
         commit=$(printf '%s\n' "$msg" | git -C "$root" commit-tree "$tree" -p "$h") || die "could not write the record commit"
-        LC_ALL=C bounded git -C "$root" push --quiet --force-with-lease="$ref:$old" "$OWED_RUN_URL" "$commit:$ref" >"$_owed_scratch/err" 2>&1 || rc=$?
+        bounded env LC_ALL=C git -C "$root" push --quiet --force-with-lease="$ref:$old" "$OWED_RUN_URL" "$commit:$ref" >"$_owed_scratch/err" 2>&1 || rc=$?
         if [ "$rc" != 0 ]; then
           err=$(cat "$_owed_scratch/err" 2>/dev/null)
           step="push $ref to $OWED_RUN_URL"

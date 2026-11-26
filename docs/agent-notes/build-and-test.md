@@ -1360,6 +1360,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is set (e.g. macOS Terminal/SSH with only `LC_CTYPE=UTF-8`, gh-ocannl-2462); standalone
   scripts that do not source `harness-support.sh` therefore export `LANG=C` before forking
   (which alone stops the lookup, with `env LC_ALL=C` as a defensive guard in subshells).
+  `scripts/test-harness-support.sh` audits standalone Bash scripts under `tools/*.sh` with
+  non-comment locale assignments for this startup guard (gh-ocannl-2484), alongside unset-locale
+  regression checks in the per-script harnesses.
 - `tools/test-ci-durations.sh` prints each failed subject's exit status, stderr,
   API-call diff and stdout (a golden diff for selector checks), before scratch cleanup
   (gh-ocannl-1993). Read these before guessing API ordering: the fetch loop is sequential.

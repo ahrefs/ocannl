@@ -176,6 +176,15 @@ leg3() {
   has "the renderings were counted, not vacuously equal" "$err" \
     "ppx-output-diff: no difference between $(git -C "$R" rev-parse --short=12 planted) and $(git -C "$R" rev-parse --short=12 planted) over 3 rendering(s)"
   untouched
+  # Unset-locale startup guard (gh-ocannl-2484): the pipeline sort runs cleanly
+  # under unset LANG/LC_ALL with LC_CTYPE=UTF-8.
+  rc=0
+  env -u LANG -u LC_ALL LC_CTYPE=UTF-8 CLICOLOR_FORCE=1 TMPDIR="$TMP/subject-tmp" \
+    "$subject" -C "$R" planted planted -- src >"$out" 2>"$err" || rc=$?
+  expect_rc "a revision against itself under unset LANG/LC_ALL and LC_CTYPE=UTF-8" 0
+  has "unset-locale run counts renderings" "$err" \
+    "ppx-output-diff: no difference between $(git -C "$R" rev-parse --short=12 planted) and $(git -C "$R" rev-parse --short=12 planted) over 3 rendering(s)"
+  untouched
 }
 harness_leg_run '3: a revision against itself exits 0 over a counted corpus, whatever DUNE_BUILD_DIR says' leg3
 

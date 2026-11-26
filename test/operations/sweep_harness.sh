@@ -1926,6 +1926,18 @@ exec 8<&-
 [ "$report_write_rc" -eq 2 ]
 grep -q '^aggregate-skips: cannot write report$' "$tmp/report-write.err"
 
+# Standalone unset-locale guard (gh-ocannl-2484): aggregate-skips.sh runs
+# sort/comm in subshells and pipelines; unset or empty LANG/LC_ALL with
+# LC_CTYPE=UTF-8 must succeed with identical output.
+unset_locale_report=$(env -u LANG -u LC_ALL LC_CTYPE=UTF-8 "$aggregate" \
+  --known cc --known metal \
+  --run cc m4-max "$tmp/future-cc.records" --run metal m4-max "$tmp/identity-metal.log")
+[ "$unset_locale_report" = "$future_kind" ]
+empty_locale_report=$(env LANG= LC_ALL= LC_CTYPE=UTF-8 "$aggregate" \
+  --known cc --known metal \
+  --run cc m4-max "$tmp/future-cc.records" --run metal m4-max "$tmp/identity-metal.log")
+[ "$empty_locale_report" = "$future_kind" ]
+
 # Hold one run after it owns the worktree lock, then replace its history with
 # the old schema. A competing launch must refuse at the lock without migrating
 # that file; this deterministically pins migration behind serialization.
