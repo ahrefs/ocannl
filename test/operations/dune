@@ -10816,6 +10816,7 @@
   arrayjit.ir
   arrayjit.utils
   arrayjit.verdict
+  exact_sums
   ll_test))
 
 (executable

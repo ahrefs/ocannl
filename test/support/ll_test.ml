@@ -855,26 +855,16 @@ let run ?ctx ?bindings ?launch ?fresh_zero ~name o ~seed =
     claim about an executed TENSORIZED candidate requires {!rendered_tensorized} of this census
     beside its values.
 
-    Every node in [read] must be backed by a stored device buffer in the executed context
-    ([Context.Stored] and not placed [Virtual], gh-ocannl-2452): reading a [Virtual] node — whether
-    recomputed on demand or backed only by an external seed the routine never wrote — or a
-    [Host_init]-only node raises [Invalid_argument] rather than silently observing values the
-    routine did not store. Unobservable and missing outcomes ([Local], aliased, slice view, etc.)
-    keep [Context.get_values]'s [User_error] diagnostics. *)
+    Every node in [read] must be [Context.Stored] in the executed context (gh-ocannl-2452).
+    [Recomputable] and [Host_init] raise [Invalid_argument]. Unobservable and missing outcomes
+    ([Local], aliased, slice view, etc.) keep [Context.get_values]'s [User_error] diagnostics. *)
 let execute_with_census ?ctx ?bindings ?launch ?fresh_zero ~name (o : LL.optimized) ~seed
     ~(read : Tn.t list) =
   let ctx, routine = run_routine ?ctx ?bindings ?launch ?fresh_zero ~name o ~seed in
   let check_stored tn =
     let obs = Context.observability ctx tn in
     match obs with
-    | Context.Stored ->
-        if Tn.Placements.known_virtual (Context.placements ctx) tn then
-          invalid_arg
-            (Printf.sprintf
-               "Ll_test.execute_with_census: node %s is placed Virtual in routine %s, so readback \
-                would read an externally seeded buffer the routine never wrote rather than observe \
-                a buffer the routine stored; materialize it before optimization"
-               (Tn.debug_name tn) routine.Context.name)
+    | Context.Stored -> ()
     | Context.Recomputable ->
         invalid_arg
           (Printf.sprintf

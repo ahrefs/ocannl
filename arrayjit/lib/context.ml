@@ -2116,6 +2116,8 @@ let observability_internal_error tn what =
         reading it should have decided it)"
        (Tn.debug_name tn) what)
 
+let has_authoritative_host_init tn = Tn.known_host_constant tn && Ir.Host_inits.mem tn
+
 let walk_virtual ctx (root : Tn.t) : walk_verdict =
   let plc = placements ctx in
   let comps = computations ctx in
@@ -2160,9 +2162,9 @@ let walk_virtual ctx (root : Tn.t) : walk_verdict =
   and read_verdict v r =
     match Tn.Placements.get plc r with
     | Some (Tn.Local, _) -> W_local [ v; r ]
+    | Some (Tn.Virtual, _) -> if has_authoritative_host_init r then W_ok else prefix v (walk r)
     | _ when aliased ctx r -> W_aliased [ v; r ]
     | _ when present r -> W_ok
-    | Some (Tn.Virtual, _) -> prefix v (walk r)
     | Some (Tn.Effectively_constant, _) when Hashtbl.mem comps r -> prefix v (walk r)
     | Some (Tn.On_device, _) -> W_missing (Set.singleton (module Tn) r)
     | Some ((Tn.Effectively_constant | Tn.Never_virtual), _) | None ->
@@ -2178,28 +2180,27 @@ let observability ctx (tn : Tn.t) : observability =
   match Tn.slice_of tn with
   | Some (parent, _) -> Slice_view parent
   | None -> (
-      let plc = placements ctx in
-      match Tn.Placements.get plc tn with
+      let replay () =
+        match walk_virtual ctx tn with
+        | W_ok -> Recomputable
+        | W_local path -> Unobservable_local path
+        | W_aliased path -> Unobservable_aliased path
+        | W_merge path -> Unobservable_merge path
+        | W_launch (path, syms) -> Launch_bound (path, syms)
+        | W_missing leaves -> Needs_context (Set.to_list leaves)
+      in
+      match Tn.Placements.get (placements ctx) tn with
       | Some (Tn.Local, _) -> Unobservable_local [ tn ]
-      | placement -> (
-          if aliased ctx tn then Unobservable_aliased [ tn ]
-          else if mem ctx tn then Stored
-          else if Ir.Host_inits.mem tn then Host_init
-          else
-            match placement with
-            | Some ((Tn.Virtual | Tn.Effectively_constant), _)
-              when Hashtbl.mem (computations ctx) tn -> (
-                match walk_virtual ctx tn with
-                | W_ok -> Recomputable
-                | W_local path -> Unobservable_local path
-                | W_aliased path -> Unobservable_aliased path
-                | W_merge path -> Unobservable_merge path
-                | W_launch (path, syms) -> Launch_bound (path, syms)
-                | W_missing leaves -> Needs_context (Set.to_list leaves))
-            | Some (Tn.On_device, _) -> Needs_context [ tn ]
-            | Some ((Tn.Virtual | Tn.Effectively_constant | Tn.Never_virtual | Tn.Local), _) | None
-              ->
-                Not_computed))
+      | Some (Tn.Virtual, _) when has_authoritative_host_init tn -> Host_init
+      | Some (Tn.Virtual, _) ->
+          (* A host upload can allocate a buffer that the virtual producer never writes. *)
+          if inherits_computation ctx tn then replay () else Not_computed
+      | _ when aliased ctx tn -> Unobservable_aliased [ tn ]
+      | _ when mem ctx tn -> Stored
+      | _ when Ir.Host_inits.mem tn -> Host_init
+      | Some (Tn.Effectively_constant, _) when inherits_computation ctx tn -> replay ()
+      | Some (Tn.On_device, _) -> Needs_context [ tn ]
+      | Some ((Tn.Effectively_constant | Tn.Never_virtual), _) | None -> Not_computed)
 
 let path_to_string path =
   String.concat ~sep:" -> "
@@ -2690,6 +2691,28 @@ let recompute_all_to_host ctx (reads : (Tn.t * Nd.t) list) : Nd.t list =
 let recompute_to_host ctx (tn : Tn.t) (nd : Nd.t) : Nd.t =
   match recompute_all_to_host ctx [ (tn, nd) ] with [ nd ] -> nd | _ -> assert false
 
+let read_device_buffer_to_host ctx tn =
+  (* [transfer] awaits pending device writes feeding the node, attempts the device-to-host copy, and
+     awaits its completion before the host buffer is read. *)
+  let nd = host_buffer tn in
+  let copied =
+    Backends.query ctx.wrapped
+      {
+        q =
+          (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
+            Backend.await c.BI.device;
+            if Backend.to_host c tn nd then (
+              Backend.await c.BI.device;
+              true)
+            else false);
+      }
+  in
+  if copied then nd
+  else
+    failwith
+      (Printf.sprintf "Context.to_host: internal error: no transfer for %s, which has a buffer"
+         (Tn.debug_name tn))
+
 (** Transfers [tn]'s value into a fresh host [Ndarray] and returns it: its device buffer, its
     host-init data, or its recomputation ({!observability}); refuses with the reason otherwise. *)
 let to_host ctx (tn : Tn.t) : Nd.t =
@@ -2703,27 +2726,7 @@ let to_host ctx (tn : Tn.t) : Nd.t =
   in
   let obs = observability ctx tn in
   match obs with
-  | Stored ->
-      (* [transfer] awaits pending device writes feeding the node, attempts the device-to-host copy,
-         and awaits its completion before the host buffer is read. *)
-      let nd = host_buffer tn in
-      let copied =
-        Backends.query ctx.wrapped
-          {
-            q =
-              (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
-                Backend.await c.BI.device;
-                if Backend.to_host c tn nd then (
-                  Backend.await c.BI.device;
-                  true)
-                else false);
-          }
-      in
-      if copied then nd
-      else
-        failwith
-          (Printf.sprintf "Context.to_host: internal error: no transfer for %s, which has a buffer"
-             (Tn.debug_name tn))
+  | Stored -> read_device_buffer_to_host ctx tn
   | Host_init ->
       (* An ndarray-backed literal that is not part of any computation in this context (so it was
          never allocated on the device): its value is its registered host initialization data.
@@ -2837,7 +2840,7 @@ let check_host_write_lasts ~fn ctx (tn : Tn.t) =
 let check_copy_lasts ~src ~dst (tn : Tn.t) =
   match Map.find dst.frontier.fetch_defined tn.Tn.uid with
   | None -> ()
-  | Some _ when Tn.known_host_constant tn && Ir.Host_inits.mem tn -> ()
+  | Some _ when has_authoritative_host_init tn -> ()
   | Some (id, name) -> (
       let src_key = buffer_key src tn in
       let no_op =
@@ -2961,9 +2964,9 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
   (* The fallback also serves nodes with no device buffer in [src]: [to_host] reads host-init
      literals and recomputes virtual nodes. A merge buffer cannot be filled host-side, so [Copy]
      raises where the fallback would engage. *)
-  let host_roundtrip what =
+  let host_roundtrip ?(read = to_host) what =
     match into_merge_buffer with
-    | BI.No -> upload dst tn (to_host src tn)
+    | BI.No -> upload dst tn (read src tn)
     | BI.Copy ->
         raise
         @@ Utils.User_error
@@ -3102,7 +3105,18 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
   match Backends.pair_contexts src.wrapped dst.wrapped with
   | Backends.Same_backend (impl, s, d) -> same impl s d
   | Backends.Cross_backend ->
-      host_roundtrip
+      (* The same-backend path transfers the device buffer, including a detached seed. Preserve the
+         source bytes when the cross-backend transfer needs host staging. *)
+      let read =
+        if
+          Tn.Placements.known_virtual (placements src) tn
+          && mem src tn
+          && Option.is_none (Tn.slice_of tn)
+          && not (aliased src tn)
+        then read_device_buffer_to_host
+        else to_host
+      in
+      host_roundtrip ~read
         (Printf.sprintf "cross-backend transfer (%s to %s)" (backend_name src) (backend_name dst))
 
 let get_values ctx (tn : Tn.t) : float array =
