@@ -91,7 +91,7 @@
 # explicit CROSS-CUTTING local run: `prepush --referenced-only --since BASE`
 # (gh-ocannl-2072), plus exercising tests and applicable slow aliases from the
 # full list, link-only ones included. Otherwise the run before a push is `tools/test-run.sh prepush --since BASE`
-# (gh-ocannl-1829): the default list, link-only aliases included, without its
+# (gh-ocannl-1829): the scoped list (see Comment-only scope), without its
 # `slow-` and `train-` members (the nightly CI run builds `@train`, no CI job
 # runs `@slow`, and no per-PR job runs either, so `prepush` names the `slow-`
 # ones and counts the `train-` ones for the caller to run those the change
@@ -100,6 +100,19 @@
 # but its `slow-` aliases, and the local run is those plus the tests
 # exercising the change (AGENTS.md). The graph is always the CURRENT worktree's, whatever
 # revisions were named.
+#
+# Comment-only scope (gh-ocannl-2407). The allowlist is a Git diff with at least
+# one existing, regular library `.ml` or `.mli` edited in place and optionally
+# `.md` paths. Every OCaml hunk must have only blank or comment lines on
+# both sides using the definition reader's lexical pass, with unchanged lines
+# still reading the same. Code inside literals, quoted extensions and
+# non-ASCII quoted delimiters, added or deleted sources, mode changes,
+# unreadable hunks, unknown owners and `--files` keep ordinary reach.
+# Compiler output, source locations and Markdown contents are outside this
+# check. Compile and scans cover the library edit's link-only reach. The
+# ordinary list still prints it, but only the first tier counts for width.
+# Internal `--for-prepush` leaves off that link-only tier for this diff alone.
+# The first tier still counts and runs normally (e.g. rules reading the files).
 #
 # What dune is asked (each answer is checked against the forms listed below,
 # and an answer of any other form stops the run, exit 2):
@@ -469,8 +482,9 @@
 # reads instead of the prose above it (`tools/test-run.sh prepush` does, and
 # refuses a stderr without it). `cross-cutting`: the first tier spans over half
 # the per-test aliases, or the printed list does though its first tier does not
-# (gh-ocannl-1996: a library module most tests only link; `--referenced-only`
-# prints the first tier alone, so it is judged on that). CROSS-CUTTING opens
+# (gh-ocannl-1996: a library module most tests only link; see Comment-only scope
+# above for the exception). `--referenced-only` prints and judges the first tier
+# alone. CROSS-CUTTING opens
 # stderr. Alias queries buffer their other diagnostics until exit, so the
 # banner also precedes the alias list when stdout and stderr are combined.
 # Its reason lists up to three changed paths with the widest observed
@@ -506,6 +520,7 @@ usage="usage: affected [--referenced-only] [--gpu-gated] [--why ALIAS|all]... [-
 # Link-only aliases (see the Perl below) are printed last, and named on stderr;
 # --referenced-only leaves them off stdout.
 referenced_only=0
+for_prepush=0
 gpu_gated=0
 harnesses=0
 census=0 census_member=
@@ -523,6 +538,7 @@ args=()
 while [ $# -gt 0 ]; do
   case $1 in
     --referenced-only) referenced_only=1; shift ;;
+    --for-prepush) for_prepush=1; shift ;;
     --gpu-gated) gpu_gated=1; shift ;;
     --gpu-gated=*) die "--gpu-gated is a flag and takes no value: $1 ($usage)" ;;
     --harnesses) harnesses=1; shift ;;
@@ -642,7 +658,7 @@ else
       cp -- "$f" "$tmp/new/$f" || die "cannot copy $f"
     fi
   done <"$tmp/changed"
-  git diff -U0 --no-color --no-renames --no-ext-diff "${revs[0]}" -- '*.ml' '*.mli' >"$tmp/ml-diff" ||
+  git diff -U0 --no-color --no-renames --no-ext-diff --no-textconv "${revs[0]}" -- '*.ml' '*.mli' >"$tmp/ml-diff" ||
     die "git diff ${revs[0]} failed"
 fi
 
@@ -3614,7 +3630,7 @@ listings
 
 cat >"$tmp/main.pl" <<'PERL'
 use strict; use warnings;
-my ($tmp, $referenced_only, $probe_ok, $qroot, $old_root, $gpu_gated) = @ARGV;
+my ($tmp, $referenced_only, $probe_ok, $qroot, $old_root, $gpu_gated, $for_prepush) = @ARGV;
 require "$tmp/dune-source.pl";
 # While a dune answer is being read, a refusal keeps a copy of it (see keep_raw).
 our ($raw_text, $raw_what);
@@ -4806,6 +4822,7 @@ sub disabled_stanzas {
   return $disabled_here{$d} = \@forms;
 }
 
+my %library_module;
 for my $p (@changed) {
   my ($d, $b) = dir_of($p);
   for my $a (@al) {
@@ -4862,6 +4879,7 @@ for my $p (@changed) {
     my $how = "module $mod of";
     @ix = @{$by_modkey{"$d\0$mod"} // []};
     $by_module = $mod if @ix;
+    $library_module{$p} = 1 if grep { $st[$_]{kind} eq "library" } @ix;
     unless (@ix) {
       my @tests = grep { $st[$_]{kind} eq "tests" && $st[$_]{dir} eq $d } 0 .. $#st;
       my @named = grep { $st[$_]{units}{lcfirst $mod} } @tests;
@@ -5311,6 +5329,13 @@ sub own_tokens {   # the names an owner's own code mentions, or undef when its c
 # touches the module as a whole; so does any file without hunks (`--files`, a
 # new file).
 my %path_defs;   # path -> {NAME => 1}, or undef: the whole module
+my %comment_only_module;
+# The ranking lexer does not recognize quoted extensions or normalize
+# UTF-8 delimiters. Either can put apparent comments inside a literal.
+my $unsupported_quote = qr{
+  \{(?: %{1,2}[A-Za-z_\x80-\xff][A-Za-z_0-9'.\x80-\xff]*(?:[\t\f\x20]+[a-z_\x80-\xff]*)?
+      | [a-z_]*[\x80-\xff][a-z_\x80-\xff]* )\|
+}x;
 sub type_names {   # TYPE-NAME CHANGED-LINE -> the names a change to that line of the type touches
   my ($t, $line) = @_;
   my $code = code_of($line);
@@ -5345,22 +5370,25 @@ sub enclosing_def {   # -> [NAME...], or undef: the whole module
   return undef;
 }
 if (-f "$tmp/ml-diff") {
-  my (%hunks, $cur, $gone);
+  my (%hunks, %regular, $cur, $gone, $regular);
   for (split /\n/, slurp("$tmp/ml-diff")) {
-    if (/^diff /) { $cur = $gone = undef; next }
+    if (/^diff /) { $cur = $gone = undef; $regular = 0; next }
+    if (/^index [0-9a-f]+\.\.[0-9a-f]+ 100(?:644|755)$/) { $regular = 1; next }
     if (/^--- (?:a\/(.*)|\/dev\/null)$/) { $gone = $1; next }
     if (/^\+\+\+ (?:b\/(.*)|\/dev\/null)$/) { $cur = $1 // $gone; next }
     if (/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/ && defined $cur) {
       push @{$hunks{$cur}}, [old => $1, $2 // 1], [new => $3, $4 // 1];
+      $regular{$cur} = $regular;
     }
   }
   for my $p (keys %hunks) {
     my %defs;
-    my %side = map { my $f = "$tmp/$_/$p"; ($_ => [-f $f ? split(/\n/, slurp($f), -1) : ()]) } qw(old new);
+    my %source = map { my $f = "$tmp/$_/$p"; ($_ => -f $f ? slurp($f) // "" : "") } qw(old new);
+    my %side = map { ($_ => [split /\n/, $source{$_}, -1]) } qw(old new);
     # A changed line holding no code -- blank, or comment only, outside every
     # literal -- changes no definition (gh-ocannl-1765: the blank line above an
     # added definition was attributed to the definition above it).
-    my %code = map { my $f = "$tmp/$_/$p"; ($_ => [-f $f ? split(/\n/, code_of(slurp($f), 1), -1) : ()]) } qw(old new);
+    my %code = map { ($_ => [split /\n/, code_of($source{$_}, 1), -1]) } qw(old new);
     my %inert = map { my $l = $code{$_}; ($_ => { map { $l->[$_] =~ /\S/ ? () : ($_ + 1 => 1) } 0 .. $#$l }) } qw(old new);
     # A file new on this side (an `.mli` added beside its `.ml`, say) or gone from
     # it can hide or expose any member: the whole module.
@@ -5380,12 +5408,14 @@ if (-f "$tmp/ml-diff") {
     }
     for (; $o <= @{$code{old}}; $o++, $n++) { $moved = 1 if ($code{old}[$o - 1] // "") ne ($code{new}[$n - 1] // "") }
     if ($moved) { $path_defs{$p} = undef; next }
+    my $changed_code = 0;
     for my $h (@{$hunks{$p}}) {
       my ($which, $start, $count) = @$h;
       next unless $count;
       @{$side{$which}} or do { %defs = ("\0whole" => 1); last };
       for my $n ($start .. $start + $count - 1) {
         next if $inert{$which}{$n};
+        $changed_code = 1;
         my $names = enclosing_def($side{$which}, $n);
         if (!defined $names) { %defs = (); $defs{"\0whole"} = 1; last }
         # An operator or other non-identifier: tokens hold identifiers only, so the
@@ -5397,8 +5427,12 @@ if (-f "$tmp/ml-diff") {
     }
     # No definition at all: only comments or blank lines changed.
     $path_defs{$p} = $defs{"\0whole"} ? undef : \%defs;
+    $comment_only_module{$p} = 1 if $regular{$p} && $library_module{$p} && defined $path_defs{$p} && !$changed_code
+      && !grep { /$unsupported_quote/ } values %source;
   }
 }
+my $comment_only = %comment_only_module && !grep { !$comment_only_module{$_} && !/\.md\z/ } @changed;
+my $omit_link_by = $referenced_only ? "--referenced-only" : $for_prepush && $comment_only ? "--for-prepush" : "";
 # The names a changed module answers to: its own, and those re-exporting it,
 # each with the modules it is visible through (below).
 # A stanza reached from one hit as a whole is never link-only: no name says
@@ -5777,7 +5811,7 @@ sub explain {
   my @r;
   push @r, $a->{hidden} ? "a helper alias that per-test aliases need, never printed itself" . ($t ? " (reached: what needs it carries its tier)" : "")
     : !$t ? "NOT LISTED: no changed path reaches it"
-    : $t eq "link" ? "LINK-ONLY: printed last" . ($referenced_only ? ", and left off here by --referenced-only" : "; --referenced-only leaves it off")
+    : $t eq "link" ? "LINK-ONLY: printed last" . ($omit_link_by ? ", and left off here by $omit_link_by" : "; --referenced-only leaves it off")
     : $t eq "guess" ? "BLIND: printed first, since its action is not known here and may read a changed path"
     : "REFERENCED: printed first";
   push @r, "a dune file over its directory changed: $dune_why{$a->{dir}}" if $dune_dirs{$a->{dir}};
@@ -5999,8 +6033,8 @@ sub cross_reason {
 my $n_all = 0;
 $n_all += $_ for values %total;
 my $n_first = keys %out;
-my $n_listed = $n_first + ($referenced_only ? 0 : @link_only);
-my %verdict = map { $_ => 1 } verdict($n_first, $n_listed, $n_all, scalar @unmapped);
+my $n_listed = $n_first + ($omit_link_by ? 0 : @link_only);
+my %verdict = map { $_ => 1 } verdict($n_first, $comment_only ? $n_first : $n_listed, $n_all, scalar @unmapped);
 if ($verdict{"cross-cutting"}) {
   my $first_wide = first_tier_wide($n_first, $n_all);
   my $reason = cross_reason(keys %out, $first_wide ? () : @link_only);
@@ -6013,7 +6047,7 @@ if ($verdict{"cross-cutting"}) {
 }
 
 my @selected = grep { !$gpu_gated || $gpu_reason{$_} }
-  (sort(keys %out), $referenced_only ? () : @link_only);
+  (sort(keys %out), $omit_link_by ? () : @link_only);
 print "$_\n" for @selected;
 if ($gpu_gated) {
   print STDERR "affected: gpu-gated: $_: $gpu_reason{$_}\n" for @selected;
@@ -6047,6 +6081,9 @@ for my $ob (@off_build) {
     $n, scalar(@$named), (@$named ? ", named below" : ""), $n_link, (@$seeds ? "" : "; nothing here links it");
   print STDERR "affected: off-build: $_\n" for @$named;
 }
+if ($comment_only) {
+  print STDERR "affected: comment-only reason: library edits change only comments or blank lines. Compile and scans cover link-only reach.\n";
+}
 if (@link_only) {
   my $what = join("; ", map { $_ . (!$mod_defs{$_} ? "" : %{$mod_defs{$_}} ? " (" . join(", ", sort keys %{$mod_defs{$_}}) . ")"
                                     : " (no definition: only comments or blank lines changed)") }
@@ -6055,8 +6092,8 @@ if (@link_only) {
     . " its own names the changed part, so it is reached only through other library code. A change in what that"
     . " code does for its callers still breaks them (gh-ocannl-1235: Register_tile); run them before pushing such a"
     . " change. %s\n",
-    scalar(@link_only), $referenced_only ? "NOT printed (--referenced-only)" : "printed LAST, after the others",
-    $what, $referenced_only ? "They are:" : "--referenced-only leaves them off. They are:";
+    scalar(@link_only), $omit_link_by ? "NOT printed ($omit_link_by)" : "printed LAST, after the others",
+    $what, $omit_link_by ? "They are:" : "--referenced-only leaves them off. They are:";
   print STDERR "affected: link-only: $_\n" for @link_only;
 }
 print STDERR "$_\n" for @why_lines;
@@ -6075,7 +6112,7 @@ my $n_harness = 0;
   }
 }
 {
-  my @slow = sort grep { m{(?:^\@|/)slow-[^/]*$} } keys %out, @link_only;   # link-only ones too: CI runs none
+  my @slow = sort grep { m{(?:^\@|/)slow-[^/]*$} } keys %out, ($comment_only ? () : @link_only);
   my $slow = @slow ? sprintf(" but its %d slow- alias(es), which no CI job runs: run those locally too", scalar @slow) : "";
   if (!$verdict{"cross-cutting"}) {
   } elsif (first_tier_wide($n_first, $n_all)) {
@@ -6089,8 +6126,8 @@ my $n_harness = 0;
       . " (--referenced-only) are where to start -- and `dune build \@check`\n", $n_listed, $n_all, scalar(@link_only), $n_first, $slow, $n_first;
   }
 }
-printf STDERR "affected: %d alias(es) from %d changed path(s)%s%s%s\n", scalar(keys %out) + ($referenced_only ? 0 : @link_only),
-  scalar(@changed), (@link_only ? sprintf(", %d of them link-only%s", scalar(@link_only), $referenced_only ? " and left off" : "") : ""),
+printf STDERR "affected: %d alias(es) from %d changed path(s)%s%s%s\n", $n_listed,
+  scalar(@changed), (@link_only ? sprintf(", %d of them link-only%s", scalar(@link_only), $omit_link_by ? " and left off" : "") : ""),
   ($n_harness ? sprintf(", and %d harness command(s), named above", $n_harness) : ""),
   $verdict{incomplete} ? "; INCOMPLETE, see UNMAPPED above" : "";
 # The trailer: the last line of stderr, one line, in this order.
@@ -6098,7 +6135,7 @@ printf STDERR "affected: verdict=%s\n", join(",", grep { $verdict{$_} } qw(cross
 exit($verdict{incomplete} ? 3 : 0);
 PERL
 rc=0
-perl "$tmp/main.pl" "$tmp" "$referenced_only" "$probe_ok" "$qroot" "$tmp/probe-old" "$gpu_gated" || rc=$?
+perl "$tmp/main.pl" "$tmp" "$referenced_only" "$probe_ok" "$qroot" "$tmp/probe-old" "$gpu_gated" "$for_prepush" || rc=$?
 # 4: the probe loaded, but dune could not print a rule there (an input the copy
 # lacks, say): the whole reading again, without the probe.
 if [ "$rc" = 4 ] && [ "$probe_ok" = 1 ]; then
@@ -6111,6 +6148,6 @@ if [ "$rc" = 4 ] && [ "$probe_ok" = 1 ]; then
   fi
   listings
   rc=0
-  perl "$tmp/main.pl" "$tmp" "$referenced_only" "$probe_ok" "$qroot" "$tmp/probe-old" "$gpu_gated" || rc=$?
+  perl "$tmp/main.pl" "$tmp" "$referenced_only" "$probe_ok" "$qroot" "$tmp/probe-old" "$gpu_gated" "$for_prepush" || rc=$?
 fi
 exit "$rc"

@@ -857,6 +857,95 @@ if harness_leg 'cross-cutting names the ranked source path'; then
   git_q reset -q --hard HEAD~1 || exit 2
 fi
 
+if harness_leg 'comment-only library reach and merge plan'; then
+  comment_fixture_start=$(git_q rev-parse HEAD) || exit 2
+  mkdir -p "$repo/comment_ranked" "$repo/test/training" || exit 2
+  for i in $(seq 1 32); do
+    printf '(test (name uses_%s) (modules uses_%s) (libraries core))\n' "$i" "$i" >>"$repo/comment_ranked/dune"
+    printf 'let () = ignore Core.H.used\n' >"$repo/comment_ranked/uses_$i.ml"
+    : >"$repo/comment_ranked/uses_$i.expected"
+  done
+  cat >"$repo/test/training/dune" <<'DUNE'
+(rule (target fixture.actual) (action (with-stdout-to %{target} (run %{exe:../../t2/gen.exe} train))))
+(rule (alias train-fixture) (action (diff fixture.expected fixture.actual)))
+DUNE
+  : >"$repo/test/training/fixture.expected"
+  cp "$HERE/merge-build-check.sh" "$HERE/owed-run.sh" "$repo/tools/" || exit 2
+  # Use real Dune with an empty shell harness manifest.
+  printf 'exit 0\n' >"$repo/tools/test-harnesses.sh"
+  comment_ignore=.git
+  comment_ignore+=ignore
+  printf '/_build/\n' >>"$repo/$comment_ignore"
+  printf 'val used : int\nval unused : int\n' >"$repo/lib/helper.mli"
+  git_q add "$comment_ignore" comment_ranked test/training tools lib/helper.mli &&
+    git_q commit -qm comment-base || exit 2
+  comment_base=$(git_q rev-parse HEAD) || exit 2
+  printf '\n(* A note, "quoted". *)\n' >>"$repo/lib/helper.ml"
+  printf '(** Interface note. *)\n' >>"$repo/lib/helper.mli"
+  printf 'Edited Markdown.\n' >"$repo/docs/notes.md"
+  git_q commit -qam comment-head || exit 2
+  comment_alias=@comment_ranked/runtest-uses_1
+  comment_train=@test/training/train-fixture
+  comment_reason='library edits change only comments or blank lines. Compile and scans cover link-only reach.'
+
+  affected "$comment_base..HEAD"
+  trailer
+  if [ "$rc" = 0 ] && [ "$verdict" = ok ] &&
+     grep -qxF "affected: comment-only reason: $comment_reason" "$err" &&
+     grep -qxF "affected: link-only: $comment_alias" "$err" &&
+     grep -qxF "affected: link-only: $comment_train" "$err" &&
+     grep -qxF "$comment_alias" "$out" && grep -qxF "$comment_train" "$out"; then
+    report 0 'a comment-only library diff with Markdown keeps its wide diagnostic list and has verdict ok'
+  else report 1 'a comment-only library diff with Markdown keeps its wide diagnostic list and has verdict ok' "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
+
+  rc=0
+  (cd "$repo" && tools/test-run.sh prepush --since "$comment_base..HEAD" --list) >"$out" 2>"$err" || rc=$?
+  if [ "$rc" = 0 ] && grep -qxF '@t2/runtest-scan' "$out" &&
+     ! grep -qxF "$comment_alias" "$out" &&
+     grep -q '^test-run: prepush: .* left off: 0 train-' "$err"; then
+    report 0 'prepush keeps the scan and drops link-only tests and training'
+  else report 1 'prepush keeps the scan and drops link-only tests and training' "exit $rc; $(cat "$out"); $(tail -n 4 "$err")"; fi
+
+  comment_records=$TMP/comment-owed.git
+  git init -q --bare "$comment_records" || exit 2
+  comment_plan() {
+    rc=0
+    (cd "$repo" && OCANNL_TOOL_OWED_RUN_URL="$comment_records" \
+      OCANNL_TOOL_MERGE_BUILD_REACH_CACHE="$TMP/comment-reach" \
+      bash tools/merge-build-check.sh --plan --base "$comment_base") >"$out" 2>"$err" || rc=$?
+  }
+  for comment_query in cold cached; do
+    comment_plan
+    comment_plan_label="the $comment_query merge plan prints the comment-only reason and owes no run"
+    if [ "$rc" = 0 ] && grep -qxF 'ship-pr-merge-plan: nothing-owed' "$out" &&
+       grep -qxF "merge-build-check: tests tier: comment-only reason: $comment_reason" "$out" &&
+       { [ "$comment_query" = cold ] || grep -qxF 'merge-build-check: tests plan: reused cached reach' "$out"; }; then
+      report 0 "$comment_plan_label"
+    else report 1 "$comment_plan_label" "exit $rc; $(cat "$out"); $(tail -n 4 "$err")"; fi
+  done
+
+  # The unchanged definition disappears through two added delimiters. The other
+  # edits still match the allowlist, so only the delimiter reading can keep this wide.
+  printf '(*\nlet used = 1\n*)\nlet unused = 2\n' >"$repo/lib/helper.ml"
+  affected --referenced-only "$comment_base"
+  trailer
+  if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] &&
+     grep -qxF "$comment_alias" "$out" && ! grep -q '^affected: comment-only reason:' "$err"; then
+    report 0 'commenting out an unchanged definition keeps the first tier cross-cutting'
+  else report 1 'commenting out an unchanged definition keeps the first tier cross-cutting' "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
+
+  git_q checkout -q -- lib/helper.ml || exit 2
+  printf 'let quoted = {%%fixture_payload|before\nafter|}\n' >>"$repo/lib/helper.ml"
+  git_q commit -qam quoted-base || exit 2
+  printf 'let used = 1\nlet unused = 2\n\n(* A note, "quoted". *)\nlet quoted = {%%fixture_payload|before\n\nafter|}\n' >"$repo/lib/helper.ml"
+  affected HEAD
+  trailer
+  if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] && ! grep -q '^affected: comment-only reason:' "$err"; then
+    report 0 'a blank line added inside a quoted extension keeps ordinary cross-cutting reach'
+  else report 1 'a blank line added inside a quoted extension keeps ordinary cross-cutting reach' "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
+  git_q reset -q --hard "$comment_fixture_start" || exit 2
+fi
+
 if harness_leg 'link-only'; then
   # Ranked, not dropped (gh-ocannl-1431): what names the changed module is printed first,
   # what only links its library last, and both are printed unless --referenced-only.

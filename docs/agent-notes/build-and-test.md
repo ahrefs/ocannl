@@ -4543,7 +4543,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     run owns the full list then, but for its `slow-` aliases, which no CI job runs (CI builds
     `@train` or `@default @runtest @bin-smoke`; `@check` only compiles `@slow`), so the local run
     is those plus the tests exercising the change (AGENTS.md).
-    A list spanning over half the suite is CROSS-CUTTING too, whatever its first tier
+    A list spanning over half the suite is normally CROSS-CUTTING too, whatever its first tier
     (gh-ocannl-1996): link-level reach lists 815 of the 825 per-test aliases for any `arrayjit/lib`
     module (`low_level.ml`: 379 first, 436 link-only; `metal_backend.ml`: 27 first) and 631 to 636
     for one of `tensor/` or `lib/` (`autotune.ml`: 307 first), and read `ok` they made `prepush`
@@ -4553,7 +4553,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     names it as where the local run starts (`affected --referenced-only`, which prints that tier
     alone and is judged on it). Both thresholds are over half today; the lists found were under
     40% (`test/support/ll_test.ml`, 329) or over 76%. So `prepush` now runs for tests, test
-    support, tools and docs, and refuses for a library module.
+    support, tools and docs, and refuses for a library code change.
+    For comment-only library edits (gh-ocannl-2407), the Git hunks must show only comments or
+    blank lines on both sides of existing, regular library `.ml` and `.mli` files, with unchanged
+    lines still reading the same. The other paths may be Markdown. The default `affected` report
+    keeps its link-only list and explains why only the first tier counts toward CROSS-CUTTING.
+    `prepush` leaves off the link-only aliases, including link-only training aliases. The merge
+    build uses that plan with its compile and scans tier. First-tier readers keep their ordinary
+    verification requirements. Delimiter changes that hide or expose code and files with quoted
+    forms outside the lexical reader's boundary keep the ordinary reach.
     The machine-readable form is the trailer (gh-ocannl-1921): whenever the list is printed, the
     last line of stderr is `affected: verdict=V`, V one of `ok`, `cross-cutting`, `incomplete`
     (a changed path is UNMAPPED, exit 3) or `cross-cutting,incomplete`. A caller reads that line,
@@ -4564,7 +4572,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     The contract: LINK-ONLY is a heuristic ranking,
     and `--referenced-only` a deliberate trade (faster, with a possible miss) for iterating
     mid-change, except the explicit CROSS-CUTTING first-tier local run below. The pre-push run
-    is `prepush`: the default list without its `slow-`/`train-` members, unless the verdict is `cross-cutting`, when `prepush` refuses
+    is `prepush`: the list after applying the comment-only scope and leaving off
+    `slow-`/`train-` members, unless the verdict is `cross-cutting`, when `prepush` refuses
     and the PR's CI run owns the list.
   - `--why ALIAS` (repeatable; `--why all` for every listed alias) explains a rank on stderr, in
     `affected: why @ALIAS:` lines, stdout untouched (gh-ocannl-1711): a verdict (REFERENCED,
@@ -4691,7 +4700,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     test (exit 1, pointing at `affected --files`).
   - The pre-push run is one command (gh-ocannl-1829): `tools/test-run.sh prepush --since BASE
     [--start] [--cap N] [--test-cap N] [--expect-backend B]... [build -j 4]` asks `affected --since BASE`
-    for its default list (link-only aliases included), leaves off the `slow-` and `train-` members
+    for its list (including link-only aliases except for comment-only library edits), leaves off
+    the `slow-` and `train-` members
     and runs the rest in one Dune build with one digest, verdict and exit status.
     It derives the selected scans from `test/operations/dune`'s `scans` stanza and enables Dune's
     dependency paths for those batches (gh-ocannl-2329). The `runtest-prepush_scan_membership` action

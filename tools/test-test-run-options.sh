@@ -2989,7 +2989,7 @@ pp_probe() { # tag rc argv...: prepush against the stand-in's list, its stderr t
 pp_detail=
 pp_want='build -j 2 @a/runtest-x @@runtest-root @a/runtest-slow-ish @train-dir/runtest-q'
 pp_probe pp-run 0 --since base build -j 2
-{ [ "$argv_rc" = 0 ] && [ "$argv_calls" = "$pp_want" ] && [ "$pp_asked" = "--since base" ] &&
+{ [ "$argv_rc" = 0 ] && [ "$argv_calls" = "$pp_want" ] && [ "$pp_asked" = "--for-prepush --since base" ] &&
   grep -qF 'prepush: 4 of the 7 alias(es) affected --since base lists; left off: 1 train-' <<<"$argv_err" &&
   grep -qxF 'test-run: prepush: train: @b/train-z' <<<"$argv_err" &&
   grep -qxF 'test-run: prepush: slow: @a/slow-y' <<<"$argv_err" &&
@@ -3015,7 +3015,7 @@ pp_range_check() {
   : >"$TMP/pp-range.affected.harnesses"
   printf '%s\n' 'tools/test-x.sh' >"$TMP/pp-range-harness.out"
   PP_HARNESS_OUT=$TMP/pp-range-harness.out pp_probe pp-range 0 --since old..new --list
-  { [ "$argv_rc" = 0 ] && [ "$pp_asked" = 'old..new' ] &&
+  { [ "$argv_rc" = 0 ] && [ "$pp_asked" = '--for-prepush old..new' ] &&
     [ "$(cat "$TMP/pp-range.affected.harnesses")" = '--harnesses old..new' ] &&
     [ "$argv_out" = "$(printf '%s\n' '@a/runtest-x' '@@runtest-root' '@a/runtest-slow-ish' '@train-dir/runtest-q')" ] &&
     [ -z "$argv_calls" ] &&
@@ -3195,7 +3195,7 @@ pp_tier_check() {
     local opts=()
     case $mode in list) opts=(--list) ;; start) opts=(--start) ;; esac
     pp_probe "pp-tier-$mode" 0 --referenced-only --since base ${opts[@]+"${opts[@]}"}
-    { [ "$argv_rc" = 0 ] && [ "$pp_asked" = $'--since base\n--referenced-only --since base' ] &&
+    { [ "$argv_rc" = 0 ] && [ "$pp_asked" = $'--for-prepush --since base\n--for-prepush --referenced-only --since base' ] &&
       grep -qF 'FIRST TIER ONLY (--referenced-only)' <<<"$argv_err" &&
       grep -qxF 'test-run: prepush: train: @b/train-z' <<<"$argv_err" &&
       grep -qxF 'test-run: prepush: slow: @a/slow-y' <<<"$argv_err" &&
@@ -3254,7 +3254,7 @@ pp_tier_guard_check() {
     local opts=()
     case $mode in list) opts=(--list) ;; start) opts=(--start) ;; esac
     pp_probe "pp-tier-ok-$mode" 0 --referenced-only --since base ${opts[@]+"${opts[@]}"}
-    { [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && [ "$pp_asked" = '--since base' ] &&
+    { [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && [ "$pp_asked" = '--for-prepush --since base' ] &&
       grep -qF 'not cross-cutting: the pre-push run is plain prepush' <<<"$argv_err" &&
       [ -z "$(pp_left)" ]; } || { pp_guard_detail="$mode: exit $argv_rc; $pp_asked; $argv_err"; return; }
   done
