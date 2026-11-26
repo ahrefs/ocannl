@@ -1151,6 +1151,17 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/slow-virtual_inliner_oracle-widen-3
 @test/operations/slow-where_scope_generator-widen
 
+== slow HIP batches on minix-amd-linux ==
+Run each command as its own batch on minix-amd-linux (unified memory). Omit these aliases
+from combined HIP batches. The comments estimate test action time. Allow extra time for
+compilation and slot acquisition. Each runner invocation has its own cap.
+env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build @test/operations/slow-hip_scratch_tune_survives -j 4 # about thirty seconds
+env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build @test/operations/slow-virtual_inliner_oracle-widen-0 -j 4 # about four to five minutes
+env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build @test/operations/slow-virtual_inliner_oracle-widen-1 -j 4 # about four to five minutes
+env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build @test/operations/slow-virtual_inliner_oracle-widen-2 -j 4 # about four to five minutes
+env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build @test/operations/slow-virtual_inliner_oracle-widen-3 -j 4 # about four to five minutes
+env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build @test/operations/slow-where_scope_generator-widen -j 4 # about two to three minutes
+
 == tests calling a backend's compiler with source of their own ==
 They pin nothing and build no kernel through the pipeline, and a change to a backend's
 builtins prelude, its compiler flags or how its compiler is resolved breaks them all the same

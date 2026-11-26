@@ -66,6 +66,13 @@
     reach such text DERIVED from the sources ({!Test_scan.Kernel_exec_scan}) and their own closing
     list of aliases, which a codegen change runs on every GPU backend.
 
+    {1 Slow HIP batches}
+
+    The batch recipes take aliases from the already-derived text and kernel-execution lists. The
+    timing table is a closed set of exact aliases for HIP scratch tuning and the widened oracle and
+    scope-generator runs on minix-amd-linux. Its estimates describe test actions on unified memory
+    and come from run records, independent of the census.
+
     {1 The tests calling a backend's compiler themselves}
 
     A third population breaks on a change to a backend's builtins prelude, its compiler flags or how
@@ -99,6 +106,37 @@ module Floors = Test_scan.Scan_floors
 module Attempt = Test_scan.Scan_attempt
 module Rerun = Test_scan.Rerun_aliases
 module Exec = Test_scan.Kernel_exec_scan
+
+let hip_batch_alias ~fail ~aliases name =
+  let alias = Rerun.at "test/operations" name in
+  if List.mem aliases alias ~equal:String.equal then Some alias
+  else (
+    fail (Printf.sprintf "%s has a HIP estimate but is absent from the inventory" alias);
+    None)
+
+let print_hip_slow_batches ~aliases =
+  let estimates =
+    [
+      ("slow-hip_scratch_tune_survives", "about thirty seconds");
+      ("slow-virtual_inliner_oracle-widen-0", "about four to five minutes");
+      ("slow-virtual_inliner_oracle-widen-1", "about four to five minutes");
+      ("slow-virtual_inliner_oracle-widen-2", "about four to five minutes");
+      ("slow-virtual_inliner_oracle-widen-3", "about four to five minutes");
+      ("slow-where_scope_generator-widen", "about two to three minutes");
+    ]
+  in
+  printf
+    "\n\
+     == slow HIP batches on minix-amd-linux ==\n\
+     Run each command as its own batch on minix-amd-linux (unified memory). Omit these aliases\n\
+     from combined HIP batches. The comments estimate test action time. Allow extra time for\n\
+     compilation and slot acquisition. Each runner invocation has its own cap.\n";
+  List.iter estimates ~f:(fun (name, estimate) ->
+      Option.iter (hip_batch_alias ~fail:Verdict.fail ~aliases name) ~f:(fun alias ->
+          printf
+            "env OCANNL_BACKEND=hip tools/test-run.sh run --expect-backend hip --cap 900 build %s \
+             -j 4 # %s\n"
+            alias estimate))
 
 (** Lower bounds per scanned root, well below the census of the day they were written. See
     {!Test_scan.Scan_floors}: a glob that breaks goes to zero, a member added moves nothing. *)
@@ -281,6 +319,19 @@ let refuse_stale_after_marker_exemptions ~fail stale =
 
 let refusal_control ~wrapper =
   let source = "test/operations/codegen_text_inventory.ml" in
+  let refused_estimate = ref false in
+  let fail _message =
+    refused_estimate := true;
+    Test_scan.Refusal_control_manifest.observe_failure ~source
+      ~format:"%s has a HIP estimate but is absent from the inventory"
+  in
+  let known_alias = "@test/operations/slow-kept" in
+  let aliases = [ known_alias ] in
+  let found = hip_batch_alias ~fail ~aliases "slow-kept" in
+  let kept = Option.equal String.equal found (Some known_alias) && not !refused_estimate in
+  let missing = hip_batch_alias ~fail ~aliases "slow-missing" in
+  Verdict.p "a HIP estimate must name an alias in the inventory"
+    (kept && Option.is_none missing && !refused_estimate);
   let refused = ref false in
   let fail _message =
     refused := true;
@@ -874,10 +925,12 @@ let () =
      Every alias named above, once. Hand them to `tools/test-run.sh run build`; an alias re-running\n\
      a golden only when a pform reads some value covers that golden on the backend that makes it\n\
      so, listed next, and the goldens' families say which backends a change has to be run on.\n";
-  Map.data golden_routes @ Map.data site_routes
-  |> List.concat_map ~f:(List.map ~f:(fun (r : Rerun.route) -> r.Rerun.alias))
-  |> List.dedup_and_sort ~compare:String.compare
-  |> List.iter ~f:print_endline;
+  let text_aliases =
+    Map.data golden_routes @ Map.data site_routes
+    |> List.concat_map ~f:(List.map ~f:(fun (r : Rerun.route) -> r.Rerun.alias))
+    |> List.dedup_and_sort ~compare:String.compare
+  in
+  List.iter text_aliases ~f:print_endline;
   (* gh-ocannl-1581: the conditional ones, split by the backend each condition's value means -- as
      the reader writing the file decides it, by running its own code over every backend. *)
   printf
@@ -927,9 +980,12 @@ let () =
      # codegen change runs\" and \"of those, the aliases re-running a golden only on one backend\".\n\
      # For example, @test/operations/runtest-micrograd_demo_logging is required by those earlier\n\
      # sections but is absent from this kernel-execution list.\n";
-  List.concat_map kernel_exec ~f:(fun (_, _, runs) -> List.map runs ~f:(fun r -> r.Rerun.alias))
-  |> List.dedup_and_sort ~compare:String.compare
-  |> List.iter ~f:print_endline;
+  let kernel_aliases =
+    List.concat_map kernel_exec ~f:(fun (_, _, runs) -> List.map runs ~f:(fun r -> r.Rerun.alias))
+    |> List.dedup_and_sort ~compare:String.compare
+  in
+  List.iter kernel_aliases ~f:print_endline;
+  print_hip_slow_batches ~aliases:(text_aliases @ kernel_aliases);
   printf
     "\n\
      == tests calling a backend's compiler with source of their own ==\n\
