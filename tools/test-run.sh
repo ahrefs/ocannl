@@ -6479,7 +6479,11 @@ case $sub in
     new_run "$@"
     if [ -n "$fleet_leg_record" ]; then
       { printf '%s\n' "$fleet_leg_record" >"$run_dir/fleet-leg-run-record" &&
-        { [ -z "$fleet_leg_cmd" ] || printf '%s\n' "$fleet_leg_cmd" >"$run_dir/fleet-leg-command"; }; } ||
+        if [ -n "$fleet_leg_cmd" ]; then
+          printf '%s\n' "$fleet_leg_cmd" >"$run_dir/fleet-leg-command"
+        elif [ "$expect" = cc ]; then
+          printf '%s\n' 'non-canonical-cc-invocation' >"$run_dir/fleet-leg-ineligible"
+        fi; } ||
         { rm -rf "$run_dir"; die "cannot record the fleet leg in $run_dir"; }
     fi
     if [ -n "$expect" ]; then
@@ -6525,7 +6529,7 @@ case $sub in
     # receipt variables; this launcher retains its copies above.
     unset FLEET_LEG_RUN_RECORD FLEET_LEG_RECEIPT_LINK FLEET_LEG_RECEIPT_DIR
     register_fleet_leg_receipt() {
-      local prev prev_rc
+      local prev prev_rc prev_qual=0 cur_qual=0 owed_sh=$runner_root/tools/owed-run.sh
       [ "$sub" = run ] && [ -n "$fleet_leg_record" ] && [ -n "$fleet_leg_receipt_link" ] || return 0
       [ -f "$run_dir/exit" ] || return 0
       if [ ! -e "$fleet_leg_receipt_link" ] && [ ! -L "$fleet_leg_receipt_link" ]; then
@@ -6539,10 +6543,16 @@ case $sub in
       [ -n "$prev" ] && [ -d "$prev" ] &&
         [ "$(cat "$prev/kind" 2>/dev/null)" != linux-shell ] &&
         cmp -s "$prev/fleet-leg-run-record" <(printf '%s\n' "$fleet_leg_record") || return 0
-      prev_rc=$(cat "$prev/exit" 2>/dev/null || true)
-      # Keep a passing eligible-candidate receipt if a trailing run is ineligible or failed.
-      if [ -f "$prev/fleet-leg-command" ] && [ "$prev_rc" = 0 ] &&
-         { [ -z "$fleet_leg_cmd" ] || [ "$digest_rc" != 0 ]; }; then
+      if [ -r "$owed_sh" ]; then
+        "${BASH:-bash}" "$owed_sh" qualifies-receipt "$prev" 2>/dev/null && prev_qual=1
+        "${BASH:-bash}" "$owed_sh" qualifies-receipt "$run_dir" 2>/dev/null && cur_qual=1
+      else
+        prev_rc=$(cat "$prev/exit" 2>/dev/null || true)
+        [ -f "$prev/fleet-leg-command" ] && [ "$prev_rc" = 0 ] && prev_qual=1
+        [ -n "$fleet_leg_cmd" ] && [ "$digest_rc" = 0 ] && cur_qual=1
+      fi
+      # Keep a passing qualifying owed receipt if a trailing run is focused, non-cc, or failed.
+      if [ "$prev_qual" = 1 ] && [ "$cur_qual" = 0 ]; then
         return 0
       fi
       rm -f "$fleet_leg_receipt_link" && ln -s "$run_dir" "$fleet_leg_receipt_link" 2>/dev/null ||

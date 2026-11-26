@@ -1331,13 +1331,12 @@ owed_record_leg() {
   hook_url=$TMP/owed-record.git
   git init -q --bare "$hook_url" || { harness_abandon 'could not create the record repository'; return; }
   leg_record() { # LAST_RUN LEG_RECORD OBSERVED_SHA [RECEIPT_DIR]
-    local receipt_dir=${4-}
     hrc=0
     (
       cd "$R" || exit 2
-      if [ -n "$receipt_dir" ]; then
+      if [ $# -ge 4 ]; then
         PATH=$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$hook_url FAKE_LAST_RUN=$1 \
-          FLEET_LEG_RECEIPT_DIR=$receipt_dir "./$hook" "$2" fixture-request "$3"
+          FLEET_LEG_RECEIPT_DIR=$4 "./$hook" "$2" fixture-request "$3"
       else
         PATH=$TMP/gitbin:$SYS_PATH OCANNL_TOOL_OWED_RUN_URL=$hook_url FAKE_LAST_RUN=$1 \
           "./$hook" "$2" fixture-request "$3"
@@ -1387,6 +1386,10 @@ owed_record_leg() {
   rm -f "$last_run/fleet-leg-command"
   leg_record "$last_run" "$leg_path" "$hook_head"
   hook_refused 'a cc receipt missing fleet-leg-command is refused' 'missing fleet-leg-command'
+  printf 'non-canonical-cc-invocation\n' >"$last_run/fleet-leg-ineligible"
+  leg_record "$last_run" "$leg_path" "$hook_head" "$last_run"
+  hook_ineligible 'a cc receipt marked ineligible (non-canonical syntax) is logged as an ineligible leg' 'explicit spaced --expect-backend cc'
+  rm -f "$last_run/fleet-leg-ineligible"
   printf '%s\n' 'build @test/training/train-b' >"$last_run/fleet-leg-command"
   leg_record "$last_run" "$leg_path" "$hook_head"
   hook_refused 'a receipt for different targets cannot stand for this leg' "does not cover the fleet leg's requested targets"
@@ -1414,6 +1417,8 @@ owed_record_leg() {
   hook_refused 'a missing FLEET_LEG_RECEIPT_DIR refuses without falling back to last' 'no run directory'
   leg_record "$last_run" "$leg_path" "$hook_head" last
   hook_refused 'a relative FLEET_LEG_RECEIPT_DIR refuses without resolving last' 'FLEET_LEG_RECEIPT_DIR must be a single-line absolute path'
+  leg_record "$last_run" "$leg_path" "$hook_head" ''
+  hook_refused 'an explicitly empty FLEET_LEG_RECEIPT_DIR refuses without falling back to last' 'FLEET_LEG_RECEIPT_DIR must be a single-line absolute path'
   last x.ml
   leg_record "$last_run" "$leg_path" "$hook_head"
   hook_refused 'a dirty checkout cannot publish a clean receipt' 'the fleet worktree is dirty'

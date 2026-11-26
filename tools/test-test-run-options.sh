@@ -1617,6 +1617,7 @@ leg_125() {
   local foreign_link="$TMP/leg-receipt-link-foreign" plain_link="$TMP/leg-receipt-link-plain"
   local local_link="$TMP/leg-receipt-link-local" cc_dir gpu_dir
   local FLEET_LEG_RUN_RECORD FLEET_LEG_RECEIPT_LINK
+  cp "$HERE/owed-run.sh" "$repeat_root/tools/owed-run.sh" || { report 1 'stage owed-run.sh for leg 125'; return; }
   rm -f "$link" "$gpu_link" "$foreign_link" "$plain_link" "$local_link"
   export FLEET_LEG_RUN_RECORD="$path"
   export FLEET_LEG_RECEIPT_LINK="$link"
@@ -1633,7 +1634,18 @@ leg_125() {
       "exit $argv_rc; receipt: $argv_dir; link: $(readlink "$link" 2>/dev/null || echo absent); Dune: $argv_calls; stderr: $argv_err"
   fi
 
-  # A trailing ineligible run in the same leg must not overwrite a passing eligible-candidate symlink.
+  # A trailing focused cc run in the same leg must not overwrite a passing qualifying receipt symlink.
+  argv_probe owed-receipt-trailing-focused run --expect-backend cc build @test/operations/runtest-focused -j 1
+  if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
+     cmp -s "$argv_dir/fleet-leg-run-record" <(printf '%s\n' "$path") &&
+     [ -L "$link" ] && [ "$(readlink "$link")" = "$cc_dir" ]; then
+    report 0 'a trailing focused cc run preserves an already-registered qualifying receipt symlink'
+  else
+    report 1 'a trailing focused cc run preserves an already-registered qualifying receipt symlink' \
+      "exit $argv_rc; receipt: $argv_dir; link: $(readlink "$link" 2>/dev/null || echo absent)"
+  fi
+
+  # A trailing non-cc run in the same leg must not overwrite a passing qualifying receipt symlink.
   export OCANNL_BACKEND=cuda
   argv_probe owed-receipt-trailing-gpu run --expect-backend cuda build "$target" -j 1
   unset OCANNL_BACKEND
@@ -1677,10 +1689,11 @@ leg_125() {
   argv_probe owed-receipt-equals run --expect-backend=cc build "$target" -j 1
   if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
      cmp -s "$argv_dir/fleet-leg-run-record" <(printf '%s\n' "$path") &&
+     [ -f "$argv_dir/fleet-leg-ineligible" ] &&
      [ ! -e "$argv_dir/fleet-leg-command" ]; then
-    report 0 'the fleet command record requires the explicit spaced cc option'
+    report 0 'the fleet command record requires the explicit spaced cc option and marks equals syntax ineligible'
   else
-    report 1 'the fleet command record requires the explicit spaced cc option' "exit $argv_rc; receipt: $argv_dir"
+    report 1 'the fleet command record requires the explicit spaced cc option and marks equals syntax ineligible' "exit $argv_rc; receipt: $argv_dir"
   fi
 
   # Pre-existing wrapper pointers (foreign symlink or non-symlink file) are never overwritten.

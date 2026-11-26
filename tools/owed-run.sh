@@ -482,8 +482,13 @@ record_run() {
     die "record: $run was not run with --expect-backend cc (its expect-backend: '$exp_backend')"
   fi
   if [ -n "$leg_record" ]; then
-    [ -f "$run/fleet-leg-command" ] ||
+    if [ ! -f "$run/fleet-leg-command" ]; then
+      if [ -f "$run/fleet-leg-ineligible" ]; then
+        printf '%s\n' "$me: recorded nothing (ineligible leg: $run did not request an owed-run command via explicit spaced --expect-backend cc)"
+        return 0
+      fi
       die "record: $run did not request an owed-run command (missing fleet-leg-command)"
+    fi
     requested_cmd=$(cat "$run/fleet-leg-command" 2>/dev/null) ||
       die "record: could not read $run/fleet-leg-command"
     [[ $requested_cmd != *$'\n'* ]] && [ -n "${requested_cmd% }" ] ||
@@ -581,6 +586,16 @@ case $verb in
   linux-shell-pointer)
     [ $# -le 1 ] || die "linux-shell-pointer: at most one WORKTREE"
     linux_shell_last_pointer "${1:-$root}" || die "linux-shell-pointer: cannot determine receipt pointer (set HOME or OCANNL_TOOL_TEST_RUNS)" ;;
+  qualifies-receipt)
+    [ $# = 1 ] && [ -d "$1" ] || exit 1
+    [ -f "$1/exit" ] && [ "$(cat "$1/exit" 2>/dev/null)" = 0 ] || exit 1
+    [ "$(cat "$1/expect-backend" 2>/dev/null)" = cc ] || exit 1
+    [ -f "$1/fleet-leg-command" ] || exit 1
+    req_cmd=$(cat "$1/fleet-leg-command" 2>/dev/null) || exit 1
+    [[ $req_cmd != *$'\n'* ]] && [ -n "${req_cmd% }" ] && cmd_cover "$req_cmd" || exit 1
+    req_cover=$cover
+    eff_cmd=$(sed -n 1p "$1/cmd" 2>/dev/null) eff_cmd=${eff_cmd% }
+    cmd_cover "$eff_cmd" && [ "$cover" = "$req_cover" ] || exit 1 ;;
   record)
     run= print=0
     for a do
@@ -598,9 +613,9 @@ case $verb in
   leg-record)
     [ $# = 3 ] && [[ $1 = /* ]] && [ -n "$2" ] && is_sha "$3" ||
       die "leg-record: expected an absolute leg record path, request ID and observed SHA"
-    if [ -n "${FLEET_LEG_RECEIPT_DIR:-}" ]; then
+    if [ -n "${FLEET_LEG_RECEIPT_DIR+x}" ]; then
       if [[ $FLEET_LEG_RECEIPT_DIR != /* ]] || [[ $FLEET_LEG_RECEIPT_DIR = *$'\n'* ]]; then
-        printf '%s\n' "$me: record: FLEET_LEG_RECEIPT_DIR must be a single-line absolute path: $FLEET_LEG_RECEIPT_DIR"
+        printf '%s\n' "$me: record: FLEET_LEG_RECEIPT_DIR must be a single-line absolute path: '$FLEET_LEG_RECEIPT_DIR'"
         printf '%s\n' "$me: recorded nothing (record refused)"
       elif [ -d "$FLEET_LEG_RECEIPT_DIR" ] &&
            [ "$(cat "$FLEET_LEG_RECEIPT_DIR/kind" 2>/dev/null)" = linux-shell ]; then
