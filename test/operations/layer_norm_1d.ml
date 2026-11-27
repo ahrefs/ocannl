@@ -14,8 +14,7 @@ let () =
   let y = Tensor.term_init [| 1.; 2.; 3.; 4. |] ~label:[ "y" ] () in
   let normed = ln y in
   let ctx = Ocannl.Train.forward_once ctx normed in
-  Stdio.printf "1-D layer_norm output shape:\n%s\n%!"
-    (Sexp.to_string_hum ([%sexp_of: Shape.t] normed.Tensor.shape));
+  Stdio.printf "1-D layer_norm output shape:\n%s\n%!" (Shape.to_string_hum normed.Tensor.shape);
   (* layer_norm([1;2;3;4]) with gamma=1, beta=0: (x - 2.5) / sqrt(1.25 + eps) = [-1.342; -0.447;
      0.447; 1.342]. *)
   Ocannl.Train.printf ~here:[%here] ~with_grad:false ctx normed

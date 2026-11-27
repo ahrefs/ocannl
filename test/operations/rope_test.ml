@@ -103,8 +103,7 @@ let () =
   (* Add x to output to constrain output shape via shape inference, like attention_test.ml *)
   let%op out = x + attn ~train_step:None ~mask x in
   let _ctx = Ocannl.Train.forward_once ctx out in
-  Stdio.printf "RoPE attention output shape: %s\n\n"
-    (Sexp.to_string_hum ([%sexp_of: Shape.t] out.Tensor.shape))
+  Stdio.printf "RoPE attention output shape: %s\n\n" (Shape.to_string_hum out.Tensor.shape)
 
 (* PoPE test removed: PoPE requires doubling dimensionality (d → 2d), deferred to follow-up — see
    TODO in nn_blocks.ml *)

@@ -83,6 +83,5 @@ let () =
   let _ctx = Ocannl.Train.forward_once ~output_cd_file:false ~bindings ctx loss in
 
   (* Verify shapes *)
-  Stdio.printf "Loss shape:\n%s\n" (Sexp.to_string_hum ([%sexp_of: Shape.t] loss.Tensor.shape));
-  Stdio.printf "Logits shape:\n%s\n%!"
-    (Sexp.to_string_hum ([%sexp_of: Shape.t] logits.Tensor.shape))
+  Stdio.printf "Loss shape:\n%s\n" (Shape.to_string_hum loss.Tensor.shape);
+  Stdio.printf "Logits shape:\n%s\n%!" (Shape.to_string_hum logits.Tensor.shape)
