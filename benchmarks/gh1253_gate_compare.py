@@ -2,18 +2,22 @@
 """Join one gh1253_cells.sh gate pair to its calibration rows.
 
 Reads only the pair's successful cells.py cell.json records, autotune-seeding:
-stderr lines, current 12-column calibration TSVs, and (for timing-admission
-diagnostics on missing rows) the arm's `rank-site: tune` stdout line via
-bench_output.rank_site_lines. A join needs one ranked gate, one exact plan
+stderr lines, current 12-column calibration TSVs, and -- only when a join finds
+zero rows for an arm's selected plan -- each arm's `rank-site: tune` stdout line
+via bench_output.rank_site_lines. A join needs one ranked gate, one exact plan
 label, segment census evidence, and one positive timing row in the same arm.
 Seeded plans join by label. The configured preset joins by the tuner's resolved
 digest, which can also identify a deduplicated row. The ranked gate tags must
-match after removing auto's optional copy_rate.
+match after removing auto's optional copy_rate. An absent calibration TSV counts
+as zero timing rows so missing-sample admission diagnostics still report when an
+arm admitted no timings; other I/O errors propagate.
 
-Timing-admission reader boundary (closed allowlist): reads only the
-`timing_decisions` field of `rank-site: tune` lines (`none` or comma-separated
+Timing-admission reader boundary (closed allowlist): consulted only when either
+arm is missing its timing row, reading only the `timing_decisions` field of
+`rank-site: tune` lines (`none` or comma-separated
 `<settle>:<admission>=<positive int>` where `<settle>` is in KNOWN_SETTLES and
-`<admission>` is in KNOWN_ADMISSIONS). Malformed `rank-site:` lines, multiple
+`<admission>` is in KNOWN_ADMISSIONS, pinned against Autotune's emitters in
+test/operations/bench_line_readers.py). Malformed `rank-site:` lines, multiple
 `rank-site: tune` lines, or unrecognized settle/admission/count tokens fail
 closed with ValueError. Other stdout/stderr lines, old TSV schemas, and rows
 from other cells are outside the join and ignored.
@@ -56,7 +60,12 @@ KNOWN_ADMISSIONS = frozenset(ADMISSION_ORDER)
 
 
 class MissingTimingRowError(ValueError):
-    """Raised when the calibration TSV holds zero rows for the arm's selected plan."""
+    """Raised when the calibration TSV is absent or holds zero rows for the selected plan."""
+
+    def __init__(self, path, key):
+        self.path = path
+        self.key = key
+        super().__init__(f"{path}: expected one timing row for {key}, found 0")
 
 
 def parse_timing_decisions(raw):
@@ -146,9 +155,13 @@ def seeding_plan(census, *, optional=False, allow_repeated=False):
                      allow_repeated=allow_repeated)
 
 
-def joined_row(path, backend, label, preset_digest, timing_admissions=None):
+def joined_row(path, backend, label, preset_digest):
     rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        lines = []
+    for line in lines:
         if not line or line.startswith("#"):
             continue
         fields = line.split("\t")
@@ -159,10 +172,7 @@ def joined_row(path, backend, label, preset_digest, timing_admissions=None):
     if len(rows) != 1:
         key = f"{label!r} at digest {preset_digest}" if preset_digest is not None else repr(label)
         if len(rows) == 0:
-            detail = (f" (timing_admissions: {timing_admissions})"
-                      if timing_admissions is not None else "")
-            raise MissingTimingRowError(
-                f"{path}: expected one timing row for {key}, found 0{detail}")
+            raise MissingTimingRowError(path, key)
         raise ValueError(f"{path}: expected one timing row for {key}, found {len(rows)}")
     _, digest, routine, row_label, time, *_ = rows[0]
     ms = float(time)
@@ -193,33 +203,47 @@ def read_arm(stem, backend, arm):
     if not label.startswith(("F_preset[", "F_seeded[")):
         raise ValueError(f"unrecognized seeded plan label {label!r}")
     attribution = preset_digest(census) if label.startswith("F_preset[") else None
-    timing_admissions = read_timing_admissions(stem)
-    digest, routine, row_label, ms = joined_row(tsv, backend, label, attribution, timing_admissions)
+    digest, routine, row_label, ms = joined_row(tsv, backend, label, attribution)
     timed_as = f" timed_as={row_label!r}" if row_label != label else ""
     return (config, gate.split(), (f"{arm}: joined=1 label={label!r}{timed_as} routine={routine!r} "
-                    f"digest={digest} measured_ms={ms:.6f}", *census), routine, timing_admissions)
+                    f"digest={digest} measured_ms={ms:.6f}", *census), routine)
 
 
 def compare(backend, pair):
     records = {}
+    missing = {}
     errors = []
-    missing_row = False
     for arm in ("auto", "auto-legacy"):
         try:
             records[arm] = read_arm(Path(f"{pair}_{arm}"), backend, arm)
         except MissingTimingRowError as exc:
-            missing_row = True
-            errors.append(f"{arm}: {exc}")
+            missing[arm] = exc
         except (KeyError, OSError, ValueError) as exc:
             errors.append(f"{arm}: {exc}")
-    if errors:
-        if missing_row:
+    if missing or errors:
+        out_errors = []
+        for arm in ("auto", "auto-legacy"):
+            if arm in missing:
+                exc = missing[arm]
+                try:
+                    admissions = read_timing_admissions(Path(f"{pair}_{arm}"))
+                except (OSError, ValueError) as diag_exc:
+                    out_errors.append(f"{arm}: {exc}; timing_admissions error: {diag_exc}")
+                else:
+                    out_errors.append(f"{arm}: {exc} (timing_admissions: {admissions})")
+        out_errors.extend(errors)
+        if missing:
             for arm in ("auto", "auto-legacy"):
                 if arm in records:
-                    errors.append(f"{arm}: timing_admissions: {records[arm][4]}")
-        raise ValueError("\n".join(errors))
-    (auto_config, auto_gate, auto_lines, auto_routine, _), (
-        legacy_config, legacy_gate, legacy_lines, legacy_routine, _) = (
+                    try:
+                        admissions = read_timing_admissions(Path(f"{pair}_{arm}"))
+                    except (OSError, ValueError) as diag_exc:
+                        out_errors.append(f"{arm}: timing_admissions error: {diag_exc}")
+                    else:
+                        out_errors.append(f"{arm}: timing_admissions: {admissions}")
+        raise ValueError("\n".join(out_errors))
+    (auto_config, auto_gate, auto_lines, auto_routine), (
+        legacy_config, legacy_gate, legacy_lines, legacy_routine) = (
             records["auto"], records["auto-legacy"])
     changed = sorted(key for key in auto_config.keys() | legacy_config.keys()
                      if auto_config.get(key) != legacy_config.get(key))
