@@ -30,6 +30,7 @@ open Ocannl
 open Ocannl.Operation.DSL_modules
 
 let () =
+  Bench_harness.install_timing_trace ();
   let site = Option.value (Stdlib.Sys.getenv_opt "BENCH_SITE") ~default:"wgrad" in
   let dims default =
     Option.value (Stdlib.Sys.getenv_opt "BENCH_SITE_DIMS") ~default
@@ -202,8 +203,22 @@ let () =
     match !report with
     | None -> Stdio.printf "rank-site: tune site=%s no report\n" site
     | Some r ->
-        Stdio.printf "rank-site: tune site=%s outcome=%s crowned=%S best_ms=%.6f timed=%d %s\n%!"
+        let timing_decisions =
+          match r.Autotune.timing_decisions with
+          | [] -> "none"
+          | ds ->
+              String.concat ~sep:","
+                (List.map ds ~f:(fun (settle, admission, count) ->
+                     Printf.sprintf "%s:%s=%d"
+                       (Autotune.batch_settle_name settle)
+                       (Autotune.batch_admission_name admission)
+                       count))
+        in
+        Stdio.printf
+          "rank-site: tune site=%s outcome=%s crowned=%S best_ms=%.6f timed=%d %s \
+           timing_decisions=%s\n\
+           %!"
           site
           (Autotune.outcome_name r.Autotune.outcome)
           r.Autotune.best_label r.Autotune.best_ms r.Autotune.candidates_timed
-          (Autotune.finals_fields r)
+          (Autotune.finals_fields r) timing_decisions

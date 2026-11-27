@@ -69,8 +69,9 @@
 # OUT/rank_<site>_gate_r<N>.txt joins each arm's seeding census to its own exact timed plan.
 # A deduplicated preset joins by schedule digest and reports the candidate label that was timed.
 # The join requires clean resolved configuration records that differ only in the gate and
-# TSV destination. Missing evidence fails that pair. Inspect failed output in OUT and retry in an
-# empty directory.
+# TSV destination. Missing evidence fails that pair; when a timing row is missing, the join prints
+# each arm's timing-admission reasons from `rank-site: tune` beside the missing-sample count
+# (gh-ocannl-2376). Inspect failed output in OUT and retry in an empty directory.
 # Where the backend advises no operand-delivery rate, both modes resolve to the same gate and
 # the pair report marks them as identical.
 # BENCH_PICK=1 (stated to every cell) makes each listing cell also print model_default's actual
