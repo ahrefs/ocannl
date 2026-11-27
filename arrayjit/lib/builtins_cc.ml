@@ -138,6 +138,47 @@ let integer_power_builtins ~prefix ~supports_double ~dialect =
     ]
   else [ single ]
 
+(* The CUDA and HIP integer extrema compare in the operands' usual arithmetic common type. Check
+   both deduced types before conversion, using a trait for the scalar types OCANNL emits so the
+   runtime compiler needs no host C++ library headers. *)
+let cuda_like_extrema_builtins =
+  let extrema name comparison =
+    ( name,
+      Printf.sprintf
+        {|template <typename A, typename B>
+__device__ __forceinline__ decltype(A() + B()) %s(A a, B b) {
+  static_assert(ocannl_is_integral<A>::value && ocannl_is_integral<B>::value,
+                "%s requires integral operands");
+  typedef decltype(A() + B()) C;
+  C x = (C)a, y = (C)b;
+  return x %s y ? x : y;
+}|}
+        name name comparison,
+      [ "ocannl_is_integral" ] )
+  in
+  [
+    ( "ocannl_is_integral",
+      {|template <typename T> struct ocannl_is_integral { static constexpr bool value = false; };
+#define ocannl_declare_integral_type(T) \
+  template <> struct ocannl_is_integral<T> { static constexpr bool value = true; };
+ocannl_declare_integral_type(bool)
+ocannl_declare_integral_type(char)
+ocannl_declare_integral_type(signed char)
+ocannl_declare_integral_type(unsigned char)
+ocannl_declare_integral_type(short)
+ocannl_declare_integral_type(unsigned short)
+ocannl_declare_integral_type(int)
+ocannl_declare_integral_type(unsigned int)
+ocannl_declare_integral_type(long)
+ocannl_declare_integral_type(unsigned long)
+ocannl_declare_integral_type(long long)
+ocannl_declare_integral_type(unsigned long long)
+#undef ocannl_declare_integral_type|},
+      [] );
+    extrema "ocannl_max" ">";
+    extrema "ocannl_min" "<";
+  ]
+
 (* Keep the bounds typed at the call site. Give half its own builtin key because CUDA chooses its
    architecture floor from the intrinsics in the selected prelude. *)
 let cuda_like_sat01_builtins =

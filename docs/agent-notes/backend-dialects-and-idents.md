@@ -302,7 +302,10 @@ files.
   `Builtins_metal`'s `ocannl_max` / `ocannl_min`, which compare in the operands' common type, for
   the integer-promoted sums. Since gh-ocannl-1883 every backend's do, and each homogeneous arm is
   swept at the integer precisions as each operand of `Mod` (`Under_mod`). Executed quotient cases
-  check both operands of `Div`.
+  check both operands of `Div`. CUDA and HIP share a header-free integral trait in their extrema
+  prelude. Both templates assert the types of their two operands before converting to the common
+  type. `cuda_like_builtins_emulation` compiles the shared definitions for mixed integers and
+  checks that each floating operand triggers the assertion.
   The rule is in backend-precision-and-simd.md.
 - Tensor-node debug names become identifiers verbatim in the emitted kernel, so anything the
   backend also emits as a *name* must be reserved (`ident_blacklist`). Reserve it from the
