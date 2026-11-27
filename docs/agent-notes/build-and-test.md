@@ -4572,6 +4572,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     and scans tier. First-tier readers keep their ordinary
     verification requirements. Delimiter changes that hide or expose code and files with quoted
     forms outside the lexical reader's boundary keep the ordinary reach.
+    The source lexer recognizes ASCII quoted expressions and items (`{%ext|…|}` and
+    `{%%ext tag|…|tag}`, gh-ocannl-2513). It marks even blank lines in their payloads as code
+    and keeps quote contents inside OCaml comments inert. The lexer records quoted continuation
+    lines separately so payload text can contribute names without splitting a definition.
+    The `comment-only library reach and merge plan` harness leg pins a blank payload insertion's
+    named reader and a nearby comment edit's compile-and-scans fallback. The `helper definitions`
+    leg pins a named helper's reference after a payload line that resembles a binding.
     The machine-readable form is the trailer (gh-ocannl-1921): whenever the list is printed, the
     last line of stderr is `affected: verdict=V`, V one of `ok`, `cross-cutting`, `incomplete`
     (a changed path is UNMAPPED, exit 3) or `cross-cutting,incomplete`. A caller reads that line,
