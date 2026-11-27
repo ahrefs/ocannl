@@ -35,6 +35,8 @@ a description dune refuses to produce is refused: true
 a probe resolving to zero or multiple libraries is refused: true
 a control asserting one refusal format rejects another refusal whose arguments contain its text: true
 the synthetic tool calls leave action stderr empty: true
+the findlib importer reads a co-located interface with no requires path to its definer: true
+the findlib fixture refuses the stanza that declares the interface's possible definer: true
 the workspace description names compiler-libs.common: true
 every dune file and the workspace description lie within the recognised forms: true
 every exemption row is still earned: its stanza declares the library and uses none of it: true
@@ -94,6 +96,8 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:e654ceab66220252a649c7bb36aa0e49] object directory
   [scanner-refusal:4bb6aa436016609d636df4dbb21c88fd] unreadable typed tree
   [scanner-refusal:1705a50114bbcfdc7d549777efcf1348] no single library
+  [scanner-refusal:fabd0f74da554892c9472b380dd864cb] co-located interface with
+  [scanner-refusal:12eb34f55ce2d30bbcca2c13c584516c] interface's possible definer
   [scanner-refusal:1c8850699d8f9fec6290b9542a410741] an unreadable archive
   [scanner-refusal:e25a1cf286ceb521ee4eb7746aad5229] archive tool producing
   [scanner-refusal:ff2924c3a9869dd3bc7f7d72acd8ead1] malformed archive interface
@@ -140,7 +144,10 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:a0a5de6bdc283aef59519729356595e4] test-support fixture finding
   [scanner-refusal:4a372cdf7b39da35fd50d7a96957b75f] its expected libraries
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
+  [scanner-refusal:3f1d076365e378b925ddb2d0e2a10505] shared-directory findlib fixture
+  [scanner-refusal:8cda105643bd96c09dc8261c3b932999] shared-directory findlib fixture
+  [scanner-refusal:ff089c8ce0d0f584240e2b63b6d20faf] shared-directory fixture stanzas
   [scanner-refusal:1262ba0367f56ab63b0ef45185bb1257] control stanza must
-  [scanner-refusal:351ce2a461cb37393c61069ee2649d96] unused_compiler_deps
+  [scanner-refusal:b0838acc6eaf79cf95f6a2045fe2af6c] unused_compiler_deps
   [scanner-refusal:36778054d93aa08eac389989017aed7a] DUNE_SOURCEROOT
 End of synthetic controls.

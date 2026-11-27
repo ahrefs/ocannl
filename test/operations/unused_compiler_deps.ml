@@ -30,18 +30,17 @@
    sharing an include directory, dune-resolved [ocamlfind query -predicates byte] supplies their own
    absolute archive paths and dune-resolved [ocamlobjinfo] supplies [Unit name:] definitions.
    Archive definitions take precedence over imports, including definitions from an importer's
-   co-located dependencies outside the scan's reporting scope. For an interface-only unit (a
-   shared-directory [.cmi] with no archive definition), the candidates are archives whose
-   [Interfaces imported:] sections name it. There must be one dependency-minimal importer, and no
-   archive-bearing library in its [requires] closure may share a directory containing the [.cmi].
-   Such a dependency could define the interface without importing it. If the importer sees the
-   [.cmi] through the shared directory without a [requires] path to its definer, the scan can credit
-   the importer and report the definer unused. Ambiguous or absent ownership refuses the referencing
-   stanza before it can report any unused library. Imports outside the library's include directories
-   contribute nothing. Imported entries have two tab-separated fields (digest and unit); malformed
-   entries refuse. This preserves type-only units such as [Parsetree] without crediting its users.
-   Archive-less findlib packages own no units. Ownership uses directory contents, byte archive
-   metadata and Dune's resolved dependency graph. No module inventory is inferred from [META] or
+   co-located peers outside the scan's reporting scope. For an interface-only unit (a
+   shared-directory [.cmi] with no archive definition), there must be one dependency-minimal
+   importer. Every other resolved library with a byte archive in a directory shared by the importer
+   and the [.cmi] must also import the unit and transitively require the importer. Other peers could
+   supply the interface, including without a [requires] edge. Ambiguous or absent ownership refuses
+   the referencing stanza before it can report any unused library. Imports outside the library's
+   include directories contribute nothing. Imported entries have two tab-separated fields (digest
+   and unit); malformed entries refuse. This preserves type-only units such as [Parsetree] without
+   crediting its users. Archive-less findlib packages own no units. The peer census is bounded by
+   Dune's workspace and probe descriptions. Ownership uses directory contents, byte archive metadata
+   and Dune's resolved dependency graph. No module inventory is inferred from [META] or
    [dune-package]. A failed query, unreadable archive or output without definitions refuses without
    directory fallback. Shared local libraries refuse: findlib cannot resolve their archives and
    [@check] does not build them.
@@ -213,13 +212,11 @@ let temp name = Stdlib.Filename.concat (Lazy.force temp_root) name
 
 (* [dune describe workspace] of the project rooted at [root], in a build directory of its own. The
    nested dune must not believe it is an action of the running one; its stderr is discarded. *)
-let run_describe ~fail:(module F : FAIL) ~dune ~root ~tag =
+let run_describe ~fail:(module F : FAIL) ~dune ~env ~root ~tag =
   let open F in
   let build_dir = temp ("ucd-" ^ tag ^ "-build") in
   let status, out, _ =
-    Fresh_process.run ~exe:dune
-      ~env:(Fresh_process.nested_dune_environment ())
-      ~temp_dir:(Lazy.force temp_root) ~stderr:`Discard
+    Fresh_process.run ~exe:dune ~env ~temp_dir:(Lazy.force temp_root) ~stderr:`Discard
       [
         "describe";
         "workspace";
@@ -342,9 +339,9 @@ let cmi_units dir =
 
 (* These tools are action arguments resolved by dune, not shell commands found on PATH. Their stderr
    goes to the caller's [stderr], so archive diagnostics stay visible. *)
-let capture ~stderr tool args =
+let capture ?env ~stderr tool args =
   match
-    Fresh_process.run ~exe:tool ~temp_dir:(Lazy.force temp_root) ~stderr:(`Into stderr) args
+    Fresh_process.run ~exe:tool ?env ~temp_dir:(Lazy.force temp_root) ~stderr:(`Into stderr) args
   with
   | WEXITED 0, out, _ -> Ok out
   | _ -> Error "tool did not exit 0"
@@ -390,7 +387,7 @@ let archive_units ~fail:sink ?(stderr = Unix.stderr) ~objinfo archive =
       empty_archive
   | Ok text -> read_archive ~fail:sink ~archive text
 
-let shared_units ~fail:sink ?(stderr = Unix.stderr) ~findlib ~objinfo l =
+let shared_units ~fail:sink ?env ?(stderr = Unix.stderr) ~findlib ~objinfo l =
   let (module F : FAIL) = sink in
   let open F in
   if l.local then (
@@ -398,7 +395,7 @@ let shared_units ~fail:sink ?(stderr = Unix.stderr) ~findlib ~objinfo l =
     empty_archive)
   else
     match
-      capture ~stderr findlib [ "query"; "-predicates"; "byte"; "-format"; "%+a"; l.lib_name ]
+      capture ?env ~stderr findlib [ "query"; "-predicates"; "byte"; "-format"; "%+a"; l.lib_name ]
     with
     | Error e ->
         fail "archive query for %s: %s" l.lib_name e;
@@ -503,14 +500,12 @@ let library_owners ~fail ~cmi_units ~archive_of ~tracked by_uid =
           else Set.to_list cmis
         in
         List.iter definitions ~f:(fun u -> Hashtbl.add_multi owners ~key:u ~data:l.uid));
-  let co_located_dependencies unit uid =
+  let co_located_archives unit uid =
     let l = Hashtbl.find_exn by_uid uid in
     List.concat_map l.include_dirs ~f:(fun dir ->
         if Set.mem (cmis_in dir) unit then Hashtbl.find_multi directories dir else [])
     |> List.filter ~f:(fun peer ->
-        (not (String.equal uid peer))
-        && depends_on by_uid uid peer
-        && not (List.is_empty (archive peer).definitions))
+        (not (String.equal uid peer)) && not (List.is_empty (archive peer).definitions))
   in
   let interface_cache = Hashtbl.create (module String) in
   fun unit ->
@@ -518,20 +513,26 @@ let library_owners ~fail ~cmi_units ~archive_of ~tracked by_uid =
     | [] when Set.mem !shared_cmis unit ->
         Hashtbl.find_or_add interface_cache unit ~default:(fun () ->
             let candidates = Hashtbl.find_multi interface_candidates unit in
-            let dependencies =
-              List.map candidates ~f:(fun uid -> (uid, co_located_dependencies unit uid))
-            in
+            let peers = List.map candidates ~f:(fun uid -> (uid, co_located_archives unit uid)) in
             (* A peer outside the reporting scope can still establish ownership. *)
             let definitions =
-              List.concat_map dependencies ~f:snd
+              List.concat_map peers ~f:snd
               |> List.filter ~f:(fun uid ->
                   List.mem (archive uid).definitions unit ~equal:String.equal)
               |> List.dedup_and_sort ~compare:String.compare
             in
             match definitions with
             | [] ->
-                interface_owner ~fail ~depends_on:(depends_on by_uid)
-                  ~possible_definers:(List.Assoc.find_exn dependencies ~equal:String.equal)
+                let possible_definers uid =
+                  List.Assoc.find_exn peers ~equal:String.equal uid
+                  |> List.filter ~f:(fun peer ->
+                      (* A peer may supply a .cmi without using it or appearing in [uid]'s
+                         dependency closure. A downstream import is evidence of use. *)
+                      not
+                        (depends_on by_uid peer uid
+                        && List.mem (archive peer).interfaces unit ~equal:String.equal))
+                in
+                interface_owner ~fail ~depends_on:(depends_on by_uid) ~possible_definers
                   ~name:(fun uid -> (Hashtbl.find_exn by_uid uid).lib_name)
                   unit candidates
                 |> Option.map ~f:List.return
@@ -746,6 +747,149 @@ let bind_probed ~fail:(module F : FAIL) ~by_uid ~by_name ~probed unresolved =
    string. *)
 
 let refused_with ?quiet ~format f = Refusals.refused_with ?quiet ~source:manifest_source ~format f
+
+let shared_directory_control ~dune ~ocamlc ~findlib ~objinfo =
+  let definer_name = "ucd_shared_fixture.definer" in
+  let importer_name = "ucd_shared_fixture.importer" in
+  let unit = "Ucd_shared_types" in
+  let caller_name = "ucd_direct_use" in
+  let tag = "shared-fixture" in
+  let root =
+    probe_project ~tag
+      (Printf.sprintf "(library (name %s) (modules %s) (libraries %s))\n%s" caller_name caller_name
+         definer_name (probe_stanzas [ importer_name ]))
+  in
+  let packages = root ^ "/findlib" in
+  let shared = packages ^ "/ucd_shared_fixture" in
+  List.iter [ packages; shared ] ~f:(fun dir -> Unix.mkdir dir 0o755);
+  let write file data = Out_channel.write_all (shared ^ "/" ^ file) ~data in
+  write "META"
+    (Printf.sprintf
+       {|package "definer" (
+  requires = "%s"
+  archive(byte) = "ucd_definer.cma"
+)
+package "importer" (
+  requires = "%s"
+  archive(byte) = "ucd_importer.cma"
+)
+|}
+       compiler_root compiler_root);
+  (* The definer ships the .cmi without an archive unit or any import of it. *)
+  write "ucd_shared_types.mli" "type t\n";
+  write "ucd_definer.ml" "let marker = ()\n";
+  write "ucd_importer.ml" ("type t = " ^ unit ^ ".t\n");
+  Out_channel.write_all (root ^ "/" ^ caller_name ^ ".ml") ~data:("type t = " ^ unit ^ ".t\n");
+  let checked_command ~exe ?cwd ?env args =
+    let ((status, _, _) as result) =
+      Fresh_process.run ~exe ?cwd ?env ~temp_dir:(Lazy.force temp_root) args
+    in
+    match status with
+    | WEXITED 0 -> ()
+    | _ ->
+        Fresh_process.report ~label:"shared-directory findlib fixture" result;
+        failwith "could not build the shared-directory findlib fixture"
+  in
+  List.iter
+    [
+      [ "-c"; "ucd_shared_types.mli"; "ucd_definer.ml"; "ucd_importer.ml" ];
+      [ "-a"; "-o"; "ucd_definer.cma"; "ucd_definer.cmo" ];
+      [ "-a"; "-o"; "ucd_importer.cma"; "ucd_importer.cmo" ];
+    ]
+    ~f:(fun args -> checked_command ~exe:ocamlc ~cwd:shared args);
+  let env =
+    Fresh_process.nested_dune_environment ()
+    |> Array.filter ~f:(fun binding -> not (String.is_prefix binding ~prefix:"OCAMLPATH="))
+    |> Array.to_list
+    |> List.cons ("OCAMLPATH=" ^ packages)
+    |> Array.of_list
+  in
+  let description, messages =
+    Refusals.collect_refusals (fun ~fail -> run_describe ~fail ~dune ~env ~root ~tag)
+  in
+  let text, build_dir =
+    match (description, messages) with
+    | Some result, [] -> result
+    | _ -> failwith "could not describe the shared-directory findlib fixture"
+  in
+  checked_command ~exe:dune ~env
+    [ "build"; "--root"; root; "--build-dir"; build_dir; "-j"; "1"; "@check" ];
+  let workspace_root = build_dir ^ "/default" in
+  let libraries, parse_refusals =
+    Refusals.collect_refusals (fun ~fail -> read_description ~fail ~workspace_root ~build_dir text)
+  in
+  let resolve name = List.find libraries ~f:(fun l -> String.equal l.lib_name name) in
+  let definer = Option.value_exn (resolve definer_name) in
+  let importer = Option.value_exn (resolve importer_name) in
+  let by_uid =
+    List.map libraries ~f:(fun l -> (l.uid, l)) |> Hashtbl.of_alist_exn (module String)
+  in
+  let population_of uid =
+    Option.map (reach_path by_uid uid) ~f:(fun path -> Compiler_reaching path)
+  in
+  let archive_of ~fail l = shared_units ~fail ~env ~findlib ~objinfo l in
+  let (definer_archive, importer_archive), archive_refusals =
+    Refusals.collect_refusals (fun ~fail -> (archive_of ~fail definer, archive_of ~fail importer))
+  in
+  let imports archive = List.mem archive.interfaces unit ~equal:String.equal in
+  let fixture_metadata =
+    match (parse_refusals, archive_refusals) with
+    | [], [] ->
+        (not (depends_on by_uid importer.uid definer.uid))
+        && Option.is_some (population_of definer.uid)
+        && Option.is_some (population_of importer.uid)
+        && List.mem definer_archive.definitions "Ucd_definer" ~equal:String.equal
+        && (not (List.mem definer_archive.definitions unit ~equal:String.equal))
+        && (not (List.mem importer_archive.definitions unit ~equal:String.equal))
+        && (not (imports definer_archive))
+        && imports importer_archive
+    | _ -> false
+  in
+  p_exists "the findlib importer reads a co-located interface with no requires path to its definer"
+    importer.include_dirs ~f:(fun dir ->
+      fixture_metadata
+      && List.mem definer.include_dirs dir ~equal:String.equal
+      && Option.value_map (cmi_units dir) ~default:false ~f:(fun units ->
+          List.mem units unit ~equal:String.equal));
+  let stanza =
+    match
+      Refusals.collect_refusals (fun ~fail ->
+          collect_stanzas ~fail ~dir:"" (Scan.stanzas (In_channel.read_all (root ^ "/dune"))))
+    with
+    | stanzas, [] -> List.find_exn stanzas ~f:(fun s -> String.equal s.name caller_name)
+    | _ -> failwith "could not read the shared-directory fixture stanzas"
+  in
+  let verdict = ref Inactive in
+  let refused =
+    refused_with ~format:"interface-only unit %s: no unique archive owner among [%s]" (fun ~fail ->
+        let owners =
+          library_owners ~fail ~cmi_units ~archive_of:(archive_of ~fail)
+            ~tracked:(fun uid -> Option.is_some (population_of uid))
+            by_uid
+        in
+        let w =
+          {
+            workspace_root;
+            resolve;
+            available = (fun name -> Option.is_some (resolve name));
+            population_of;
+            owners;
+            rewriters = Set.empty (module String);
+          }
+        in
+        verdict := judge ~fail w stanza)
+  in
+  let refused_stanza =
+    match !verdict with
+    | Refused -> true
+    | Inactive -> false
+    | Checked findings ->
+        eprintf "shared-directory fixture reported unused: [%s]\n"
+          (String.concat ~sep:", " (List.map findings ~f:(fun finding -> finding.library)));
+        false
+  in
+  p "the findlib fixture refuses the stanza that declares the interface's possible definer"
+    (refused && refused_stanza)
 
 let controls ~dune ~objinfo ~tool_stderr =
   let stanza_of text =
@@ -988,6 +1132,7 @@ let controls ~dune ~objinfo ~tool_stderr =
     (refused_with ~format:"dune describe workspace of %s did not exit 0" (fun ~fail ->
          ignore
            (run_describe ~fail ~dune
+              ~env:(Fresh_process.nested_dune_environment ())
               ~root:(probe_project ~tag:"control-bad" "(library")
               ~tag:"control-bad"
              : (string * string) option)));
@@ -1016,10 +1161,13 @@ let controls ~dune ~objinfo ~tool_stderr =
 let () =
   Test_utils.set_binary_stdout ();
   let argv = Array.to_list (Test_scan.Scan_argv.expand Stdlib.Sys.argv) in
-  let workspace_root, dune, findlib, objinfo, deps =
+  let workspace_root, dune, ocamlc, findlib, objinfo, deps =
     match argv with
-    | _ :: root :: dune :: findlib :: objinfo :: deps -> (root, dune, findlib, objinfo, deps)
-    | _ -> failwith "usage: unused_compiler_deps WORKSPACE_ROOT DUNE OCAMLFIND OCAMLOBJINFO @DEPS"
+    | _ :: root :: dune :: ocamlc :: findlib :: objinfo :: deps ->
+        (root, dune, ocamlc, findlib, objinfo, deps)
+    | _ ->
+        failwith
+          "usage: unused_compiler_deps WORKSPACE_ROOT DUNE OCAMLC OCAMLFIND OCAMLOBJINFO @DEPS"
   in
   let source_root =
     match Stdlib.Sys.getenv_opt "DUNE_SOURCEROOT" with
@@ -1032,6 +1180,7 @@ let () =
             controls ~dune ~objinfo ~tool_stderr:(Unix.descr_of_out_channel sink)))
   in
   p "the synthetic tool calls leave action stderr empty" (String.is_empty control_stderr);
+  shared_directory_control ~dune ~ocamlc ~findlib ~objinfo;
   let refusals = ref [] in
   let fail : (module FAIL) =
     (module struct
@@ -1039,7 +1188,7 @@ let () =
     end)
   in
   let describe ~root ~tag =
-    match run_describe ~fail ~dune ~root ~tag with
+    match run_describe ~fail ~dune ~env:(Fresh_process.nested_dune_environment ()) ~root ~tag with
     | None -> []
     | Some (text, build_dir) -> read_description ~fail ~workspace_root ~build_dir text
   in

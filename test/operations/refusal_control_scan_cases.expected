@@ -966,6 +966,11 @@ unused_compiler_deps.ml: [scanner-refusal:90c4db4dc0ddba1d876dfb79175075f8] no o
 unused_compiler_deps.ml: [scanner-refusal:e654ceab66220252a649c7bb36aa0e49] object directory (direct failure) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:4bb6aa436016609d636df4dbb21c88fd] unreadable typed tree (direct failure) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:1705a50114bbcfdc7d549777efcf1348] no single library (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:3f1d076365e378b925ddb2d0e2a10505] shared-directory findlib fixture (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:8cda105643bd96c09dc8261c3b932999] shared-directory findlib fixture (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:fabd0f74da554892c9472b380dd864cb] co-located interface with (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:ff089c8ce0d0f584240e2b63b6d20faf] shared-directory fixture stanzas (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:12eb34f55ce2d30bbcca2c13c584516c] interface's possible definer (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:1262ba0367f56ab63b0ef45185bb1257] control stanza must (direct failure) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:1c8850699d8f9fec6290b9542a410741] an unreadable archive (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:e25a1cf286ceb521ee4eb7746aad5229] archive tool producing (claim) is catalogued beside unused_compiler_deps.expected: true
@@ -1003,7 +1008,7 @@ unused_compiler_deps.ml: [scanner-refusal:b1784c07fa1dac619848cd1b4a9d64f0] obje
 unused_compiler_deps.ml: [scanner-refusal:69ce705759093b5f97c6cc8e0413a500] description dune refuses (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:8c24881b343b90be6f9574bf281e5045] or multiple libraries (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:80993f82fb1569705822b50a7436584e] rejects another refusal (claim) is catalogued beside unused_compiler_deps.expected: true
-unused_compiler_deps.ml: [scanner-refusal:351ce2a461cb37393c61069ee2649d96] unused_compiler_deps (direct failure) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:b0838acc6eaf79cf95f6a2045fe2af6c] unused_compiler_deps (direct failure) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:36778054d93aa08eac389989017aed7a] DUNE_SOURCEROOT (direct failure) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:044e249871007719b6bc46d149189c1d] synthetic tool calls (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:22c08112ff7b660af6dab49542313b14] compiler-libs.common (claim) is catalogued beside unused_compiler_deps.expected: true
