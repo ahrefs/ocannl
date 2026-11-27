@@ -1236,14 +1236,22 @@ files.
   dropped) and visits every operand -- never `evaluation_reads_of_proc`, the cost collector, which
   skips merge reads and charges one `Where` arm. A new statement or scalar constructor, or a change to
   what instantiation keeps, must update `replay_facts` too: its match arms are exhaustive for that
-  reason. A shared-loop capture can retain an ordinary read of a later candidate (gh-ocannl-2493).
-  On an inherited splice, `virtual_llc` serves these reads at the substituted indices when both
-  nodes' components come entirely from earlier routines. A retained read observes the dependency
-  at consumption, after the producer has run. The read site's bounds can eliminate a `Where` arm
-  after substitution. Scopes that retract to a materialized buffer shield their bodies.
-  Cleanup refuses a surviving virtual buffer read with its provenance.
+  reason. A shared-loop capture can retain an ordinary read of a later candidate (gh-ocannl-2493,
+  gh-ocannl-2510). `virtual_llc` serves these retained reads at the substituted indices at every
+  instantiation — both same-routine reads and inherited splices, including when a later routine
+  updates the dependency — while leaving reads still in `outer_process_for` (not-yet-stored
+  siblings during phase-1 capture, or an enclosing setter target) intact. A cyclic retained read
+  outside `outer_process_for` materializes an undecided local node (`162:cyclic-virtual-replay`)
+  so its scopes retract cleanly, or raises a named `User_error` when the node is already committed
+  virtual or inherited. A retained read observes the dependency at consumption, after the producer
+  has run; by contrast, split loops capture a `Local_scope` of the earlier write (matching
+  producer-time while virtual, retracting to replay-time if materialized). The read site's bounds
+  can eliminate a `Where` arm after substitution. Scopes that retract to a materialized buffer
+  shield their bodies. Cleanup refuses a surviving virtual buffer read with its provenance.
   `buffer_aliasing` checks the virtual dependency chain and the materialized shield against one
-  materialized run.
+  materialized run; `virtual_shared_loop_replay` pins the `Local`-fed extent-20 seam fixture, the
+  shared-versus-split comparison against producer-time and replay-time references, multi-hop
+  retained chains, cyclic retained reads and cross-routine dependency updates.
   A materialized node with a buffer ends the walk (it shields a `Local` dependency behind
   it). Lineage placement takes precedence over an uploaded buffer for a `Virtual` node
   (gh-ocannl-2475), including at a dependency the walk reaches. Host readback follows its stored

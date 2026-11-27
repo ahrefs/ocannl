@@ -1,0 +1,59 @@
+local shared loop (downstream out): materialized producer-time reference matches closed form: true
+local shared loop (downstream out): materialized replay-time reference matches closed form: true
+local shared loop (downstream out): loc settles Local: true
+local shared loop (downstream out): v_loc stays Virtual: true
+local shared loop (downstream out): stored v_reader retains Get(v_loc) and no Local_scope(v_loc): true
+local shared loop (downstream out): v_reader stays Virtual: true
+local shared loop (downstream out): observability reports Unobservable_local [v_reader; v_loc; loc]: true
+local shared loop (downstream out): seeding v_loc keeps the Unobservable_local path to loc: true
+local shared loop (downstream out): out matches replay-time reference: true
+local shared loop (downstream out): out_replay matches replay-time reference: true
+local shared loop (in-loop out): materialized producer-time reference matches closed form: true
+local shared loop (in-loop out): materialized replay-time reference matches closed form: true
+local shared loop (in-loop out): loc settles Local: true
+local shared loop (in-loop out): v_loc stays Virtual: true
+local shared loop (in-loop out): stored v_reader retains Get(v_loc) and no Local_scope(v_loc): true
+local shared loop (in-loop out): v_reader stays Virtual: true
+local shared loop (in-loop out): observability reports Unobservable_local [v_reader; v_loc; loc]: true
+local shared loop (in-loop out): seeding v_loc keeps the Unobservable_local path to loc: true
+local shared loop (in-loop out): out matches replay-time reference: true
+local shared loop (in-loop out): out_replay matches replay-time reference: true
+local shared loop (observable reader): materialized producer-time reference matches closed form: true
+local shared loop (observable reader): materialized replay-time reference matches closed form: true
+local shared loop (observable reader): loc settles Local: true
+local shared loop (observable reader): v_loc stays Virtual: true
+local shared loop (observable reader): stored v_reader retains Get(v_loc) and no Local_scope(v_loc): true
+local shared loop (observable reader): observable v_reader materializes On_device: true
+local shared loop (observable reader): observable v_reader matches replay-time reference: true
+local shared loop (observable reader): out matches replay-time reference: true
+local shared loop (observable reader): out_replay matches replay-time reference: true
+shared vs split: materialized producer-time reference matches closed form: true
+shared vs split: materialized replay-time reference matches closed form: true
+split (virtual dep): tap and dep stay virtual: true
+split (virtual dep): stored tap captures Local_scope(dep) and retains no Get(dep): true
+split (virtual dep): host read of tap matches producer-time reference: true
+split (virtual dep): same-routine out matches producer-time reference: true
+split (materialized shield): tap stays virtual and dep is non-virtual: true
+split (materialized shield): stored tap captured Local_scope(dep) (retracted at consumption): true
+split (materialized shield): host read of tap matches replay-time reference: true
+split (materialized shield): same-routine out matches replay-time reference: true
+shared (virtual dep, host only): tap and dep stay virtual: true
+shared (virtual dep, host only): stored tap retains Get(dep) and no Local_scope(dep): true
+shared (virtual dep, host only): host read of tap matches replay-time reference: true
+shared (virtual dep, same-routine read): tap and dep stay virtual: true
+shared (virtual dep, same-routine read): stored tap retains Get(dep) and no Local_scope(dep): true
+shared (virtual dep, same-routine read): host read of tap matches replay-time reference: true
+shared (virtual dep, same-routine read): same-routine out matches replay-time reference: true
+shared (materialized shield): tap stays virtual and dep is non-virtual: true
+shared (materialized shield): stored tap retains Get(dep) and no Local_scope(dep): true
+shared (materialized shield): host read of tap matches replay-time reference: true
+shared (materialized shield): same-routine out matches replay-time reference: true
+retained chain: a, b, and c stay virtual: true
+retained chain: no buffer reads of a, b, or c survive: true
+retained chain: executed out matches replay-time closed form: true
+cyclic retained reads (undecided): cycle breaks by materializing a with 162: true
+cyclic retained reads (undecided): executed out matches materialized run and closed form: true
+cyclic retained reads (declared virtual): raises named User_error: true
+inherited updated dep: routine A defers both tap and dep: true
+inherited updated dep: read before local update sees routine A's final dep (early + 16): true
+inherited updated dep: read after local update sees routine B's dep (early + 100): true
