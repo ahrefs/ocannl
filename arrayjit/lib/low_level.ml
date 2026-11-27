@@ -944,6 +944,48 @@ let elided_operand : scalar_arg =
   let c = Constant 0. in
   (c, scalar_precision c)
 
+(* The renderer can skip the second operand of these three homogeneous operators. A floating
+   judgment must hold even under a backend that widens the evaluation precision. *)
+let gate_shut ~decided ~prec op ((value, _) as gate) =
+  match op with
+  | Ops.And -> Option.equal Bool.equal (decided (value, prec)) (Some false)
+  | Ops.Or -> Option.equal Bool.equal (decided (value, prec)) (Some true)
+  | Ops.Relu_gate ->
+      Option.equal Bool.equal
+        (decided (Binop (Ops.Cmplt, (Constant 0., prec), gate), prec))
+        (Some false)
+  | _ -> false
+
+(* Evaluation precision follows the slot, not the annotation on a homogeneous operand. *)
+let walk_scalar_operands ~decided ~prec ~walk (value : scalar_t) =
+  let at prec (value, ann) = (walk ~prec value, ann) in
+  let own ((_, ann) as arg) = at ann arg in
+  match value with
+  | Ternop (Ops.Where, condition, yes, no) -> (
+      let condition = own condition in
+      match decided condition with
+      | Some true -> Ternop (Ops.Where, condition, at prec yes, elided_operand)
+      | Some false -> Ternop (Ops.Where, condition, elided_operand, at prec no)
+      | None ->
+          let yes = at prec yes in
+          let no = at prec no in
+          Ternop (Ops.Where, condition, yes, no))
+  | Ternop (op, a, b, c) ->
+      let arg = if Ops.is_homogeneous_prec_ternop op then at prec else own in
+      let a = arg a in
+      let b = arg b in
+      let c = arg c in
+      Ternop (op, a, b, c)
+  | Binop (op, a, b) ->
+      let arg = if Ops.is_homogeneous_prec_binop op then at prec else own in
+      let a = arg a in
+      let b = if gate_shut ~decided ~prec op a then elided_operand else arg b in
+      Binop (op, a, b)
+  | Unop (op, ((_, ann) as a)) ->
+      let arg_prec = if Ops.is_homogeneous_prec_unop op then prec else ann in
+      Unop (op, at arg_prec a)
+  | _ -> value
+
 let neutral_scalar prec op =
   Either.value_map (Ops.neutral_elem_at prec op)
     ~first:(fun c -> Constant c)
@@ -4421,8 +4463,8 @@ let rec write_index_mentions tn s (c : t) =
       false
 
 (* [decide_where] is {!where_condition_decided} (defined below the interval machinery it needs, like
-   [elide_stored]): whether a [Where] condition is decided over the static indices and the given
-   loops (gh-ocannl-1469). *)
+   [elide_stored]): whether a selector or gate condition is decided over the static indices and the
+   given loops (gh-ocannl-1469). *)
 let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope) ?only_store
     ~elide_stored
     ~(decide_where : loops:(Indexing.symbol * (int * int)) list -> scalar_arg -> bool option)
@@ -4677,19 +4719,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
      store ([Non_virtual 9] / [10]): an emitted decision resting on it never reaches a stored
      template, and its extent holds where the code runs. *)
   let decision_loops ~opaque enclosing = List.filter enclosing ~f:(fun (s, _) -> not (opaque s)) in
-  let walk_where ~opaque ~enclosing ~loop cond yes no =
-    let arg (value, prec) = (loop value, prec) in
-    let cond = arg cond in
-    (* A dead arm must not instantiate an inherited computation or register its inputs. Walk the
-       condition and the live arms in program order (gh-ocannl-2052). *)
-    match decide_where ~loops:(decision_loops ~opaque enclosing) cond with
-    | Some true -> Ternop (Ops.Where, cond, arg yes, elided_operand)
-    | Some false -> Ternop (Ops.Where, cond, elided_operand, arg no)
-    | None ->
-        let yes = arg yes in
-        let no = arg no in
-        Ternop (Ops.Where, cond, yes, no)
-  in
+  let decide ~opaque ~enclosing arg = decide_where ~loops:(decision_loops ~opaque enclosing) arg in
+  let tn_prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
   (* gh-ocannl-2493, gh-ocannl-2510: a shared-loop capture leaves later candidates in [store_pf], so
      an earlier candidate's stored template can retain a [Get] of a later virtual candidate. Expand
      those retained reads whenever the template is instantiated -- locally or across routines --
@@ -4812,16 +4843,19 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         in
         For_loop { loop with body }
     | Set_local (id, value) ->
-        Set_local (id, close_replay_scalar ~opaque ~outer_process_for ~replay_stack ~enclosing value)
+        Set_local
+          ( id,
+            close_replay_scalar ~opaque ~outer_process_for ~replay_stack ~enclosing
+              ~prec:(tn_prec id.tn) value )
     | Noop | Comment _ | Staged_compilation _ -> code
     | Scan_loop _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _ | Declare_local _
     | Workgroup_barrier | Tile_mma _ | If _ ->
         (* Instantiation emits a scalar computation with local writes. *)
         assert false
-  and close_replay_scalar ~opaque ~outer_process_for ~replay_stack ~enclosing (value : scalar_t) :
-      scalar_t =
+  and close_replay_scalar ~opaque ~outer_process_for ~replay_stack ~enclosing ~prec
+      (value : scalar_t) : scalar_t =
     let loop = close_replay_scalar ~opaque ~outer_process_for ~replay_stack ~enclosing in
-    let arg (value, prec) = (loop value, prec) in
+    let arg (value, prec) = (loop ~prec value, prec) in
     match value with
     | Get (tn, indices) when not (Tn.Placements.known_non_virtual plc tn) -> (
         if Set.mem outer_process_for tn then value
@@ -4855,19 +4889,9 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         let body = close_replay ~opaque ~outer_process_for ~replay_stack ~enclosing opts.body in
         Local_scope { opts with body }
     | Get_dynamic opts -> Get_dynamic { opts with dyn_value = arg opts.dyn_value }
-    | Ternop (Ops.Where, cond, yes, no) -> walk_where ~opaque ~enclosing ~loop cond yes no
-    | Ternop (op, a, b, c) ->
-        let a = arg a in
-        let b = arg b in
-        let c = arg c in
-        Ternop (op, a, b, c)
-    | Binop (Arg1, (a, _), _) -> loop a
-    | Binop (Arg2, _, (b, _)) -> loop b
-    | Binop (op, a, b) ->
-        let a = arg a in
-        let b = arg b in
-        Binop (op, a, b)
-    | Unop (op, a) -> Unop (op, arg a)
+    | Binop (Arg1, (a, _), _) | Binop (Arg2, _, (a, _)) -> loop ~prec a
+    | Ternop _ | Binop _ | Unop _ ->
+        walk_scalar_operands ~decided:(decide ~opaque ~enclosing) ~prec ~walk:loop value
     | Constant _ | Constant_bits _ | Get _ | Get_local _ | Get_merge_buffer _ | Embed_index _
     | Local_scope _ ->
         value
@@ -5096,7 +5120,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                 c with
                 init =
                   loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan
-                    ~enclosing ~footprint_ok:false c.init;
+                    ~enclosing ~footprint_ok:false ~prec:(tn_prec c.prev.tn) c.init;
               })
         in
         Scan_loop
@@ -5275,7 +5299,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                     loop_scalar
                       ~opaque:(rhs_opaque ~opaque ~will_store tn)
                       ~process_for:next ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
-                      ~footprint_ok llsc);
+                      ~footprint_ok ~prec:(tn_prec tn) llsc);
               debug;
             }
         in
@@ -5314,7 +5338,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                       loop_scalar
                         ~opaque:(rhs_opaque ~opaque ~will_store tn)
                         ~process_for:next ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
-                        ~footprint_ok arg_scalar),
+                        ~footprint_ok ~prec:arg_prec arg_scalar),
                   arg_prec );
               debug;
             }
@@ -5341,7 +5365,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         Set_local
           ( id,
             loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
-              ~footprint_ok:false llsc )
+              ~footprint_ok:false ~prec:(tn_prec id.tn) llsc )
     | Declare_local _ -> llc
     | Comment _ -> llc
     | Staged_compilation _ -> llc
@@ -5361,7 +5385,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         (* gh-ocannl-2052: the condition precedes the guarded body in program order. *)
         let c =
           loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
-            ~footprint_ok:false c
+            ~footprint_ok:false ~prec c
         in
         let body =
           loop_proc ~opaque ~process_for ~owned ~in_storage_pass ~guarded:true ~in_scan ~enclosing
@@ -5369,7 +5393,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         in
         If { cond = (c, prec); body }
   and loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
-      ~footprint_ok (llsc : scalar_t) : scalar_t =
+      ~footprint_ok ~prec (llsc : scalar_t) : scalar_t =
     let loop =
       loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
         ~footprint_ok
@@ -5440,7 +5464,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                (virtualized_gather_table_rejection tn
                   ~decided_by:"declared virtual, or committed virtual before this read"));
         Tn.Placements.update plc tn Never_virtual Surviving_read;
-        Get_dynamic { tn; idcs; dyn_axis; dyn_value = (loop v, prec) }
+        Get_dynamic { tn; idcs; dyn_axis; dyn_value = (loop ~prec v, prec) }
     | Local_scope opts ->
         Local_scope
           {
@@ -5452,23 +5476,10 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     | Get_local _ -> llsc
     | Get_merge_buffer (_, _) -> llsc
     | Embed_index _ -> llsc
-    | Ternop (Ops.Where, cond, yes, no) -> walk_where ~opaque ~enclosing ~loop cond yes no
-    | Ternop (op, (llv1, prec1), (llv2, prec2), (llv3, prec3)) ->
-        let v1 = loop llv1 in
-        let v2 = loop llv2 in
-        let v3 = loop llv3 in
-        Ternop (op, (v1, prec1), (v2, prec2), (v3, prec3))
-    (* Review round 9: a projection's discarded operand is never evaluated — do not descend into it
-       (attempting to inline a merge-tainted inherited virtual there would raise for code that never
-       runs); collapse to the selected operand, mirroring [simplify_llc]'s Arg1/Arg2 arms — the
-       renderers emit the selected operand alone either way. *)
-    | Binop (Arg1, (llv1, _), _) -> loop llv1
-    | Binop (Arg2, _, (llv2, _)) -> loop llv2
-    | Binop (op, (llv1, prec1), (llv2, prec2)) ->
-        let v1 = loop llv1 in
-        let v2 = loop llv2 in
-        Binop (op, (v1, prec1), (v2, prec2))
-    | Unop (op, (llsc, prec)) -> Unop (op, (loop llsc, prec))
+    (* Projected operands never run, so do not instantiate their reads. *)
+    | Binop (Arg1, (value, _), _) | Binop (Arg2, _, (value, _)) -> loop ~prec value
+    | Ternop _ | Binop _ | Unop _ ->
+        walk_scalar_operands ~decided:(decide ~opaque ~enclosing) ~prec ~walk:loop llsc
   in
   (* Top-level statement by statement: a footprint prologue is spliced right after the statement of
      its producer's last write, or ahead of the reader's when the producer is inherited; the [Seq]
@@ -6549,16 +6560,12 @@ let where_condition_decided static_indices ~(loops : (Indexing.symbol * (int * i
   in
   decided_at_every_precision ~ienv ~prec:cprec cnd
 
-(* gh-ocannl-1620: the routine's raw code as its emitted walk evaluates it, for ANALYSIS only (it is
-   never stored, never emitted): dead loops dropped and the arm of a [Where] the emit walk decides
-   dead replaced by [Constant 0.], as {!virtual_llc} does with no loop opaque -- the static indices
-   plus every enclosing loop's extent, scan binders included, through {!where_condition_decided}.
-   The emit walk decides the condition AFTER inlining its reads, which turns a read into a scope the
-   interval analysis does not see into; a condition that reads a buffer is therefore never decided
-   here, so this view decides no arm the emit walk keeps. [And] / [Or] / [Relu_gate] operands stay,
-   as the walk keeps them (which is why {!elide_unevaluated_operands}, eliding those too, is not
-   this), and projections' discarded operands are the access folds' to skip. *)
+(* gh-ocannl-1620: an analysis view of the raw code its emitted walk evaluates. The static indices
+   and enclosing loop extents can decide a [Where] or shut a gate. A condition reading a buffer is
+   kept unknown here: the emit walk decides after inlining, and interval analysis cannot see through
+   the resulting scope. Projections' discarded operands are the access folds' to skip. *)
 let live_view static_indices (llc : t) : t =
+  let tn_prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
   let rec reads_buffer (sc : scalar_t) =
     match sc with
     | Get _ | Get_dynamic _ | Get_merge_buffer _ | Local_scope _ -> true
@@ -6579,40 +6586,39 @@ let live_view static_indices (llc : t) : t =
         Scan_loop
           {
             sc with
-            carried = List.map carried ~f:(fun cr -> { cr with init = scalar ~loops cr.init });
+            carried =
+              List.map carried ~f:(fun cr ->
+                  { cr with init = scalar ~loops ~prec:(tn_prec cr.prev.tn) cr.init });
             body = stmt ~loops:((index, (from_, to_)) :: loops) body;
           }
-    | Set ({ llsc; _ } as set) -> Set { set with llsc = scalar ~loops llsc }
-    | Set_dynamic ({ dyn_value; llsc; _ } as set) ->
-        Set_dynamic { set with dyn_value = arg ~loops dyn_value; llsc = scalar ~loops llsc }
+    | Set ({ tn; llsc; _ } as set) -> Set { set with llsc = scalar ~loops ~prec:(tn_prec tn) llsc }
+    | Set_dynamic ({ tn; dyn_value; llsc; _ } as set) ->
+        Set_dynamic
+          {
+            set with
+            dyn_value = arg ~loops dyn_value;
+            llsc = scalar ~loops ~prec:(tn_prec tn) llsc;
+          }
     | Set_from_vec ({ arg = a; _ } as set) -> Set_from_vec { set with arg = arg ~loops a }
-    | Set_local (id, v) -> Set_local (id, scalar ~loops v)
+    | Set_local (id, v) -> Set_local (id, scalar ~loops ~prec:(tn_prec id.tn) v)
     | If { cond; body } -> If { cond = arg ~loops cond; body = stmt ~loops body }
     | Tile_mma ({ fallback; _ } as tm) -> Tile_mma { tm with fallback = stmt ~loops fallback }
-  and arg ~loops ((sc, prec) : scalar_arg) : scalar_arg = (scalar ~loops sc, prec)
-  and scalar ~loops (sc : scalar_t) : scalar_t =
+  and arg ~loops ((sc, prec) : scalar_arg) : scalar_arg = (scalar ~loops ~prec sc, prec)
+  and scalar ~loops ~prec (sc : scalar_t) : scalar_t =
     match sc with
     | Constant _ | Constant_bits _ | Embed_index _ | Get _ | Get_local _ | Get_merge_buffer _ -> sc
     | Get_dynamic ({ dyn_value; _ } as g) -> Get_dynamic { g with dyn_value = arg ~loops dyn_value }
     | Local_scope ({ body; _ } as scope) -> Local_scope { scope with body = stmt ~loops body }
-    | Ternop (Ops.Where, ((cnd, _) as cond), a2, a3) -> (
-        let cond = arg ~loops cond in
-        let decided =
-          if reads_buffer cnd then None else where_condition_decided static_indices ~loops cond
+    | Ternop _ | Binop _ | Unop _ ->
+        let decided ((value, _) as arg) =
+          if reads_buffer value then None else where_condition_decided static_indices ~loops arg
         in
-        match decided with
-        | Some true -> Ternop (Ops.Where, cond, arg ~loops a2, elided_operand)
-        | Some false -> Ternop (Ops.Where, cond, elided_operand, arg ~loops a3)
-        | None -> Ternop (Ops.Where, cond, arg ~loops a2, arg ~loops a3))
-    | Ternop (op, a1, a2, a3) -> Ternop (op, arg ~loops a1, arg ~loops a2, arg ~loops a3)
-    | Binop (op, a1, a2) -> Binop (op, arg ~loops a1, arg ~loops a2)
-    | Unop (op, a1) -> Unop (op, arg ~loops a1)
+        walk_scalar_operands ~decided ~prec ~walk:(scalar ~loops) sc
   in
   stmt ~loops:[] llc
 
 let elide_unevaluated_operands static_indices ~(opaque : Indexing.symbol -> bool) (llc : t) : t =
   let decided = decided_at_every_precision in
-  let elided (_ : scalar_arg) : scalar_arg = elided_operand in
   let extend ienv index ~from_ ~to_ =
     if opaque index then ienv else ienv_extend ienv index ~from_ ~to_
   in
@@ -6643,41 +6649,14 @@ let elide_unevaluated_operands static_indices ~(opaque : Indexing.symbol -> bool
     | Tile_mma ({ fallback; _ } as tm) -> Tile_mma { tm with fallback = stmt ~ienv fallback }
   (* An operand evaluated at its own annotation (a heterogeneous slot). *)
   and own ~ienv ((sc, ann) : scalar_arg) : scalar_arg = (scalar ~ienv ~prec:ann sc, ann)
-  (* An operand evaluated at the enclosing result precision (a homogeneous slot). *)
-  and at ~ienv ~prec ((sc, ann) : scalar_arg) : scalar_arg = (scalar ~ienv ~prec sc, ann)
   and scalar ~ienv ~prec (sc : scalar_t) : scalar_t =
     match sc with
     | Constant _ | Constant_bits _ | Embed_index _ | Get _ | Get_local _ | Get_merge_buffer _ -> sc
     | Get_dynamic ({ dyn_value; _ } as g) -> Get_dynamic { g with dyn_value = own ~ienv dyn_value }
     | Local_scope ({ body; _ } as scope) -> Local_scope { scope with body = stmt ~ienv body }
-    | Ternop (Ops.Where, ((cnd, cprec) as cond), a, b) -> (
-        match decided ~ienv ~prec:cprec cnd with
-        | Some true -> Ternop (Ops.Where, own ~ienv cond, at ~ienv ~prec a, elided b)
-        | Some false -> Ternop (Ops.Where, own ~ienv cond, elided a, at ~ienv ~prec b)
-        | None -> Ternop (Ops.Where, own ~ienv cond, at ~ienv ~prec a, at ~ienv ~prec b))
-    | Ternop (((Ops.FMA | Ops.Mul3) as op), a, b, d) ->
-        Ternop (op, at ~ienv ~prec a, at ~ienv ~prec b, at ~ienv ~prec d)
-    | Binop (op, ((g, _) as gate), x) when Ops.is_homogeneous_prec_binop op ->
-        (* The renderings: [g && x], [g || x], [(g > 0.0 ? x : 0.0)]. [Satur01_gate]'s rendering
-           tests [floor] of its gate, not the interval this would decide, so it is left alone. *)
-        let shut =
-          match op with
-          | Ops.And -> Option.equal Bool.equal (decided ~ienv ~prec g) (Some false)
-          | Ops.Or -> Option.equal Bool.equal (decided ~ienv ~prec g) (Some true)
-          | Ops.Relu_gate ->
-              Option.equal Bool.equal
-                (decided ~ienv ~prec (Binop (Ops.Cmplt, (Constant 0., prec), gate)))
-                (Some false)
-          | Ops.Satur01_gate | Ops.Arg1 | Ops.Arg2 | Ops.Add | Ops.Sub | Ops.Mul | Ops.Div
-          | Ops.ToPowOf | Ops.Max | Ops.Min | Ops.Mod | Ops.Cmplt | Ops.Cmple | Ops.Cmpeq
-          | Ops.Cmpne | Ops.Threefry4x32_crypto | Ops.Threefry4x32_light
-          | Ops.Uint4x32_to_prec_uniform_lane ->
-              false
-        in
-        Binop (op, at ~ienv ~prec gate, if shut then elided x else at ~ienv ~prec x)
-    | Binop (op, a, b) -> Binop (op, own ~ienv a, own ~ienv b)
-    | Unop (op, a) when Ops.is_homogeneous_prec_unop op -> Unop (op, at ~ienv ~prec a)
-    | Unop (op, a) -> Unop (op, own ~ienv a)
+    | Ternop _ | Binop _ | Unop _ ->
+        let decided (value, prec) = decided ~ienv ~prec value in
+        walk_scalar_operands ~decided ~prec ~walk:(scalar ~ienv) sc
   in
   stmt ~ienv:(ienv_of_static_indices ~node_bounds:false static_indices) llc
 

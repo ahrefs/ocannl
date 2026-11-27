@@ -15,7 +15,7 @@
    Merge: [v := where 1 (ell + 100) merge(msrc)]. Consuming [v] in B is legal.
 
    Gate: [v := ell + relu_gate (-1) gx], whose gate is shut, so [gx] is no input of B. (The
-   materialized reading still renders the read: the routine's simplify does not fold gates.)
+   materialized reading checks the producer's value independently of template storage.)
 
    Provenance: [v := where 0 extra ell], and B writes [extra] under an [If], then reads it
    unguarded. The raw guards-taken verdict counts the guarded write as coverage; the strict splice
@@ -388,7 +388,7 @@ let consumer_b ~shape ~x ~v ~out =
   let s = sym () in
   loop_n s dim (set out [| iter s |] (shape s ~x:(get x [| iter s |]) ~v:(get v [| iter s |])))
 
-let case_consumer_decided ~label ~tag shape =
+let case_consumer_decided ?(expected = x_vals) ~label ~tag shape =
   let ctx, v = tainted_lineage ~label ~tag in
   let x = mk (tag ^ "x") and out = mk (tag ^ "out") in
   List.iter [ x; out ] ~f:materialize;
@@ -406,7 +406,7 @@ let case_consumer_decided ~label ~tag shape =
       in
       p_all2
         (label ^ ": executed values are the live arm's")
-        (List.hd_exn got) x_vals ~f:Float.equal;
+        (List.hd_exn got) expected ~f:Float.equal;
       let v_m = mk (tag ^ "vm") and x_m = mk (tag ^ "xm") and out_m = mk (tag ^ "outm") in
       List.iter [ v_m; x_m; out_m ] ~f:materialize;
       let o_m = optimize ~name:("sts_" ^ tag ^ "_m") (consumer_b ~shape ~x:x_m ~v:v_m ~out:out_m) in
@@ -1400,6 +1400,16 @@ let () =
   case_consumer_decided ~label:"consumer where 0 v x" ~tag:"c0" (fun _ ~x ~v -> where_ (ic 0) v x);
   case_consumer_decided ~label:"consumer where (i < 4) x v" ~tag:"ce" (fun s ~x ~v ->
       where_ (lt (embed s) (ic dim)) x v);
+  case_consumer_decided ~label:"consumer shut And" ~tag:"gand" (fun s ~x ~v ->
+      add x (binop Ir.Ops.And (binop Ir.Ops.Cmplt (embed s) (ic 0)) v));
+  case_consumer_decided
+    ~expected:(Array.map x_vals ~f:(fun x -> x +. 1.))
+    ~label:"consumer shut Or" ~tag:"gor"
+    (fun s ~x ~v -> add x (binop Ir.Ops.Or (binop Ir.Ops.Cmplt (embed s) (ic dim)) v));
+  case_consumer_decided ~label:"consumer shut Relu_gate" ~tag:"grelu" (fun s ~x ~v ->
+      add x (binop Ir.Ops.Relu_gate (binop Ir.Ops.Sub (embed s) (ic dim)) v));
+  case_consumer_refused ~label:"consumer runtime-dependent And" ~tag:"gopen" (fun s ~x ~v ->
+      add x (binop Ir.Ops.And (binop Ir.Ops.Cmplt (embed s) (ic 2)) v));
   case_consumer_kept_loop ();
   case_consumer_write_index_opaque ();
   case_nested_consumer_decided ();
