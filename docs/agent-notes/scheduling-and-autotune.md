@@ -1335,7 +1335,9 @@ files.
   clears candidate contention and, with a script in force, an unresolved batching verdict; calibration
   and invalid readings keep their admission rules. `flip_abandonment` pins production refusal, nesting
   and failure restoration with a majority-stalled window, then asserts search, placement and cache
-  branches without skips.
+  branches without skips. `measured_callback_scope_scan` checks test modules for a
+  timing witness using a closed set of OCaml syntax forms. The fixture still owns the scope
+  around its search.
 - **`unbatched` is load too** (gh-ocannl-1995). On a shared GPU a kernel near the batch target reads
   every batched probe a few percent over it (hip on tuf: singles 0.4 ms, depths 26, 32 and the
   rescue's 25 at 10.3, 13.5 and 11.8 ms), the calibration has no depth left, and the window is refused

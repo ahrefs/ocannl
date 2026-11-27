@@ -162,9 +162,10 @@ let () =
 (* --- The baseline's window refused. --- *)
 
 let baseline_refused =
-  Autotune.Seam.with_value Autotune.on_candidate_measured
-    (fun ~label ~digest:_ ms -> if String.equal label "baseline" then Float.nan else ms)
-    (search ~tag:"baseline_refused")
+  Autotune.with_uncontended_test_windows (fun () ->
+      Autotune.Seam.with_value Autotune.on_candidate_measured
+        (fun ~label ~digest:_ ms -> if String.equal label "baseline" then Float.nan else ms)
+        (search ~tag:"baseline_refused"))
 
 let () =
   p "refused baseline: the report records the baseline's refused window"

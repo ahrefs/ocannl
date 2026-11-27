@@ -121,6 +121,13 @@ let raw_entries =
       ] );
     ("doc_examples_extract.ml", []);
     ("ll_test_ratchet.ml", []);
+    ( "measured_callback_scope_scan.ml",
+      [
+        "[scanner-refusal:6430ff79146d5e4bf05bdceb2021f4c1] measurement setter with";
+        "[scanner-refusal:70f74c802c263837cb8b3e9a45a00f38] measured callback may";
+        "[scanner-refusal:9433917d9e4a1b340740735628bafd4a] does not require";
+        "[scanner-refusal:d6ce703a4a0fe1b7ee8319a6066ca344] installing the measurement";
+      ] );
     ( "premise_ratchet.ml",
       [
         "[scanner-refusal:b58a95cec37dfce6d01a2e4de53038d6] test source parses";
