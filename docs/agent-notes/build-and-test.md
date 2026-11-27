@@ -1251,10 +1251,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   at widths 1 and 4 and failed the pinned leg at both widths; the same subject
   exited 1 under `/bin/bash` 3.2 and 0 under Homebrew 5.3.
 - Under Bash 3.2, unsetting a function-local variable can uncover a caller's export
-  (gh-ocannl-2483). Use `env -u` at launch when a fixture needs the variable absent
-  from a child. Leg 125 of `tools/test-test-run-options.sh` supplies an outer record
-  even in ordinary CI. The local probe removes that variable at launch and keeps
-  the receipt link set to check that a link alone creates no receipt.
+  (gh-ocannl-2483, gh-ocannl-2504). Use `env -u` at launch when a fixture needs a variable absent
+  from a child. `tools/test-test-run-common.sh` unsets `FLEET_LEG_RUN_RECORD`,
+  `FLEET_LEG_RECEIPT_LINK`, and `FLEET_LEG_RECEIPT_DIR` at startup so ordinary legs never write
+  into an outer leg's receipt pointer; leg 125 of `tools/test-test-run-options.sh` supplies outer
+  exports for all three even in ordinary CI, clears the unwanted ones with `env -u` at launch, and
+  keeps a supplied `FLEET_LEG_RECEIPT_LINK` on the local probe to check that a link alone creates
+  no receipt.
 - A closed standard descriptor can be reopened before a shell script starts. On Linux,
   uutils `env` 0.10.0 reopened each of fd 0, 1 and 2 on `/dev/null` when the caller closed
   it (gh-ocannl-2401). For a Bash script that must preserve those descriptors, a `/bin/sh`
@@ -6153,10 +6156,12 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `tools/test-run.sh run` writes `FLEET_LEG_RUN_RECORD` into the receipt, registers the finished
   receipt directory through `FLEET_LEG_RECEIPT_LINK` (saving `fleet-leg-command` only for an
   explicit spaced `run --expect-backend cc` request), and unsets the `FLEET_LEG_*` receipt
-  variables for child processes. `tools/owed-run.sh leg-record` prefers `FLEET_LEG_RECEIPT_DIR`
-  (never falling back to `last` when set), so wrappers setting a private `OCANNL_TOOL_TEST_RUNS`
-  publish automatically; it falls back to the worktree's `last` pointers only when
-  `FLEET_LEG_RECEIPT_DIR` is unset. The hook compares the leg's temporary run-record path to
+  variables for child processes. `tools/owed-run.sh leg-record` reads `FLEET_LEG_RECEIPT_DIR`
+  (never falling back to `paths run last` or the worktree's `linux-shell` pointer, gh-ocannl-2504),
+  so wrappers setting a private `OCANNL_TOOL_TEST_RUNS` publish automatically while legs that
+  registered no receipt (such as `dune`, benchmarks, or `repeat`/`fresh`) log `recorded nothing (no
+  receipt registered for this leg)` instead of `record refused`. The hook compares the leg's
+  temporary run-record path to
   `fleet-leg-run-record` and requires the receipt's SHA to match the observed SHA and the current
   checkout, rejecting earlier receipts even for the same head and command. Its requested and
   effective commands must both be allowlisted and cover the same targets. Validly bound, clean,
@@ -6208,7 +6213,7 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `--dune` aliases through `tools/test-run.sh run --expect-backend cc build` and `--harness`
   (`tools/test-harnesses.sh --member`) or `--all-harnesses`, rejects any harness member with 0
   `PASS` checks or an unexpected `SKIP`, and writes an `os=Linux` receipt outside the worktree that `tools/owed-run-report.sh`
-  (`tools/owed-run.sh leg-record`, via `FLEET_LEG_RECEIPT_DIR` or its per-worktree pointer)
+  (`tools/owed-run.sh leg-record`, via `FLEET_LEG_RECEIPT_DIR`)
   publishes as `owed-run: v2 linux-shell ... os=Linux ... targets=...`. A `v2 run` record carries
   no OS attestation and never satisfies `linux:*` needs, and a `linux-shell` record never
   satisfies `runtest` or `train`.
