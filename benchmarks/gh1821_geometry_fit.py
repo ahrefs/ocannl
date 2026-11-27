@@ -116,7 +116,7 @@ def load(out, arm):
         stock = stock_replicates(src, stock_census_paths(out, cell))
         if not stock.times:
             raise ValueError(f"{src}: no calibration rows")
-        explain, kernels, order = {}, {}, []
+        explain, kernels = {}, {}
         with open(listing) as f:
             # bench_output's one reader of the rank-site lines (gh-ocannl-1767).
             lines = bench_output.rank_site_lines(f.read())
@@ -125,12 +125,11 @@ def load(out, arm):
                 fills = [float(x) for x in fields.get("fills", "").split(",") if x not in ("", "n/a")]
                 explain[fields["label"]] = (float(fields["rank_ms"]),
                                             fields.get("admitted") != "false", fills)
-                order.append(fields["label"])
             elif kind == "kernels" and "label" in fields:
                 kernels[fields["label"]] = [dict(kv.split("=", 1) for kv in spec.split(","))
                                             for spec in fields.get("kernels", "").split(";") if spec]
         rows = []
-        for pos, label in enumerate(order):
+        for pos, label in enumerate(explain):
             resolved = row_replicates(label, stock, cell)
             if resolved is None or label not in kernels:
                 continue

@@ -771,6 +771,18 @@ if harness_leg '8: gh1821_geometry_fit refuses <2 candidates and handles empty p
     grep -qF "${site}: fewer than two candidates join" "$geo_base/one-cand.err"
   check '1-candidate refusal emits no stdout' test ! -s "$geo_base/one-cand.out"
 
+  # Repeated explain label for a single timed candidate still counts as 1 candidate.
+  dup_dir="$geo_base/dup-cand"
+  write_geo_cell "$dup_dir" \
+    $'W_sketch[control]|11111111/aaaaaaaa|1.25' \
+    $'W_sketch[control]|1.25|true\nW_sketch[control]|1.25|true'
+  got=0
+  python3 "$geo_fit" "$dup_dir" >"$geo_base/dup-cand.out" 2>"$geo_base/dup-cand.err" || got=$?
+  check 'gh1821_geometry_fit refuses a repeated single explain label with exit 2' test "$got" = 2
+  check 'repeated-label refusal names fewer than two candidates join' \
+    grep -qF "${site}: fewer than two candidates join" "$geo_base/dup-cand.err"
+  check 'repeated-label refusal emits no stdout' test ! -s "$geo_base/dup-cand.out"
+
   # 0-candidate cell (calibration rows present, none join): same refusal.
   zero_dir="$geo_base/zero-cand"
   write_geo_cell "$zero_dir" \
