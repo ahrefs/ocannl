@@ -125,6 +125,7 @@
   tensorized_census_scan
   forced_decline_sort
   provenance_tag_scan
+  resource_fault_inventory_scan
   scan_argv
   scan_floors
   dune_stanza_scan

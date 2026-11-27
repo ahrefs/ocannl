@@ -113,6 +113,7 @@ def install_cancellation(driver):
     (`cell_group.CancellationDeferral`), named for `driver` in its message."""
     _cancellation.label = driver
     _cancellation.install()
+    cell_group.cancel_on_launcher_exit()
 
 
 # ---------------------------------------------------------------------------------------------
@@ -400,7 +401,7 @@ def paired_by_mode(base, mine, base_labels, mine_labels):
 def run_in_group(argv, cwd, env, timeout, stdout, stderr):
     """`argv` as a managed process group under a cap: its exit status, or "timeout"."""
     with _cancellation.deferring():
-        proc = cell_group.spawn(argv, cwd=cwd, env=env, stdout=stdout, stderr=stderr)
+        proc = cell_group.spawn(argv, cwd=cwd, env=env, stdout=stdout, stderr=stderr, watch_driver=True)
         try:
             with _cancellation.cancellable():
                 status = proc.wait(timeout=timeout)

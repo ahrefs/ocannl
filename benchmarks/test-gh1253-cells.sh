@@ -126,7 +126,7 @@ with open(os.environ["CALLS"], "a") as calls:
           Path.cwd().name, arm, file=calls)
 label = "F_seeded[2 segs, 1 seeded, 0 sunk, 0 split, plan aaaaaaaa]"
 legacy = "F_seeded[2 segs, 1 seeded, 0 sunk, 0 split, plan bbbbbbbb]"
-mutation = scenario if arm == "auto-legacy" else None
+mutation = scenario if arm == "auto-legacy" or scenario == "both-rows-refused" else None
 preset_arm = mutation in ("preset", "preset-dedup", "preset-wrong-digest")
 selected = label if arm == "auto" or scenario == "equivalent" else legacy
 if preset_arm:
@@ -144,16 +144,31 @@ print("autotune-seeding: plan", selected, file=sys.stderr)
 if preset_arm:
     attribution = "44444444/dddddddd" if mutation == "preset-wrong-digest" else preset_digest
     print("autotune-seeding: preset-digest", attribution, file=sys.stderr)
-with open(opts["autotune_calibration_file"], "w") as rows:
-    auto_ms, legacy_ms = ("1.25", "8.00") if arm == "auto" else ("9.00", "2.50")
-    preset_row = preset_timed_as if mutation in ("preset-dedup", "preset-wrong-digest") else preset
-    for name, digest, ms in ((label, "11111111/aaaaaaaa", auto_ms),
-                             (legacy, "22222222/bbbbbbbb", legacy_ms),
-                             (preset_row, preset_digest, "0.25")):
-        if mutation == "row" and name == selected:
-            continue
-        print(opts["backend"], digest, "rs_stub", name, ms, "", 1, 4, 8, "false", "false",
-              "false", sep="\t", file=rows)
+if mutation != "no-tune-line":
+    if mutation in ("bad-timing-decisions", "bad-timing-decisions-joined"):
+        td = "bogus:refused_unbatched=1"
+    elif mutation == "no-tsv":
+        td = "cap_unresolved:refused_unbatched=3"
+    elif mutation == "row":
+        td = "cap_unresolved:refused_unbatched=1,measured_batch:admitted=2"
+    elif mutation == "both-rows-refused":
+        td = ("cap_unresolved:refused_unbatched=2,measured_batch:admitted=1"
+              if arm == "auto" else "measured_batch:refused_contended=1,measured_batch:admitted=2")
+    else:
+        td = "measured_batch:admitted=3"
+    print(f'rank-site: tune site={os.environ["BENCH_SITE"]} outcome=searched crowned="{selected}" '
+          f'best_ms=0.250000 timed=2 finals=not_run finals_contenders=0 timing_decisions={td}')
+if mutation != "no-tsv":
+    with open(opts["autotune_calibration_file"], "w") as rows:
+        auto_ms, legacy_ms = ("1.25", "8.00") if arm == "auto" else ("9.00", "2.50")
+        preset_row = preset_timed_as if mutation in ("preset-dedup", "preset-wrong-digest") else preset
+        for name, digest, ms in ((label, "11111111/aaaaaaaa", auto_ms),
+                                 (legacy, "22222222/bbbbbbbb", legacy_ms),
+                                 (preset_row, preset_digest, "0.25")):
+            if mutation in ("row", "both-rows-refused", "no-tune-line", "bad-timing-decisions") and name == selected:
+                continue
+            print(opts["backend"], digest, "rs_stub", name, ms, "", 1, 4, 8, "false", "false",
+                  "false", sep="\t", file=rows)
 PY
 chmod +x "$TMP/shims/dune" "$exe"
 
@@ -259,6 +274,41 @@ if harness_leg '4: mutated twins are rejected'; then
     check "$mutation mutation fails the pair" test "$got" = 1
     check "$mutation mutation names the failed join" grep -qF "$diagnostic" "$TMP/runs/$run/stdout"
   done
+  check 'missing row names the arm admission refusal beside found 0' \
+    grep -qF 'found 0 (timing_admissions: refused_unbatched=1, admitted=2 (cap_unresolved:refused_unbatched=1, measured_batch:admitted=2))' \
+      "$TMP/runs/mutant-row/stdout"
+  check 'missing row also reports the sibling arm timing admissions' \
+    grep -qF 'auto: timing_admissions: no refusals, admitted=3 (measured_batch:admitted=3)' \
+      "$TMP/runs/mutant-row/stdout"
+  drive "$SRC" mutant-both-rows STUB_MUTATION=both-rows-refused
+  check 'both arms missing rows fail the pair' test "$got" = 1
+  check 'both arms missing rows names auto refused_unbatched' \
+    grep -qF 'auto: ' "$TMP/runs/mutant-both-rows/stdout"
+  check 'both arms missing rows prints auto admission refusal' \
+    grep -qF 'found 0 (timing_admissions: refused_unbatched=2, admitted=1 (cap_unresolved:refused_unbatched=2, measured_batch:admitted=1))' \
+      "$TMP/runs/mutant-both-rows/stdout"
+  check 'both arms missing rows prints auto-legacy admission refusal' \
+    grep -qF 'found 0 (timing_admissions: refused_contended=1, admitted=2 (measured_batch:refused_contended=1, measured_batch:admitted=2))' \
+      "$TMP/runs/mutant-both-rows/stdout"
+  drive "$SRC" mutant-no-tune-line STUB_MUTATION=no-tune-line
+  check 'missing row without rank-site: tune line still fails' test "$got" = 1
+  check 'missing row without rank-site: tune line reports unavailable admissions' \
+    grep -qF 'found 0 (timing_admissions: unavailable (no rank-site: tune timing_decisions))' \
+      "$TMP/runs/mutant-no-tune-line/stdout"
+  drive "$SRC" mutant-no-tsv STUB_MUTATION=no-tsv
+  check 'missing TSV file still fails as found 0' test "$got" = 1
+  check 'missing TSV file reports arm admission refusals beside found 0' \
+    grep -qF 'found 0 (timing_admissions: refused_unbatched=3 (cap_unresolved:refused_unbatched=3))' \
+      "$TMP/runs/mutant-no-tsv/stdout"
+  check 'missing TSV file still reports sibling arm timing admissions' \
+    grep -qF 'auto: timing_admissions: no refusals, admitted=3 (measured_batch:admitted=3)' \
+      "$TMP/runs/mutant-no-tsv/stdout"
+  drive "$SRC" mutant-bad-td STUB_MUTATION=bad-timing-decisions
+  check 'unrecognized timing_decisions settle fails closed on missing row' test "$got" = 1
+  check 'unrecognized timing_decisions names the bad settle' \
+    grep -qF "unrecognized timing_decisions settle 'bogus'" "$TMP/runs/mutant-bad-td/stdout"
+  drive "$SRC" joined-bad-td STUB_MUTATION=bad-timing-decisions-joined
+  check 'valid TSV joins succeed without validating diagnostic stdout' test "$got" = 0
 fi
 if harness_leg '5: stock agreement uses preset attribution and retains the serial lookup'; then
   site=rank_wgrad_1x32x32x32

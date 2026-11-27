@@ -43,12 +43,12 @@ type turn = Main | Spawned
    before the other domain's reads. *)
 let running : turn option Stdlib.Atomic.t = Stdlib.Atomic.make None
 
-type event = { turn : turn option; point : FI.point }
+type event = { turn : turn option; ev : FI.event }
 
-let recorder events point = events := { turn = Stdlib.Atomic.get running; point } :: !events
+let recorder events ev = events := { turn = Stdlib.Atomic.get running; ev } :: !events
 
 let points events =
-  List.map events ~f:(fun e -> e.point) |> List.dedup_and_sort ~compare:Poly.compare
+  List.map events ~f:(fun e -> e.ev.point) |> List.dedup_and_sort ~compare:Poly.compare
 
 let clean_dir dir =
   if Stdlib.Sys.file_exists dir && Stdlib.Sys.is_directory dir then (
@@ -58,11 +58,21 @@ let clean_dir dir =
 
 let cache_dir = "autotune_cache_resource_fault_injection_domains"
 
-type fixture = { comp : Ir.Assignments.comp; y : Tensor.t; w : Tensor.t; nd : Ir.Ndarray.t }
+type fixture = {
+  comp : Ir.Assignments.comp;
+  y : Tensor.t;
+  w : Tensor.t;
+  w_big : Tensor.t;
+  nd : Ir.Ndarray.t;
+  nd_big : Ir.Ndarray.t;
+}
 
-(* Built in this domain before any other domain exists: tensor construction is not under test. *)
-let fixture name =
+(* Built in this domain before any other domain exists: tensor construction is not under test.
+   [grow_elems] increases strictly across scenarios on the singleton [cc] device so every turn
+   forces a real merge-slab grow and hits [Merge_slab_before_allocate]. *)
+let fixture ~grow_elems name =
   let values = [| -2.; -1.; 3.; 4. |] in
+  let big_values = Array.init grow_elems ~f:(fun i -> Float.of_int (i + 1)) in
   let x = TDSL.ndarray values ~label:[ name ^ "_x" ] ~output_dims:[ 4 ] () in
   (* A fresh upload needs a mutable target; literals refuse host writes (gh-ocannl-2021). *)
   let w =
@@ -70,12 +80,21 @@ let fixture name =
       ~f:(fun i -> values.(i.(0)))
       ~grad_spec:Tensor.Prohibit_grad ()
   in
+  let w_big =
+    Operation.init ~mutable_:true ~l:(name ^ "_w_big") ~prec:Ir.Ops.single ~o:[ grow_elems ]
+      ~f:(fun i -> big_values.(i.(0)))
+      ~grad_spec:Tensor.Prohibit_grad ()
+  in
   let%op y = relu x in
   let nd =
     Ir.Ndarray.init_array ~debug:(name ^ " upload") Ir.Ops.single ~dims:[| 4 |] ~padding:None
       ~f:(fun i -> values.(i.(0)))
   in
-  { comp = Train.forward y; y; w; nd }
+  let nd_big =
+    Ir.Ndarray.init_array ~debug:(name ^ " merge grow") Ir.Ops.single ~dims:[| grow_elems |]
+      ~padding:None ~f:(fun i -> big_values.(i.(0)))
+  in
+  { comp = Train.forward y; y; w; w_big; nd; nd_big }
 
 (* One uninjected scenario in the calling domain, as [who]'s turn, against contexts from [root]. *)
 let scenario ?who ~root ~name f =
@@ -88,6 +107,17 @@ let scenario ?who ~root ~name f =
       let readback = Context.get_values ctx f.y.Tensor.value in
       Context.release ctx;
       let uploaded = Context.from_host (root ()) f.w.Tensor.value f.nd in
+      let uploaded_big = Context.from_host uploaded f.w_big.Tensor.value f.nd_big in
+      let merge_dst =
+        Context.copy ~into_merge_buffer:Ir.Backend_intf.Copy ~src:uploaded_big ~dst:(root ())
+          f.w.Tensor.value
+      in
+      let merge_dst =
+        Context.copy ~into_merge_buffer:Ir.Backend_intf.Copy ~src:uploaded_big ~dst:merge_dst
+          f.w_big.Tensor.value
+      in
+      Context.release merge_dst;
+      Context.release uploaded_big;
       Context.release uploaded;
       (* One directory for every scenario: the turns never overlap, and each starts it fresh. *)
       clean_dir cache_dir;
@@ -123,8 +153,11 @@ let await_signal s =
 let cc () = Context.cpu ()
 
 let () =
-  let main_fixture = fixture "rfid_main" and spawned_fixture = fixture "rfid_spawned" in
-  let multidev_fixture = fixture "rfid_multidev" in
+  let main_first_fixture = fixture ~grow_elems:16 "rfid_main"
+  and spawned_bare_fixture = fixture ~grow_elems:32 "rfid_spawned_bare"
+  and main_second_fixture = fixture ~grow_elems:48 "rfid_main_again"
+  and spawned_fixture = fixture ~grow_elems:64 "rfid_spawned"
+  and multidev_fixture = fixture ~grow_elems:16 "rfid_multidev" in
   let main_events = ref [] and spawned_events = ref [] in
   let spawned_ready = signal () and spawned_turn = signal () in
   let ( first_ok,
@@ -133,15 +166,15 @@ let () =
         multidev_ok,
         multidev_events,
         multidev_backend ) =
-    FI.with_callback (recorder main_events) ~f:(fun () ->
-        let first_ok = scenario ~who:Main ~root:cc ~name:"rfid_main" main_fixture in
+    FI.with_event_callback (recorder main_events) ~f:(fun () ->
+        let first_ok = scenario ~who:Main ~root:cc ~name:"rfid_main" main_first_fixture in
         let spawned =
           Stdlib.Domain.spawn (fun () ->
               (* Before installing anything: a fresh domain calls the no-op, not its parent's. *)
               let uninstalled_ok =
-                scenario ~who:Spawned ~root:cc ~name:"rfid_spawned_bare" spawned_fixture
+                scenario ~who:Spawned ~root:cc ~name:"rfid_spawned_bare" spawned_bare_fixture
               in
-              FI.with_callback (recorder spawned_events) ~f:(fun () ->
+              FI.with_event_callback (recorder spawned_events) ~f:(fun () ->
                   raise_signal spawned_ready;
                   await_signal spawned_turn;
                   ( uninstalled_ok,
@@ -151,7 +184,7 @@ let () =
         await_signal spawned_ready;
         let second_ok =
           Exn.protect
-            ~f:(fun () -> scenario ~who:Main ~root:cc ~name:"rfid_main_again" main_fixture)
+            ~f:(fun () -> scenario ~who:Main ~root:cc ~name:"rfid_main_again" main_second_fixture)
             ~finally:(fun () ->
               (* Even if this scenario fails, the spawned domain must be released to finish. *)
               raise_signal spawned_turn)
@@ -161,7 +194,7 @@ let () =
         let multidev_events = ref [] in
         let multidev_backend = ref "" in
         let multidev_ok =
-          FI.with_callback (recorder multidev_events) ~f:(fun () ->
+          FI.with_event_callback (recorder multidev_events) ~f:(fun () ->
               scenario ~who:Main
                 ~root:(fun () ->
                   let ctx = Context.cpu ~threads:2 () in
@@ -195,4 +228,9 @@ let () =
   p "spawned domain: its callback saw every point the main domain's did"
     (List.equal FI.equal_point (points spawned_events) (points main_events));
   p "multidev_cc: the calling domain's callback saw every point the cc scenario reaches"
-    (List.equal FI.equal_point (points multidev_events) (points main_events))
+    (List.equal FI.equal_point (points multidev_events) (points main_events));
+  p "multidev_cc: merge-slab growth fires Merge_slab_before_allocate on the calling domain"
+    (List.mem (points multidev_events) FI.Merge_slab_before_allocate ~equal:FI.equal_point);
+  p_all "every domain event carries its point's derived ownership phase"
+    (main_events @ spawned_events @ multidev_events)
+    ~f:(fun e -> FI.equal_ownership_phase e.ev.phase (FI.phase_of_point e.ev.point))

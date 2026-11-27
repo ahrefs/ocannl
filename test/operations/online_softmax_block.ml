@@ -26,7 +26,8 @@
    fold cannot move, scores that are no contraction), each falling back to the two-pass form; 7.
    training: the fold forward under the composed backward (treatment E of the gh-1002/1003 record)
    and under the fused one (treatment F); 8. device resolution before analysis and compilation, and
-   structural agreement with an explicit block size. *)
+   structural agreement with an explicit block size; 9. observation intent and how it differs from
+   optimizer placement. *)
 
 open Base
 open Stdio
@@ -333,6 +334,7 @@ let rec map_sets ~f (llc : LL.t) : LL.t =
    head width, so that the masked scores have the values' shape. *)
 module Value_alias = struct
   let check ~rewrite =
+    let module B = Ll_test in
     Tensor.unsafe_reinitialize ();
     let raw =
       with_gates ~on:true ~block:4 (fun () ->
@@ -352,10 +354,13 @@ module Value_alias = struct
     in
     p "a value operand aliasing the masked scores: no fold"
       (Set.is_empty (tiles (rewrite ~block:4 aliased)));
-    (* The same with a materialized exponential: a live row-state definition the fold would move
-       behind itself, and so define only after reading it. *)
+    let scratch = B.node_factory ~first_id:100450 ~dims:[| 1 |] () in
+    let probe = scratch "later_reader" in
+    let zero = B.fixed 0 in
+    let read_first (tn : Tn.t) = B.get tn (Array.map (Lazy.force tn.dims) ~f:(fun _ -> zero)) in
+    let with_later_reader llc tn = B.seq llc (B.set_at probe zero (read_first tn)) in
+    (* The later reader keeps the exponential live, so the fold would move it past its own read. *)
     let e = Option.value_exn (Set.find (written raw) ~f:(label_is "exp_exp_vals")) in
-    Ll_test.materialize e;
     let aliased_live =
       LL.unflat_lines
         (List.map (LL.flat_lines [ raw ]) ~f:(fun stmt ->
@@ -365,37 +370,21 @@ module Value_alias = struct
              else stmt))
     in
     p "a value operand aliasing a live row-state definition (the exponentials): no fold"
-      (Set.is_empty (tiles (rewrite ~block:4 aliased_live)));
-    (* A live definition reading a scope local: the census does not see local writes, so the fold
-       will not move it (the probabilities materialized, their definition wrapped in a scope). *)
-    let probs = Option.value_exn (Set.find (written raw) ~f:(label_is "softmax")) in
-    Ll_test.materialize probs;
+      (Set.is_empty (tiles (rewrite ~block:4 (with_later_reader aliased_live e))));
+    (* A scope-valued definition can go if dead. A later reader would require moving its local
+       accesses, which the fold's code-motion check cannot justify. *)
+    let scoped_value = scratch "scoped_state" in
     let scoped =
-      LL.unflat_lines
-        (List.map (LL.flat_lines [ raw ]) ~f:(fun stmt ->
-             let rec wrap (llc : LL.t) : LL.t =
-               match llc with
-               | LL.For_loop fl -> LL.For_loop { fl with body = wrap fl.body }
-               | LL.Set ({ tn; llsc; _ } as st) when Tn.equal tn probs ->
-                   let id = LL.get_scope probs in
-                   LL.Set
-                     {
-                       st with
-                       llsc =
-                         LL.Local_scope
-                           {
-                             id;
-                             orig_indices = st.idcs;
-                             mint = LL.Inlined_computation;
-                             body = LL.Set_local (id, llsc);
-                           };
-                     }
-               | other -> other
-             in
-             wrap stmt))
+      insert_before raw ~before:(reads_node "softmax")
+        [
+          B.set_at scoped_value zero (B.scope ~orig_indices:[| zero |] scoped_value (read_first e));
+        ]
     in
+    let without_reader = rewrite ~block:4 scoped in
+    p "a dead definition reading a scope local is removed by the fold"
+      (Set.length (tiles without_reader) = 2 && not (Set.mem (written without_reader) scoped_value));
     p "a live definition reading a scope local: no fold"
-      (Set.is_empty (tiles (rewrite ~block:4 scoped)))
+      (Set.is_empty (tiles (rewrite ~block:4 (with_later_reader scoped scoped_value))))
 end
 
 let () =
@@ -666,17 +655,11 @@ let () =
   in
   p "probabilities stored narrower than the scores: no fold"
     (Set.is_empty (tiles (rewrite (renarrow raw))));
-  (* Only the row max requested: the fold writes it, and nothing else of the row state -- the
-     shifted scores, exponentials and probabilities have no reader, so they go, and with them the
-     score chain; only a live definition would move behind the fold. *)
   let max_vals = Option.value_exn (Set.find (written raw) ~f:(label_is "max_vals")) in
   B.materialize max_vals;
   let r = rewrite raw in
-  let w = written r in
-  p "the row max alone requested: the fold writes it and its tiles"
-    (Set.mem w max_vals && not (Set.is_empty (tiles r)));
-  p_none "the row max alone requested: no other row-state or score-chain node is written"
-    [ "softmax"; "exp_exp_vals"; "where"; "n67" ] ~f:(fun name -> Set.exists w ~f:(label_is name))
+  p "a requested row max keeps the composed forward"
+    (LL.equal (LL.unflat_lines (LL.flat_lines [ raw ])) r)
 
 (* --- Leg 7: training -- the fold forward under the composed backward and under the fused one.
    --- *)
@@ -865,3 +848,146 @@ let () =
       in
       p "auto compilation has the same code structure as the explicit resolved size"
         (String.equal (Option.value_exn !captured_digest) (Option.value_exn !forced_digest)))
+
+(* --- Leg 9: declared observation at the four refusal sites. --- *)
+
+let unique_writer raw ~label ~f =
+  let nodes = ref [] in
+  Ll_test.walk raw ~on_stmt:(function
+    | LL.Set { tn; llsc; _ } -> Option.iter (f tn llsc) ~f:(fun target -> nodes := target :: !nodes)
+    | _ -> ());
+  match !nodes with [ node ] -> node | _ -> failwith ("expected one writer for " ^ label)
+
+let sum_node raw =
+  unique_writer raw ~label:"the row sum" ~f:(fun tn -> function
+    | LL.Binop (Ir.Ops.Div, _, (LL.Get (l, _), _)) when label_is "softmax" tn -> Some l
+    | _ -> None)
+
+let denominator_square raw =
+  let l = sum_node raw in
+  unique_writer raw ~label:"the denominator square" ~f:(fun tn -> function
+    | LL.Binop (Ir.Ops.ToPowOf, (LL.Get (base, _), _), _) when Tn.equal l base -> Some tn
+    | _ -> None)
+
+let observed_values ?(check_placement = false) ~name ~backward target =
+  Tensor.unsafe_reinitialize ();
+  let y = model ~mask_fill:(-2.) ~seq:12 ~layers:1 ~d_k:8 ~prefix:2 () in
+  let comp =
+    if backward then
+      let%op loss = (y *. y) ++ "... | ... => 0" in
+      Train.grad_update loss
+    else (
+      Train.set_materialized y.Tensor.value;
+      y.Tensor.forward)
+  in
+  let ctx = Train.init_params (Context.auto ()) Ir.Indexing.Empty y in
+  let raw = Ir.Assignments.to_low_level comp.Ir.Assignments.asgns in
+  let tn = target raw in
+  let block = if backward then 0 else 4 in
+  let with_rewrite ~on f =
+    with_gates ~on ~block (fun () ->
+        Online_softmax.set_backward_enabled (Some backward);
+        f ())
+  in
+  let rewrites llc = if backward then rowdot_writes llc = 1 else Set.length (tiles llc) = 2 in
+  let unobserved = with_rewrite ~on:true (fun () -> Online_softmax.rewrite raw) in
+  p
+    (name ^ ": without observation the rewrite removes the writer")
+    (rewrites unobserved && not (Set.mem (written unobserved) tn));
+  if check_placement then (
+    let composed =
+      with_rewrite ~on:false (fun () ->
+          let settings = LL.virtualize_settings in
+          let max_reduction = settings.max_inline_reduction and max_visits = settings.max_visits in
+          settings.max_inline_reduction <- -1;
+          settings.max_visits <- 1;
+          Exn.protect
+            ~f:(fun () ->
+              Context.lowered_for_decisions ~name:"osb_placement_composed" ctx comp
+                Ir.Indexing.Empty)
+            ~finally:(fun () ->
+              settings.max_inline_reduction <- max_reduction;
+              settings.max_visits <- max_visits))
+    in
+    p "the optimizer's visit cap materializes the probabilities in its fork"
+      (Ll_test.known_non_virtual composed tn
+      && Set.mem (written composed.LL.llc) tn
+      && Option.equal Tn.equal_provenance (Ll_test.rejection_code composed tn) (Some Tn.Visit_cap)
+      && Option.is_none tn.Tn.memory_mode_intent
+      && not (Tn.is_observable tn));
+    let folded =
+      with_rewrite ~on:true (fun () ->
+          Ir.Assignments.lower
+            (LL.copy_optimize_ctx composed.LL.optimize_ctx)
+            ~unoptim_ll_source:None ~ll_source:None ~cd_source:None ~name:"osb_with_placement" []
+            comp.Ir.Assignments.asgns)
+    in
+    p "the fold fires with the visit-cap placement in the incoming lineage"
+      (rewrites folded.LL.llc && not (Set.mem (written folded.LL.llc) tn)));
+  let run ~on ~suffix ctx =
+    with_rewrite ~on (fun () ->
+        let ctx, routine =
+          Context.compile ~name:("osb_" ^ name ^ suffix) ctx comp Ir.Indexing.Empty
+        in
+        Context.run ctx routine)
+  in
+  let reference = run ~on:false ~suffix:"_reference" (Context.decide_materialized ctx [ tn ]) in
+  let want = Context.to_host reference tn in
+  let want_values = Ir.Ndarray.retrieve_flat_values want in
+  p_all (name ^ ": the reference has finite values") (Array.to_list want_values) ~f:Float.is_finite;
+  p
+    (name ^ ": the reference distinguishes a missing write")
+    (Array.exists want_values ~f:(fun v -> Float.(abs v > 1e-5)));
+  let dims = Ir.Ndarray.dims want in
+  p_alli (name ^ ": the reference varies along every non-singleton axis") (Array.to_list dims)
+    ~f:(fun axis extent ->
+      extent = 1
+      || Ir.Ndarray.fold_as_float want ~init:false ~f:(fun varies idx v ->
+          varies
+          ||
+          let next = Array.copy idx in
+          next.(axis) <- (next.(axis) + 1) % extent;
+          Float.(abs (v - Ir.Ndarray.get_as_float want next) > 1e-6)));
+  Tn.set_observable tn;
+  p
+    (name ^ ": the node declares observation alone")
+    (Tn.is_observable tn && Option.is_none tn.Tn.memory_mode_intent);
+  let observed = with_rewrite ~on:true (fun () -> Online_softmax.rewrite raw) in
+  p
+    (name ^ ": the rewrite declines and keeps the writer")
+    ((if backward then rowdot_writes observed = 0
+      else LL.equal (LL.unflat_lines (LL.flat_lines [ raw ])) observed)
+    && Set.mem (written observed) tn);
+  let ctx = run ~on:true ~suffix:"_observed" ctx in
+  let got =
+    try Ir.Ndarray.retrieve_flat_values (Context.to_host ctx tn)
+    with Utils.User_error message ->
+      eprintf "%s host read: %s\n%!" name message;
+      [||]
+  in
+  p_close
+    (name ^ ": host read matches the materialized composed computation")
+    got want_values ~tol:(close_tol ~tol:1e-5)
+
+let () =
+  printf "--- leg 9: observation intent roots online-softmax intermediates ---\n";
+  let labelled label raw = Option.value_exn (Set.find (written raw) ~f:(label_is label)) in
+  observed_values ~name:"row_max" ~backward:false (labelled "max_vals");
+  observed_values ~name:"row_sum" ~backward:false sum_node;
+  observed_values ~check_placement:true ~name:"probabilities" ~backward:false (labelled "softmax");
+  observed_values ~name:"masked_scores" ~backward:false (labelled "where");
+  observed_values ~name:"probability_gradient" ~backward:true (labelled "softmax.grad");
+  observed_values ~name:"denominator_square" ~backward:true denominator_square;
+  Tensor.unsafe_reinitialize ();
+  let t = model ~seq:12 ~layers:2 ~d_k:8 ~prefix:0 () in
+  let raw = Ir.Assignments.to_low_level t.Tensor.forward.Ir.Assignments.asgns in
+  let first_max =
+    List.find_map_exn (LL.flat_lines [ raw ]) ~f:(fun stmt ->
+        Set.find (written stmt) ~f:(label_is "max_vals"))
+  in
+  Tn.set_observable first_max;
+  let rewritten = with_gates ~on:true ~block:4 (fun () -> Ir.Rewrites.apply raw) in
+  p "one observed attention leaves a sibling fold eligible through the tier fixpoint"
+    (Set.length (tiles rewritten) = 2
+    && scans_of rewritten = 1
+    && Set.mem (written rewritten) first_max)

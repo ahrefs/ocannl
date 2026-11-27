@@ -283,6 +283,7 @@ shell test/operations/apt_fallback.sh
 shell test/operations/ci_matrix.sh
 shell tools/test-machine-verify.sh
 shell tools/test-merge-build-check.sh
+shell tools/test-owed-run-tty.sh
 shell tools/test-merge-build-replay.sh
 shell tools/test-row-trace-compact.sh
 shell tools/test-compare-bounded-outcomes.sh

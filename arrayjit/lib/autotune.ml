@@ -1988,6 +1988,23 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
                   (calibration_dispatches, upper_depth, upper_ms, Measured_batch)
                 else if Float.is_finite confirmed_wall_ms then
                   (calibration_dispatches, confirmed_depth, confirmed_wall_ms, Affine_projection)
+                else if
+                  Float.(
+                    upper_ms >= queued_batch_ms
+                    && upper_ms < contention_ratio *. queued_batch_ms
+                    && upper_ms >= measured.ms)
+                  && Option.exists !last_fit ~f:(fun f -> Poly.equal f.verdict Fit_negative_fixed)
+                  && Float.(
+                       upper_ms /. Float.of_int upper_depth
+                       <= contention_ratio *. (measured.ms /. Float.of_int depth))
+                then
+                  (* A mild boost-clock step between two nearby depths can make [fixed_ms] exceed
+                     [fixed_fit_noise_fraction] ([Fit_negative_fixed]). Because the slope is
+                     strictly superlinear and within [contention_ratio] per launch, the upper
+                     target-sized batch is not fixed-overhead dominated (gh-ocannl-2376). *)
+                  if Float.(measured.ms >= queued_batch_ms) then
+                    (calibration_dispatches, depth, measured.ms, Measured_batch)
+                  else (calibration_dispatches, upper_depth, upper_ms, Measured_batch)
                 else if Float.(upper_ms >= queued_batch_ms && upper_ms >= measured.ms) then
                   (calibration_dispatches, queue_depth_cap, Float.nan, Cap_unresolved)
                 else
@@ -2005,7 +2022,8 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
               if depth = 1 then (calibration_dispatches, 1, single_estimate.ms, Measured_batch)
               else confirm_interpolated calibration_dispatches depth ~upper_depth ~upper_ms
             in
-            let rec confirm_or_scale ?(retry_stall = true) calibration_dispatches depth wall_ms =
+            let rec confirm_or_scale ?(retry_stall = true) ~base_resolved calibration_dispatches
+                depth wall_ms =
               if depth = queue_depth_cap then
                 (* The cap itself cannot provide a depth-separated confirmation. Its directly
                    measured wall is still the best scale evidence; repeating the same depth only
@@ -2041,7 +2059,22 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
                        target-sized base. Retry the same depth once: jumping straight to the cap
                        would inflate the timed batch and its 2x refusal threshold precisely when
                        calibration observed the stall that rule is meant to reject. *)
-                    confirm_or_scale ~retry_stall:false calibration_dispatches depth wall_ms
+                    confirm_or_scale ~retry_stall:false ~base_resolved calibration_dispatches depth
+                      wall_ms
+                  else if
+                    base_resolved
+                    && Float.(
+                         wall_ms < contention_ratio *. queued_batch_ms
+                         && confirmation.ms <= wall_ms *. contention_ratio)
+                    && Option.exists !last_fit ~f:(fun f -> Poly.equal f.verdict Fit_negative_fixed)
+                  then
+                    (* A +25% confirmation step amplifies a 4-15% per-launch boost-clock settle by
+                       5-6x into a negative fitted intercept ([Fit_negative_fixed]). Because the
+                       slope is strictly superlinear and [confirmation.ms] stays within
+                       [contention_ratio] of [wall_ms], the confirmation rules out fixed-overhead
+                       dominance on the already-resolved target-sized base rather than indicating an
+                       unresolved queue cliff (gh-ocannl-2376). *)
+                    (calibration_dispatches, depth, wall_ms, Measured_batch)
                   else (calibration_dispatches, queue_depth_cap, Float.nan, Cap_unresolved)
                 else
                   let depth, wall_ms =
@@ -2090,7 +2123,9 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
                     else
                       validate_depth (probes_left - 1) calibration_dispatches base_depth base_ms
                         next_depth next_wall_ms
-                  else confirm_or_scale calibration_dispatches depth validation.ms
+                  else
+                    confirm_or_scale ~base_resolved:(Float.is_finite next_wall_ms)
+                      calibration_dispatches depth validation.ms
                 else if next_depth < depth && Float.is_finite next_wall_ms then
                   (* Past the bracket, so the base is itself over the target and the resolved pair
                      puts the crossing below the validation, possibly below the base too. Probing it
@@ -2148,7 +2183,9 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
                 validate_depth max_depth_validation_probes calibration_dispatches 1
                   single_estimate.ms depth estimated_batch_wall_ms
               else if depth = probe_depth && Float.(probe.ms >= queued_batch_ms) then
-                confirm_or_scale calibration_dispatches probe_depth probe.ms
+                confirm_or_scale
+                  ~base_resolved:(Float.is_finite estimated_batch_wall_ms)
+                  calibration_dispatches probe_depth probe.ms
               else
                 validate_depth max_depth_validation_probes calibration_dispatches probe_depth
                   probe.ms depth estimated_batch_wall_ms
@@ -5732,8 +5769,8 @@ let seeded_min_blocks = 128
    reorders the reduction. The coalesced layouts do NOT: each keeps every cell's summation order
    (test/operations/coalesce_numerics executes it), and they stay out, as the twins do, because they
    are the search's to time -- the ranking score cannot tell a coalesced leaf from its uncoalesced
-   twin (gh-ocannl-1278). Shared by the seeding and by [model_default]'s GPU family search, so the
-   two cannot drift. *)
+   twin (gh-ocannl-1278). Shared by the seeding and the numerics-preserving arm of [model_default]'s
+   GPU family search. *)
 let scalar_blocktile p =
   p.sk_gpu && (not p.sk_mma) && (not p.sk_conv) && (not p.sk_epilogue)
   && Option.is_none p.sk_coalesce && (not p.sk_batch_inner) && Option.is_none p.sk_swizzle
@@ -6416,14 +6453,6 @@ let model_seeding ~facts ~limits =
   if not (Ir.Backend_intf.binds_hardware_grid facts) then None
   else seeded_settings ~facts ~configured_gate:(fun () -> seeded_default_gate ~limits) ()
 
-(* Where the model starts from the seeded plan, the family is restricted to the numerics-preserving
-   candidate set the seeding uses ({!scalar_blocktile}, at a site accumulating at its storage
-   precision), so a model pick never changes a result the seeded plan would not: tensorized forms
-   reround, the conv family reorders the reduction. (The coalesced branch joins it only under
-   {!model_ranks_coalesced}: it preserves numerics, and only the terms that gate names tell the
-   geometry it adds from its uncoalesced twins, gh-ocannl-1278.)
-   Other leaves are kept out of the ranking, counted as not numerics-preserving, never an error.
-   Metal, the CPU backends and an unseeded CUDA/HIP compile keep the whole family. *)
 (* gh-ocannl-1600: whether [model_default] ranks the coalesced layouts: only where the terms that
    tell them apart are priced -- the memory-transaction rate (with the lane group's width stated),
    and a geometry term: the occupancy factor (its workgroup capacity, the device residency and the
@@ -6444,17 +6473,18 @@ let model_ranks_coalesced ~limits =
      || (Option.is_some (ranking_staged_copy_rate ~limits) && fill))
   && Option.is_some limits.Ir.Backend_intf.simdgroup_width
 
+(* With a seeded incumbent, the scalar blocktiles keep the seeded plan's narrowing points and
+   summation order, including at sites with widened accumulators (gh-ocannl-1405, gh-ocannl-2195).
+   The model may also rank tensorized matmuls (gh-ocannl-1663), which can reround the sum. The
+   family tree still judges the backend formats and numerics policy. Convolution reorders the
+   reduction and stays outside this admission. A coalesced layout competes only where the score
+   prices what distinguishes its geometry (gh-ocannl-1600). *)
 let model_admits ?(coalesced = false) ~seeding p =
-  (* gh-ocannl-1405, gh-ocannl-2195: a site whose accumulator widens its storage is in the set as it
-     is in the seeded plan's, in every profile -- a scalar blocktile keeps the default's narrowing
-     points ([seed_narrow_storage_enabled] says why) -- so the model's pick still changes no result
-     the seeded plan would not. *)
-  (* gh-ocannl-1600: with the memory-transaction term priced ([coalesced]), a coalesced layout of a
-     scalar blocktile is in the set too: it keeps every cell's summation order
-     (test/operations/coalesce_numerics), and the score can now tell it from its twin. Its other
-     restrictions are the blocktile's own, so a staged tensorized [coal-k] leaf stays out. *)
   Option.is_none seeding || scalar_blocktile p
   || (coalesced && Option.is_some p.sk_coalesce && scalar_blocktile { p with sk_coalesce = None })
+  || p.sk_mma && (not p.sk_conv)
+     && (coalesced || Option.is_none p.sk_coalesce)
+     && Utils.get_global_flag ~default:true ~arg_name:"model_default_tensorize"
 
 (* gh-ocannl-1477: the seeded plan's own sketches on a program [model_default] searches -- the whole
    routine, or one keyed segment of its per-segment substitution: each scalar blocktile the plan
@@ -7597,16 +7627,8 @@ module Make (D : Driver) = struct
          sketch, [anchored] below). [None] where the untuned compile is the plain default (another
          backend, seeding off). *)
       let seeding_here = lazy (model_seeding ~facts ~limits) in
-      (* Where the model starts from the seeded plan, the family is restricted to the
-       numerics-preserving candidate set the seeding uses ({!scalar_blocktile}, at a site
-       accumulating at its storage precision), so a model pick never changes a result the seeded
-       plan would not: tensorized forms reround, the conv family reorders the reduction (see
-       [model_admits] on the coalesced branch). Other leaves are kept out of the ranking, counted as
-       not numerics-preserving ([n_excluded]), never an error. Metal, the CPU backends and an
-       unseeded CUDA/HIP compile keep the whole family. *)
-      (* gh-ocannl-1600: the coalesced layouts compete only where the memory-transaction term prices
-       what tells them from their twins -- a rate resolved and a lane width stated. Elsewhere the
-       candidate set is exactly as before. *)
+      (* With a seeded incumbent, [model_admits] applies the numerics gate before scoring. Metal,
+         the CPU backends and an unseeded CUDA/HIP compile keep the whole family. *)
       let coalesced = model_ranks_coalesced ~limits in
       let admits p = model_admits ~coalesced ~seeding:(Lazy.force seeding_here) p in
       (* gh-ocannl-1477: under seeding, a walk's threshold is the seeded plan's own sketch on the
@@ -8328,14 +8350,13 @@ module Make (D : Driver) = struct
       in
       (* gh-ocannl-1278: the coalesced tuner branch's whole-routine leaves, listed on request to
          check the score's ranking of them against timings, and always where [model_default] ranks
-         them (gh-ocannl-1600, {!model_ranks_coalesced}), so its pick is among the listed rows. A
-         leaf is marked admitted when its uncoalesced form is: the set [model_default] ranks where
-         it ranks them (neither layout reorders a cell's summation). *)
+         them (gh-ocannl-1600, {!model_ranks_coalesced}), so its pick is among the listed rows.
+         Admission here is conditional on ranking the coalesced branch. *)
       let coalesced_explains ?(label = fun p -> spec_label (Whole (W_sketch p))) prog =
         if not (coalesced || model_ranks_coalesced ~limits) then []
         else
           explain_leaves ~label
-            ~admits:(fun p -> model_admits ~seeding { p with sk_coalesce = None })
+            ~admits:(model_admits ~seeding ~coalesced:true)
             prog
             (coalesced_seed_params ~capabilities:caps ~is_gpu ~is_cpu ~limits prog)
       in
@@ -12832,6 +12853,7 @@ module Make (D : Driver) = struct
                 fun () ->
                   progress_stage "winner_compile";
                   Ir.Resource_fault_injection.hit
+                    ~artifact:(Routine { name = label })
                     Ir.Resource_fault_injection.Autotune_before_winner_replay;
                   match compile_spec_real ~label Outcome.Candidate spec with
                   | Ok c when not (shipped_dispatchable ~is_gpu c) ->

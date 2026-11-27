@@ -79,9 +79,30 @@ FP16 stride 2: the gradient equals the f32 gradient rounded once per cell: true
 the shifted positive affine axis sinks its reduction and widens: true
 the in-bounds negative affine axis keeps its reduction outside: true
 the positive affine axis needing a bounds guard keeps its reduction outside: true
-a guarded FP8 axis keeps its reduction outside: true
-the guarded FP8 reference preserves untouched bytes and updates its finite cells: true
-the guarded FP8 axis preserves the materialized result byte for byte: true
+plain: guarded FP8 reduction sinks to expected nest order: true
+plain: every sunk guarded FP8 reduction widens: true
+plain: the guarded FP8 reference preserves untouched bytes: true
+plain: the guarded FP8 reference updates its finite cells: true
+plain: guarded FP8 preserves the materialized result byte for byte: true
+single_term: guarded FP8 reduction sinks to expected nest order: true
+single_term: every sunk guarded FP8 reduction widens: true
+single_term: the guarded FP8 reference preserves untouched bytes: true
+single_term: the guarded FP8 reference updates its finite cells: true
+single_term: guarded FP8 preserves the materialized result byte for byte: true
+injective_pair: guarded FP8 reduction sinks to expected nest order: true
+injective_pair: every sunk guarded FP8 reduction widens: true
+injective_pair: the guarded FP8 reference preserves untouched bytes: true
+injective_pair: the guarded FP8 reference updates its finite cells: true
+injective_pair: guarded FP8 preserves the materialized result byte for byte: true
+overlapping_pair: guarded FP8 reduction sinks to expected nest order: true
+overlapping_pair: every sunk guarded FP8 reduction widens: true
+overlapping_pair: the guarded FP8 reference preserves untouched bytes: true
+overlapping_pair: the guarded FP8 reference updates its finite cells: true
+overlapping_pair: guarded FP8 preserves the materialized result byte for byte: true
+guarded FP8 per-step rounding loses 4*0.5 onto 8.0 while preserving untouched bytes: true
+guarded FP8 sunk accumulation rounds once to 10.0 and preserves untouched bytes: true
+guarded FP8 materialized unroll rounds once to 10.0 and preserves untouched bytes: true
+guarded FP8 partition rounds once to 10.0 and preserves untouched bytes: true
 a tied traversal chooses the frame with one residue nest: true
 the order witness loses the first small term at the overlapping cell: true
 the guarded nonunit-stride pair has a wide reduction in every residue: true

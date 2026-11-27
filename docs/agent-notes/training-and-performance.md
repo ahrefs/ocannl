@@ -340,9 +340,8 @@ files.
   staged tile as 0.70 full (predicted 1.44x its 16-row twin, measured 0.76x: tile reuse, not a
   compute-leg effect), so the pick is the swizzled 16x32x32 (0.191 ms), not the plain 32x32x32
   winner (0.162 ms); plain against swizzled stays the load tie-break's call. On CUDA's seeded
-  default path the clause is still moot: `model_admits` admits no tensorized leaf there (a
-  numerics policy, not a ranking one); it is reachable at gate 0, with seeding off, and in
-  `model_explain`.
+  `model_default` path this clause can rank the fp8 leaves (gh-ocannl-1663).
+  `model_default_tensorize` defaults on and the `reproducible` payload pins it off.
 - What the rates do and do not fix, measured (`benchmarks/gh1253_cells.sh`, 2026-10-21, rog CUDA,
   minix HIP unified, tuf HIP discrete). The seeded weight-gradient kernel is predicted within
   0.69-1.35x at b8 and b256 on all three (3-12x too fast at the class peak), and at b1 everywhere
@@ -967,6 +966,15 @@ files.
   what lets a cap reach the
   descendants, and it is why a SIGTERM to the DRIVER no longer reaches them, so a driver that
   spawns cells this way owes itself a SIGTERM handler that takes the running cell with it.
+
+- On Linux, the shared `cells.py` driver turns direct launcher death into SIGTERM. Inherited
+  ignored SIGHUP keeps a detached launch, such as `nohup`, independent of its launcher. An
+  attached driver watches the launcher process with a pidfd. On kernels without pidfds, the
+  parent-death signal follows the launching thread. The cell guard keeps the inherited fleet
+  slot and inhibitor alive after a driver SIGKILL until the cell group is observed gone
+  (gh-ocannl-2497). The child registers before exec so driver death during spawn is covered.
+  Processes that leave the managed group, loss of the guard itself and kernel waits SIGKILL
+  cannot complete require operator recovery.
 
 - Two traps in that handler, both paid for in gh-ocannl-760's review. A cancellation must be
   DEFERRED across the spawn and across the kill — between `_execute_child` and `Popen` returning

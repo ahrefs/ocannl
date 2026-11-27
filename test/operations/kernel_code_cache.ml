@@ -199,6 +199,7 @@ let () =
       d warp_v "i4";
       d warp_p "i4";
       d CS.mma_fragment_derivation "812";
+      d CS.acc_touched_derivation "42";
     ]
   in
   p "a bound name in the reserved namespace (a compiler macro's) disables the node renaming"
@@ -209,7 +210,7 @@ let () =
        (String.concat ~sep:" + "
           (List.mapi derived_locals ~f:(fun i _ -> "ocannl_k" ^ Int.to_string i))));
   p_all "every template the emitter spells through is listed for the canonical text"
-    (CS.mem_alias_derivation :: CS.mma_fragment_derivation
+    (CS.mem_alias_derivation :: CS.mma_fragment_derivation :: CS.acc_touched_derivation
     :: [ chunk; lo; hi; lane_v; lane_p; warp_v; warp_p ])
     ~f:(List.mem CS.minted_derivations ~equal:Poly.equal);
   p "a derived spelling over an unbound base is left alone"

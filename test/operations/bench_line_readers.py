@@ -364,6 +364,18 @@ claim("rank-site-field prints the pick's seeded_label, as gh1253_cells.sh asks",
 # reads as octal: the labels are decoded as the literals they are.
 claim("an OCaml literal decodes as OCaml writes it",
       bench_output.ocaml_string(r'caf\195\169 \"q\" a\\b\n') == 'café "q" a\\b\n')
+gh1253 = importlib.import_module("gh1253_gate_compare")
+vocab = {}
+for line in captured("trace", "out").splitlines():
+    if line.startswith("timing-vocab: "):
+        key, val = line.removeprefix("timing-vocab: ").split("=", 1)
+        vocab[key] = set(val.split(",")) if val else set()
+claim("gh1253_gate_compare's timing-settle allowlist matches Autotune.batch_settle_name",
+      "settles" in vocab and gh1253.KNOWN_SETTLES == vocab["settles"],
+      f"{sorted(gh1253.KNOWN_SETTLES)} vs {sorted(vocab.get('settles', set()))}")
+claim("gh1253_gate_compare's timing-admission allowlist matches Autotune.batch_admission_name",
+      "admissions" in vocab and gh1253.KNOWN_ADMISSIONS == vocab["admissions"],
+      f"{sorted(gh1253.KNOWN_ADMISSIONS)} vs {sorted(vocab.get('admissions', set()))}")
 exercised.add("rank_site")
 
 # ---------------------------------------------------------------------------------------------

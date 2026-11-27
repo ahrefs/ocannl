@@ -191,6 +191,9 @@ files.
   routine never mentions would land as a fresh `read_only` entry over uninitialized scratch, so
   `refuse_uncovered_local_reads` judges those reads on the final code first (gh-ocannl-1646,
   owned by virtualization-and-inlining.md).
+  For two uncovered scratch nodes, the diagnostic chooses the first access in the final live
+  code (gh-ocannl-1877). The replay cases in `stored_template_elision` exercise this gate with one
+  uncovered scratch node at a time, so they leave the choice between multiple refusals unpinned.
   The walk observes the raw analysis' conventions or it re-diverges (review rounds 3-6):
   dead-loop bodies register (renderers emit them, so their identifiers need parameters) but
   neither supply coverage (`written_seen`) nor demand it, and the coverage query filters through
@@ -747,6 +750,9 @@ files.
   ahead of the analyses, so the traced store and the placements see the rewritten routine, and a
   member may REMOVE a node's definition (the online normalizer replaces a max- and a sum-reduction
   with one `Scan_loop`), which a post-analysis pass such as `rewrite_one_hot_reductions` may not.
+  A member must decline when it would lose an observed definition ([tier policy](../design/gh-ocannl-483.md#observed-nodes)).
+  `test/operations/online_softmax_block.ml` reads each protected target back and pins the
+  distinction between observation intent and the visit cap's decision in a placement fork.
   A member is a static list entry with its own `Code_borne` gate key -- not a `Numerics.t` field:
   the rewritten code carries the decision, while a numerics field enters every cache fingerprint
   and would split entries for routines the rewrite never touched. The tier runs the enabled

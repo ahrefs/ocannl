@@ -780,8 +780,8 @@ let () =
       (LL.Unop (Ops.Relu, above), Ops.int64))
 
 (* gh-ocannl-1768: what the parameter guards cover in all four builtin tables. An entry the guard
-   cannot read is either not a function -- a macro, a type, a constant, which have no parameter
-   types -- or a function it skips, which has to be named here with why. *)
+   cannot read is either reported as a nonfunction (a macro, a type, a constant) or has to be named
+   here with why it needs no parameter guard. *)
 let unguarded_functions =
   [
     ( ("metal", "ocannl_max"),
@@ -794,8 +794,9 @@ let unguarded_functions =
   ]
   @ List.concat_map [ "cuda"; "hip" ] ~f:(fun table ->
       [
-        ((table, "ocannl_max"), "a template comparing operands in their common type");
-        ((table, "ocannl_min"), "a template comparing operands in their common type");
+        ((table, "ocannl_is_integral"), "a type trait with no function parameters");
+        ((table, "ocannl_max"), "a template asserting integer operands before promotion");
+        ((table, "ocannl_min"), "a template asserting integer operands before promotion");
         ((table, "ocannl_sat01_open"), "a template deducing the condition and comparison types");
         ( (table, "threefry_round"),
           "state passed by reference, internal to guarded threefry functions" );

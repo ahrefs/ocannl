@@ -41,6 +41,23 @@ reasons the tier lives at this level rather than on `Assignments` or after virtu
   is not a `Numerics.t` field: the numerics record is consulted at codegen and by tile-shape
   seeding, never in lowered code, and its fingerprint enters the cache key (gh-ocannl-568).
 
+### Observed nodes
+
+A rewrite declines wherever its replacement would remove or leave unwritten an observed node
+([gh-ocannl-1129](https://github.com/ahrefs/ocannl/issues/1129#issuecomment-7224375157)).
+At `Rewrites.apply` in `Assignments.lower`, a node is protected by its declared non-virtual
+memory-mode intent (`Tnode.known_non_virtual`) or its `Tnode.is_observable` flag. Slice aliasing
+declares the parent `On_device` for structural reasons (`Site "27:slice-alias-parent"`). The raw
+reader census determines which definitions dataflow needs. Cost-based placements in a compilation
+fork's `Tnode.Placements` have no bearing on the rewrite.
+
+The block fold keeps an attention site composed if its row state is observed or its score-chain
+cleanup would remove an observed definition. Other fold misses can use the two-pass form, which
+writes both row reductions and keeps their elementwise definitions. The backward fusion keeps the
+composed backward if it would consume an observed gradient or remove an observed auxiliary.
+With `log_level > 1`, the rewrite's refusal names the root and its declared provenance, observable
+flag, or raw reader position.
+
 ## The two shapes
 
 Recognition relates nests through the AXES of the nodes they share (a per-node signature of
@@ -92,7 +109,7 @@ loop nest — schedulable, and the shape a fused backward recomputes from `(m, l
   over the query rows for `dQ`, two over the keys for `dK` and `dV`. It reuses the `(m, l)` this
   forward saves rather than a log-sum-exp. A backward compiled without its forward declines (there
   is no normalizer to anchor on), as does one with the composed max gradient, an extra reader of a
-  consumed gradient, a requested intermediate, or active dropout between `P` and the value pass.
+  consumed gradient, an observation refusal, or active dropout between `P` and the value pass.
 - **Block tiling with tensor cores.** The scan is opaque to the schedule ops (gh-ocannl-696), so
   the rewritten attention runs one row per thread with a serial key loop: memory-optimal, not
   compute-optimal. The single-pass block fold now exists as the pass's fourth shape, behind the

@@ -1,23 +1,22 @@
 (* gh-ocannl-1278: do the coalesced tuner branch's layouts change what a matmul site computes?
 
-   [Autotune.model_admits] keeps the coalesced branch out of [model_default]'s numerics-preserving
-   candidate set beside the tensorized and conv families, on the ground that it reorders the
-   reduction. Neither layout touches a cell's summation order on its face: [Coalesce_columns]
-   (gh-ocannl-1165) merges two OUTPUT loops, the q/k/v site's head and column, and leaves the
-   contraction alone; [Coalesce_contraction] (gh-ocannl-1279) merges the out projection's two
-   contraction loops [(h, e)] into one loop over [h * e] in the same lexicographic order, so a cell
-   still accumulates its products in the order the uncoalesced nest visits them.
+   [model_default] ranks coalesced layouts where its score prices the geometry that distinguishes
+   them from their twins. The layout transformation itself retains each cell's summation order.
+   [Coalesce_columns] (gh-ocannl-1165) merges two OUTPUT loops, the q/k/v site's head and column,
+   and leaves the contraction alone; [Coalesce_contraction] (gh-ocannl-1279) merges the out
+   projection's two contraction loops [(h, e)] into one loop over [h * e] in the same lexicographic
+   order, so a cell still accumulates its products in the order the uncoalesced nest visits them.
 
    This test executes that claim on inputs where the order matters. Each value is a multiple of 1/37
    rounded to f32, so products and partial sums round: a host replay of one cell's f32 accumulation
    in the reverse order changes its bits, which is the control that bitwise agreement below is not
    an accident of exact arithmetic (schedule_coalesce's inputs are exact by design, so its bitwise
    claims could not tell). On a GPU backend, per layout: every scalar blocktile seed of the ordinary
-   family ([Autotune.scalar_blocktile], the set the seeded default and [model_default] draw from) is
-   executed, and they agree among themselves bitwise; then every coalesced seed of the layout is
-   executed and must compute that same output bitwise. Seeds are enumerated under the device's own
-   limits, so every one of them can run. Off GPU the coalesced seeds cannot execute and only the
-   structural claims hold. *)
+   family ([Autotune.scalar_blocktile], the set the seeded default draws from) is executed, and they
+   agree among themselves bitwise; then every coalesced seed of the layout is executed and must
+   compute that same output bitwise. Seeds are enumerated under the device's own limits, so every
+   one of them can run. Off GPU the coalesced seeds cannot execute and only the structural claims
+   hold. *)
 
 (* cc-fp-contract: not-cc -- the executed bitwise claims are gated on a hardware grid, so cc skips
    them *)

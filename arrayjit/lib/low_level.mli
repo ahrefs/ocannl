@@ -2246,8 +2246,7 @@ val sink_narrow_reduction_loops : t -> t
 (** In a perfect serial nest updating a narrow-float node read only at the written cell, put cell
     loops outside reductions so code generation can hold the whole reduction at [accum_prec]
     (gh-ocannl-2362). Plain indices and certified injective positive affine axes, including
-    single-term axes (gh-ocannl-2479), need only interchange. Guarded FP8 nests with single-term
-    axes decline since write-back can change untouched cells. For independent positive affine pairs
+    single-term axes (gh-ocannl-2479), need only interchange. For independent positive affine pairs
     that overlap (gh-ocannl-2423, gh-ocannl-2464), cell loops own every window that reaches the
     cell. Both preserve each cell's contribution order. Part of {!post_virtualization_pipeline},
     after {!rewrite_one_hot_reductions}. *)

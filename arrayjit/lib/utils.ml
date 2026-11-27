@@ -224,6 +224,7 @@ let known_config_keys =
       "autotune_bound_pruning";
       "autotune_calibration_file";
       "model_default_schedule";
+      "model_default_tensorize";
       "model_default_placements";
       "model_default_geometry_lattice";
       "model_peak_flops";
@@ -496,6 +497,11 @@ let config_key_classification : (config_key_class * string * string list) list =
        replay under it; AGENTS.md's numerics-gate rule. Hashed into the codegen tag on CUDA and \
        HIP, where the plan runs, when on",
       [ "gpu_default_seed_narrow_storage" ] );
+    ( Keyed "codegen",
+      "a numerics gate on the untimed seeded model's tensorized matmul candidates \
+       (gh-ocannl-1663), whose reduction can round differently from the scalar seed. The policy \
+       enters the CUDA/HIP cache identity when off, preserving existing keys at the default",
+      [ "model_default_tensorize" ] );
     ( Search_shaping,
       "it steers the search: how wide, how long, what is proposed, what is pruned, how candidates \
        are ranked, and when a candidate's failure ends the search",
@@ -1647,6 +1653,8 @@ autotune_search=false
 # The analytic cost model picks schedules from per-backend (and, once calibrated, per-machine)
 # envelope constants -- the same leak without the timing runs.
 model_default_schedule=false
+# If the seeded model is explicitly enabled, keep tensorized leaves out of its ranking.
+model_default_tensorize=false
 # The greedy inlining refinement of Train.tune_placements accepts a flip when the timing
 # improves, so which nodes end up inlined is machine-dependent -- and inlining is not
 # numerics-neutral where storage precision is narrower than compute precision: a materialized
@@ -1728,9 +1736,9 @@ gpu_default_seed_narrow_storage=false
 |}
 
 let performance_profile_payload =
-  {|# The fastest configuration AT UNCHANGED SEMANTICS. Result-changing gates (tf32_matmuls,
-# fp16_arithmetic's accuracy-for-throughput trade is the one exception below, and the
-# algebraic-rewrite tiers) belong to the numerics axis, not to this one.
+  {|# Throughput settings with two changes to floating-point results: fp16_arithmetic and the
+# seeded model's admission of tensorized matmuls. The other numerics gates belong to
+# the approximate profile.
 
 # Empirical schedule search on, with a wider beam and more rounds than the everyday defaults.
 # The benchmark runners (benchmarks/runners/ocannl) pass ~rounds:0, so their tuned cells get
@@ -1739,7 +1747,8 @@ let performance_profile_payload =
 autotune_search=true
 autotune_beam_width=4
 autotune_rounds=4
-# Untuned compiles still get the cost model's pick instead of the plain default pipeline.
+# Untuned compiles get the cost model's pick. On seeded CUDA/HIP it can rank tensorized matmuls
+# (model_default_tensorize defaults to true), whose matrix instructions can reround the sum.
 model_default_schedule=true
 
 # Target the host CPU, and let the SIMD probe add what that target already supports.
@@ -1749,7 +1758,7 @@ cc_backend_simd_flags=auto
 # Native 16-bit arithmetic where the target has it; ignored on targets that promote fp16 to
 # float. On CUDA and Metal it keeps the f16-accumulate tensor units and storage-width f16
 # accumulators -- on CUDA the narrow side of the trade auto no longer takes (gh-ocannl-2195), and
-# the one result-changing key of this payload. HIP floors it to auto, wide (gh-ocannl-2233): gfx11's
+# a result-changing setting of this payload. HIP floors it to auto, wide (gh-ocannl-2233): gfx11's
 # f16-accumulate WMMA misses whole-output checksums by 7-82% and runs slower than the wide arm, so
 # no profile selects it; an explicit fp16_arithmetic=true still does.
 fp16_arithmetic=prefer_narrow
@@ -1782,6 +1791,8 @@ fp16_arithmetic=prefer_narrow
 # f32 matmul operands computed at tf32 (10-bit mantissa, f32 accumulation) on the backends with
 # a tf32 tile shape (CUDA sm_80+); a no-op elsewhere.
 tf32_matmuls=true
+# Allow the seeded CUDA/HIP model to rank legal tensorized matmuls, the built-in default.
+model_default_tensorize=true
 # The narrow side of the bf16 accumulator trade (gh-ocannl-838), the twin of fp16_arithmetic
 # above but with no backend floor: never the strict f32 residency `false` requests. It
 # resolves as auto everywhere except HIP and Metal, where auto went wide (gh-ocannl-1051,

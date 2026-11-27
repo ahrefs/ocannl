@@ -892,6 +892,7 @@ test/operations/gather_table_placement.ml [through Ll_test.execute; run by @test
 test/operations/gpu_lane_reduction.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-gpu_lane_reduction]
 test/operations/gpu_packed_prec.ml [through Ll_test.execute; run by @test/operations/runtest-gpu_packed_prec]
 test/operations/gpu_parallel_prefix.ml [through Ll_test.execute; run by @test/operations/runtest-gpu_parallel_prefix]
+test/operations/gpu_resource_fault_injection.ml [prelowered compile; run by @test/operations/runtest-gpu_resource_fault_injection]
 test/operations/gpu_serial_lanes.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-gpu_serial_lanes]
 test/operations/gpu_small_leading_axis.ml [through Ll_test.execute; run by @test/operations/runtest-gpu_small_leading_axis]
 test/operations/half_float_power.ml [through Ll_test.execute; run by @test/operations/runtest-half_float_power]
@@ -976,6 +977,7 @@ test/operations/virtual_guarded_setter.ml [through Ll_test.execute; through Ll_t
 test/operations/virtual_inliner_oracle.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-virtual_inliner_oracle, @test/operations/runtest-virtual_inliner_oracle-shards, @test/operations/slow-virtual_inliner_oracle-plant-transpose, @test/operations/slow-virtual_inliner_oracle-widen-0, @test/operations/slow-virtual_inliner_oracle-widen-1, @test/operations/slow-virtual_inliner_oracle-widen-2, @test/operations/slow-virtual_inliner_oracle-widen-3]
 test/operations/virtual_rejection_boundary.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-virtual_rejection_boundary, @test/operations/runtest-virtual_rejection_boundary_raise]
 test/operations/virtual_shared_loop.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_shared_loop]
+test/operations/virtual_shared_loop_replay.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-virtual_shared_loop_replay]
 test/operations/virtual_uncaptured_loop.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_uncaptured_loop]
 test/operations/wait_bound_declines.ml [prelowered compile; run by @test/operations/runtest-wait_bound_declines]
 test/operations/where_arm_scopes.ml [through Ll_test.execute; through Ll_test.link; through Ll_test.optimize_and_execute; run by @test/operations/runtest-where_arm_scopes]
@@ -1052,6 +1054,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-gpu_lane_reduction
 @test/operations/runtest-gpu_packed_prec
 @test/operations/runtest-gpu_parallel_prefix
+@test/operations/runtest-gpu_resource_fault_injection
 @test/operations/runtest-gpu_serial_lanes
 @test/operations/runtest-gpu_small_leading_axis
 @test/operations/runtest-half_float_power
@@ -1147,6 +1150,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-virtual_rejection_boundary
 @test/operations/runtest-virtual_rejection_boundary_raise
 @test/operations/runtest-virtual_shared_loop
+@test/operations/runtest-virtual_shared_loop_replay
 @test/operations/runtest-virtual_uncaptured_loop
 @test/operations/runtest-wait_bound_declines
 @test/operations/runtest-where_arm_scopes

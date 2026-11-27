@@ -1,5 +1,7 @@
 import ast
 import contextlib
+import errno
+import io
 import os
 import re
 import signal
@@ -342,8 +344,14 @@ class CellGroupTest(unittest.TestCase):
         if not cell_group.process_is_alive(pid):
             return False
         if Path(f"/proc/{pid}/stat").exists():
-            with contextlib.suppress(OSError, IndexError):
+            try:
                 return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+            except FileNotFoundError:
+                return False  # Reaped between probing and reading /proc.
+            except (OSError, IndexError):
+                pass
+        elif sys.platform == "linux":
+            return cell_group.process_is_alive(pid)
         return True
 
     def wait_gone(self, pid, timeout=10):
@@ -492,6 +500,164 @@ class CellGroupTest(unittest.TestCase):
         self.assertIs(observed, cell_group.GONE)
         child.wait()
 
+    @unittest.skipUnless(sys.platform == "linux", "the census reads Linux procfs")
+    def test_unreadable_stat_only_matters_for_a_possible_group_member(self):
+        zombie, hidden = Path("/proc/100"), Path("/proc/200")
+
+        def read_stat(path):
+            if path == zombie / "stat":
+                return "100 (cell) Z 1 100"
+            raise PermissionError(path)
+
+        for hidden_group, expected in ((200, cell_group.GONE), (100, cell_group.UNKNOWN)):
+            with (
+                self.subTest(hidden_group=hidden_group),
+                unittest.mock.patch.object(Path, "exists", return_value=True),
+                unittest.mock.patch.object(Path, "iterdir", return_value=[zombie, hidden]),
+                unittest.mock.patch.object(Path, "read_text", autospec=True, side_effect=read_stat),
+                unittest.mock.patch.object(os, "killpg"),
+                unittest.mock.patch.object(os, "getpgid", side_effect={100: 100, 200: hidden_group}.__getitem__),
+            ):
+                self.assertIs(cell_group._observe_posix_group(100, allow_zombie_gone=True), expected)
+
+    @unittest.skipUnless(sys.platform == "linux", "the shared cell death guard is Linux-specific")
+    def test_shared_cells_guard_ignores_an_incomplete_group_id(self):
+        stdin = unittest.mock.Mock(buffer=io.BytesIO(b"123"))
+        with (
+            unittest.mock.patch.object(sys, "stdin", stdin),
+            unittest.mock.patch.object(os, "killpg") as kill_group,
+            unittest.mock.patch.object(cell_group, "_observe_posix_group", return_value=cell_group.GONE),
+        ):
+            cell_group._guard_driver()
+        kill_group.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "linux", "the shared cell death guard is Linux-specific")
+    def test_guarded_cell_keeps_caller_fds(self):
+        with tempfile.TemporaryFile() as descriptor:
+            descriptor.write(b"caller data")
+            descriptor.seek(0)
+            group = cell_group.spawn(
+                self.python("import os, sys; print(os.read(int(sys.argv[1]), 100).decode())",
+                            descriptor.fileno()),
+                watch_driver=True, pass_fds=(descriptor.fileno(),), stdout=subprocess.PIPE,
+            )
+            try:
+                stdout, _ = group.communicate(timeout=10)
+                self.assertEqual((group.returncode, stdout), (0, b"caller data\n"))
+            finally:
+                cell_group.terminate(group, grace=0.2)
+
+    @unittest.skipUnless(sys.platform == "linux", "the shared cell death guard is Linux-specific")
+    def test_guarded_cell_refuses_a_caller_preexec_callback(self):
+        with (
+            unittest.mock.patch.object(cell_group, "_DriverDeathGuard") as guard,
+            unittest.mock.patch.object(subprocess, "Popen"),
+        ):
+            with self.assertRaisesRegex(ValueError, "preexec_fn"):
+                cell_group.spawn(self.python("pass"), watch_driver=True, preexec_fn=lambda: None)
+            guard.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "linux", "the shared cell death guard is Linux-specific")
+    def test_dead_guard_keeps_the_completed_cell_status(self):
+        group = cell_group.spawn(self.python("raise SystemExit(4)"), watch_driver=True)
+        try:
+            self.assertEqual(group.wait(timeout=10), 4)
+            group.guard.proc.kill()
+            group.guard.proc.wait(timeout=10)
+        finally:
+            result = cell_group.terminate(group, grace=0.2)
+        self.assertIs(result.observation, cell_group.GONE)
+        self.assertEqual(group.returncode, 4)
+
+    def launcher_with_driver(self, mode):
+        ready = self.dir / "driver.pid"
+        thread_exited = self.dir / "thread-exited"
+        after_thread = self.dir / "driver-after-thread"
+        driver = (
+            "import os, pathlib, signal, sys, time, cells\n"
+            "parent = os.getppid()\n"
+            "cells.install_cancellation('test launcher')\n"
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "if sys.argv[4] == 'thread':\n"
+            "    while not pathlib.Path(sys.argv[2]).exists(): time.sleep(0.01)\n"
+            "    pathlib.Path(sys.argv[3]).touch()\n"
+            "    signal.pause()\n"
+            "else:\n"
+            "    while os.getppid() == parent: time.sleep(0.01)\n"
+            "    signal.raise_signal(signal.SIGHUP)\n"
+            "    print('driver survived launcher exit', flush=True)\n"
+        )
+        launcher = (
+            "import pathlib, signal, subprocess, sys, threading, time\n"
+            "mode = sys.argv[1]\n"
+            "def launch():\n"
+            "    subprocess.Popen(sys.argv[4:], stdin=subprocess.DEVNULL)\n"
+            "    while not pathlib.Path(sys.argv[2]).exists(): time.sleep(0.01)\n"
+            "if mode == 'nohup':\n"
+            "    signal.signal(signal.SIGHUP, signal.SIG_IGN)\n"
+            "    launch()\n"
+            "else:\n"
+            "    signal.signal(signal.SIGHUP, signal.SIG_DFL)\n"
+            "    thread = threading.Thread(target=launch)\n"
+            "    thread.start()\n"
+            "    thread.join()\n"
+            "    pathlib.Path(sys.argv[3]).touch()\n"
+            "sys.stdin.buffer.read(1)\n"
+        )
+        with subprocess.Popen(
+            self.python(launcher, mode, ready, thread_exited,
+                        *self.python(driver, ready, thread_exited, after_thread, mode)),
+            cwd=HERE, start_new_session=True, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ) as proc:
+            try:
+                self.wait_file(ready)
+                if mode == "thread":
+                    self.wait_file(after_thread)
+                out, err = proc.communicate(input=b"x", timeout=10)
+                self.assertEqual(proc.returncode, 0, err)
+                return out, err
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                if ready.exists():
+                    pid = int(ready.read_text())
+                    if self.alive(pid):
+                        with contextlib.suppress(ProcessLookupError):
+                            os.kill(pid, signal.SIGKILL)
+
+    @unittest.skipUnless(sys.platform == "linux", "the shared launcher guard is Linux-specific")
+    def test_nohup_driver_survives_when_its_launcher_exits(self):
+        out, err = self.launcher_with_driver("nohup")
+        self.assertEqual(out, b"driver survived launcher exit\n", err)
+
+    @unittest.skipUnless(
+        hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"),
+        "requires Linux process pidfds",
+    )
+    def test_launcher_guard_waits_for_the_process_after_its_spawning_thread_exits(self):
+        try:
+            pidfd = os.pidfd_open(os.getpid())
+        except OSError as exc:
+            if exc.errno == errno.ENOSYS:
+                self.skipTest("the kernel does not provide process pidfds")
+            raise
+        os.close(pidfd)
+        _, err = self.launcher_with_driver("thread")
+        self.assertIn(b"test launcher: terminated by signal", err)
+
+    @unittest.skipUnless(sys.platform == "linux", "the shared launcher guard is Linux-specific")
+    def test_driver_can_exit_with_sigterm_blocked(self):
+        subprocess.run(
+            self.python(
+                "import signal, cells\n"
+                "signal.signal(signal.SIGHUP, signal.SIG_DFL)\n"
+                "signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})\n"
+                "cells.install_cancellation('masked signal fixture')\n"
+            ),
+            cwd=HERE, check=True, timeout=10,
+        )
+
     @unittest.skipUnless(os.name == "posix", "driver signal fixtures require POSIX")
     def test_shared_cells_reaps_a_resistant_descendant_on_cancel_or_timeout(self):
         for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, None):
@@ -538,6 +704,82 @@ class CellGroupTest(unittest.TestCase):
                 else:
                     self.assertIn(f"test shared cells: terminated by signal {signum}", err)
                 self.assertTrue(self.wait_gone(pid), "descendant outlived the shared cell driver")
+
+    @unittest.skipUnless(sys.platform == "linux", "the shared cell death guard is Linux-specific")
+    def test_shared_cells_retain_the_slot_through_launcher_or_driver_death(self):
+        import fcntl
+
+        worker = (
+            "import signal, sys, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "time.sleep(300)\n"
+        )
+        leader = (
+            "import subprocess, sys\n"
+            f"subprocess.run([sys.executable, '-c', {worker!r}, sys.argv[1]], check=True)\n"
+        )
+        driver_source = (
+            "import os, subprocess, sys, cells\n"
+            "cells.install_cancellation('test shared cells')\n"
+            "cells.run_in_group([sys.executable, '-c', sys.argv[1], sys.argv[2]], "
+            "'.', os.environ, 60, subprocess.DEVNULL, subprocess.DEVNULL)\n"
+        )
+        launcher_source = (
+            "import signal, subprocess, sys\n"
+            "signal.signal(signal.SIGHUP, signal.SIG_DFL)\n"
+            "driver = subprocess.Popen(sys.argv[2:], close_fds=False)\n"
+            + publish_pid("sys.argv[1]", "driver.pid")
+            + "sys.exit(driver.wait())\n"
+        )
+        for victim in ("launcher", "driver"):
+            with self.subTest(victim=victim):
+                pidfile = self.dir / f"{victim}-cell.pid"
+                kill_the_group_on_cleanup(self, pidfile)
+                driver_file = self.dir / f"{victim}-driver.pid"
+                lockfile = self.dir / f"{victim}.lock"
+                with lockfile.open("wb") as slot:
+                    fcntl.flock(slot, fcntl.LOCK_EX)
+                    launcher = subprocess.Popen(
+                        self.python(launcher_source, driver_file,
+                                    *self.python(driver_source, leader, pidfile)),
+                        cwd=HERE, pass_fds=(slot.fileno(),), start_new_session=True,
+                        stderr=subprocess.DEVNULL,
+                    )
+                try:
+                    self.wait_file(pidfile)
+                    self.wait_file(driver_file)
+                    holder = int(pidfile.read_text())
+                    pgid = os.getpgid(holder)
+                    driver_pid = int(driver_file.read_text())
+                    self.assertTrue(self.alive(holder))
+                    with lockfile.open("rb") as contender:
+                        flags = fcntl.LOCK_EX | fcntl.LOCK_NB
+                        with self.assertRaises(BlockingIOError):
+                            fcntl.flock(contender, flags)
+                        if victim == "launcher":
+                            launcher.terminate()
+                        else:
+                            os.kill(driver_pid, signal.SIGKILL)
+                        launcher.wait(timeout=10)
+                        deadline = time.monotonic() + 5
+                        while True:
+                            try:
+                                fcntl.flock(contender, flags)
+                                break
+                            except BlockingIOError:
+                                if time.monotonic() >= deadline:
+                                    self.fail("the cell's slot was never released")
+                                time.sleep(0.02)
+                        self.assertFalse(self.alive(holder), "slot released with a live cell member")
+                        self.assertFalse(self.alive(pgid), "slot released with a live cell leader")
+                finally:
+                    if launcher.poll() is None:
+                        launcher.kill()
+                        launcher.wait()
+                    if driver_file.exists() and self.alive(int(driver_file.read_text())):
+                        with contextlib.suppress(ProcessLookupError):
+                            os.kill(int(driver_file.read_text()), signal.SIGKILL)
 
     def gh1002_driver(self, child_source, pidfile, timeout=30):
         driver = subprocess.Popen(

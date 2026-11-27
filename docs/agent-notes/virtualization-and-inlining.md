@@ -1236,14 +1236,34 @@ files.
   dropped) and visits every operand -- never `evaluation_reads_of_proc`, the cost collector, which
   skips merge reads and charges one `Where` arm. A new statement or scalar constructor, or a change to
   what instantiation keeps, must update `replay_facts` too: its match arms are exhaustive for that
-  reason. A shared-loop capture can retain an ordinary read of a later candidate (gh-ocannl-2493).
-  On an inherited splice, `virtual_llc` serves these reads at the substituted indices when both
-  nodes' components come entirely from earlier routines. A retained read observes the dependency
-  at consumption, after the producer has run. The read site's bounds can eliminate a `Where` arm
-  after substitution. Scopes that retract to a materialized buffer shield their bodies.
-  Cleanup refuses a surviving virtual buffer read with its provenance.
-  `buffer_aliasing` checks the virtual dependency chain and the materialized shield against one
-  materialized run.
+  reason. A shared-loop capture can retain an ordinary read of a later candidate (gh-ocannl-2493,
+  gh-ocannl-2510). `virtual_llc` serves these retained reads at the substituted indices at every
+  instantiation — both same-routine reads and inherited splices, including when a later routine
+  updates the dependency — while leaving reads still in `outer_process_for` (not-yet-stored
+  siblings during phase-1 capture, or an enclosing setter target) intact. During phase 2 of a
+  shared loop, each candidate keeps its pre-loop computations until its final setter in the loop
+  body runs, so a read before a later sibling write never replays an uninitialized input; a read
+  between two writes of the same candidate in one loop materializes an undecided local node
+  (`163:shared-loop-mid-write-read`) or refuses a committed-virtual or inherited node (deferred as
+  `165:capture-mid-write-read` during speculative phase-1 capture). Cycle detection tracks active
+  `Set` component indices per node, so disjoint cell replays (such as `a[1,i] -> b[i] -> a[0,i]`)
+  succeed while genuine re-entry materializes an undecided local node (`162:cyclic-virtual-replay`)
+  or refuses a committed-virtual or inherited node (deferred as `164:capture-cyclic-replay` during
+  speculative phase-1 capture so dead `Where` arms do not fail). When
+  `materialize_observable_readers` commits a reader `On_device` (`Observed_reader_reads_local`) at
+  the end of `virtual_llc`, scopes minted for it after its final live write retract to `Get` so
+  same-routine readers agree with the stored buffer, while scopes captured before a later write of
+  that node stay lexical (preserving gh-ocannl-2415's pre-overwrite captures). A retained read
+  observes the dependency's visible components at consumption; by contrast, split loops capture a
+  `Local_scope` of the earlier write (matching producer-time while virtual, retracting to
+  replay-time if materialized). The read site's bounds can eliminate a `Where` arm after
+  substitution. Scopes that retract to a materialized buffer shield their bodies. Cleanup refuses a
+  surviving virtual buffer read with its provenance. `buffer_aliasing` checks the virtual dependency
+  chain and the materialized shield against one materialized run; `virtual_shared_loop_replay` pins
+  the `Local`-fed extent-20 seam fixture, the shared-versus-split comparison against producer-time
+  and replay-time references, phase-2 read visibility before later sibling writes, mid-write reads,
+  multi-hop retained chains, cyclic and disjoint-cell retained reads, dead-arm cycle capture, and
+  cross-routine dependency updates.
   A materialized node with a buffer ends the walk (it shields a `Local` dependency behind
   it). Lineage placement takes precedence over an uploaded buffer for a `Virtual` node
   (gh-ocannl-2475), including at a dependency the walk reaches. Host readback follows its stored

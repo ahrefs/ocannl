@@ -4579,6 +4579,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     with one function per threshold (`first_tier_wide`, `list_wide`), which is where a different
     cross-cutting rule goes; the `verdict trailer` leg of `tools/test-affected-tests.sh` calls it
     on the counts above.
+    The gh-ocannl-1997 audit checked the Ludics fleet and ship-pr implementations and local
+    installed scripts. The documented fleet targets-file example redirects only stdout.
+    Fleet run evidence comes from the runner's saved record and status, and ship-pr delegates
+    reach planning to OCANNL's merge build, which reads the trailer alongside `prepush`.
     The contract: LINK-ONLY is a heuristic ranking,
     and `--referenced-only` a deliberate trade (faster, with a possible miss) for iterating
     mid-change, except the explicit CROSS-CUTTING first-tier local run below. The pre-push run
@@ -4774,6 +4778,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `tools/test-test-harnesses.sh` drives the real `affected --harnesses` over a git fixture whose
     commit reaches two members, and reads the closing line's form out of `tools/test-run.sh`, so
     the two tools cannot disagree on its spelling.
+  - The project-context checks in `tools/test-typecheck-scan-cases.sh` exercise snippet and stub
+    sources through the owning module's PPX. The gh-ocannl-1997 audit found the stub and PPX paths
+    select the corresponding legs and found no concrete stub regression to justify listing broad
+    library paths. Extend the declaration with a reproducing library path when there is one.
 
 ## Testing a dependency candidate without changing the switch
 
@@ -6118,8 +6126,10 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   On macOS either side can get `EPERM` when both call `setpgid` for the same child. The
   supervisor sets the group and releases the leader over the lifetime pipe before it forks Git.
   Scratch files keep the bound independent of transport pipe EOF. Manual terminal pushes keep
-  Git's existing foreground timeout so its prompt can read the terminal. The shared benchmark
-  runner already uses `cell_group` to cancel during the active wait and confirms the group is
+  Git's existing foreground timeout so its prompt can read the terminal. `tools/test-owed-run-tty.sh`
+  answers a fake transport's push prompt in a PTY and checks that a read which tries the same
+  terminal hits the isolated timeout (gh-ocannl-2497). The shared benchmark runner uses
+  `cell_group` to cancel during the active wait and confirms the group is
   gone before unwinding. The fixtures for both tools plant descendants that ignore TERM.
 - **What.** A finished, exit-0, clean-at-launch tools/test-run.sh run under `--expect-backend cc`
   of `runtest`, `build @runtest [@train]`, `build @train` or `build @test/training/train-NAME...`

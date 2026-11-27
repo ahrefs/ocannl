@@ -1665,6 +1665,9 @@ module type Slab_alloc = sig
   (** Frees the slab for [pool_id] and drops its table entry. [None] for backends that rely on GC.
   *)
 
+  val has_pool : device -> pool_id:int -> bool
+  (** Whether the backend's private pool table currently holds an entry for [(device, pool_id)]. *)
+
   val zero_ranges : device -> (buffer_loc * int) list -> unit
   (** Zero-initializes each [(loc, size_in_bytes)]: [size_in_bytes] at
       [base_of loc.pool_id + loc.offset]. When it returns, every range reads as zero to a later host

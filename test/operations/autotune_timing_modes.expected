@@ -115,6 +115,15 @@ every synthetic device's dispatches stay within time_routine's documented maximu
 every reported probe is exactly the batches the device dispatched for it: true
 every batch after the calibration is the timed loop's, at the settled depth: true
 
+== bounded superlinear confirmation ==
+a boost-clock settle during confirmation keeps the resolved target-sized base batch: true
+a boost-clock settle after validation narrowing keeps the validated target-sized batch: true
+a mild superlinear crossing refit keeps the measured target-sized upper batch: true
+a persistent >2x confirmation stall still retries once and refuses unbatched: true
+a stalled upper batch (>2x per-launch) in crossing interpolation still falls back to crossing: true
+an over-2x-target base with Fit_negative_fixed confirmation stays Cap_unresolved: true
+an unresolved validation base with Fit_negative_fixed confirmation stays Cap_unresolved: true
+
 == autotune_timing spelling ==
 "queued" selects the queued objective: true
 "isolated" selects the isolated objective: true

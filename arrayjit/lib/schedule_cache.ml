@@ -696,6 +696,13 @@ let codegen_tag ~(facts : Backend_intf.backend_facts) ~(limits : Backend_intf.ha
          && Utils.get_global_flag ~default:false ~arg_name:"gpu_default_seed_narrow_storage"
        then [ "seed-narrow-storage" ]
        else [])
+    (* gh-ocannl-1663: distinguish the stricter seeded-model numerics policy on the backends that
+       seed. Hash the disabled setting to preserve existing keys at the built-in default. *)
+    @ (if
+         facts.Backend_intf.seeds_untuned_default
+         && not (Utils.get_global_flag ~default:true ~arg_name:"model_default_tensorize")
+       then [ "no-model-default-tensorize" ]
+       else [])
     (* gh-ocannl-1308: the test-only forced Tile_mma decline renders every tensorized candidate as
        its scalar fallback, so a winner crowned under it is not the normal regime's, nor the
        reverse. The ON regime is the one hashed, so no key changes while the hook is off. *)
@@ -1029,9 +1036,13 @@ let read_regime_stamp dir =
   | Ok (Some _) | Error _ -> Unreadable_stamp
 
 let write_regime_stamp dir =
-  Utils.Atomic_file.write_all ~path:(regime_stamp_file dir)
+  let stamp = regime_stamp_file dir in
+  Utils.Atomic_file.write_all ~path:stamp
     ~data:(Int.to_string cache_regime_version ^ "\n")
-    ~before_commit:(fun () -> Resource_fault_injection.hit Schedule_cache_before_regime_commit)
+    ~before_commit:(fun () ->
+      Resource_fault_injection.hit
+        ~artifact:(Cache_file { path = stamp })
+        Schedule_cache_before_regime_commit)
     ()
 
 (* What a cache-open is for (gh-ocannl-1439). Only a [Write] open sweeps: a read never deletes, so
@@ -1095,7 +1106,9 @@ let rec with_regime_lock ~mode dir f =
       Stdlib.Fun.protect
         ~finally:(fun () -> Unix.close fd)
         (fun () ->
-          Resource_fault_injection.hit Schedule_cache_before_lock;
+          Resource_fault_injection.hit
+            ~artifact:(Cache_file { path = lock_file })
+            Schedule_cache_before_lock;
           Unix.lockf fd (match mode with Read -> Unix.F_RLOCK | Write -> Unix.F_LOCK) 0;
           f ())
 
@@ -1213,7 +1226,9 @@ let store_sexp ~dir ~key sexp =
                 Utils.Atomic_file.write_all ~path:file
                   ~data:(Sexp.to_string_hum (sexp_of_stored_entry { key; payload = sexp }))
                   ~before_commit:(fun () ->
-                    Resource_fault_injection.hit Schedule_cache_before_commit)
+                    Resource_fault_injection.hit
+                      ~artifact:(Cache_file { path = file })
+                      Schedule_cache_before_commit)
                   ();
                 None
               with Stdlib.Sys_error msg ->
@@ -1245,7 +1260,9 @@ let lookup_sexp ~dir ~key ~of_sexp ~current =
             | Error msg -> Error msg
             | Ok true -> (
                 try
-                  Resource_fault_injection.hit Schedule_cache_before_replay;
+                  Resource_fault_injection.hit
+                    ~artifact:(Cache_file { path = file })
+                    Schedule_cache_before_replay;
                   let stored = stored_entry_of_sexp (Sexplib.Sexp.load_sexp file) in
                   (* Another key's entry under this key's digest is a miss, decided before the
                      payload is decoded: it is not this key's answer, however well it decodes. *)

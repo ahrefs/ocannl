@@ -110,12 +110,12 @@ a value pass into a slice of its output: no fold, the two-pass form keeps the ze
 a value pass ahead of the probabilities it would consume: no fold: true
 a value operand aliasing the masked scores: no fold: true
 a value operand aliasing a live row-state definition (the exponentials): no fold: true
+a dead definition reading a scope local is removed by the fold: true
 a live definition reading a scope local: no fold: true
 tiles past the stack threshold: no fold: true
 tiles past the stack threshold: the output matches the composed within 1e-5 relative: true
 probabilities stored narrower than the scores: no fold: true
-the row max alone requested: the fold writes it and its tiles: true
-the row max alone requested: no other row-state or score-chain node is written: true
+a requested row max keeps the composed forward: true
 --- leg 7: training -- the fold forward under the composed and the fused backward ---
 treatment E (composed backward): the step holds the fold: true
 treatment E (composed backward): the moved probabilities and exponentials have one writer each: true
@@ -164,3 +164,49 @@ analyze-only lowering honors the run's device economics: true
 backend compilation honors the same device economics: true
 analysis and compilation agree on the resolved code structure: true
 auto compilation has the same code structure as the explicit resolved size: true
+--- leg 9: observation intent roots online-softmax intermediates ---
+row_max: without observation the rewrite removes the writer: true
+row_max: the reference has finite values: true
+row_max: the reference distinguishes a missing write: true
+row_max: the reference varies along every non-singleton axis: true
+row_max: the node declares observation alone: true
+row_max: the rewrite declines and keeps the writer: true
+row_max: host read matches the materialized composed computation: true
+row_sum: without observation the rewrite removes the writer: true
+row_sum: the reference has finite values: true
+row_sum: the reference distinguishes a missing write: true
+row_sum: the reference varies along every non-singleton axis: true
+row_sum: the node declares observation alone: true
+row_sum: the rewrite declines and keeps the writer: true
+row_sum: host read matches the materialized composed computation: true
+probabilities: without observation the rewrite removes the writer: true
+the optimizer's visit cap materializes the probabilities in its fork: true
+the fold fires with the visit-cap placement in the incoming lineage: true
+probabilities: the reference has finite values: true
+probabilities: the reference distinguishes a missing write: true
+probabilities: the reference varies along every non-singleton axis: true
+probabilities: the node declares observation alone: true
+probabilities: the rewrite declines and keeps the writer: true
+probabilities: host read matches the materialized composed computation: true
+masked_scores: without observation the rewrite removes the writer: true
+masked_scores: the reference has finite values: true
+masked_scores: the reference distinguishes a missing write: true
+masked_scores: the reference varies along every non-singleton axis: true
+masked_scores: the node declares observation alone: true
+masked_scores: the rewrite declines and keeps the writer: true
+masked_scores: host read matches the materialized composed computation: true
+probability_gradient: without observation the rewrite removes the writer: true
+probability_gradient: the reference has finite values: true
+probability_gradient: the reference distinguishes a missing write: true
+probability_gradient: the reference varies along every non-singleton axis: true
+probability_gradient: the node declares observation alone: true
+probability_gradient: the rewrite declines and keeps the writer: true
+probability_gradient: host read matches the materialized composed computation: true
+denominator_square: without observation the rewrite removes the writer: true
+denominator_square: the reference has finite values: true
+denominator_square: the reference distinguishes a missing write: true
+denominator_square: the reference varies along every non-singleton axis: true
+denominator_square: the node declares observation alone: true
+denominator_square: the rewrite declines and keeps the writer: true
+denominator_square: host read matches the materialized composed computation: true
+one observed attention leaves a sibling fold eligible through the tier fixpoint: true

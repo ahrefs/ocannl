@@ -358,6 +358,36 @@ let phase6 () =
               ~lowered_transform:(fun o -> [ o ])
               (Context.auto ()) Ir.Assignments.empty_comp Ir.Indexing.Empty)))
 
+(* gh-ocannl-1877: the frontend must report the first source node the validity hook refuses. Reverse
+   the source while retaining the same registry and optimized code. *)
+let frontend_refusal_order () =
+  let a = mk "pls_stale_a" in
+  let b = mk "pls_stale_b" in
+  List.iter [ a; b ] ~f:materialize;
+  let program first second =
+    seq (set first [| fixed 0 |] (c 1.)) (set second [| fixed 0 |] (c 1.))
+  in
+  let name = "pls_stale_order" in
+  let opt = optimize ~name (program a b) in
+  let ctx = Context.auto () in
+  let validity_check = Ir.Tnode.validity_check in
+  let previous = !validity_check in
+  let exception Refused of Ir.Tnode.t in
+  Exn.protect
+    ~finally:(fun () -> validity_check := previous)
+    ~f:(fun () ->
+      validity_check := Some (fun tn -> raise (Refused tn));
+      p_all "the frontend names the first invalid prelowered node in source order"
+        [ (a, b); (b, a) ]
+        ~f:(fun (first, second) ->
+          let source = program first second in
+          let prelowered = { opt with LL.source } in
+          match
+            Context.compile ~name ~prelowered ctx Ir.Assignments.empty_comp Ir.Indexing.Empty
+          with
+          | _ -> false
+          | exception Refused tn -> Ir.Tnode.equal tn first))
+
 let () =
   phase1 ();
   phase2 ();
@@ -365,4 +395,5 @@ let () =
   phase4 ();
   phase5 ();
   phase6 ();
+  frontend_refusal_order ();
   printf "prelowered seam: PASS\n"

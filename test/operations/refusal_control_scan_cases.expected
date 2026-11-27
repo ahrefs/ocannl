@@ -756,6 +756,10 @@ tensorized_census_ratchet.ml: [scanner-refusal:4656151bdc35a3727a1bea78aa31e974]
 tensorized_census_ratchet.ml: [scanner-refusal:e553a74d077e12582953b27756595d9e] executed tensorized parity (claim) is catalogued beside tensorized_census_ratchet.expected, tensorized_census_scan_cases.expected: true
 tensorized_census_ratchet.ml: [scanner-refusal:acf79e9d5f580995dafd055521de641f] Context.run (claim) is catalogued beside tensorized_census_ratchet.expected, tensorized_census_scan_cases.expected: true
 provenance_tag_inventory.ml has exactly the explicitly assigned refusal controls: true
+resource_fault_inventory_scan.ml has exactly the explicitly assigned refusal controls: true
+resource_fault_inventory_scan.ml: [scanner-refusal:c85bb67d5d4a65e371321bd39eff4686] derived fault-injection point (claim) is catalogued beside resource_fault_inventory_scan.expected: true
+resource_fault_inventory_scan.ml: [scanner-refusal:32d44718d7ebdf4c4f7d6d2d289ff1cd] inventory table row (claim) is catalogued beside resource_fault_inventory_scan.expected: true
+resource_fault_inventory_scan.ml: [scanner-refusal:6cd996e65b0a28170b37d4a74708cfee] every fault-injection point (claim) is catalogued beside resource_fault_inventory_scan.expected: true
 open_node_scan.ml has exactly the explicitly assigned refusal controls: true
 open_node_scan.ml: [scanner-refusal:d7ba33c928dde8cf6b59d769ad3a0b85] does not parse (direct failure) is catalogued beside open_node_scan.expected, open_node_scan_control.expected, open_node_scan_refusal_control.expected, open_node_scan_cases.expected: true
 open_node_scan.ml: [scanner-refusal:53596805b743d859cfe3bcff6c3f4cef] open-node reader raised (direct failure) is catalogued beside open_node_scan.expected, open_node_scan_control.expected, open_node_scan_refusal_control.expected, open_node_scan_cases.expected: true

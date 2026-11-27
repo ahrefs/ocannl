@@ -183,9 +183,12 @@ files.
   bindings, into a variable passed to `note_open_node`; its header in
   `test/support/open_node_scan.ml` lists the forms it follows and what it refuses. A new `Context` entry point over a
   node runs `check_node_valid` (or, over a program, `frontend_gate`) before it forces anything: a
-  discarded node's dims otherwise fail as an unrelated shape error. A new write a failed construction
-  can leave behind must call `Row.note_mutation`, or a failure after it will not taint. An operation that knows its accumulation up-front (`Tensor.raw_accum`) creates the step
-  directly.
+  discarded node's dims otherwise fail as an unrelated shape error. For the prelowered registry,
+  the gate checks nodes in raw source access order, with registry-only nodes following in uid
+  order (gh-ocannl-1877). `prelowered_seam` reverses two rejected nodes in the source with the
+  registry and optimized code fixed. A new write a failed construction can leave behind must call
+  `Row.note_mutation`, or a failure after it will not taint. An operation that knows its accumulation up-front
+  (`Tensor.raw_accum`) creates the step directly.
 - Per-(result, reduced-position) facts in `%cd` grad code belong in a product-space intermediate
   (`*_pspace` suffix): its shape unifies with `Shape.product_space_shape` (result rows +
   contracted axes appended; fixed-index axes pinned to 1 — pinned projection means never a

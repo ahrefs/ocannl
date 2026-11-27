@@ -1379,7 +1379,10 @@ type batch_settle =
   | Prior_depth
       (** The caller's prior depth, which the singles agreed with, kept without the probes
           (gh-ocannl-1697): a seeded single calibrates at its seeded plan's settled depth. *)
-  | Measured_batch  (** A resolved fit confirmed a depth a probe (or the singles) measured. *)
+  | Measured_batch
+      (** A resolved fit (or a bounded superlinear confirmation ruling out fixed-overhead dominance
+          on a target-sized base, gh-ocannl-2376) confirmed a depth a probe (or the singles)
+          measured. *)
   | Affine_projection  (** A resolved fit's projection to a depth no probe measured. *)
   | Wall_scaled  (** A linear scale from the deepest measured batch, the fit being unresolved. *)
   | Cap_measured  (** The cap, measured by a probe. *)
@@ -2759,10 +2762,8 @@ type model_choice = {
           used to crown one and then degrade to the default (gh-ocannl-522). *)
   mc_excluded : int;
       (** Sketch candidates kept out of the ranking where the model starts from the seeded plan
-          (CUDA and HIP, seeding on) because they are not numerics-preserving (gh-ocannl-1253:
-          tensorized, conv, coalesced and the other forms {!model_default}'s restriction leaves out,
-          or any sketch at a site accumulating wider than its storage); never scored, so neither in
-          [mc_skipped] nor in [mc_rejected]. *)
+          (CUDA and HIP, seeding on) and the admission policy excludes their schedule form
+          (gh-ocannl-1253, gh-ocannl-1663). A leaf excluded here is never scored. *)
   mc_placement_rank_ms : float option;
       (** The ranking score in ms the placement pre-search (config [model_default_placements]) gave
           the leaf it won with -- the picked placements', or the default placements' where no flip
@@ -2805,10 +2806,9 @@ val model_operand_loads :
     backend but CUDA). The walk keys only [Loads]. *)
 
 val scalar_blocktile : sketch_params -> bool
-(** The numerics-preserving candidate set the seeded untuned default draws from and
-    {!model_default}'s family search is restricted to where it starts from the seeded plan
-    (gh-ocannl-1324, gh-ocannl-1253): the unfused GPU scalar blocktile with no twin flavor. Exposed
-    for tests. *)
+(** The unfused GPU scalar blocktile with no twin flavor. The seeded untuned default draws from this
+    set (gh-ocannl-1324), and {!model_default} admits it under the seeded ranking policy
+    (gh-ocannl-1253). Exposed for tests. *)
 
 val model_family_search :
   ?on_rejected:(unit -> unit) ->
@@ -2836,9 +2836,9 @@ val model_family_search :
     sites, then to the first; a tie never displaces [incumbent]. Sketches are scheduled at
     [capabilities]' [accum_prec]. [on_rejected] is called for each leaf whose schedule fails to
     apply; a leaf [admit] refuses is left unscored, [on_excluded] called, before it is scheduled
-    ({!model_default}'s numerics-preserving restriction). [None] for a lowering neither family
-    claims. A conv path carries no certain-traffic increment, so its bound is the schedule-invariant
-    floor, sound for every completion. With [coalesced] (default [false]; {!model_default} passes
+    ({!model_default}'s seeded admission policy). [None] for a lowering neither family claims. A
+    conv path carries no certain-traffic increment, so its bound is the schedule-invariant floor,
+    sound for every completion. With [coalesced] (default [false]; {!model_default} passes
     {!model_ranks_coalesced}), the coalesced layouts' leaves ({!coalesced_seed_params}) are scored
     after the walk, leaf by leaf under the same [admit] and accounting and with no bound, and one
     displaces the walk's pick (or [incumbent]) only by strict improvement (gh-ocannl-1600). Exposed
@@ -3242,9 +3242,8 @@ type explain = {
           any kernel is): not a price, the count {!model_default}'s family search breaks exact score
           ties with (gh-ocannl-1254). *)
   ex_admitted : bool;
-      (** Whether {!model_default}'s numerics-preserving restriction (in force where it starts from
-          the seeded plan, CUDA and HIP) admits the candidate to its ranking; the incumbent always
-          is. *)
+      (** Whether the candidate passes {!model_default}'s admission policy, assuming the branch is
+          ranked. The incumbent always passes. *)
   ex_anchor : bool;
       (** Whether this sketch leaf is the one {!model_default} anchors the walk at (gh-ocannl-1477):
           the best-ranked of the seeded plan's own sketches on the program -- the parameters the
@@ -4300,13 +4299,14 @@ module Make (D : Driver) : sig
       hides it under its compute leg, so without the anchor a leaf that only ties the seeded
       geometry beat the plan. A leaf the score separates from it still can; a per-segment
       substitution keeps the seeded sketch on every segment no leaf strictly improves. The
-      candidates compete on the program after the plan's split prelude, and the sketch candidates
-      are restricted to the seeding's numerics-preserving forms — scalar block tiles at a site
-      accumulating at its storage precision — so the pick never changes a value the untuned compile
-      computes. Fatal failures propagate without retrying. Once the compile is on that pipeline
-      there is nothing left to fall back to, so its failures propagate as they would from
-      {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is executed and no
-      cache is involved — results depend only on the computation, backend, and envelope constants.
+      candidates compete on the program after the plan's split prelude. The seeded ranking admits
+      scalar blocktiles and tensorized matmuls allowed by the backend and the numerics policy.
+      [model_default_tensorize] controls admission of the tensorized leaves (gh-ocannl-1663), and
+      [reproducible] pins it off. Fatal failures propagate without retrying. Once the compile is on
+      that pipeline there is nothing left to fall back to, so its failures propagate as they would
+      from {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is executed and
+      no cache is involved — results depend only on the computation, backend, and envelope
+      constants.
 
       Being a drop-in for {!Context.compile} includes its [name] (gh-ocannl-669): it names the
       routine and every artifact of this compile — the model pick's, the fallback's, and the

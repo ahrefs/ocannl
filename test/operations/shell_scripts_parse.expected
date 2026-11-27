@@ -786,6 +786,8 @@ tools/test-merge-build-replay.sh uses the shared harness contract: true
 tools/test-merge-build-replay.sh parses: true
 tools/test-mutation-run.sh uses the shared harness contract: true
 tools/test-mutation-run.sh parses: true
+tools/test-owed-run-tty.sh uses the shared harness contract: true
+tools/test-owed-run-tty.sh parses: true
 tools/test-pin-revisions.sh uses the shared harness contract: true
 tools/test-pin-revisions.sh parses: true
 tools/test-ppx-output-diff.sh uses the shared harness contract: true

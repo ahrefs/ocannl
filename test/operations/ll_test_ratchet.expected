@@ -39,7 +39,7 @@ test/operations/masked_persistent_fragment.ml -- records=0 traversals=1
 test/operations/narrow_scatter_residency.ml -- records=9 traversals=0
 test/operations/narrow_storage_compute.ml -- records=0 traversals=1
 test/operations/online_softmax.ml -- records=8 traversals=4
-test/operations/online_softmax_block.ml -- records=11 traversals=8
+test/operations/online_softmax_block.ml -- records=8 traversals=7
 test/operations/op_legality.ml -- records=4 traversals=1
 test/operations/operand_walk_order.ml -- records=1 traversals=0
 test/operations/peel_census.ml -- records=8 traversals=0

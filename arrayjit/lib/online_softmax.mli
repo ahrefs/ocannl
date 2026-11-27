@@ -40,9 +40,9 @@
       gradients are the composed ones; [ds] reassociates the composed [(dP / l + dl) * e], hence the
       numerics gate. It declines whole -- the backward stays composed -- on anything it cannot
       prove: no normalizer in the routine, a composed max gradient, another reader of a consumed
-      gradient node, a requested (materialized) intermediate, code the census cannot see in the
-      span, a dead or partial loop, mixed precisions along either chain, or an elementwise step
-      between [e / l] and the value pass (active dropout).
+      gradient node, an observed gradient intermediate or auxiliary the fusion would consume, code
+      the census cannot see in the span, a dead or partial loop, mixed precisions along either
+      chain, or an elementwise step between [e / l] and the value pass (active dropout).
 
     - With a positive block size [B] in [online_softmax_block] (gh-ocannl-1003), the first two
       shapes give way, per attention, to ONE pass: per query row, a scan over the key blocks of [B]
@@ -57,12 +57,13 @@
       [sum (p / l) * v]), within the same numerics gate. A key count not a multiple of [B] leaves a
       guarded tail, padded with [-inf] scores. The final [(m, l)] land in their nodes when a later
       statement reads them, and the elementwise definitions reading them move behind the fold, so
-      the composed or fused backward reads what it reads after the two-pass form. It declines -- the
-      two-pass form applies -- on a value pass that does not read [e / l] directly (active dropout),
-      a reader of the row state it cannot move, scores that are not a contraction of two reads, or
-      anything else the two-pass contract refuses. The pass emits the scalar form; on a GPU with f32
-      matrix units the default schedule renders its two contractions as block [Tile_mma]s, one lane
-      per query row ({!Schedule.optop.Fold_mma}).
+      the composed or fused backward reads what it reads after the two-pass form. An observed
+      row-state node or an observed score definition the cleanup would remove keeps the attention
+      composed. The two-pass form is the fallback for ordinary misses such as active dropout, a
+      reader of the row state the fold cannot move, or scores that are not a contraction of two
+      reads. The pass emits the scalar form; on a GPU with f32 matrix units the default schedule
+      renders its two contractions as block [Tile_mma]s, one lane per query row
+      ({!Schedule.optop.Fold_mma}).
 
     What stays as it was in the two-pass form: the score reduction [q * k^T] keeps its own placement
     decision -- the recompute cap [virtualize_max_inline_reduction] decides whether it is replayed
@@ -70,8 +71,8 @@
     attention's memory trade (no [seq, seq] buffer at all); storing was faster at every cell
     measured on cc and Metal (benchmarks/report-gh483-online-softmax.md, seq 128 to 1024), and a
     training step's backward reads the scores again through cross-routine splicing. (The block fold
-    computes its scores into the tile from [q] and [k] and reads nothing else of the score chain,
-    which it removes where nothing else reads it.)
+    computes its scores into the tile from [q] and [k] and can remove the score definitions with no
+    remaining reader, subject to the observation guard.)
 
     The pass runs at lowering, ahead of the analyses ({!Rewrites.apply}, from [Assignments.lower],
     over the raw lowered code), so the traced store and the placements see the rewritten routine and
@@ -139,8 +140,8 @@ val reset : unit -> unit
     keeps them on one analysis-cache key; a reset only makes the next lowering mint afresh. *)
 
 val rewrite : ?auto_block:int -> Low_level.t -> Low_level.t
-(** The pass over raw lowered code (no gate: the tier consults {!enabled}). Every normalizer pattern
-    in the routine is rewritten; a routine without one is returned as is. The minted scope-local
+(** The pass over raw lowered code (no gate: the tier consults {!enabled}). Eligible normalizer
+    patterns are rewritten; an observation refusal keeps its site composed. The minted scope-local
     nodes carry memory-mode provenance ["483:online-softmax-state"], the fused backward's per-row
     [D] (a stored node: [Never_virtual]) ["1002:fused-backward-row-dot"]; the block fold's tiles
     (labelled [block_scores] and [block_numerator]) request no memory mode: the optimizer refuses

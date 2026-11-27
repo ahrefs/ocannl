@@ -1,7 +1,9 @@
 (* Integer RNG results are also checked before storage, against independently extracted input
    bits and signedness, including the C reference table. Generic C arithmetic promotions and
-   parameter guards have a separate compile-only C++ leg below. A signed-byte copy must pass byte parity and fail
-   the result checks. *)
+   parameter guards have separate compile-only C++ legs below. The integer extrema leg compiles
+   calls to the Min/Max templates with either operand floating and with the dialect's scalar
+   integer types and booleans in each operand position.
+   A signed-byte copy must pass byte parity and fail the result checks. *)
 (* The CUDA and HIP definition tables' device-free conversion helpers (gh-ocannl-1353), compiled by
    the host C compiler beside the C table the cc backend prepends, and compared with it bitwise.
    Since the two tables became stdlib-only libraries, every PR compiles them as OCaml; this checks
@@ -58,6 +60,7 @@ type vendor = {
   label : string;
   table : (string * string * string list) list;
   guard_dialect : Ir.C_syntax.param_guard_dialect option;
+  typ_of_prec : Ir.Ops.prec -> string;
 }
 
 let cuda =
@@ -66,6 +69,7 @@ let cuda =
     label = "CUDA";
     table = Builtins_cuda.builtins;
     guard_dialect = Cuda_config.builtin_param_guards;
+    typ_of_prec = Cuda_config.typ_of_prec;
   }
 
 let hip =
@@ -74,6 +78,7 @@ let hip =
     label = "HIP";
     table = Builtins_hip.builtins;
     guard_dialect = Hip_config.builtin_param_guards;
+    typ_of_prec = Hip_config.typ_of_prec;
   }
 
 let vendors = [ cuda; hip ]
@@ -445,7 +450,7 @@ let guarded_host_source vendor ~guard ~broken ~body =
     @ definitions @ [ "}" ] @ guards
     @ [ "namespace vendor {"; body; "}" ])
 
-let host_compiles source =
+let host_compiles ?rejecting source =
   let src = Filename.temp_file "ocannl_param_guards_" ".cpp" in
   let log = Filename.temp_file "ocannl_param_guards_" ".log" in
   Fun.protect
@@ -459,11 +464,21 @@ let host_compiles source =
           (Cc.compiler_command ()) (Filename.quote src) (Filename.quote log)
       in
       let ok = Sys.command command = 0 in
-      if not ok then (
-        let ic = open_in_bin log in
-        prerr_string (really_input_string ic (in_channel_length ic));
-        close_in ic);
-      ok)
+      let diagnostic =
+        if ok then ""
+        else
+          let ic = open_in_bin log in
+          let diagnostic =
+            Fun.protect
+              ~finally:(fun () -> close_in ic)
+              (fun () -> really_input_string ic (in_channel_length ic))
+          in
+          prerr_string diagnostic;
+          diagnostic
+      in
+      match rejecting with
+      | None -> ok
+      | Some message -> (not ok) && count_occurrences ~sub:message diagnostic > 0)
 
 (* Match metal_builtins_emulation's existing environment boundary: mingw may omit its C++ front end.
    Elsewhere a missing compiler fails the positive compile claim. *)
@@ -471,6 +486,35 @@ let host_guard_leg =
   Verdict.leg ~aggregation:`Environment
     ~when_:((not Sys.win32) || host_compiles "int ocannl_cxx_probe() { return 0; }")
     ~on:"mingw with no C++ front end" ()
+
+let () =
+  List.iter
+    (fun v ->
+      let keys = [ "ocannl_min"; "ocannl_max" ] in
+      let source key operands =
+        let prelude =
+          String.concat "\n"
+            ("#define __device__\n#define __forceinline__ inline"
+            :: Ir.C_syntax.builtin_definitions v.table ~keys:[ key ])
+        in
+        let calls = List.map (Printf.sprintf "  (void)%s(%s);" key) operands in
+        Printf.sprintf "%s\nvoid probe() {\n%s\n}\n" prelude (String.concat "\n" calls)
+      in
+      let integer_operands =
+        "bool" :: List.map v.typ_of_prec Ir.Ops.integer_precs
+        |> List.concat_map (fun typ ->
+            [ Printf.sprintf "(%s)1, 2" typ; Printf.sprintf "2, (%s)1" typ ])
+      in
+      Verdict.in_leg ~leg:host_guard_leg
+        (v.label ^ ": Min and Max accept every rendered integer type and bool on either side")
+        (fun label -> p_all label keys ~f:(fun key -> host_compiles (source key integer_operands)));
+      Verdict.in_leg ~leg:host_guard_leg
+        (v.label ^ ": integer Min and Max reject a float in either operand") (fun label ->
+          p_all label
+            (List.concat_map (fun key -> [ (key, "0.5f, 1"); (key, "1, 0.5f") ]) keys)
+            ~f:(fun (key, args) ->
+              host_compiles ~rejecting:"requires integral operands" (source key [ args ]))))
+    vendors
 
 (* Type shims for the full operator-arm preflight. These compile the actual table text and rendered
    operands; device intrinsic VALUES and vendor overload resolution remain the device sweep's

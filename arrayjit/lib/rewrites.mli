@@ -1,8 +1,10 @@
 (** The algebraic-rewrite tier over raw lowered code: pattern-directed substitutions that CHANGE the
     computation, where the schedule transforms only rearrange a fixed one. [Assignments.lower]
     applies the tier between [to_low_level] and [Low_level.optimize], ahead of the analyses, so the
-    traced store and the placements see the rewritten routine and a rewrite may remove a node's
-    definition outright.
+    traced store and the placements see the rewritten routine. A member declines at a site where its
+    replacement would leave an observed node without its definition. A node's declared non-virtual
+    memory-mode intent or observable flag protects that definition. Optimization decisions in a
+    lineage's placement table are outside this check.
 
     Each member is gated by config keys of its own (the [approximate] profile is the umbrella that
     turns them all on), classified [Code_borne]: the rewritten code carries the decision, so no

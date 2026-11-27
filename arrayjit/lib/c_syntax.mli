@@ -1169,6 +1169,10 @@ val warp_reduce_derivations : (string * string) * (string * string)
 val mma_fragment_derivation : string * string
 (** Derivation template of an MMA fragment register, applied to its node's uid. *)
 
+val acc_touched_derivation : string * string
+(** Derivation template of a guarded localized accumulator's write-back flag, applied to its scope
+    id. *)
+
 val minted_derivations : (string * string) list
 (** Every derivation template the emitter mints names with, for the kernel code cache's renaming. *)
 
