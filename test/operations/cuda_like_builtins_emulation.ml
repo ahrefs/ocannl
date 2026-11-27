@@ -1,7 +1,8 @@
 (* Integer RNG results are also checked before storage, against independently extracted input
    bits and signedness, including the C reference table. Generic C arithmetic promotions and
    parameter guards have separate compile-only C++ legs below. The integer extrema leg compiles
-   calls to the Min/Max templates with either operand floating and with mixed integer widths.
+   calls to the Min/Max templates with either operand floating and with the dialect's scalar
+   integer types and booleans in each operand position.
    A signed-byte copy must pass byte parity and fail the result checks. *)
 (* The CUDA and HIP definition tables' device-free conversion helpers (gh-ocannl-1353), compiled by
    the host C compiler beside the C table the cc backend prepends, and compared with it bitwise.
@@ -59,6 +60,7 @@ type vendor = {
   label : string;
   table : (string * string * string list) list;
   guard_dialect : Ir.C_syntax.param_guard_dialect option;
+  typ_of_prec : Ir.Ops.prec -> string;
 }
 
 let cuda =
@@ -67,6 +69,7 @@ let cuda =
     label = "CUDA";
     table = Builtins_cuda.builtins;
     guard_dialect = Cuda_config.builtin_param_guards;
+    typ_of_prec = Cuda_config.typ_of_prec;
   }
 
 let hip =
@@ -75,6 +78,7 @@ let hip =
     label = "HIP";
     table = Builtins_hip.builtins;
     guard_dialect = Hip_config.builtin_param_guards;
+    typ_of_prec = Hip_config.typ_of_prec;
   }
 
 let vendors = [ cuda; hip ]
@@ -487,23 +491,29 @@ let () =
   List.iter
     (fun v ->
       let keys = [ "ocannl_min"; "ocannl_max" ] in
-      let source key args =
+      let source key operands =
         let prelude =
           String.concat "\n"
             ("#define __device__\n#define __forceinline__ inline"
             :: Ir.C_syntax.builtin_definitions v.table ~keys:[ key ])
         in
-        Printf.sprintf "%s\nvoid probe() { (void)%s(%s); }\n" prelude key args
+        let calls = List.map (Printf.sprintf "  (void)%s(%s);" key) operands in
+        Printf.sprintf "%s\nvoid probe() {\n%s\n}\n" prelude (String.concat "\n" calls)
+      in
+      let integer_operands =
+        "bool" :: List.map v.typ_of_prec Ir.Ops.integer_precs
+        |> List.concat_map (fun typ ->
+            [ Printf.sprintf "(%s)1, 2" typ; Printf.sprintf "2, (%s)1" typ ])
       in
       Verdict.in_leg ~leg:host_guard_leg
-        (v.label ^ ": integer Min and Max accept mixed integer operands") (fun label ->
-          p_all label keys ~f:(fun key -> host_compiles (source key "1u, 2LL")));
+        (v.label ^ ": Min and Max accept every rendered integer type and bool on either side")
+        (fun label -> p_all label keys ~f:(fun key -> host_compiles (source key integer_operands)));
       Verdict.in_leg ~leg:host_guard_leg
         (v.label ^ ": integer Min and Max reject a float in either operand") (fun label ->
           p_all label
             (List.concat_map (fun key -> [ (key, "0.5f, 1"); (key, "1, 0.5f") ]) keys)
             ~f:(fun (key, args) ->
-              host_compiles ~rejecting:"requires integral operands" (source key args))))
+              host_compiles ~rejecting:"requires integral operands" (source key [ args ]))))
     vendors
 
 (* Type shims for the full operator-arm preflight. These compile the actual table text and rendered
