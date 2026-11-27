@@ -34,6 +34,15 @@ let report_refusal ~rewrite (tn, root) =
     Stdio.eprintf "online_softmax: %s declined for %s [%s] (%s)\n%!" rewrite (Tn.debug_name tn)
       (Tn.id tn) why
 
+let report_reader_shape ~expected tn positions =
+  if Utils.settings.log_level > 1 then
+    let statements = String.concat ~sep:", " (List.map positions ~f:Int.to_string) in
+    Stdio.eprintf
+      "online_softmax: backward fusion reader shape miss for %s [%s] (expected %s, reader \
+       statements [%s])\n\
+       %!"
+      (Tn.debug_name tn) (Tn.id tn) expected statements
+
 let allow_unobserved ~rewrite nodes =
   match List.find_map nodes ~f:intent_root with
   | None -> Some ()
@@ -864,9 +873,7 @@ let find_backward r (nz : normalizer) : backward option =
     match outside_readers r eg_tn with
     | [ pos ] -> Some pos
     | positions ->
-        List.iter positions ~f:(fun pos ->
-            report_refusal ~rewrite:"backward fusion with multiple exponential-gradient readers"
-              (eg_tn, Reader pos));
+        report_reader_shape ~expected:"one exponential-gradient reader" eg_tn positions;
         None
   in
   let* e_nest = r.nests.(e_pos) in
@@ -907,9 +914,7 @@ let find_backward r (nz : normalizer) : backward option =
         chain n.tn sg ((pos, z, env, rhs, cur, n.tn) :: links) (depth - 1)
     | [ p1; p2 ] -> Some (cur, sig_cur, List.rev links, p1, p2)
     | _ :: _ :: _ :: _ as positions ->
-        List.iter positions ~f:(fun pos ->
-            report_refusal ~rewrite:"backward fusion with multiple score-gradient readers"
-              (cur, Reader pos));
+        report_reader_shape ~expected:"a gradient link or two terminal contractions" cur positions;
         None
     | _ -> None
   in
@@ -946,9 +951,7 @@ let find_backward r (nz : normalizer) : backward option =
     match terminal_contractions with
     | Some _ as matched -> matched
     | None ->
-        List.iter [ p1; p2 ] ~f:(fun pos ->
-            report_refusal ~rewrite:"backward fusion without a terminal contraction pair"
-              (ds_tn, Reader pos));
+        report_reader_shape ~expected:"the query and key gradient contractions" ds_tn [ p1; p2 ];
         None
   in
   let kq_pos, kq_nest, (kq_voc, kq_env), _, k_op, _ = kq in
@@ -1071,7 +1074,7 @@ let find_backward r (nz : normalizer) : backward option =
     with
     | None -> true
     | Some pos ->
-        report_refusal ~rewrite:"backward fusion" (tn, Reader pos);
+        report_reader_shape ~expected:"a complete gradient before the read" tn [ pos ];
         false
   in
   let filled_before_read =
