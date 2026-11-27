@@ -5597,6 +5597,9 @@ let site_reduction_extent (site : matmul_site) =
 let seeded_default_backend (facts : Ir.Backend_intf.backend_facts) = facts.seeds_untuned_default
 let reduction_sink_backend (facts : Ir.Backend_intf.backend_facts) = facts.sinks_untuned_reductions
 
+let uses_seeded_incumbent ~facts choice =
+  seeded_default_backend facts || seeded_choice_changed choice
+
 type seed_gate =
   | Min_reduction of int
   | Ranked of {
@@ -7595,8 +7598,8 @@ module Make (D : Driver) = struct
       (* gh-ocannl-1253: the model keeps the untuned plan as the incumbent unless a candidate
          strictly beats it. CUDA and HIP can add sketch seeding; Metal can sink plain reductions. *)
       let untuned_here = lazy (model_untuned_plan ~facts ~limits) in
-      (* [model_admits] applies the numerics gate only where the untuned compiler seeds sketches.
-         A sink-only Metal incumbent keeps the same candidate family as the plain preset. *)
+      (* [model_admits] applies the numerics gate under the CUDA/HIP sketch-seeding policy. A
+         sink-only Metal incumbent keeps the same candidate family as the plain preset. *)
       let coalesced = model_ranks_coalesced ~limits in
       let admits p = model_admits ~coalesced ~seeding:(Lazy.force seeding_here) p in
       (* gh-ocannl-1477: under seeding, a walk's threshold is the seeded plan's own sketch on the
@@ -7712,7 +7715,7 @@ module Make (D : Driver) = struct
                 let segs =
                   seeded_segs ~on_choice:(fun c -> incumbent_choice := c) seeding (scratch_of opt)
                 in
-                if seeded_default_backend facts || seeded_choice_changed !incumbent_choice then
+                if uses_seeded_incumbent ~facts !incumbent_choice then
                   ("seeded", `Seeded seeding, segs)
                 else ("default", `Default, segs)
             | None ->
@@ -8257,10 +8260,7 @@ module Make (D : Driver) = struct
                 ~capabilities:caps ~facts ~limits ~accum_prec ~static_indices ~gate ~min_serial
                 ~sink_enabled ~admit_narrow (scratch_of opt)
             in
-            let label =
-              if seeded_default_backend facts || seeded_choice_changed !record then "seeded"
-              else "default"
-            in
+            let label = if uses_seeded_incumbent ~facts !record then "seeded" else "default" in
             (label, segs)
         | None ->
             ( "default",
