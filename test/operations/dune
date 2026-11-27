@@ -16876,6 +16876,7 @@
   ocannl_config
   sweep_components.sh
   ../../scripts/harness-support.sh
+  ../../scripts/process-group.sh
   ../../tools/lab-map.sh
   ; the one probe fleet-registry.sh and gpu-tokens.sh ask through (gh-ocannl-1841)
   ../../tools/fleet-worker-candidates.sh

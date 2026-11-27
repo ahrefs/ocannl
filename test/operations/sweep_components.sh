@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Direct fixtures for the sourced sweep components. No sweep, remote host or OCaml
 # executable is launched. Run `bash test/operations/sweep_components.sh [COMPONENT]`;
-# COMPONENT is all (default), lab, fleet, fingerprint, state or tokens.
+# COMPONENT is all (default), lab, fleet, fingerprint, state, tokens or supervisor.
 set -uo pipefail
 . "$(dirname "$0")/../../scripts/harness-support.sh"
+. "$(dirname "$0")/../../scripts/process-group.sh"
 component=${1:-all}
 [ $# -eq 0 ] || shift
-case $component in all | lab | fleet | fingerprint | state | tokens) ;; *) echo "unknown component: $component" >&2; exit 2 ;; esac
+case $component in all | lab | fleet | fingerprint | state | tokens | supervisor) ;; *) echo "unknown component: $component" >&2; exit 2 ;; esac
 TOOLS=$(cd "$(dirname "$0")/../../tools" && pwd)
 if [ "${1:-}" = --tools ]; then
   [ $# -ge 2 ] || { echo "--tools requires a directory" >&2; exit 2; }
@@ -364,11 +365,155 @@ state_fixture() {
   equal 'state: a record moved across a probe-code change is not blamed on the box' "$(grep -c 'HOST CAPABILITIES CHANGED' "$TMP/messages"):$(grep -c 'and so did the code producing it' "$TMP/messages")" 0:1
 }
 
+# Process supervisor cancellation races (gh-ocannl-2066): a CORE::GLOBAL::fork
+# hook drives the shipping `$capped_perl` directly into both windows around
+# fork() without relying on CPU load.
+supervisor_fixture() {
+  . "$TOOLS/sweep-supervisor.sh"
+  local sup_pl=$TMP/supervisor.pl rc cpid sup waited
+  printf '%s' "$capped_perl" >"$sup_pl"
+  cat >"$TMP/ForkHook.pm" <<'PERL'
+package ForkHook;
+use strict;
+use warnings;
+BEGIN {
+  *CORE::GLOBAL::fork = sub () {
+    my $mode = $ENV{SUP_TEST_MODE} // "";
+    my $p = CORE::fork();
+    return $p unless defined $p;
+    if (!$p) {
+      if (my $pf = $ENV{SUP_TEST_CHILD_PID}) {
+        if (open my $fh, ">", "$pf.tmp") {
+          print $fh "$$\n";
+          close $fh;
+          rename "$pf.tmp", $pf;
+        }
+      }
+      if ($mode eq "delay_child" && $ENV{SUP_TEST_GATE}) {
+        for (1 .. 1000) {
+          last if -e $ENV{SUP_TEST_GATE};
+          select undef, undef, undef, 0.01;
+        }
+      }
+      return 0;
+    }
+    if ($mode eq "term_after_ready") {
+      my $ready = $ENV{SUP_TEST_READY};
+      for (1 .. 400) {
+        last if -e $ready;
+        select undef, undef, undef, 0.01;
+      }
+      CORE::kill("TERM", $$);
+    } elsif ($mode eq "delay_child") {
+      if (my $pf = $ENV{SUP_TEST_CHILD_PID}) {
+        for (1 .. 400) {
+          last if -e $pf;
+          select undef, undef, undef, 0.01;
+        }
+      }
+      CORE::kill("TERM", $$);
+    }
+    return $p;
+  };
+  *CORE::GLOBAL::kill = sub {
+    my ($sig, @pids) = @_;
+    my $r = CORE::kill($sig, @pids);
+    if ($sig eq "TERM" && @pids && $pids[0] < 0) {
+      if (($ENV{SUP_TEST_MODE} // "") eq "delay_child" && $ENV{SUP_TEST_GATE}) {
+        if (open my $fh, ">", $ENV{SUP_TEST_GATE}) { close $fh; }
+      }
+      if (my $kl = $ENV{SUP_TEST_KILL_LOG}) {
+        if (open my $fh, ">>", $kl) { print $fh "$sig @pids\n"; close $fh; }
+      }
+    }
+    return $r;
+  };
+}
+1;
+PERL
+  # 1. TERM delivered inside fork() once the child has already called setpgid
+  # and exec'd (the gh-ocannl-2066 orphaning race).
+  rm -f "$TMP/sup-fork.pid" "$TMP/sup-fork.ready"
+  SUP_TEST_MODE=term_after_ready SUP_TEST_READY=$TMP/sup-fork.ready \
+    perl -I"$TMP" -MForkHook "$sup_pl" 30 \
+      /bin/sh -c 'printf "%s\n" "$$" >"$1.pid"; : >"$1.ready"; while :; do sleep 0.05; done' \
+      _ "$TMP/sup-fork" 2>/dev/null
+  rc=$?
+  cpid=$(cat "$TMP/sup-fork.pid" 2>/dev/null || true)
+  local alive=no
+  if [ -n "$cpid" ] && pid_alive "$cpid"; then alive=yes; fi
+  if [ "$rc" -eq 143 ] && [ -n "$cpid" ] && [ "$alive" = no ]; then
+    report 0 'supervisor: TERM between fork and handler install reaps the child'
+  else
+    [ -n "$cpid" ] && kill -KILL -- "-$cpid" "$cpid" 2>/dev/null || true
+    report 1 'supervisor: TERM between fork and handler install reaps the child' \
+      "rc=$rc cpid=${cpid:-missing} alive=$alive"
+  fi
+  # 2. TERM delivered in parent while child is held before setpgid(0, 0) on a
+  # gate that opens only once `$reap` sends `kill TERM -$pid`: parent-side
+  # setpgid puts the child into its own group before unblocking, so the pending
+  # TERM kills the child before exec @ARGV runs.
+  rm -f "$TMP/sup-pgid.pid" "$TMP/sup-pgid.pid.tmp" "$TMP/sup-pgid.gate" "$TMP/sup-pgid.execd"
+  SUP_TEST_MODE=delay_child SUP_TEST_CHILD_PID=$TMP/sup-pgid.pid SUP_TEST_GATE=$TMP/sup-pgid.gate \
+    perl -I"$TMP" -MForkHook "$sup_pl" 30 \
+      /bin/sh -c ': >"$1.execd"' _ "$TMP/sup-pgid" 2>/dev/null
+  rc=$?
+  cpid=$(cat "$TMP/sup-pgid.pid" 2>/dev/null || true)
+  alive=no
+  if [ -n "$cpid" ] && pid_alive "$cpid"; then alive=yes; fi
+  if [ "$rc" -eq 143 ] && [ ! -e "$TMP/sup-pgid.execd" ] && [ -n "$cpid" ] && [ "$alive" = no ]; then
+    report 0 'supervisor: parent-side setpgid reaps a child signalled before exec'
+  else
+    [ -n "$cpid" ] && kill -KILL -- "-$cpid" "$cpid" 2>/dev/null || true
+    report 1 'supervisor: parent-side setpgid reaps a child signalled before exec' \
+      "rc=$rc cpid=${cpid:-missing} alive=$alive execd=$([ -e "$TMP/sup-pgid.execd" ] && echo yes || echo no)"
+  fi
+  # 3. Another termination signal (HUP) arriving while $reap is held open on the
+  # child's TERM grace does not re-enter cleanup or overwrite the exit status
+  # (observed via both the group-TERM call count and exit 143 vs 129).
+  rm -f "$TMP/sup-double.pid" "$TMP/sup-double.ready" "$TMP/sup-double.termed" \
+    "$TMP/sup-double.release" "$TMP/sup-double.kills"
+  SUP_TEST_KILL_LOG=$TMP/sup-double.kills \
+    perl -I"$TMP" -MForkHook "$sup_pl" 30 \
+      /bin/sh -c 'trap ": >\"\$1.termed\"; while [ ! -e \"\$1.release\" ]; do sleep 0.02; done; exit 0" TERM; printf "%s\n" "$$" >"$1.pid"; : >"$1.ready"; while :; do sleep 0.05; done' \
+      _ "$TMP/sup-double" 2>/dev/null &
+  sup=$!
+  waited=0
+  until [ -e "$TMP/sup-double.ready" ] || [ "$waited" -ge 200 ]; do
+    sleep 0.02
+    waited=$((waited + 1))
+  done
+  kill -TERM "$sup" 2>/dev/null || true
+  waited=0
+  until [ -e "$TMP/sup-double.termed" ] || [ "$waited" -ge 200 ]; do
+    sleep 0.02
+    waited=$((waited + 1))
+  done
+  local second_kill_rc=0 term_kills=0
+  kill -HUP "$sup" 2>/dev/null || second_kill_rc=$?
+  sleep 0.2
+  : >"$TMP/sup-double.release"
+  wait "$sup"
+  rc=$?
+  cpid=$(cat "$TMP/sup-double.pid" 2>/dev/null || true)
+  term_kills=$(wc -l <"$TMP/sup-double.kills" 2>/dev/null | tr -d ' ' || echo 0)
+  alive=no
+  if [ -n "$cpid" ] && pid_alive "$cpid"; then alive=yes; fi
+  if [ "$rc" -eq 143 ] && [ "$second_kill_rc" -eq 0 ] && [ "$term_kills" -eq 1 ] && [ -n "$cpid" ] && [ "$alive" = no ]; then
+    report 0 'supervisor: second signal during reap does not re-enter cleanup'
+  else
+    [ -n "$cpid" ] && kill -KILL -- "-$cpid" "$cpid" 2>/dev/null || true
+    report 1 'supervisor: second signal during reap does not re-enter cleanup' \
+      "rc=$rc second_kill_rc=$second_kill_rc term_kills=$term_kills cpid=${cpid:-missing} alive=$alive"
+  fi
+}
+
 # A green fixture must fail when its shipping function is broken. Each child
 # runs one component, so these controls never recurse into another control set.
 controls_fixture() {
-  local kind module pattern control rc
-  for kind in lab fleet fingerprint state tokens; do
+  local kind target_component module pattern control rc
+  for kind in lab fleet fingerprint state tokens supervisor-mask supervisor-setpgid supervisor-reentry; do
+    target_component=${kind%%-*}
     control=$TMP/mutant-$kind
     mkdir -p "$control"
     cp "$TOOLS"/lab-map.sh "$TOOLS"/fleet-registry.sh "$TOOLS"/sweep-fingerprint.sh \
@@ -404,10 +549,31 @@ controls_fixture() {
         grep -q 'gpu = \$gpu if' "$control/$module" || echo 'tokens mutant did not apply' >&2
         pattern="FAIL  tokens: the reader keeps the fleet's holders and counts the GPU's"
         ;;
+      supervisor-mask)
+        module=sweep-supervisor.sh
+        perl -pe 's/POSIX::sigprocmask\(POSIX::SIG_BLOCK\(\), \$sigmask, \$oldmask\) or die "sigprocmask: \$!";/# mutant: mask removed/' \
+          "$TOOLS/$module" >"$control/$module"
+        grep -q '# mutant: mask removed' "$control/$module" || echo 'supervisor-mask mutant did not apply' >&2
+        pattern='FAIL  supervisor: TERM between fork and handler install reaps the child'
+        ;;
+      supervisor-setpgid)
+        module=sweep-supervisor.sh
+        perl -pe 's/POSIX::setpgid\(\$pid, \$pid\);/# mutant: parent setpgid removed/' \
+          "$TOOLS/$module" >"$control/$module"
+        grep -q '# mutant: parent setpgid removed' "$control/$module" || echo 'supervisor-setpgid mutant did not apply' >&2
+        pattern='FAIL  supervisor: parent-side setpgid reaps a child signalled before exec'
+        ;;
+      supervisor-reentry)
+        module=sweep-supervisor.sh
+        perl -pe 's/\$SIG\{ALRM\} = \$SIG\{INT\} = \$SIG\{TERM\} = \$SIG\{HUP\} = "IGNORE";/# mutant: ignore removed/' \
+          "$TOOLS/$module" >"$control/$module"
+        grep -q '# mutant: ignore removed' "$control/$module" || echo 'supervisor-reentry mutant did not apply' >&2
+        pattern='FAIL  supervisor: second signal during reap does not re-enter cleanup'
+        ;;
     esac
     rc=0
     harness_rejected 1 "$pattern" "$TMP/control-$kind.log" \
-      bash "$0" "$kind" --tools "$control" || rc=$?
+      bash "$0" "$target_component" --tools "$control" || rc=$?
     report "$rc" "negative control: $kind fixture rejects a broken component"
   done
 }
@@ -417,5 +583,6 @@ case $component in all | fleet) fleet_fixture ;; esac
 case $component in all | fingerprint) fingerprint_fixture ;; esac
 case $component in all | state) state_fixture ;; esac
 case $component in all | tokens) tokens_fixture ;; esac
+case $component in all | supervisor) supervisor_fixture ;; esac
 case $component in all) controls_fixture ;; esac
 finish

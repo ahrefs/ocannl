@@ -1868,7 +1868,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   synchronized copies), with `pid_alive` beside it for one process (gh-ocannl-1383: a cancelled
   sweep unit, orphaned in a group of its own that the sweep's group check never sees, read as a
   survivor while it waited for its reaper; `sweep_harness` asks every "outlived" question through
-  it, and a failure prints the survivor's `ps` row, where `Z` names the misreading): `/proc` where
+  it, and a failure prints the survivor's `ps` row, where `Z` names the misreading; gh-ocannl-2066
+  later caught live `S`-state orphans with `PPID=1` from `tools/sweep-supervisor.sh` installing
+  `$SIG{INT/TERM/HUP}` after `fork()`, fixed by masking those signals across `fork()` with
+  `POSIX::setpgid` in both parent and child, pinned by `sweep_components.sh`'s `supervisor`
+  fixture): `/proc` where
   there is one (fork-free, through the shell's `read`), `ps -A -o pgid=,stat=` on the BSDs and
   macOS, degrading to the bare signal only where neither answers; the signal probe stays FIRST as a
   necessary condition, which makes the predicate a strict narrowing of the `kill -0` it replaced —
