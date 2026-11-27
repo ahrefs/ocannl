@@ -32,11 +32,14 @@
    per iteration — the fragment-scope form opens it once, outside the loop). Canonical digests
    distinguish the depths, and the pipelined companion section alone must separate byte-identical IR
    whose side-table depths differ (the phase-2 aliasing hazard, pinned by record surgery).
-   Validation legs pin the illegal placements. The C backends cannot express shared placement and
-   must reject the compile cleanly (the same pinning as the SMEM matmul test); the schedule-level
-   validation errors are the typed Illegal_schedule declines autotune candidates see. *)
+   Validation legs pin the illegal placements. On C backends (gh-ocannl-678),
+   [Low_level.serialize_workgroup_barriers] renders workgroup-shared staging into barrier-fissioned
+   serial C loops, so the execution parity and depth-2-vs-depth-1 legs run there too (while GPU-only
+   source checks stay gated on [on_gpu]); the schedule-level validation errors are the typed
+   Illegal_schedule declines autotune candidates see. *)
 
-(* cc-fp-contract: not-cc -- the bitwise legs need shared placement, which the C backends refuse *)
+(* cc-fp-contract: exact-operands -- dyadic small operands whose products and sums stay exact in
+   f32 *)
 
 open Base
 open Ocannl
@@ -260,64 +263,38 @@ let () =
   p_all2 "the prefill of the targets differs from the serial twin's result in every cell" mc_prefill
     got_serial ~f:(fun a b -> Float.(a <> b));
   let results =
-    if on_gpu then
-      Some
-        (List.map legs ~f:(fun ((key, mc, _) as leg) ->
-             let ctx, routine = compile_leg leg in
-             let ctx = Context.set_values ctx mc.Tensor.value mc_prefill in
-             let ctx = Context.run ctx routine in
-             (key, Context.get_values ctx mc.Tensor.value)))
-    else None
+    List.map legs ~f:(fun ((key, mc, _) as leg) ->
+        let ctx, routine = compile_leg leg in
+        let ctx = Context.set_values ctx mc.Tensor.value mc_prefill in
+        let ctx = Context.run ctx routine in
+        (key, Context.get_values ctx mc.Tensor.value))
   in
-  (let label = "staged depths approximate the serial twin (GPU) or clean rejection (CPU)" in
-   match results with
-   | Some results ->
-       p_all label results ~f:(fun (key, got) ->
-           Verdict.within ~what_ran:(Printf.sprintf "depth %d" key) label got got_serial
-             ~tol:(fun _ -> 1e-2))
-   | None ->
-       (* The C backends reject the shared staging composition at compile (workgroup-shared
-          placement is not renderable there) — same clean rejection as the SMEM matmul test, at any
-          depth. *)
-       let rejects leg =
-         try
-           ignore (compile_leg leg : Context.t * Context.routine);
-           false
-         with Invalid_argument msg -> String.is_substring msg ~substring:"not supported"
-       in
-       p_all label legs ~f:rejects);
-  (* The executed depths, where the backend is a GPU; off it the claims below are skipped. *)
-  let got =
-    lazy
-      (let results = Option.value_exn results in
-       let find key = List.Assoc.find_exn results key ~equal:Int.equal in
-       (find 0, find 1, find 2))
-  in
+  (let label = "staged depths approximate the serial twin (GPU and CPU)" in
+   p_all label results ~f:(fun (key, got) ->
+       Verdict.within ~what_ran:(Printf.sprintf "depth %d" key) label got got_serial ~tol:(fun _ ->
+           1e-2)));
+  let find key = List.Assoc.find_exn results key ~equal:Int.equal in
+  let got_ref, got_d1, got_d2 = (find 0, find 1, find 2) in
   (* The invariant: pipelining is a pure prefetch-timing transform. *)
-  in_leg ~leg:gpu_leg "depth 2 matches depth 1 BITWISE" (fun label ->
-      let _, got_d1, got_d2 = Lazy.force got in
-      p_all2 label got_d2 got_d1 ~f:Float.equal);
+  p_all2 "depth 2 matches depth 1 BITWISE" got_d2 got_d1 ~f:Float.equal;
   (* The gh-567 invariant: grouping and eliding barriers is a pure synchronization transform. *)
-  in_leg ~leg:gpu_leg "depth 1 matches the un-elided barrier structure BITWISE" (fun label ->
-      let got_ref, got_d1, _ = Lazy.force got in
-      p_all2 label got_d1 got_ref ~f:Float.equal);
+  p_all2 "depth 1 matches the un-elided barrier structure BITWISE" got_d1 got_ref ~f:Float.equal;
   let count_sub src sub =
     String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length
   in
-  in_leg ~leg:gpu_leg "depth 2 rotates the buffers the depth-1 kernel does not" (fun label ->
-      let src1 = Generated.read "pipe_mm_d1" in
-      let src2 = Generated.read "pipe_mm_d2" in
-      (* The depth-2 kernel rotates both tile buffers ([% 2] terms on reads and writes) and
-         allocates each tile at twice the depth-1 size (16x16 -> [512] and 16x32 -> [1024] floats);
-         the depth-1 kernel has no rotation and single-size tiles. *)
-      let decl_ok src d =
-        if on_metal then
-          count_sub src ("[" ^ Int.to_string (256 * d) ^ "]") >= 1
-          && count_sub src ("[" ^ Int.to_string (512 * d) ^ "]") >= 1
-        else true
-      in
-      p label
-        (count_sub src2 "% 2" >= 4 && count_sub src1 "% 2" = 0 && decl_ok src1 1 && decl_ok src2 2));
+  (let src1 = Generated.read "pipe_mm_d1" in
+   let src2 = Generated.read "pipe_mm_d2" in
+   (* The depth-2 kernel rotates both tile buffers ([% 2] terms on reads and writes) and allocates
+      each tile at twice the depth-1 size (16x16 -> [512] and 16x32 -> [1024] floats); the depth-1
+      kernel has no rotation and single-size tiles. *)
+   let decl_ok src d =
+     if on_metal || not on_gpu then
+       count_sub src ("[" ^ Int.to_string (256 * d) ^ "]") >= 1
+       && count_sub src ("[" ^ Int.to_string (512 * d) ^ "]") >= 1
+     else true
+   in
+   p "depth 2 rotates the buffers the depth-1 kernel does not"
+     (count_sub src2 "% 2" >= 4 && count_sub src1 "% 2" = 0 && decl_ok src1 1 && decl_ok src2 2));
   (* gh-487 phase 2: where the backend has an async-copy arm, the depth-2 staging renders as async
      copies — both prologues and both prefetches, 4 call sites — with one wait-then-barrier opening
      each rotor iteration, while depth 1 stays fully synchronous: the pd1/pd2 pair keeps comparing
@@ -595,28 +572,24 @@ let () =
             String.equal f feature && String.is_substring detail ~substring
         | _ -> false)
   in
-  (* The C backends reject the workgroup-shared composition before either check is reached, so the
-     renderer's preconditions are unreachable there: off a GPU these claims are skipped. *)
-  in_leg ~leg:gpu_leg "a read outside the rotor loop is a candidate's typed decline, not a fatal"
-    (fun label ->
-      p label
-        (declines_at_codegen ~feature:"pipelined tile read outside its rotor loop"
-           ~substring:"outside its rotor loop" rotorless_transform));
-  in_leg ~leg:gpu_leg "so is a pipelined tile whose rotor loop is not Serial" (fun label ->
-      p label
-        (declines_at_codegen ~feature:"pipelined tile whose rotor loop is not Serial"
-           ~substring:"no longer Serial" unserial_rotor_transform));
-  in_leg ~leg:gpu_leg "and the same schedule written by hand still raises at Context.compile"
-    (fun label ->
-      let%op mcr2 = ma * mb in
-      expect_invalid label ~substring:"outside its rotor loop" (fun () ->
-          ignore
-            (Context.compile
-               ~lowered_transform:(fun o -> [ (rotorless_transform ~out:mcr2.Tensor.value) o ])
-               (Context.auto ())
-               (named "pipe_mm_rotorless_user" (Train.forward mcr2))
-               Ir.Indexing.Empty
-              : Context.t * Context.routine)));
+  (* gh-ocannl-678: with serial barrier-fission lowering, cc reaches these renderer preconditions
+     too. *)
+  p "a read outside the rotor loop is a candidate's typed decline, not a fatal"
+    (declines_at_codegen ~feature:"pipelined tile read outside its rotor loop"
+       ~substring:"outside its rotor loop" rotorless_transform);
+  p "so is a pipelined tile whose rotor loop is not Serial"
+    (declines_at_codegen ~feature:"pipelined tile whose rotor loop is not Serial"
+       ~substring:"no longer Serial" unserial_rotor_transform);
+  (let%op mcr2 = ma * mb in
+   expect_invalid "and the same schedule written by hand still raises at Context.compile"
+     ~substring:"outside its rotor loop" (fun () ->
+       ignore
+         (Context.compile
+            ~lowered_transform:(fun o -> [ (rotorless_transform ~out:mcr2.Tensor.value) o ])
+            (Context.auto ())
+            (named "pipe_mm_rotorless_user" (Train.forward mcr2))
+            Ir.Indexing.Empty
+           : Context.t * Context.routine)));
 
   (* --- Seeding pin (gh-ocannl-487): the depth twins follow the backend's advertised
      [mma_pipeline_depths] — one twin per staged seed per advertised depth, identical to its plain

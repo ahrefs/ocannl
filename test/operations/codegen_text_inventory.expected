@@ -870,6 +870,7 @@ test/operations/capture_pass_side_effects.ml [through Ll_test.execute; through L
 test/operations/cc_half_excess_precision.ml [through Ll_test.execute; run by @test/operations/runtest-cc_half_excess_precision]
 test/operations/cc_kernel_outline.ml [through Ll_test.execute; run by @test/operations/runtest-cc_kernel_outline]
 test/operations/cc_march_census.ml [through Ll_test.link; run by @test/operations/runtest-cc_march_census-emission, @test/operations/runtest-cc_march_census-emission-outlined, @test/operations/runtest-cc_march_census-w16_native_foreign, @test/operations/runtest-cc_march_census-w16_native_host, @test/operations/runtest-cc_march_census-w16_wide_foreign, @test/operations/runtest-cc_march_census-w16_wide_host, @test/operations/runtest-cc_march_census-w32_native_foreign, @test/operations/runtest-cc_march_census-w32_native_host, @test/operations/runtest-cc_march_census-w32_wide_foreign, @test/operations/runtest-cc_march_census-w32_wide_host, @test/operations/runtest-cc_march_census-w64_native_foreign, @test/operations/runtest-cc_march_census-w64_native_host, @test/operations/runtest-cc_march_census-w64_wide_foreign, @test/operations/runtest-cc_march_census-w64_wide_host]
+test/operations/cc_workgroup_shared_staging.ml [prelowered compile; run by @test/operations/runtest-cc_workgroup_shared_staging]
 test/operations/codegen_fma_precision.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-codegen_fma_precision]
 test/operations/compile_failure_declines.ml [staged callback; prelowered compile; run by @test/operations/runtest-compile_failure_declines]
 test/operations/context_handle_refusals.ml [through Ll_test.link; run by @test/operations/runtest-context_handle_refusals]
@@ -1028,6 +1029,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-cc_march_census-w64_native_host
 @test/operations/runtest-cc_march_census-w64_wide_foreign
 @test/operations/runtest-cc_march_census-w64_wide_host
+@test/operations/runtest-cc_workgroup_shared_staging
 @test/operations/runtest-codegen_fma_precision
 @test/operations/runtest-compile_failure_declines
 @test/operations/runtest-context_handle_refusals

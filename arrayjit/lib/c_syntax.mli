@@ -745,8 +745,9 @@ module type C_syntax_config = sig
       [.z]. *)
 
   val barrier_syntax : string option
-  (** Workgroup barrier statement ([__syncthreads();] / [threadgroup_barrier(...);]); [None] makes
-      [Workgroup_barrier] a compile-time error (serialization cannot implement a barrier). *)
+  (** Workgroup barrier statement ([__syncthreads();] / [threadgroup_barrier(...);]); [None] selects
+      serial barrier-fission lowering ({!Low_level.serialize_workgroup_barriers}) in [compile_proc]
+      instead of emitting a hardware barrier statement. *)
 
   val async_copy : async_copy_syntax option
   (** gh-ocannl-487 phase 2: asynchronous global→workgroup-shared copies (CUDA [cp.async]) for the
@@ -779,7 +780,8 @@ module type C_syntax_config = sig
 
   val shared_decl_prefix : string option
   (** Declaration prefix for workgroup-shared placements ([__shared__ ] / [threadgroup ]); [None]
-      makes a non-empty [workgroup_shared] set a compile-time error. *)
+      declares workgroup-shared tiles as plain block-scope (or heap-spilled) arrays under serial
+      barrier-fission lowering ({!Low_level.serialize_workgroup_barriers}, gh-ocannl-678). *)
 
   val compiler_contraction_off : unit -> bool
   (** Whether this backend's kernel compile is pinned so its compiler never contracts a [a * b + c]

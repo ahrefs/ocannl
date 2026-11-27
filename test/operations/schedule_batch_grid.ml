@@ -54,9 +54,10 @@ open Verdict.Claims
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 
-(* The execution claims, open on a GPU backend and skipped by name elsewhere: written once
-   (gh-ocannl-1703). *)
-let exec_leg = Verdict.leg ~when_:on_gpu ~on:backend_name ()
+(* The hardware [.z] register text claim runs only on backends that bind a hardware grid; execution
+   and bitwise parity run on every backend, including cc via serial barrier-fission rendering
+   (gh-ocannl-678). *)
+let gpu_leg = Verdict.leg ~when_:on_gpu ~on:backend_name ()
 
 module Generated = Test_utils.Generated
 
@@ -205,67 +206,55 @@ let leg ~tag ~batch_product ?interior ~fold_div ~fold_mod ~build () =
   if Option.is_some interior then
     p (tag ^ ": bgrid-in twins launch the interior batch on grid.y") !inner_ok;
   p (tag ^ ": the fold arithmetic decodes innermost-mod, outermost-div") !fold_ok;
-  (* --- Executable parity, seed by seed, on backends that can run shared staging. --- *)
-  if not on_gpu then
-    Stdio.eprintf "%s: %s cannot execute workgroup-shared staging — execution legs skipped\n" tag
-      backend_name;
-  let executed =
-    lazy
-      (let n_ran = ref 0 and n_match = ref 0 in
-       (* Every seed compiles under the one routine name [<tag>_sched], so each overwrites the
-          previous seed's artifact. Arming before each compile makes the read below this seed's
-          kernel or nothing -- until gh-ocannl-655 the fold was credited to whichever seed happened
-          to have written last, which is how a post-loop grep for the fold found a later serial
-          seed's kernel and read 0 occurrences (gh-ocannl-643). Each batch-grid seed is now checked
-          in its own right rather than one standing for all. *)
-       let n_fold_seeds = ref 0 and n_folded = ref 0 in
-       List.iter seeds ~f:(fun q ->
-           Generated.arm (tag ^ "_sched");
-           match
-             let ctx, routine =
-               Context.compile
-                 ~lowered_transform:(fun o ->
-                   [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o ])
-                 (Context.auto ()) fwd Ir.Indexing.Empty
-             in
-             Context.get_values (Context.run ctx routine) cand.Tensor.value
-           with
-           | got ->
-               Int.incr n_ran;
-               if Array.for_all2_exn got want ~f:Float.equal then Int.incr n_match;
-               let fold_strings =
-                 match (q.Autotune.sk_batch_inner, interior) with
-                 | true, Some (_, rows) ->
-                     (* bgrid-in folds the row blocks (innermost-mod) with the outer batch
-                        (outermost-div); a single row block leaves nothing to decode. *)
-                     let row_blocks = (rows + q.Autotune.sk_bm - 1) / q.Autotune.sk_bm in
-                     if row_blocks < 2 then None
-                     else
-                       let n = Int.to_string row_blocks in
-                       Some (fold_reg ^ " / " ^ n, fold_reg ^ " % " ^ n)
-                 | _ -> if q.Autotune.sk_batch_grid then Some (fold_div, fold_mod) else None
-               in
-               Option.iter fold_strings ~f:(fun (fold_div, fold_mod) ->
-                   Int.incr n_fold_seeds;
-                   let src = Generated.read (tag ^ "_sched") in
-                   if
-                     String.is_substring src ~substring:fold_div
-                     && String.is_substring src ~substring:fold_mod
-                   then Int.incr n_folded)
-           | exception exn -> Stdio.eprintf "%s: seed FAILED: %s\n" tag (Exn.to_string exn));
-       (!n_ran, !n_match, !n_fold_seeds, !n_folded))
-  in
-  in_leg ~leg:exec_leg (tag ^ ": every seed compiles and runs") (fun label ->
-      let n_ran, _, _, _ = Lazy.force executed in
-      p label (n_ran = List.length seeds && n_ran > 0));
-  in_leg ~leg:exec_leg (tag ^ ": every candidate matches the serial reference bitwise")
-    (fun label ->
-      let n_ran, n_match, _, _ = Lazy.force executed in
-      p label (n_ran = n_match));
-  in_leg ~leg:exec_leg (tag ^ ": the generated source folds the batch axes onto the .z register")
-    (fun label ->
-      let _, _, n_fold_seeds, n_folded = Lazy.force executed in
-      p label (n_fold_seeds > 0 && n_folded = n_fold_seeds))
+  (* --- Executable parity, seed by seed, on every backend (including cc via serial barrier-fission
+     rendering, gh-ocannl-678). --- *)
+  let n_ran = ref 0 and n_match = ref 0 in
+  (* Every seed compiles under the one routine name [<tag>_sched], so each overwrites the previous
+     seed's artifact. Arming before each compile makes the read below this seed's kernel or nothing
+     -- until gh-ocannl-655 the fold was credited to whichever seed happened to have written last,
+     which is how a post-loop grep for the fold found a later serial seed's kernel and read 0
+     occurrences (gh-ocannl-643). Each batch-grid seed is now checked in its own right rather than
+     one standing for all. *)
+  let n_fold_seeds = ref 0 and n_folded = ref 0 in
+  List.iter seeds ~f:(fun q ->
+      Generated.arm (tag ^ "_sched");
+      match
+        let ctx, routine =
+          Context.compile
+            ~lowered_transform:(fun o ->
+              [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o ])
+            (Context.auto ()) fwd Ir.Indexing.Empty
+        in
+        Context.get_values (Context.run ctx routine) cand.Tensor.value
+      with
+      | got ->
+          Int.incr n_ran;
+          if Array.for_all2_exn got want ~f:Float.equal then Int.incr n_match;
+          if on_gpu then
+            let fold_strings =
+              match (q.Autotune.sk_batch_inner, interior) with
+              | true, Some (_, rows) ->
+                  (* bgrid-in folds the row blocks (innermost-mod) with the outer batch
+                     (outermost-div); a single row block leaves nothing to decode. *)
+                  let row_blocks = (rows + q.Autotune.sk_bm - 1) / q.Autotune.sk_bm in
+                  if row_blocks < 2 then None
+                  else
+                    let n = Int.to_string row_blocks in
+                    Some (fold_reg ^ " / " ^ n, fold_reg ^ " % " ^ n)
+              | _ -> if q.Autotune.sk_batch_grid then Some (fold_div, fold_mod) else None
+            in
+            Option.iter fold_strings ~f:(fun (fold_div, fold_mod) ->
+                Int.incr n_fold_seeds;
+                let src = Generated.read (tag ^ "_sched") in
+                if
+                  String.is_substring src ~substring:fold_div
+                  && String.is_substring src ~substring:fold_mod
+                then Int.incr n_folded)
+      | exception exn -> Stdio.eprintf "%s: seed FAILED: %s\n" tag (Exn.to_string exn));
+  p (tag ^ ": every seed compiles and runs") (!n_ran = List.length seeds && !n_ran > 0);
+  p (tag ^ ": every candidate matches the serial reference bitwise") (!n_ran = !n_match);
+  in_leg ~leg:gpu_leg (tag ^ ": the generated source folds the batch axes onto the .z register")
+    (fun label -> p label (!n_fold_seeds > 0 && !n_folded = !n_fold_seeds))
 
 let () =
   let bb = 2 and hh = 4 and ss = 64 and jj = 32 and kk = 16 in

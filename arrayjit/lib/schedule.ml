@@ -10268,8 +10268,8 @@ let seedable_shared_target ~limits lowered =
    [apply_fuse_epilogue] (every other [Local] update in this module is of a node the op minted), and
    it does so for a fusion target -- written by the reduction, read by the fused tail -- that is not
    [settled_on_device]. Shared placement exists only where the backend states
-   [workgroup_shared_placement] (CPU codegen rejects a non-empty [workgroup_shared]), and the target
-   is then charged its whole [size_in_bytes] by [workgroup_memory_bytes], which
+   [workgroup_shared_placement] (hardware shared memory; CPU backends keep it [false]), and the
+   target is then charged its whole [size_in_bytes] by [workgroup_memory_bytes], which
    [check_hardware_limits_classified] holds to [max_workgroup_memory_bytes] for every kernel a
    compile emits: a larger node cannot leave the device in any kernel the hardware gate admits. An
    unknown limit bounds nothing. *)

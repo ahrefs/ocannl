@@ -7,6 +7,7 @@ test/operations/autotune_grid_record.ml: 1 uncovered, 0 covered
 test/operations/autotune_report_drops.ml: 0 uncovered, 1 covered
 test/operations/autotune_staffed_singles.ml: 0 uncovered, 1 covered
 test/operations/back_to_back_runs.ml: 1 uncovered, 0 covered
+test/operations/cc_workgroup_shared_staging.ml: 0 uncovered, 1 covered
 test/operations/conv_twin_packing.ml: 1 uncovered, 0 covered
 test/operations/cuda_mma_k8_parity.ml: 0 uncovered, 1 covered
 test/operations/default_prefill.ml: 1 uncovered, 0 covered

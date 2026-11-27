@@ -246,8 +246,9 @@ files.
   scalars), and each contraction becomes one block `Tile_mma` whose `lane` is that outer loop,
   between explicit barriers (a `Tile_mma`'s leading bracket is form-dependent, see below).
   `validate_parallel` and the renderer take this unchanged; what they refuse is a guard around a
-  barrier, so query and key tails keep the scalar form. It is GPU-only: a `Workgroup` loop
-  enclosing barriers has no serial rendering (cc would finish lane 0's scan before lane 1 starts).
+  barrier, so query and key tails keep the scalar form. The preset emits `Fold_mma` only where the
+  device advertises an f32 MMA tile (GPU-only in production; serial barrier-fission emulation on
+  `cc` below handles `Scan_loop` barriers too).
   Read the per-statement census (`Context.routine.mma` renderings), not the aggregate, to show both
   contractions tensorized (`test/operations/online_softmax_block_mma`). Measured in
   `benchmarks/report-gh1003-block-fold.md`: on Metal the attention's per-layer kernels go from
@@ -269,6 +270,22 @@ files.
   `Code_borne` cache classification. Backend-free lowering conservatively resolves auto to 0.
   In training the step is backward-bound
   (gh-ocannl-1124): the fold moves it by 1-2%.
+- **Backends without hardware workgroups render workgroup-shared staging serially by barrier
+  fission** (gh-ocannl-678, `Low_level.serialize_workgroup_barriers`): when `C_syntax.compile_proc`
+  sees `workgroup_shared` or `Workgroup_barrier` on a backend with `shared_decl_prefix = None` or
+  `barrier_syntax = None` (`cc`), it runs full GPU `validate_parallel ~fork_join:false` first,
+  hoists canonical `Grid` slot loops to the kernel root, eliminates `Grid`/`Workgroup` loops into
+  slot coordinates (with extent guards), replicates thread-private `Local` arrays and
+  barrier-crossing `Declare_local`/`Scan_loop` carried state per workgroup thread, and fissions
+  the workgroup loops strictly from barrier to barrier without inserting a phantom barrier at a
+  `Serial` loop back-edge. Shared tiles declare as plain block-scope (or heap-spilled) arrays
+  poisoned with `0xFF` (`memset`) on entry to each workgroup so missing barriers fail
+  deterministically. `Backend_intf.workgroup_shared_placement` stays `false` on `cc` so production
+  seeding and `Fuse_epilogue` never target shared placement on CPU. Guard:
+  `test/operations/cc_workgroup_shared_staging.ml` (plus executed `cc` parity in
+  `schedule_batch_grid`, `schedule_batched_mma`, `schedule_smem_matmul`,
+  `schedule_register_matmul`, `schedule_pipelined_matmul`, `schedule_swizzle_matmul`,
+  `schedule_ldmatrix_matmul`, `schedule_mma_matmul`, and `hardware_workgroup_reduce`).
 - GPU fission folds a reduction's whole-node zero into the reduction's kernel (gh-ocannl-1175) as a
   pass over the FINISHED segmentation (`group_units`'s `fold_zeros`): a singleton zero segment
   folds, expanded by the zero policy's `Expand_zero` (GPU, above its size threshold), into the

@@ -140,15 +140,14 @@ let () =
   let mc1_prefill = Array.init (n * n) ~f:(fun c -> Float.of_int (1000 + c)) in
   p_all2 "the prefill of the accumulator differs from the serial twin's result in every cell"
     mc1_prefill got_serial ~f:(fun a b -> Float.(a <> b));
-  if has_shared then (
-    let ctx_a, routine_a =
-      Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx_a reg_comp Ir.Indexing.Empty
-    in
-    let ctx_a = Context.set_values ctx_a mc1.Tensor.value mc1_prefill in
-    let ctx_a = Context.run ctx_a routine_a in
-    let got_reg = Context.get_values ctx_a mc1.Tensor.value in
-    p_close "register-tiled matmul parity (GPU) or clean rejection (CPU)" got_reg got_serial
-      ~tol:approx_tol;
+  let ctx_a, routine_a =
+    Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx_a reg_comp Ir.Indexing.Empty
+  in
+  let ctx_a = Context.set_values ctx_a mc1.Tensor.value mc1_prefill in
+  let ctx_a = Context.run ctx_a routine_a in
+  let got_reg = Context.get_values ctx_a mc1.Tensor.value in
+  p_close "register-tiled matmul parity (GPU and CPU)" got_reg got_serial ~tol:approx_tol;
+  if has_shared then
     let src = Generated.read "mmr_tiled" in
     let count_sub sub =
       String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length
@@ -158,7 +157,7 @@ let () =
        plain [acc + a * b] -- contraction is a licence, off by default (gh-ocannl-998) -- or, with
        [fp_contract] on, an FMA: Metal spells it [fma(], CUDA and HIP [fmaf(]. The three patterns
        are disjoint, so the counts add. *)
-    p "unrolled register tile structure (GPU) or rejected (CPU)"
+    p "unrolled register tile structure (GPU)"
       (count_sub ("(" ^ Generated.node_ident ~facts "acc_mc1" ^ "[")
        + count_sub "fma(" + count_sub "fmaf("
        = tm * tn
@@ -169,29 +168,15 @@ let () =
          shared-address-space declaration in emitted source. *)
       if String.is_substring backend_name ~substring:"metal" then
         count_sub ("threadgroup float " ^ Generated.node_ident ~facts "tile_") = 2
-      else count_sub ("__shared__ float " ^ Generated.node_ident ~facts "tile_") = 2))
-  else (
-    (match
-       try
-         ignore
-           (Context.compile
-              ~lowered_transform:(fun o -> [ transform o ])
-              ctx_a reg_comp Ir.Indexing.Empty
-             : Context.t * Context.routine);
-         None
-       with Invalid_argument msg -> Some msg
-     with
-    | Some msg ->
-        p "register-tiled matmul parity (GPU) or clean rejection (CPU)"
-          (String.is_substring msg ~substring:"not supported")
-    | None -> p "register-tiled matmul parity (GPU) or clean rejection (CPU)" false);
-    skipped "unrolled register tile structure (GPU) or rejected (CPU)");
-  (* The structural leg (gh-ocannl-1626): per-PR CI runs cc, which rejects shared placement, so the
-     claim above that reads the emitted kernel is skipped there. What it pins up to the dialect's
-     spelling is the scheduled IR, which [Sched.apply] builds on the host: the schedule is applied
-     here to the lowering this host captures, and the IR is read -- TM * TN accumulation statements
-     reading both operand tiles, two shared tiles, no guard, and every tile store under both
-     Workgroup loops and indexed by both: each thread copies cells of its own (gh-ocannl-1661). *)
+      else count_sub ("__shared__ float " ^ Generated.node_ident ~facts "tile_") = 2)
+  else skipped "unrolled register tile structure (GPU)";
+  (* The structural leg (gh-ocannl-1626): the claim above that reads GPU-dialect emitted source is
+     skipped on C backends (which render serialized C loops instead of [threadgroup]/[__shared__]).
+     What it pins up to the dialect's spelling is the scheduled IR, which [Sched.apply] builds on
+     the host: the schedule is applied here to the lowering this host captures, and the IR is read
+     -- TM * TN accumulation statements reading both operand tiles, two shared tiles, no guard, and
+     every tile store under both Workgroup loops and indexed by both: each thread copies cells of
+     its own (gh-ocannl-1661). *)
   let post = transform (Ll_test.captured_lowering ~name:"mmr_capture" reg_comp) in
   let guards, _ = Ll_test.guards_and_barriers post.LL.llc in
   let tiles = post.LL.workgroup_shared in

@@ -69,7 +69,7 @@ extent-adapted geometry covers the column extent with vector tiles: true
 full-mantissa products are inexact in f32: true
 full-mantissa tensorized matmul matches the serial twin bitwise: true
 register tiling offers a whole-vector fused accumulator update: true
-staged+tensorized matmul parity (GPU) or clean rejection (CPU): true
+staged+tensorized matmul parity (GPU and CPU): true
 staged+tensorized structure as expected: true
 staged+tensorized half matmul matches the serial twin bitwise: true
 staged+tensorized half fragment residency: true
