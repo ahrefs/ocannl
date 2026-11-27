@@ -703,6 +703,11 @@ env_var_deps.ml: [scanner-refusal:c32893cb68f676d5b920e664ddd544a1] default-modu
 env_var_deps.ml: [scanner-refusal:cc3f3f4d2c2871eaf60a3bbe9f670f42] invalidates an initialization (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 refused_action_streams.ml has exactly the explicitly assigned refusal controls: true
 ll_test_ratchet.ml has exactly the explicitly assigned refusal controls: true
+measured_callback_scope_scan.ml has exactly the explicitly assigned refusal controls: true
+measured_callback_scope_scan.ml: [scanner-refusal:6430ff79146d5e4bf05bdceb2021f4c1] measurement setter with (claim) is catalogued beside measured_callback_scope_scan.expected: true
+measured_callback_scope_scan.ml: [scanner-refusal:70f74c802c263837cb8b3e9a45a00f38] measured callback may (claim) is catalogued beside measured_callback_scope_scan.expected: true
+measured_callback_scope_scan.ml: [scanner-refusal:9433917d9e4a1b340740735628bafd4a] does not require (claim) is catalogued beside measured_callback_scope_scan.expected: true
+measured_callback_scope_scan.ml: [scanner-refusal:d6ce703a4a0fe1b7ee8319a6066ca344] installing the measurement (claim) is catalogued beside measured_callback_scope_scan.expected: true
 exact_partials_ratchet.ml has exactly the explicitly assigned refusal controls: true
 exact_partials_ratchet.ml: [scanner-refusal:ba759c72b65ab51d06be7e24325abbb2] every test source (claim) is catalogued beside exact_partials_ratchet.expected, exact_partials_scan_cases.expected: true
 exact_partials_ratchet.ml: [scanner-refusal:958e88eddd55da1a156f3795cd586c78] beside a derivation (claim) is catalogued beside exact_partials_ratchet.expected, exact_partials_scan_cases.expected: true
