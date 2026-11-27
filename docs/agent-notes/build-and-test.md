@@ -6126,8 +6126,10 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   On macOS either side can get `EPERM` when both call `setpgid` for the same child. The
   supervisor sets the group and releases the leader over the lifetime pipe before it forks Git.
   Scratch files keep the bound independent of transport pipe EOF. Manual terminal pushes keep
-  Git's existing foreground timeout so its prompt can read the terminal. The shared benchmark
-  runner already uses `cell_group` to cancel during the active wait and confirms the group is
+  Git's existing foreground timeout so its prompt can read the terminal. `tools/test-owed-run-tty.sh`
+  answers a fake transport's push prompt in a PTY and checks that a read which tries the same
+  terminal hits the isolated timeout (gh-ocannl-2497). The shared benchmark runner uses
+  `cell_group` to cancel during the active wait and confirms the group is
   gone before unwinding. The fixtures for both tools plant descendants that ignore TERM.
 - **What.** A finished, exit-0, clean-at-launch tools/test-run.sh run under `--expect-backend cc`
   of `runtest`, `build @runtest [@train]`, `build @train` or `build @test/training/train-NAME...`
