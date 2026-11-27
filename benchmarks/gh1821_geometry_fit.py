@@ -19,8 +19,9 @@ Usage: gh1821_geometry_fit.py OUT [--arm ARM] [--multiprocessors P] [--warp W] [
         against positive 12-column stock rows (replicates kept independent of same-label rows at
         other digests) and census-selected `F_seeded[...]` by exact label, and refuses conflicting
         censuses or missing attributed incumbents (`preset_unmatched` / `seeded_plan_unmatched`,
-        exit 2, no stdout). Archives without census logs keep the legacy `baseline` / unique
-        `F_seeded[...]` lookup.
+        exit 2, no stdout) as well as any cell where fewer than two candidates join (exit 2, no
+        stdout). Archives without census logs keep the legacy `baseline` / unique `F_seeded[...]`
+        lookup.
   --arm the listing to re-score (default `shipped`): the fill-only reference F, i.e. scored with no
         staged-copy term and a continuous fill (`shipped` before gh-ocannl-1821 on CUDA; `noocc`
         on HIP, whose shipped listing carries an occupancy factor).
@@ -45,10 +46,11 @@ cells has them priced).
 
 Per cell it prints the agreement (decided pairs, measured more than the band apart, ordered as
 measured; a tie orders none), and the admitted+coalesced and admitted-only argmins (ties to the
-listing order, model_default's rule) with their median slowdown against the fastest member, and
-the measured spread (the fastest admitted candidate's p90/p10 over its replicates, 1.0 under 3):
-#1600's criterion passes where the admitted+coalesced argmin is not coalesced or is within the
-spread, at an agreement no lower than F's.
+listing order, model_default's rule; `none` when a pick set is empty) with their median slowdown
+against the fastest member, and the measured spread (the fastest admitted candidate's p90/p10 over
+its replicates, 1.0 under 3 or when no candidate is admitted): #1600's criterion passes where the
+admitted+coalesced argmin is absent, not coalesced, or within the spread, at an agreement no lower
+than F's.
 """
 
 import argparse
@@ -143,8 +145,8 @@ def load(out, arm):
                          "adm": explain[label][1], "kernels": ks,
                          "geo": tuple(map(int, g.groups()[:5])) if g else None,
                          "bgrid": bool(g and g.group(6)), "coal": bool(g and g.group(7))})
-        if not rows:
-            raise ValueError(f"{cell}: no candidates join")
+        if len(rows) < 2:
+            raise ValueError(f"{cell}: fewer than two candidates join")
         # The seeded plan borrows the geometry of a leaf whose main kernel matches its own.
         for r in rows:
             if r["geo"] is None and r["kernels"]:
@@ -209,23 +211,29 @@ def evaluate(cells, copy_rate, p, band):
         for name, pred in (("admitted", lambda r: r["adm"] and not r["coal"]),
                            ("admitted+coalesced", lambda r: r["adm"])):
             members = [r for r in rows if pred(r)]
+            if not members:
+                continue
             pick = min(members, key=lambda r: (sc[r["label"]], r["pos"]))
             best = min(members, key=lambda r: r["med"])
             sets[name] = (pick, pick["med"] / best["med"], best)
-        fastest = min((r for r in rows if r["adm"]), key=lambda r: r["med"])
-        out.append((cell, 100.0 * right / max(1, decided), sets, spread(fastest["times"])))
+        admitted_best = sets["admitted+coalesced"][2] if "admitted+coalesced" in sets else None
+        spr = spread(admitted_best["times"]) if admitted_best is not None else 1.0
+        out.append((cell, 100.0 * right / max(1, decided), sets, spr))
     return out
 
 
 def report(tag, res, base=None):
     passing = 0
     for i, (cell, agr, sets, spr) in enumerate(res):
-        pick, slow, _ = sets["admitted+coalesced"]
-        ok = (not pick["coal"] or slow <= spr) and (base is None or agr >= base[i][1] - 1e-9)
+        pick, slow, _ = sets.get("admitted+coalesced", (None, 1.0, None))
+        ok = ((pick is None or not pick["coal"] or slow <= spr)
+              and (base is None or agr >= base[i][1] - 1e-9))
         passing += ok
+        argmin = f"{pick['label']!r}@{slow:.3f}" if pick is not None else "none"
+        admitted_argmin = (f"admitted_argmin@{sets['admitted'][1]:.3f}"
+                           if "admitted" in sets else "admitted_argmin=none")
         print(f"{tag} {cell}: agreement={agr:.1f}% spread={spr:.3f}"
-              f" argmin={pick['label']!r}@{slow:.3f}"
-              f" admitted_argmin@{sets['admitted'][1]:.3f} pass={str(ok).lower()}")
+              f" argmin={argmin} {admitted_argmin} pass={str(ok).lower()}")
     return passing
 
 
