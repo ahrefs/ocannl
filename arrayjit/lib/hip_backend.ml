@@ -2011,8 +2011,11 @@ end = struct
               count takes a block's lane groups together, no candidate at the gh-ocannl-1479 cells
               on discrete RX 7700S (tuf) carries excess, so 1e11 is inert there while opening
               model_default's coalesced menu beside the occupancy capacity and copy rate below.
+              Mixed integrated+discrete hosts stay None alongside the staging rates below.
               Overridable by model_transaction_rate. *)
-           transaction_rate = (if Lazy.force all_rdna_wave32 then Some 1.0e11 else None);
+           transaction_rate =
+             (if (all_integrated || all_discrete) && Lazy.force all_rdna_wave32 then Some 1.0e11
+              else None);
            (* gh-ocannl-1600: the occupancy factor's capacity, physical: 128 KiB of LDS per WGP (the
               unit multiprocessor_count counts) on the RDNA wave32 parts. With it the deep-K
               coalesced leaves rank as measured at the gh-ocannl-1479 outproj cells on minix (argmin
