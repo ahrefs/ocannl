@@ -98,17 +98,15 @@ let () =
   let annot_comp = named "sum_wg_reduce" (Train.forward s1) in
   let transform = group_reduce ~v:v.Tensor.value ~s:s1.Tensor.value in
   let ctx_a = Context.auto () in
-  if has_barriers then (
-    let ctx_a, routine_a =
-      Context.compile
-        ~lowered_transform:(fun o -> [ transform o ])
-        ctx_a annot_comp Ir.Indexing.Empty
-    in
-    let ctx_a = Context.run ctx_a routine_a in
-    let got_s1 = Context.get_values ctx_a s1.Tensor.value in
-    p_close "workgroup reduction parity (GPU) or clean rejection (CPU)"
-      [| got_s1.(0) |]
-      [| expected_sum |] ~tol;
+  let ctx_a, routine_a =
+    Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx_a annot_comp Ir.Indexing.Empty
+  in
+  let ctx_a = Context.run ctx_a routine_a in
+  let got_s1 = Context.get_values ctx_a s1.Tensor.value in
+  p_close "workgroup reduction parity (GPU) or clean rejection (CPU)"
+    [| got_s1.(0) |]
+    [| expected_sum |] ~tol;
+  if has_barriers then
     let src = Generated.read "sum_wg_reduce" in
     let has sub = String.is_substring src ~substring:sub in
     (* This is intentionally dialect identity: the claim pins each language's shared-address-space
@@ -121,20 +119,5 @@ let () =
         has ("__shared__ float " ^ Generated.node_ident ~facts "partial_sums" ^ "[64]")
         && has "__syncthreads()"
     in
-    p "shared tile and barrier rendered (GPU) or rejected (CPU)" shared_ok)
-  else (
-    (match
-       try
-         ignore
-           (Context.compile
-              ~lowered_transform:(fun o -> [ transform o ])
-              ctx_a annot_comp Ir.Indexing.Empty
-             : Context.t * Context.routine);
-         None
-       with Invalid_argument msg -> Some msg
-     with
-    | Some msg ->
-        p "workgroup reduction parity (GPU) or clean rejection (CPU)"
-          (String.is_substring msg ~substring:"not supported")
-    | None -> p "workgroup reduction parity (GPU) or clean rejection (CPU)" false);
-    skipped "shared tile and barrier rendered (GPU) or rejected (CPU)")
+    p "shared tile and barrier rendered (GPU) or rejected (CPU)" shared_ok
+  else skipped "shared tile and barrier rendered (GPU) or rejected (CPU)"

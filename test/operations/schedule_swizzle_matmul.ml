@@ -7,8 +7,8 @@
    tiles are marked in [optimized.swizzled]: codegen remaps each tile access [P*8 + col] to [P*8 +
    (col ^ (P & 7))], a per-row bijection of the minor axis, so the values are unchanged while
    same-column reads (the classic strided access of the staged A tile) spread across shared-memory
-   banks. GPU backends execute and must match the serial twin; the C backends cannot express shared
-   placement and must reject cleanly (same pinning as the SMEM matmul test).
+   banks. GPU backends and C backends (via [Low_level.serialize_workgroup_barriers], gh-ocannl-678)
+   execute and must match the serial twin.
 
    The staged+tensorized composition (lane-aware Stage feeding Tensorize) with swizzled tiles pins
    the decline path: the tile-MMA intrinsic and fragment renderings assume row-major pointer+stride
@@ -159,17 +159,15 @@ let () =
   let smem_comp = named "mm_swizzled_smem" (Train.forward mc1) in
   let transform opt = Sched.apply (smem_schedule mc1 opt) opt in
   let ctx_a = Context.auto () in
-  if on_gpu then (
-    let ctx_a, routine_a =
-      Context.compile
-        ~lowered_transform:(fun o -> [ transform o ])
-        ctx_a smem_comp Ir.Indexing.Empty
-    in
-    let ctx_a = Context.set_values ctx_a mc1.Tensor.value prefill in
-    let ctx_a = Context.run ctx_a routine_a in
-    let got_smem = Context.get_values ctx_a mc1.Tensor.value in
-    p_close "swizzled SMEM matmul parity (GPU) or clean rejection (CPU)" got_smem got_serial
-      ~tol:approx_tol;
+  let ctx_a, routine_a =
+    Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx_a smem_comp Ir.Indexing.Empty
+  in
+  let ctx_a = Context.set_values ctx_a mc1.Tensor.value prefill in
+  let ctx_a = Context.run ctx_a routine_a in
+  let got_smem = Context.get_values ctx_a mc1.Tensor.value in
+  p_close "swizzled SMEM matmul parity (GPU) or clean rejection (CPU)" got_smem got_serial
+    ~tol:approx_tol;
+  if on_gpu then
     let src = Generated.read "mm_swizzled_smem" in
     let has sub = String.is_substring src ~substring:sub in
     let count_sub sub =
@@ -186,23 +184,8 @@ let () =
     (* Each tile is written by its cooperative load and read by the micro-kernel, all through the
        swizzled offset [P*8 + (col ^ (P & 7))]: at least 4 masked-XOR sites. *)
     p "tile accesses XOR-swizzled (GPU) or rejected (CPU)"
-      (shared_ok && count_sub " & 7)" >= 4 && count_sub " ^ " >= 4))
-  else (
-    (match
-       try
-         ignore
-           (Context.compile
-              ~lowered_transform:(fun o -> [ transform o ])
-              ctx_a smem_comp Ir.Indexing.Empty
-             : Context.t * Context.routine);
-         None
-       with Invalid_argument msg -> Some msg
-     with
-    | Some msg ->
-        p "swizzled SMEM matmul parity (GPU) or clean rejection (CPU)"
-          (String.is_substring msg ~substring:"not supported")
-    | None -> p "swizzled SMEM matmul parity (GPU) or clean rejection (CPU)" false);
-    skipped "tile accesses XOR-swizzled (GPU) or rejected (CPU)");
+      (shared_ok && count_sub " & 7)" >= 4 && count_sub " ^ " >= 4)
+  else skipped "tile accesses XOR-swizzled (GPU) or rejected (CPU)";
 
   (* --- The same schedule under the 16-byte-unit flavor ([Swizzle_b128], gh-ocannl-481 item 3 D1):
      the XOR permutes whole 16-byte units of the row instead of single elements, leaving the offset
@@ -217,17 +200,17 @@ let () =
     Sched.apply (smem_schedule ~swizzle:(Some LL.Swizzle_b128) mc1b opt) opt
   in
   let ctx_b = Context.auto () in
-  if on_gpu then (
-    let ctx_b, routine_b =
-      Context.compile
-        ~lowered_transform:(fun o -> [ transform_b128 o ])
-        ctx_b smem_b128_comp Ir.Indexing.Empty
-    in
-    let ctx_b = Context.set_values ctx_b mc1b.Tensor.value prefill in
-    let ctx_b = Context.run ctx_b routine_b in
-    let got = Context.get_values ctx_b mc1b.Tensor.value in
-    p_close "b128-swizzled SMEM matmul parity (GPU) or clean rejection (CPU)" got got_serial
-      ~tol:approx_tol;
+  let ctx_b, routine_b =
+    Context.compile
+      ~lowered_transform:(fun o -> [ transform_b128 o ])
+      ctx_b smem_b128_comp Ir.Indexing.Empty
+  in
+  let ctx_b = Context.set_values ctx_b mc1b.Tensor.value prefill in
+  let ctx_b = Context.run ctx_b routine_b in
+  let got = Context.get_values ctx_b mc1b.Tensor.value in
+  p_close "b128-swizzled SMEM matmul parity (GPU) or clean rejection (CPU)" got got_serial
+    ~tol:approx_tol;
+  if on_gpu then
     let src = Generated.read "mm_swz128_smem" in
     let count_sub sub =
       String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length
@@ -240,23 +223,8 @@ let () =
       && count_sub " & 1)" >= 4
       && count_sub " << 2)" >= 4
       && count_sub " & 3)" >= 4
-      && count_sub " & 7)" = 0))
-  else (
-    (match
-       try
-         ignore
-           (Context.compile
-              ~lowered_transform:(fun o -> [ transform_b128 o ])
-              ctx_b smem_b128_comp Ir.Indexing.Empty
-             : Context.t * Context.routine);
-         None
-       with Invalid_argument msg -> Some msg
-     with
-    | Some msg ->
-        p "b128-swizzled SMEM matmul parity (GPU) or clean rejection (CPU)"
-          (String.is_substring msg ~substring:"not supported")
-    | None -> p "b128-swizzled SMEM matmul parity (GPU) or clean rejection (CPU)" false);
-    skipped "tile accesses b128-swizzled (GPU) or rejected (CPU)");
+      && count_sub " & 7)" = 0)
+  else skipped "tile accesses b128-swizzled (GPU) or rejected (CPU)";
 
   (* --- [Stage ~pad_stride] (gh-ocannl-481 item 4): the same schedule with the tiles' minor dim
      rounded up from 8 to a multiple of 12. Nothing about the DATA changes — the load nest and the
@@ -269,17 +237,17 @@ let () =
   let smem_pad_comp = named "mm_padstride_smem" (Train.forward mc1p) in
   let transform_pad opt = Sched.apply (smem_schedule ~swizzle:None ~pad_stride:12 mc1p opt) opt in
   let ctx_p = Context.auto () in
-  if on_gpu then (
-    let ctx_p, routine_p =
-      Context.compile
-        ~lowered_transform:(fun o -> [ transform_pad o ])
-        ctx_p smem_pad_comp Ir.Indexing.Empty
-    in
-    let ctx_p = Context.set_values ctx_p mc1p.Tensor.value prefill in
-    let ctx_p = Context.run ctx_p routine_p in
-    let got = Context.get_values ctx_p mc1p.Tensor.value in
-    p_close "pad_stride SMEM matmul parity (GPU) or clean rejection (CPU)" got got_serial
-      ~tol:approx_tol;
+  let ctx_p, routine_p =
+    Context.compile
+      ~lowered_transform:(fun o -> [ transform_pad o ])
+      ctx_p smem_pad_comp Ir.Indexing.Empty
+  in
+  let ctx_p = Context.set_values ctx_p mc1p.Tensor.value prefill in
+  let ctx_p = Context.run ctx_p routine_p in
+  let got = Context.get_values ctx_p mc1p.Tensor.value in
+  p_close "pad_stride SMEM matmul parity (GPU) or clean rejection (CPU)" got got_serial
+    ~tol:approx_tol;
+  if on_gpu then
     let src = Generated.read "mm_padstride_smem" in
     let has sub = String.is_substring src ~substring:sub in
     let count_sub sub =
@@ -295,23 +263,8 @@ let () =
       && count_sub " * 12 + " >= 4
       && (not (has " * 8 + "))
       (* Padding alone is not a swizzle: the offsets stay plain row-major. *)
-      && not (has " ^ ")))
-  else (
-    (match
-       try
-         ignore
-           (Context.compile
-              ~lowered_transform:(fun o -> [ transform_pad o ])
-              ctx_p smem_pad_comp Ir.Indexing.Empty
-             : Context.t * Context.routine);
-         None
-       with Invalid_argument msg -> Some msg
-     with
-    | Some msg ->
-        p "pad_stride SMEM matmul parity (GPU) or clean rejection (CPU)"
-          (String.is_substring msg ~substring:"not supported")
-    | None -> p "pad_stride SMEM matmul parity (GPU) or clean rejection (CPU)" false);
-    skipped "pad_stride widens the tile stride (GPU) or rejected (CPU)");
+      && not (has " ^ "))
+  else skipped "pad_stride widens the tile stride (GPU) or rejected (CPU)";
 
   (* --- Swizzled tiles feeding Tensorize: the intrinsic/fragment renderings assume row-major
      pointer+stride operands, so they must decline and the lane-0 scalar fallback must run — and
@@ -368,17 +321,17 @@ let () =
   let staged_comp = named "mm_swizzled_mma" (Train.forward mc2) in
   let staged_transform opt = Sched.apply (staged_schedule opt) opt in
   let ctx_c = Context.auto () in
-  if on_gpu then (
-    let ctx_c, routine_c =
-      Context.compile
-        ~lowered_transform:(fun o -> [ staged_transform o ])
-        ctx_c staged_comp Ir.Indexing.Empty
-    in
-    let ctx_c = Context.set_values ctx_c mc2.Tensor.value prefill in
-    let ctx_c = Context.run ctx_c routine_c in
-    let got_staged = Context.get_values ctx_c mc2.Tensor.value in
-    p_close "swizzled staged+tensorized parity (GPU) or clean rejection (CPU)" got_staged got_serial
-      ~tol:approx_tol;
+  let ctx_c, routine_c =
+    Context.compile
+      ~lowered_transform:(fun o -> [ staged_transform o ])
+      ctx_c staged_comp Ir.Indexing.Empty
+  in
+  let ctx_c = Context.set_values ctx_c mc2.Tensor.value prefill in
+  let ctx_c = Context.run ctx_c routine_c in
+  let got_staged = Context.get_values ctx_c mc2.Tensor.value in
+  p_close "swizzled staged+tensorized parity (GPU) or clean rejection (CPU)" got_staged got_serial
+    ~tol:approx_tol;
+  if on_gpu then
     let src = Generated.read "mm_swizzled_mma" in
     let has sub = String.is_substring src ~substring:sub in
     let count_sub sub =
@@ -396,23 +349,8 @@ let () =
       (shared_ok
       && Ll_test.all_declined ~what:"mm_swizzled_mma" (Ll_test.renderings routine_c.Context.mma)
       && count_sub " ^ " >= 4
-      && has " & 15)" && has " & 31)"))
-  else (
-    (match
-       try
-         ignore
-           (Context.compile
-              ~lowered_transform:(fun o -> [ staged_transform o ])
-              ctx_c staged_comp Ir.Indexing.Empty
-             : Context.t * Context.routine);
-         None
-       with Invalid_argument msg -> Some msg
-     with
-    | Some msg ->
-        p "swizzled staged+tensorized parity (GPU) or clean rejection (CPU)"
-          (String.is_substring msg ~substring:"not supported")
-    | None -> p "swizzled staged+tensorized parity (GPU) or clean rejection (CPU)" false);
-    skipped "swizzled operands decline the MMA intrinsics to the lane-0 fallback");
+      && has " & 15)" && has " & 31)")
+  else skipped "swizzled operands decline the MMA intrinsics to the lane-0 fallback";
 
   (* --- Validation errors, uniform on every backend (raised by [Schedule.apply] before any
      backend-specific compilation) --- *)

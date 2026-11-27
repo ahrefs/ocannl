@@ -1,0 +1,15 @@
+smem matmul operands have f32-exact partial sums: true
+smem matmul serial oracle matches the premise's host sums bitwise: true
+smem matmul: valid shared-staging schedule matches serial oracle bitwise: true
+negative control: removing load->compute barrier fails parity and surfaces NaN poison: true
+negative control: removing trailing compute->next-load barrier fails parity (no back-edge phantom barrier): true
+negative control: moving load->compute barrier before loads fails parity (same barrier count): true
+thread-private Declare_local survives across Workgroup_barrier: true
+Forward Scan_loop enclosing Workgroup_barrier matches lockstep oracle bitwise: true
+Backward Scan_loop enclosing Workgroup_barrier matches lockstep oracle bitwise: true
+sibling Workgroup loops separated by Workgroup_barrier match oracle bitwise: true
+negative control: removing barrier between sibling Workgroup loops fails parity: true
+cross-nest aligned Grid zeroing + staged accumulation matches oracle bitwise: true
+negative control: swapped Grid slots between zeroing and accumulation fails parity: true
+validation gate: Workgroup_barrier under an If guard is still rejected: true
+validation gate: mismatched Workgroup extents across a barrier are still rejected: true

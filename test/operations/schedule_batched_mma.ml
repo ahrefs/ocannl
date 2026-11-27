@@ -152,7 +152,7 @@ let check_leg ~tag ~serial ~tensorized =
       p label
         (Ll_test.all_rendered ~what:(tag ^ "_mma") Ir.C_syntax.Mma_register_tiled
            (Ll_test.renderings routine.Context.mma)));
-  opt
+  (opt, want)
 
 let () =
   let bt = 2 and ss = 16 and kk = 8 and jj = 32 in
@@ -169,8 +169,34 @@ let () =
   in
   let%op lb0 = xv +* "bsk;kj=>bsj" wv in
   let%op lb1 = xv +* "bsk;kj=>bsj" wv in
-  let opt_lb = check_leg ~tag:"batched_lb" ~serial:lb0 ~tensorized:lb1 in
-  p "leading-batch: gpu mma seeds present" (not (List.is_empty (gpu_mma_seeds opt_lb)));
+  let opt_lb, want_lb = check_leg ~tag:"batched_lb" ~serial:lb0 ~tensorized:lb1 in
+  let gpu_seeds_lb = gpu_mma_seeds opt_lb in
+  p "leading-batch: gpu mma seeds present" (not (List.is_empty gpu_seeds_lb));
+  (* gh-ocannl-678: execute the GPU MMA seeds (including workgroup-shared staged forms) on every
+     backend, checking bitwise parity against the serial twin. *)
+  let run_gpu_mma_seed ~name ~want ~build q =
+    let cand = build () in
+    let ctx, routine =
+      Context.compile
+        ~lowered_transform:(fun o ->
+          [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o ])
+        (Context.auto ())
+        (named name (Train.forward cand))
+        Ir.Indexing.Empty
+    in
+    let prefill = Array.init (Array.length want) ~f:(fun c -> Float.of_int (1000 + c)) in
+    let ctx = Context.set_values ctx cand.Tensor.value prefill in
+    let ctx = Context.run ctx routine in
+    let got = Context.get_values ctx cand.Tensor.value in
+    (not (Array.is_empty want)) && Array.for_all2_exn got want ~f:Float.equal
+  in
+  p_all "leading-batch: gpu mma seeds compile and match the serial twin bitwise" gpu_seeds_lb
+    ~f:(fun q ->
+      run_gpu_mma_seed ~name:"batched_lb_gpu_mma" ~want:want_lb
+        ~build:(fun () ->
+          let%op t = xv +* "bsk;kj=>bsj" wv in
+          t)
+        q);
 
   (* --- Interior batch: out[b,i,h,j] += att[b,i,h,k] * v[b,k,h,j] --- *)
   let hh = 2 in
@@ -186,7 +212,7 @@ let () =
   in
   let%op ib0 = att +* "bihk;bkhj=>bihj" vv in
   let%op ib1 = att +* "bihk;bkhj=>bihj" vv in
-  let opt_ib = check_leg ~tag:"batched_ib" ~serial:ib0 ~tensorized:ib1 in
+  let opt_ib, want_ib = check_leg ~tag:"batched_ib" ~serial:ib0 ~tensorized:ib1 in
   let gpu_seeds_ib = gpu_mma_seeds opt_ib in
   p "interior-batch: gpu mma seeds present" (not (List.is_empty gpu_seeds_ib));
   (* The site's contraction extent is 8, so every staged k-block pads it 2x or more against the
@@ -201,14 +227,23 @@ let () =
           (Ir.Schedule_space.leaves (Autotune.lift_pad_waste tree))
           ~f:(fun q -> q.Autotune.sk_mma))
   in
+  let staged_ib_seed = List.find staged_ib ~f:(fun q -> q.Autotune.sk_bk > 0) in
   p "interior-batch: gpu staged sketch builds"
     (match
-       List.find staged_ib ~f:(fun q -> q.Autotune.sk_bk > 0)
-       |> Option.map ~f:(fun q -> Autotune.sketch_schedule ~accum_prec ~p:q opt_ib)
+       Option.map staged_ib_seed ~f:(fun q -> Autotune.sketch_schedule ~accum_prec ~p:q opt_ib)
      with
     | Some (_ :: _) -> true
     | Some [] | None -> false
     | exception _ -> false);
+  p "interior-batch: gpu staged mma sketch compiles and matches the serial twin bitwise"
+    (match staged_ib_seed with
+    | None -> false
+    | Some q ->
+        run_gpu_mma_seed ~name:"batched_ib_gpu_staged_mma" ~want:want_ib
+          ~build:(fun () ->
+            let%op t = att +* "bihk;bkhj=>bihj" vv in
+            t)
+          q);
 
   (* --- Variance-style self-product: must not be detected as a matmul site --- *)
   let x2 =

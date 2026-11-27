@@ -1155,9 +1155,10 @@ type select_blend_policy = No_blend | Blend_load_free | Blend_serial_loop | Blen
 type backend_facts = {
   grid_execution : grid_execution;
   workgroup_shared_placement : bool;
-      (** A node can be placed in workgroup-shared memory (the shared epilogue placement of
-          [Schedule]'s [Fuse_epilogue]): the premise of [Schedule.may_keep_off_device]. CPU codegen
-          rejects a non-empty [workgroup_shared]. *)
+      (** A node can be placed in hardware workgroup-shared memory (the shared epilogue placement of
+          [Schedule]'s [Fuse_epilogue]): the premise of [Schedule.may_keep_off_device]. CPU backends
+          keep this [false] (their serial barrier-fission lowering of [workgroup_shared] is for
+          emulation/parity, not production shared placement). *)
   seeds_untuned_default : bool;
       (** The untuned compile seeds its plan ([Autotune.seeded_default], gh-ocannl-1183): the
           backends that plan's before/after was measured on. Also scopes the seeded plan's numerics

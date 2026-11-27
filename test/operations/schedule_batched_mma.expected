@@ -2,11 +2,13 @@ batched_lb: cpu mma seeds present: true
 batched_lb tensorized matches the serial twin bitwise: true
 batched_lb tensorized structure as expected: true
 leading-batch: gpu mma seeds present: true
+leading-batch: gpu mma seeds compile and match the serial twin bitwise: true
 batched_ib: cpu mma seeds present: true
 batched_ib tensorized matches the serial twin bitwise: true
 batched_ib tensorized structure as expected: true
 interior-batch: gpu mma seeds present: true
 interior-batch: gpu staged sketch builds: true
+interior-batch: gpu staged mma sketch compiles and matches the serial twin bitwise: true
 variance-like site: no cpu mma seeds: true
 variance-like site: no gpu mma seeds: true
 bf16 inputs of both batched shapes: every cell's products share a sign and every partial sum is exact in bf16: true

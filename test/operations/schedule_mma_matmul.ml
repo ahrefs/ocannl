@@ -1736,9 +1736,9 @@ let () =
      stages anchor at k_o (loads + barriers per k-block) and Tensorize replaces the perfectly nested
      i_i x j x k_i micro-kernel reading the tiles. The ma tile's minor extent (8) is below the
      width: 8 lanes load under a folded-or-surviving [lane < 8] guard; the mb tile's minor extent
-     (32) equals the width: the lane replaces the loop outright. GPU backends execute and must match
-     the serial twin; the C backends cannot express shared placement and must reject cleanly (same
-     pinning as the SMEM matmul test). --- *)
+     (32) equals the width: the lane replaces the loop outright. Both GPU backends and C backends
+     (via [Low_level.serialize_workgroup_barriers], gh-ocannl-678) execute and must match the serial
+     twin. --- *)
   let%op mc3 = ma * mb in
   (* [bm] is the row block and [bk] the outer-k block — the extents of each [k_o] step's [Tile_mma]
      — for formats whose intrinsic tile exceeds the default (fp8's m16n8k32). *)
@@ -1800,38 +1800,16 @@ let () =
   in
   let gpu_leg = Verdict.leg ~when_:on_gpu ~on:backend_name () in
   let ctx_c = Context.auto () in
-  let staged_gpu =
-    lazy
-      (let ctx_c, routine_c =
-         Context.compile
-           ~lowered_transform:(fun o -> [ staged_transform o ])
-           ctx_c staged_comp Ir.Indexing.Empty
-       in
-       let ctx_c = run_prefilled ctx_c routine_c mc3 in
-       let got_staged = Context.get_values ctx_c mc3.Tensor.value in
-       (got_staged, routine_c))
+  let ctx_c, routine_c =
+    Context.compile
+      ~lowered_transform:(fun o -> [ staged_transform o ])
+      ctx_c staged_comp Ir.Indexing.Empty
   in
-  (if on_gpu then
-     p_close "staged+tensorized matmul parity (GPU) or clean rejection (CPU)"
-       (fst (Lazy.force staged_gpu))
-       got_serial ~tol:approx_tol
-   else
-     match
-       try
-         ignore
-           (Context.compile
-              ~lowered_transform:(fun o -> [ staged_transform o ])
-              ctx_c staged_comp Ir.Indexing.Empty
-             : Context.t * Context.routine);
-         None
-       with Invalid_argument msg -> Some msg
-     with
-     | Some msg ->
-         p "staged+tensorized matmul parity (GPU) or clean rejection (CPU)"
-           (String.is_substring msg ~substring:"not supported")
-     | None -> p "staged+tensorized matmul parity (GPU) or clean rejection (CPU)" false);
+  let ctx_c = run_prefilled ctx_c routine_c mc3 in
+  let got_staged = Context.get_values ctx_c mc3.Tensor.value in
+  p_close "staged+tensorized matmul parity (GPU) or clean rejection (CPU)" got_staged got_serial
+    ~tol:approx_tol;
   in_leg ~leg:gpu_leg "staged+tensorized structure as expected" (fun label ->
-      let _, routine_c = Lazy.force staged_gpu in
       let src = Generated.read "mm_staged_mma" in
       let has s = String.is_substring src ~substring:s in
       let count_sub sub =

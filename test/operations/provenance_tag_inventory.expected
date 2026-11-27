@@ -40,6 +40,9 @@ Site -- arrayjit/lib/c_syntax.ml, declared:
 Site -- arrayjit/lib/c_syntax.ml, is_local:
   431:is-local-virtual-query
   432:is-local-materialized-query
+Site -- arrayjit/lib/c_syntax.ml, poison_docs:
+  333:local-decl-virtual-query
+  336:local-decl-materialized-query
 Site -- arrayjit/lib/c_syntax.ml, pp_device_read_ptr:
   820:volatile-accumulation-read
 Site -- arrayjit/lib/c_syntax.ml, rmw_volatile_reads:
@@ -66,6 +69,8 @@ Site -- arrayjit/lib/low_level.ml, footprint_prologue:
   153:footprint-scratch
 Site -- arrayjit/lib/low_level.ml, instantiate_at_synthetic_read:
   1011:synthetic-read
+Site -- arrayjit/lib/low_level.ml, is_private_local:
+  678:serial-wg-lowering
 Site -- arrayjit/lib/low_level.ml, loop_proc:
   151:cleanup-dropped-zero-out
   152:cleanup-dropped-set
@@ -73,10 +78,14 @@ Site -- arrayjit/lib/low_level.ml, loop_scalar:
   18:inlined-scope
 Site -- arrayjit/lib/low_level.ml, materialized:
   50:routine-interface
+Site -- arrayjit/lib/low_level.ml, promote_scope_id:
+  678:serial-wg-lowering
 Site -- arrayjit/lib/low_level.ml, scatter_accum_node:
   2444:scatter-accum
 Site -- arrayjit/lib/low_level.ml, specialize_proc:
   40:scalar-constexpr
+Site -- arrayjit/lib/low_level.ml, wg_body:
+  678:serial-wg-lowering
 Site -- arrayjit/lib/online_softmax.ml, backward_provenance:
   1002:fused-backward-row-dot
 Site -- arrayjit/lib/online_softmax.ml, provenance:
@@ -178,7 +187,7 @@ arrayjit/lib/assignments.ml -- 27 34
 arrayjit/lib/backends.ml -- 42 43 45
 arrayjit/lib/c_syntax.ml -- 46 333 334 335 336 337 431 432 433 487 820 959
 arrayjit/lib/context.ml -- 777
-arrayjit/lib/low_level.ml -- 1 4 5 7 8 9 10 11 12 13 14 17 18 19 31 35 37 40 41 50 51 52 140 141 142 143 144 145 146 147 148 149 151 152 153 154 155 156 157 158 159 160 1011 2444
+arrayjit/lib/low_level.ml -- 1 4 5 7 8 9 10 11 12 13 14 17 18 19 31 35 37 40 41 50 51 52 140 141 142 143 144 145 146 147 148 149 151 152 153 154 155 156 157 158 159 160 678 1011 2444
 arrayjit/lib/low_level.mli -- 9 13 148
 arrayjit/lib/online_softmax.ml -- 148 483 1002
 arrayjit/lib/online_softmax.mli -- 148 483 1002

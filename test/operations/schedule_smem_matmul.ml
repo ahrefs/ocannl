@@ -14,8 +14,10 @@
    would place the barriers under divergent control flow ([validate_parallel] rejects).
 
    On GPU backends (Metal locally, CUDA in CI) the kernel executes with a 4x4 grid of 8x8 workgroups
-   and must match the serial twin. The C backends cannot express shared placement; they must reject
-   cleanly -- that rejection is what this test pins there. *)
+   and must match the serial twin. On C backends (gh-ocannl-678),
+   [Low_level.serialize_workgroup_barriers] lowers workgroup-shared staging into barrier-fissioned
+   serial C loops, so the execution parity legs run there too; only the GPU-dialect source checks
+   remain gated on [has_shared]. *)
 
 open Base
 open Ocannl
@@ -57,11 +59,12 @@ let named name (comp : Asgns.comp) : Asgns.comp =
 let n = 32
 let bm, bn, bk = (8, 8, 8)
 
-(* The structural legs (gh-ocannl-1626): per-PR CI runs cc, which rejects shared placement, so the
-   claims that read the emitted kernel are skipped there. What they pin up to the dialect's spelling
-   -- the shared tiles, the barriers, which guards survive and where -- is the scheduled IR, which
-   [Sched.apply] builds on the host: each schedule is applied here to the lowering this host
-   captures ([Ll_test.captured_lowering]), and the IR is read. *)
+(* The structural legs (gh-ocannl-1626): the claims that read the GPU-dialect emitted kernel are
+   skipped on C backends (which render serialized C loops instead of [threadgroup]/[__shared__]).
+   What they pin up to the dialect's spelling -- the shared tiles, the barriers, which guards
+   survive and where -- is the scheduled IR, which [Sched.apply] builds on the host: each schedule
+   is applied here to the lowering this host captures ([Ll_test.captured_lowering]), and the IR is
+   read. *)
 let () =
   let mav =
     Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:13 ~offset:0. ~stride:0.25)
@@ -140,16 +143,14 @@ let () =
   let mc1_prefill = Array.init (n * n) ~f:(fun c -> Float.of_int (1000 + c)) in
   p_all2 "the prefill of the accumulator differs from the serial twin's result in every cell"
     mc1_prefill got_serial ~f:(fun a b -> Float.(a <> b));
-  if has_shared then (
-    let ctx_a, routine_a =
-      Context.compile
-        ~lowered_transform:(fun o -> [ transform o ])
-        ctx_a smem_comp Ir.Indexing.Empty
-    in
-    let ctx_a = Context.set_values ctx_a mc1.Tensor.value mc1_prefill in
-    let ctx_a = Context.run ctx_a routine_a in
-    let got_smem = Context.get_values ctx_a mc1.Tensor.value in
-    p_close "SMEM matmul parity (GPU) or clean rejection (CPU)" got_smem got_serial ~tol:approx_tol;
+  let ctx_a, routine_a =
+    Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx_a smem_comp Ir.Indexing.Empty
+  in
+  let ctx_a = Context.set_values ctx_a mc1.Tensor.value mc1_prefill in
+  let ctx_a = Context.run ctx_a routine_a in
+  let got_smem = Context.get_values ctx_a mc1.Tensor.value in
+  p_close "SMEM matmul parity (GPU) or clean rejection (CPU)" got_smem got_serial ~tol:approx_tol;
+  if has_shared then
     let src = Generated.read "mm_smem" in
     let has sub = String.is_substring src ~substring:sub in
     let count_sub sub =
@@ -170,23 +171,8 @@ let () =
        loop accumulates into the privatized scalar [acc_mc1] instead of round-tripping mc1 through
        global memory. *)
     p "shared tiles, barriers, no edge guards (GPU) or rejected (CPU)"
-      (shared_ok && count_sub "if (" = 0 && has "acc_mc1"))
-  else (
-    (match
-       try
-         ignore
-           (Context.compile
-              ~lowered_transform:(fun o -> [ transform o ])
-              ctx_a smem_comp Ir.Indexing.Empty
-             : Context.t * Context.routine);
-         None
-       with Invalid_argument msg -> Some msg
-     with
-    | Some msg ->
-        p "SMEM matmul parity (GPU) or clean rejection (CPU)"
-          (String.is_substring msg ~substring:"not supported")
-    | None -> p "SMEM matmul parity (GPU) or clean rejection (CPU)" false);
-    skipped "shared tiles, barriers, no edge guards (GPU) or rejected (CPU)");
+      (shared_ok && count_sub "if (" = 0 && has "acc_mc1")
+  else skipped "shared tiles, barriers, no edge guards (GPU) or rejected (CPU)";
   (let post = transform (Ll_test.captured_lowering ~name:"mm_smem_capture" smem_comp) in
    let guards, barriers = Ll_test.guards_and_barriers post.LL.llc in
    p "structural: the SMEM schedule places two tiles in workgroup-shared memory"
@@ -239,16 +225,16 @@ let () =
       opt
   in
   let ctx_b = Context.auto () in
-  if has_shared then (
-    let ctx_b, routine_b =
-      Context.compile
-        ~lowered_transform:(fun o -> [ bcast_transform o ])
-        ctx_b bcast_comp Ir.Indexing.Empty
-    in
-    let ctx_b = Context.run ctx_b routine_b in
-    let got_b = Context.get_values ctx_b cb.Tensor.value in
-    p_close "broadcast staging values correct (GPU) or clean rejection (CPU)" got_b bcast_expected
-      ~tol:approx_tol;
+  let ctx_b, routine_b =
+    Context.compile
+      ~lowered_transform:(fun o -> [ bcast_transform o ])
+      ctx_b bcast_comp Ir.Indexing.Empty
+  in
+  let ctx_b = Context.run ctx_b routine_b in
+  let got_b = Context.get_values ctx_b cb.Tensor.value in
+  p_close "broadcast staging values correct (GPU) or clean rejection (CPU)" got_b bcast_expected
+    ~tol:approx_tol;
+  if has_shared then
     let src = Generated.read "bcast_staged" in
     let count_sub sub =
       String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length
@@ -263,23 +249,8 @@ let () =
          declaration token emitted by each language. *)
       if String.is_substring backend_name ~substring:"metal" then
         count_sub ("threadgroup float " ^ Generated.node_ident ~facts "tile_") = 1
-      else count_sub ("__shared__ float " ^ Generated.node_ident ~facts "tile_") = 1))
-  else (
-    (match
-       try
-         ignore
-           (Context.compile
-              ~lowered_transform:(fun o -> [ bcast_transform o ])
-              ctx_b bcast_comp Ir.Indexing.Empty
-             : Context.t * Context.routine);
-         None
-       with Invalid_argument msg -> Some msg
-     with
-    | Some msg ->
-        p "broadcast staging values correct (GPU) or clean rejection (CPU)"
-          (String.is_substring msg ~substring:"not supported")
-    | None -> p "broadcast staging values correct (GPU) or clean rejection (CPU)" false);
-    skipped "broadcast load is partitioned under the workgroup axis");
+      else count_sub ("__shared__ float " ^ Generated.node_ident ~facts "tile_") = 1)
+  else skipped "broadcast load is partitioned under the workgroup axis";
   (* The review regression this section pins put the load at the routine's top level, under no
      Workgroup loop and indexed by none: a store outside the axis, or one every thread of it
      repeats, fails here. *)

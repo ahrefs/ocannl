@@ -2499,3 +2499,25 @@ val mma_operand_layout :
     [`Swizzled_b128] for a b128-swizzled rank-2 tile addressed from its origin with its minor dim as
     leading dimension; [`Decline] (with the reason) for any other swizzle, which renders the scalar
     fallback without reaching a hook. Shared by the renderer and the cost model (gh-ocannl-1254). *)
+
+val contains_barrier : t -> bool
+(** Whether [llc] contains any {!t.Workgroup_barrier} statement. *)
+
+type serialized_workgroup = {
+  sw_proc : optimized;
+  sw_grid_loops : (Indexing.symbol * int) list;
+      (** Outermost-first hoisted [Grid] slot loops [(sym, extent)] enclosing [sw_proc.llc]. Each
+          loop iterates [0 .. extent - 1]; [C_syntax] emits them around workgroup-entry shared-tile
+          poisoning and [sw_proc.llc]. *)
+}
+
+val serialize_workgroup_barriers :
+  scope_prec:(scope_id -> Ops.prec) -> optimized -> serialized_workgroup
+(** gh-ocannl-678: lowers a GPU-scheduled procedure carrying [workgroup_shared] tiles and/or
+    [Workgroup_barrier]s into a serially-executable equivalent for backends without hardware
+    workgroups or shared address spaces (such as [cc]). Hoists canonical [Grid] slot loops to the
+    kernel root, binds every [Grid]/[Workgroup]/[Workgroup_reduce] loop to its positional slot
+    coordinate (with extent guards where an axis is narrower than its slot maximum), replicates
+    thread-private [Local] arrays and barrier-crossing locals per workgroup thread, and fissions the
+    workgroup loops at each synchronization point without inserting phantom barriers at serial loop
+    back-edges. *)

@@ -29,9 +29,9 @@
    to feed one from [ldmatrix] destination registers. The f16 leg pins that decline — the statement
    falls back to the swizzle-aware lane-0 micro-kernel and stays correct.
 
-   Non-CUDA backends: Metal and HIP have no [ldmatrix] analogue, so their intrinsics decline the
-   swizzled operands and the scalar fallback runs (still correct — it reads elementwise through the
-   swizzled offsets); the C backends cannot express shared placement and reject cleanly. *)
+   Non-CUDA backends: Metal, HIP, and C backends (via [Low_level.serialize_workgroup_barriers],
+   gh-ocannl-678) have no [ldmatrix] analogue, so their intrinsics decline the swizzled operands and
+   the scalar fallback runs (still correct — it reads elementwise through the swizzled offsets). *)
 
 open Base
 open Ocannl
@@ -164,63 +164,45 @@ let leg ?schedule_of ~tag ~build ~src_a ~src_b ~swz_a ~swz_b ~check ~acc_prec ?(
     let transform opt = Sched.apply (schedule_of opt) opt in
     f t0 transform
   in
-  if not on_gpu then (
-    with_target (fun t0 transform ->
-        let ctx = Context.auto () in
-        match
-          try
-            ignore
-              (Context.compile
-                 ~lowered_transform:(fun o -> [ transform o ])
-                 ctx
-                 (named (name ^ "_mma") (Train.forward t0))
-                 Ir.Indexing.Empty
-                : Context.t * Context.routine);
-            None
-          with Invalid_argument msg -> Some msg
-        with
-        | Some msg -> p parity_label (String.is_substring msg ~substring:"not supported")
-        | None -> p parity_label false);
-    p struct_label true)
-  else begin
-    let want =
-      let serial = build () in
-      Tn.update_prec serial.Tensor.value acc_prec;
-      let ctx_s = Context.auto () in
-      let ctx_s, routine_s =
-        Context.compile
-          ~lowered_transform:(fun opt -> [ opt ])
-          ctx_s
-          (named (name ^ "_serial") (Train.forward serial))
-          Ir.Indexing.Empty
-      in
-      let ctx_s = Context.run ctx_s routine_s in
-      Context.get_values ctx_s serial.Tensor.value
-    in
-    with_target @@ fun t0 transform ->
-    let ctx, routine =
+  let want =
+    let serial = build () in
+    Tn.update_prec serial.Tensor.value acc_prec;
+    let ctx_s = Context.auto () in
+    let ctx_s, routine_s =
       Context.compile
-        ~lowered_transform:(fun o -> [ transform o ])
-        (Context.auto ())
-        (named (name ^ "_mma") (Train.forward t0))
+        ~lowered_transform:(fun opt -> [ opt ])
+        ctx_s
+        (named (name ^ "_serial") (Train.forward serial))
         Ir.Indexing.Empty
     in
-    (* The census is a field of the compiled routine since gh-ocannl-626. *)
-    let census = Ll_test.renderings routine.Context.mma in
-    (* The schedule expands [t0]'s zero; fresh buffers are zero and would hide a dropped or short
-       expansion (gh-ocannl-1625), so [t0] starts off its result (the exact sums below stay under
-       50). *)
-    let prefill = Array.init (Array.length want) ~f:(fun c -> Float.of_int (1000 + c)) in
-    let ctx = Context.set_values ctx t0.Tensor.value prefill in
-    let ctx = Context.run ctx routine in
-    let got = Context.get_values ctx t0.Tensor.value in
-    (* The nonzero guard is not ceremony: a fragment mapping that reads outside the staged block
-       would plausibly produce all zeros, and zeros compare equal to zeros. *)
-    p parity_label
-      (Array.exists want ~f:(fun x -> Float.(x <> 0.)) && Array.for_all2_exn got want ~f:Float.equal);
+    let ctx_s = Context.run ctx_s routine_s in
+    Context.get_values ctx_s serial.Tensor.value
+  in
+  with_target @@ fun t0 transform ->
+  let ctx, routine =
+    Context.compile
+      ~lowered_transform:(fun o -> [ transform o ])
+      (Context.auto ())
+      (named (name ^ "_mma") (Train.forward t0))
+      Ir.Indexing.Empty
+  in
+  (* The census is a field of the compiled routine since gh-ocannl-626. *)
+  let census = Ll_test.renderings routine.Context.mma in
+  (* The schedule expands [t0]'s zero; fresh buffers are zero and would hide a dropped or short
+     expansion (gh-ocannl-1625), so [t0] starts off its result (the exact sums below stay under
+     50). *)
+  let prefill = Array.init (Array.length want) ~f:(fun c -> Float.of_int (1000 + c)) in
+  let ctx = Context.set_values ctx t0.Tensor.value prefill in
+  let ctx = Context.run ctx routine in
+  let got = Context.get_values ctx t0.Tensor.value in
+  (* The nonzero guard is not ceremony: a fragment mapping that reads outside the staged block would
+     plausibly produce all zeros, and zeros compare equal to zeros. *)
+  p parity_label
+    (Array.exists want ~f:(fun x -> Float.(x <> 0.)) && Array.for_all2_exn got want ~f:Float.equal);
+  if on_gpu then
     let src = Generated.read (name ^ "_mma") in
     p struct_label (check ~what:name ~src ~census)
-  end
+  else Verdict.skipped ~backend:backend_name struct_label
 
 let bf_a =
   Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]

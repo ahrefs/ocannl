@@ -1256,8 +1256,9 @@ module type C_syntax_config = sig
       [.z]. *)
 
   val barrier_syntax : string option
-  (** Workgroup barrier statement ([__syncthreads();] / [threadgroup_barrier(...);]); [None] makes
-      [Workgroup_barrier] a compile-time error (serialization cannot implement a barrier). *)
+  (** Workgroup barrier statement ([__syncthreads();] / [threadgroup_barrier(...);]); [None] selects
+      serial barrier-fission lowering ({!Low_level.serialize_workgroup_barriers}) in [compile_proc]
+      instead of emitting a hardware barrier statement. *)
 
   val async_copy : async_copy_syntax option
   (** gh-ocannl-487 phase 2: asynchronous global→workgroup-shared copies (CUDA [cp.async]) for the
@@ -1290,7 +1291,8 @@ module type C_syntax_config = sig
 
   val shared_decl_prefix : string option
   (** Declaration prefix for workgroup-shared placements ([__shared__ ] / [threadgroup ]); [None]
-      makes a non-empty [workgroup_shared] set a compile-time error. *)
+      declares workgroup-shared tiles as plain block-scope (or heap-spilled) arrays under serial
+      barrier-fission lowering ({!Low_level.serialize_workgroup_barriers}, gh-ocannl-678). *)
 
   val compiler_contraction_off : unit -> bool
   (** Whether this backend's kernel compile is pinned so its compiler never contracts a [a * b + c]
@@ -10631,7 +10633,7 @@ module C_syntax (B : C_syntax_config) = struct
   let compile_proc_units ?(avoid = []) ~name idx_params
       (Low_level.
          {
-           traced_store;
+           traced_store = _;
            llc;
            merge_node;
            optimize_ctx;
@@ -10647,14 +10649,12 @@ module C_syntax (B : C_syntax_config) = struct
          } as proc) :
       (string * kparam_source) list * PPrint.document list * string list * Low_level.launch_dims =
     let open PPrint in
-    (if not (Set.is_empty workgroup_shared) then
-       match B.shared_decl_prefix with
-       | Some _ -> ()
-       | None ->
-           (* The local-declaration pass below would silently emit workgroup-shared nodes as
-              per-thread stack arrays -- wrong sharing semantics. *)
-           invalid_arg
-             "C_syntax.compile_proc: workgroup-shared placement not supported by this backend");
+    (* gh-ocannl-678: backends without hardware workgroups/shared memory lower workgroup-shared
+       staging and barriers to serial loop-fissioned C code rather than rejecting at compile. *)
+    let serial_workgroup_staging =
+      (Option.is_none B.shared_decl_prefix || Option.is_none B.barrier_syntax)
+      && ((not (Set.is_empty workgroup_shared)) || Low_level.contains_barrier llc)
+    in
     (* gh-ocannl-686: the routine name reaches the emitted [void <name>(] verbatim, so it must
        already be a legal, non-reserved identifier. Mangling it HERE would leave the caller's symbol
        lookup and artifact names pointing at the pre-mangling spelling, so the caller owns the
@@ -10690,12 +10690,15 @@ module C_syntax (B : C_syntax_config) = struct
        constructs, and a [?prelowered] routine that never went through [optimize]. *)
     Low_level.validate_operand_precisions ~site:"C_syntax.compile_proc" llc;
     (* gh-ocannl-1238: with this backend's shuffle width, so the validator sees the barriers the
-       warp-shuffle and lane all-reduce renderings insert, not only the IR's own. *)
+       warp-shuffle and lane all-reduce renderings insert, not only the IR's own. Under
+       [serial_workgroup_staging], the hoisted grid/workgroup launch runs every top-level statement
+       per workgroup thread, so GPU write-coverage validation ([~fork_join:false]) applies. *)
     Low_level.validate_parallel_classified ~warp_size:B.warp_size
       ~reassociable:Online_softmax.reassociable_local
         (* gh-ocannl-1458: a backend binding no hardware [Grid] index renders each [Grid] loop as a
            joined pool dispatch (or a serial loop), so code outside [Grid] loops runs once. *)
-      ~fork_join:(Option.is_none (B.hardware_index ~kind:`Grid ~slot:0))
+      ~fork_join:
+        (Option.is_none (B.hardware_index ~kind:`Grid ~slot:0) && not serial_workgroup_staging)
       optimize_ctx.Low_level.placements llc;
     (* gh-ocannl-1887: past the gates, which judge what the caller built, and ahead of the render
        context, so that every analysis below reads the tree that renders. *)
@@ -10718,25 +10721,11 @@ module C_syntax (B : C_syntax_config) = struct
       llc;
     if !(scope_order_oracles_enabled ()) then
       scope_order_oracles () := (name, (oracle, llc)) :: !(scope_order_oracles ());
-    (* Launch-extent guards (construct-then-fold, axis-types proposal §2), only for kinds this
-       backend binds in hardware -- the serial fallback iterates the true extent. *)
-    let llc =
-      Low_level.guard_annotated_extents
-        ~should_guard:(fun kind -> Option.is_some (B.hardware_index ~kind ~slot:0))
-        llc
-    in
-    let launch = Low_level.launch_dims llc in
-    let ctx = create_render_ctx ~name { proc with llc } in
-    (refuse_unseparated_thread_write ctx)
-      ~site:"C_syntax.compile_proc: the hardware binding of the kernel's Grid/Workgroup axes"
-      ~deferred:!(ctx.current_deferred_lanes);
     (* gh-487 sanity: the rotation renders off the rotor loop's serial counter; a schedule that
        later retyped the rotor to a hardware axis would otherwise silently freeze the buffer
-       selection at copy 0 ([serial_loop_stack] only tracks serial loops). Typed for the same reason
-       as the read-position check in [pp_pipelined_rotation]: both say "this renderer cannot express
-       that pipelined tile", and a candidate composing its way into one is a decline, not a fatal
-       that ends the search around it. Like that one, the decline is [Schedule.pipeline_violation]'s
-       own typed reason. *)
+       selection at copy 0 ([serial_loop_stack] only tracks serial loops). Checked before serial
+       workgroup lowering eliminates hardware axes, so a non-Serial rotor still declines identically
+       on CPU and GPU. *)
     (if not (Map.is_empty pipelined) then
        let check_rotor index axis =
          Map.iteri pipelined ~f:(fun ~key:tn ~data:{ Low_level.pt_rotor; _ } ->
@@ -10762,6 +10751,34 @@ module C_syntax (B : C_syntax_config) = struct
          | _ -> ()
        in
        scan llc);
+    let proc, launch, grid_loops =
+      if serial_workgroup_staging then
+        let launch = Low_level.launch_dims llc in
+        let { Low_level.sw_proc; sw_grid_loops } =
+          Low_level.serialize_workgroup_barriers ~scope_prec:(scope_prec_in ~accum_scope_ids)
+            { proc with llc }
+        in
+        (sw_proc, launch, sw_grid_loops)
+      else
+        (* Launch-extent guards (construct-then-fold, axis-types proposal §2), only for kinds this
+           backend binds in hardware -- the serial fallback iterates the true extent. *)
+        let llc =
+          Low_level.guard_annotated_extents
+            ~should_guard:(fun kind -> Option.is_some (B.hardware_index ~kind ~slot:0))
+            llc
+        in
+        let launch = Low_level.launch_dims llc in
+        ({ proc with llc }, launch, [])
+    in
+    let { Low_level.traced_store; llc; optimize_ctx; workgroup_shared; _ } = proc in
+    let ctx = create_render_ctx ~name proc in
+    if not (List.is_empty grid_loops) then
+      ctx.current_loop_ranges :=
+        List.fold grid_loops ~init:!(ctx.current_loop_ranges) ~f:(fun env (sym, ext) ->
+            Affine.Loop_ranges.bind env sym (0, ext - 1));
+    (refuse_unseparated_thread_write ctx)
+      ~site:"C_syntax.compile_proc: the hardware binding of the kernel's Grid/Workgroup axes"
+      ~deferred:!(ctx.current_deferred_lanes);
     let ptr_params, params =
       derive_kparams ~llc ~traced_store ~placements:optimize_ctx.Low_level.placements
         ~alias_candidates:optimize_ctx.Low_level.alias_candidates ~merge_node ~idx_params
@@ -10865,19 +10882,74 @@ module C_syntax (B : C_syntax_config) = struct
        part to the next exactly as through a single rendering. Not under routine logging, whose
        [log_file] is a local of the kernel's own frame. *)
     let outlined_groups =
-      match B.outline_part_weight () with
-      | Some part when part > 0 && not (Utils.debug_log_from_routines ()) ->
-          Kernel_outline.groups ~part (Low_level.flat_lines [ llc ])
-      | _ -> None
+      if serial_workgroup_staging then None
+      else
+        match B.outline_part_weight () with
+        | Some part when part > 0 && not (Utils.debug_log_from_routines ()) ->
+            Kernel_outline.groups ~part (Low_level.flat_lines [ llc ])
+        | _ -> None
+    in
+    let shared_total_elems tn =
+      Tn.num_elems tn
+      *
+      match Map.find !(ctx.current_pipelined) tn with
+      | Some { Low_level.pt_depth; _ } -> pt_depth
+      | None -> 1
     in
     (* Render before declarations so accepted marked-fragment regions can suppress their otherwise
        dead scalar local arrays. Declining/debug paths leave the set empty and keep the arrays. *)
     let main_logic_doc, part_docs =
-      match outlined_groups with
-      | None -> ((compile_main ctx) llc, [])
-      | Some groups ->
-          ( empty,
-            List.map groups ~f:(fun group -> (compile_main ctx) (Low_level.unflat_lines group)) )
+      if serial_workgroup_staging then (
+        let saved_stack = !(ctx.serial_loop_stack) in
+        ctx.serial_loop_stack := List.rev_map grid_loops ~f:fst @ saved_stack;
+        let wg_doc =
+          Exn.protect
+            ~f:(fun () -> (pp_ll ctx) ~in_loop:(not (List.is_empty grid_loops)) llc)
+            ~finally:(fun () -> ctx.serial_loop_stack := saved_stack)
+        in
+        (* Poison every workgroup-shared tile with 0xFF bytes (quiet NaN for every float format,
+           non-zero sentinel for integers) on entry to each workgroup: eliminates C UB on
+           uninitialized stack reads and makes missing load->compute barriers fail deterministically
+           instead of reading zero or a previous workgroup's leftovers (gh-ocannl-678). *)
+        let plc = ctx.current_placements in
+        let touched, untouched = store_order ~llc ~traced_store in
+        let poison_docs =
+          List.filter_map (touched @ untouched) ~f:(fun tn ->
+              if
+                Set.mem workgroup_shared tn
+                && not
+                     (Tn.Placements.is_virtual_force plc tn (Site "333:local-decl-virtual-query")
+                     || Tn.Placements.is_materialized_force plc tn
+                          (Site "336:local-decl-materialized-query"))
+              then
+                let total_bytes =
+                  shared_total_elems tn * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)
+                in
+                Some (string (Printf.sprintf "memset(%s, 0xff, %d);" (get_ident tn) total_bytes))
+              else None)
+        in
+        let inner_doc =
+          match poison_docs with
+          | [] -> wg_doc
+          | _ -> separate hardline poison_docs ^^ hardline ^^ wg_doc
+        in
+        let wrapped =
+          List.fold_right grid_loops ~init:inner_doc ~f:(fun (sym, ext) body ->
+              group
+                (string ("for (" ^ B.loop_index_type)
+                ^^ pp_symbol sym ^^ string " = 0; " ^^ pp_symbol sym ^^ string " <= "
+                ^^ PPrint.OCaml.int (ext - 1)
+                ^^ string "; ++" ^^ pp_symbol sym ^^ string ") " ^^ lbrace
+                ^^ nest 2 (hardline ^^ body)
+                ^^ hardline ^^ rbrace))
+        in
+        (wrapped, []))
+      else
+        match outlined_groups with
+        | None -> ((compile_main ctx) llc, [])
+        | Some groups ->
+            ( empty,
+              List.map groups ~f:(fun group -> (compile_main ctx) (Low_level.unflat_lines group)) )
     in
     ctx.volatility_requested := B.volatile_serial_accumulation;
     if !(ctx.volatility_census_enabled) then
@@ -10920,9 +10992,31 @@ module C_syntax (B : C_syntax_config) = struct
       List.filter_map declared ~f:(fun (tn, _) ->
           Option.some_if (not (Set.mem workgroup_shared tn)) tn)
     in
-    (* gh-ocannl-1669: the thread-private ones past the function scope's stack budget are heap
-       arrays, freed after the main logic. *)
-    let heap = heap_locals ~budget:routine_stack_locals_bytes private_arrays in
+    (* gh-ocannl-1669: the function-scope arrays past the stack budget are heap arrays, freed after
+       the main logic. On backends without [shared_decl_prefix], workgroup-shared tiles are plain
+       function-scope arrays too and share the same stack budget. *)
+    let heap =
+      match B.shared_decl_prefix with
+      | Some _ -> heap_locals ~budget:routine_stack_locals_bytes private_arrays
+      | None ->
+          let all_locals = List.map declared ~f:fst in
+          if not B.heap_local_arrays then Set.empty (module Tn)
+          else
+            let bytes tn =
+              (if Set.mem workgroup_shared tn then shared_total_elems tn else Tn.num_elems tn)
+              * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)
+            in
+            List.mapi all_locals ~f:(fun k tn -> (bytes tn, k, tn))
+            |> List.sort ~compare:(fun (b1, k1, _) (b2, k2, _) ->
+                [%compare: int * int] (b1, k1) (b2, k2))
+            |> List.fold
+                 ~init:(0, Set.empty (module Tn))
+                 ~f:(fun (used, heap) (b, _, tn) ->
+                   if Set.is_empty heap && used + b <= routine_stack_locals_bytes then
+                     (used + b, heap)
+                   else (used, Set.add heap tn))
+            |> snd
+    in
     (* A single private array left in a CUDA depot can still cost a copy per resident thread. Once
        the combined frame exceeds the budget, give all of its arrays device slices. *)
     let scratch_frame =
@@ -10957,36 +11051,50 @@ module C_syntax (B : C_syntax_config) = struct
            (fun (tn, node) ->
              let is_shared = Set.mem workgroup_shared tn in
              if is_shared then
-               (* Workgroup-shared placement (axis-types proposal §3): one tile per workgroup
-                  instead of one per thread. [= {0}] is not allowed for shared declarations, so
-                  zero-initialization stays as explicit [Zero_out] code (never elided for shared
-                  nodes; see [zero_out_loop_redundant]); shared placements otherwise keep the
-                  backend's default layout (no [aligned_local_attr]).
+               let total_elems = shared_total_elems tn in
+               let typ = B.typ_of_prec @@ Lazy.force tn.storage_prec in
+               match B.shared_decl_prefix with
+               | Some prefix ->
+                   (* Workgroup-shared placement (axis-types proposal §3): one tile per workgroup
+                      instead of one per thread. [= {0}] is not allowed for shared declarations, so
+                      zero-initialization stays as explicit [Zero_out] code (never elided for shared
+                      nodes; see [zero_out_loop_redundant]); shared placements otherwise keep the
+                      backend's default layout (no [aligned_local_attr]).
 
-                  A [Swizzle_b128] tile is the exception: its layout contract is stated in 16-byte
-                  units, and the warp-cooperative loads that consume it ([ldmatrix], gh-ocannl-481
-                  item 3) require every row-group address to be 16-byte aligned. Row starts are
-                  16-byte multiples by the [Stage] validation, so aligning the base is what makes
-                  all of them aligned. The GNU attribute spelling is understood by every compiler
-                  that has a shared address space here (nvcc, hipcc, MSL's clang). *)
-               (match (swizzle_of ctx) tn with
-                 | Some Low_level.Swizzle_b128 -> string "__attribute__((aligned(16))) "
-                 | Some Low_level.Swizzle_elem | None -> empty)
-               ^^ string (Option.value_exn ~here:[%here] B.shared_decl_prefix)
-               ^^ string (B.typ_of_prec @@ Lazy.force tn.storage_prec)
-               ^^ space
-               ^^ string (get_ident tn)
-               (* A pipelined tile is [pt_depth] rotating copies (gh-487); the accesses select the
-                  copy via [pp_pipelined_rotation]. [Schedule.check_hardware_limits] accounts the
-                  same multiplier. *)
-               ^^ brackets
-                    (OCaml.int
-                       (Tn.num_elems tn
-                       *
-                       match Map.find !(ctx.current_pipelined) tn with
-                       | Some { Low_level.pt_depth; _ } -> pt_depth
-                       | None -> 1))
-               ^^ semi ^^ hardline
+                      A [Swizzle_b128] tile is the exception: its layout contract is stated in
+                      16-byte units, and the warp-cooperative loads that consume it ([ldmatrix],
+                      gh-ocannl-481 item 3) require every row-group address to be 16-byte aligned.
+                      Row starts are 16-byte multiples by the [Stage] validation, so aligning the
+                      base is what makes all of them aligned. The GNU attribute spelling is
+                      understood by every compiler that has a shared address space here (nvcc,
+                      hipcc, MSL's clang). *)
+                   (match (swizzle_of ctx) tn with
+                     | Some Low_level.Swizzle_b128 -> string "__attribute__((aligned(16))) "
+                     | Some Low_level.Swizzle_elem | None -> empty)
+                   ^^ string prefix ^^ string typ ^^ space
+                   ^^ string (get_ident tn)
+                   (* A pipelined tile is [pt_depth] rotating copies (gh-487); the accesses select
+                      the copy via [pp_pipelined_rotation]. [Schedule.check_hardware_limits]
+                      accounts the same multiplier. *)
+                   ^^ brackets (OCaml.int total_elems)
+                   ^^ semi ^^ hardline
+               | None ->
+                   (* gh-ocannl-678: serial barrier-fission rendering on backends without a shared
+                      address space declares one plain block-scope (or heap-spilled) array per
+                      shared tile, poisoned on entry to each workgroup. *)
+                   if Set.mem heap tn then
+                     separate_map hardline string
+                       (heap_local_lines ~typ ~ident:(get_ident tn) ~elems:total_elems
+                          ~zero_init:false)
+                     ^^ hardline
+                   else
+                     (match (swizzle_of ctx) tn with
+                       | Some Low_level.Swizzle_b128 -> string "__attribute__((aligned(16))) "
+                       | Some Low_level.Swizzle_elem | None -> empty)
+                     ^^ string typ ^^ space
+                     ^^ string (get_ident tn)
+                     ^^ brackets (OCaml.int total_elems)
+                     ^^ semi ^^ hardline
              else
                let typ = local_array_type ctx tn in
                outlined_locals := (typ, get_ident tn) :: !outlined_locals;

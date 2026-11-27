@@ -5129,6 +5129,28 @@
    cc_toolchain_attribution-macro_label.expected
    cc_toolchain_attribution-macro_label.actual)))
 
+; gh-ocannl-678: serial barrier-fission rendering of workgroup-shared staging on cc, with parity
+; across backends and deterministic negative controls for missing/misplaced barriers and cross-nest
+; grid misalignment.
+
+(test
+ (name cc_workgroup_shared_staging)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules cc_workgroup_shared_staging)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  arrayjit.utils
+  arrayjit.context)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-2056: a %cd inline declaration reading itself, { x } =: x + 1, compiles and executes.
 
 (test
