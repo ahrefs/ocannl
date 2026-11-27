@@ -7,4 +7,4 @@ under hip_fast_math=true with hip_extra_compile_options=-ffp-contract=off, (a * 
 under hip_fast_math=true with hip_extra_compile_options=-ffp-contract=off, explicit fma(a, b, c) still computes the fused 2^-24 bitwise: true
 under hip_fast_math=true with hip_extra_compile_options=-ffp-contract=off, the FMA-sensitive chain computes the two-rounding f32 chain bitwise: true
 multi-token hip_extra_compile_options (-freciprocal-math -fapprox-func) compiles and executes cleanly on HIP: true
-an unrecognized flag in hip_extra_compile_options fails loudly and reports the flag in hiprtc options: true
+an unrecognized flag in hip_extra_compile_options is a fatal configuration fault for an autotune candidate: true

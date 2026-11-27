@@ -11,8 +11,8 @@
    appended flags at execution: overriding [hip_fast_math=true]'s [-ffp-contract=on] with
    [-ffp-contract=off] makes [(a * b) + c] and a 37-term multiply-add chain match the host
    two-rounding f32 chain bitwise while preserving explicit [FMA]; - multi-token overrides
-   ([-freciprocal-math -fapprox-func]) compile and execute cleanly; - an unrecognized option fails
-   loudly with the appended flag reported in [hiprtc options:]. *)
+   ([-freciprocal-math -fapprox-func]) compile and execute cleanly; - an unrecognized option is a
+   fatal toolchain configuration error for a candidate, with the actual hiprtc options reported. *)
 
 (* cc-fp-contract: not-cc -- every device claim sits in the HIP leg; cc skips them all *)
 
@@ -22,6 +22,7 @@ open Ll_test
 module LL = Ir.Low_level
 module Ops = Ir.Ops
 module SC = Ir.Schedule_cache
+module Outcome = Ir.Schedule_outcome
 
 let () = Utils.state_config ~key:"fp_contract" ~data:"false"
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
@@ -109,8 +110,10 @@ type hip_results = {
   probe_approx : float;
   explicit_fma_off : float;
   chain_contract_off : float array;
-  invalid_error : string option;
+  invalid_failure : Outcome.failure option;
 }
+
+let invalid_flag = "-mocannl-no-such-hiprtc-flag"
 
 let timing_identity =
   Some
@@ -208,7 +211,7 @@ let results =
            probe_approx,
            explicit_fma_off,
            chain_contract_off,
-           invalid_error ) =
+           invalid_failure ) =
        Ir.Kernel_code_cache.with_cold_caches (fun () ->
            let ( cap_default,
                  tag_default,
@@ -280,16 +283,17 @@ let results =
                  in
                  (cap, tag, comps, c_hit))
            in
-           let invalid_error =
+           let invalid_failure =
              Utils.with_stated_config
-               [
-                 ("hip_fast_math", "true");
-                 ("hip_extra_compile_options", "-mocannl-no-such-hiprtc-flag");
-               ]
+               [ ("hip_fast_math", "true"); ("hip_extra_compile_options", invalid_flag) ]
                (fun () ->
-                 match run_probe ~first_id:234440 ~name:"heo_invalid_opt" ~explicit_fma:false with
-                 | _ -> None
-                 | exception exn -> Some (Exn.to_string exn))
+                 let name = "heo_invalid_opt" in
+                 let _, _, probe = build_probe ~first_id:234440 ~name ~explicit_fma:false in
+                 match link_outcome ~name ~provenance:Outcome.Candidate probe with
+                 | Ok (ctx, _) ->
+                     Context.release ctx;
+                     None
+                 | Error failure -> Some failure)
            in
            ( cap_default,
              tag_default,
@@ -314,7 +318,7 @@ let results =
              probe_approx,
              explicit_fma_off,
              chain_contract_off,
-             invalid_error ))
+             invalid_failure ))
      in
      let max_diff a b =
        Array.foldi a ~init:0. ~f:(fun i acc x -> Float.max acc (Float.abs (x -. b.(i))))
@@ -323,7 +327,7 @@ let results =
        "hip_extra_compile_options (not part of the golden): probe default=%h contract_off=%h \
         approx=%h explicit_fma_off=%h; chain max|contract_off-unfused|=%h; tags default=%S \
         contract_off=%S approx=%S; cache cold=(%d/%d) hit=(%d/%d) off_miss=(%d/%d) \
-        approx_miss=(%d/%d) approx_ws_hit=(%d/%d); invalid_error=%s\n\
+        approx_miss=(%d/%d) approx_ws_hit=(%d/%d); invalid_failure=%s\n\
         %!"
        probe_default probe_contract_off probe_approx explicit_fma_off
        (max_diff chain_contract_off chain_unfused)
@@ -333,7 +337,10 @@ let results =
        cost_contract_off_miss.kernels_reused cost_approx_miss.kernels_compiled
        cost_approx_miss.kernels_reused cost_approx_ws_hit.kernels_compiled
        cost_approx_ws_hit.kernels_reused
-       (Option.value invalid_error ~default:"<none>");
+       (match invalid_failure with
+       | None -> "<compiled>"
+       | Some (Outcome.Fatal { exn; _ }) -> Exn.to_string exn
+       | Some (Outcome.Classified { cause; _ }) -> Outcome.detail_of_cause cause);
      {
        cap_default;
        cap_contract_off;
@@ -358,7 +365,7 @@ let results =
        probe_approx;
        explicit_fma_off;
        chain_contract_off;
-       invalid_error;
+       invalid_failure;
      })
 
 let equal_components =
@@ -435,10 +442,22 @@ let () =
       let r = Lazy.force results in
       p label (bitwise_scalar r.probe_approx fused_expected || bitwise_scalar r.probe_approx 0.));
   in_leg ~leg:hip_leg
-    "an unrecognized flag in hip_extra_compile_options fails loudly and reports the flag in hiprtc \
-     options" (fun label ->
-      let r = Lazy.force results in
+    "an unrecognized flag in hip_extra_compile_options is a fatal configuration fault for an \
+     autotune candidate" (fun label ->
       p label
-        (Option.exists r.invalid_error ~f:(fun msg ->
-             String.is_substring msg ~substring:"hiprtc options:"
-             && String.is_substring msg ~substring:"-mocannl-no-such-hiprtc-flag")))
+        (match (Lazy.force results).invalid_failure with
+        | Some
+            (Outcome.Fatal
+               {
+                 phase = Outcome.Backend_compile;
+                 cause =
+                   Some (Outcome.Backend_rejected { stage; severity = Outcome.Configuration; _ });
+                 exn = Utils.User_error message;
+                 _;
+               }) ->
+            String.equal stage Outcome.toolchain_stage
+            && String.is_substring message ~substring:"hip_extra_compile_options"
+            && String.is_substring message ~substring:"hiprtc options:"
+            && String.is_substring message ~substring:invalid_flag
+            && not (String.is_substring message ~substring:Ir.C_syntax.codegen_bug_claim_prefix)
+        | _ -> false))
