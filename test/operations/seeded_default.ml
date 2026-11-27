@@ -69,16 +69,18 @@ let mma_standin =
   in
   { target with mt_capabilities = capabilities }
 
+let mma_k = 512
+
+(* Nonnegative dyadic operands also suit the one-sign requirement of gfx11's WMMA. A partial sum has
+   at most [mma_k * 144] units of 1/16, within the f32 accumulator's 24 significant bits. *)
+let mma_operand weights = Ll_test.weighted ~weights ~modulus:13 ~offset:0. ~stride:0.25
+let mma_a = mma_operand [| 1; 5 |]
+let mma_b = mma_operand [| 3; 7 |]
+
 let mma_site prec =
-  let n = 256 and k = 512 in
-  (* Nonnegative dyadic operands also suit the one-sign requirement of gfx11's WMMA. A partial sum
-     has at most [k * 36] units of 1/16, within the f32 accumulator's 24 significant bits. *)
-  let init label ~i ~o stride =
-    NTDSL.init ~l:label ~prec ~i:[ i ] ~o:[ o ]
-      ~f:(Ll_test.weighted ~weights:[| stride; 31 |] ~modulus:7 ~offset:0. ~stride:0.25)
-      ()
-  in
-  let a = init "sd_mma_a" ~i:k ~o:n 17 and b = init "sd_mma_b" ~i:n ~o:k 43 in
+  let n = 256 in
+  let init label ~i ~o f = NTDSL.init ~l:label ~prec ~i:[ i ] ~o:[ o ] ~f () in
+  let a = init "sd_mma_a" ~i:mma_k ~o:n mma_a and b = init "sd_mma_b" ~i:n ~o:mma_k mma_b in
   let%op out = a * b in
   Ir.Tnode.update_prec out.Tensor.value Ir.Ops.single;
   Train.set_materialized out.Tensor.value;
@@ -458,6 +460,18 @@ let () =
    the ranking reads them. Exact dyadic operands give both f16 schedules the same reference at every
    output cell regardless of summation order. *)
 let () =
+  let host_dot load_a =
+    List.init mma_k ~f:(fun k -> load_a k *. mma_b [| k; 0 |]) |> List.sum (module Float) ~f:Fn.id
+  in
+  let normal = host_dot (fun k -> mma_a [| 0; k |]) in
+  let transposed =
+    (* Transpose each 16x16 input fragment in place, keeping the addresses inside A. *)
+    host_dot (fun k ->
+        let lane = k % 16 in
+        mma_a [| lane; k - lane |])
+  in
+  p "transposing A fragments changes the host reference at output cell (0, 0)"
+    Float.(normal <> transposed);
   (* The performance payload relies on the built-in default for this key. *)
   let env =
     Array.filter (Unix.environment ()) ~f:(fun entry ->

@@ -498,9 +498,9 @@ let config_key_classification : (config_key_class * string * string list) list =
        HIP, where the plan runs, when on",
       [ "gpu_default_seed_narrow_storage" ] );
     ( Keyed "codegen",
-      "a numerics gate on the seeded model's tensorized matmul candidates (gh-ocannl-1663), whose \
-       reduction can round differently from the scalar seed. Keyed on CUDA and HIP, where the \
-       model can start from a seeded plan, when on",
+      "a numerics gate on the untimed seeded model's tensorized matmul candidates \
+       (gh-ocannl-1663), whose reduction can round differently from the scalar seed. The policy \
+       enters the CUDA/HIP cache identity when off, preserving existing keys at the default",
       [ "model_default_tensorize" ] );
     ( Search_shaping,
       "it steers the search: how wide, how long, what is proposed, what is pruned, how candidates \

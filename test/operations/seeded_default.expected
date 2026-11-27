@@ -26,6 +26,7 @@ on CUDA/HIP the model's bias gradient is bitwise the default pipeline's: true
 where the backend rates an envelope, model_pick names model_default's pick without compiling: true
 structural: for the cuda stand-in the model starts from the seeded plan: its pick is never the plain default pipeline: true
 structural control: without rated ceilings the cuda stand-in's pick is the default pipeline: true
+transposing A fragments changes the host reference at output cell (0, 0): true
 structural: the seeded performance model admits every f16, bf16 and fp8 MMA leaf: true
 structural: the seeded reproducible model excludes every f16, bf16 and fp8 MMA leaf: true
 the f32 output of the model's f16 matmul equals the nonzero reference in both profiles: true

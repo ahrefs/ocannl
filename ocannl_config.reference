@@ -1240,7 +1240,8 @@
 # gh-ocannl-1663: allow tensorized matmuls in model_default's ranking with a seeded incumbent
 # (CUDA/HIP). The backend's numeric policy still decides which formats are legal. An admitted MMA
 # can round the reduction differently from the scalar seed. The reproducible profile pins this
-# off, and the CUDA/HIP schedule cache distinguishes the two settings.
+# off. The CUDA/HIP schedule cache keys the disabled setting separately and keeps existing
+# keys when this is enabled.
 #model_default_tensorize=true
 
 # gh-ocannl-514, the placement levels of the untuned regime: with model_default_schedule=true and

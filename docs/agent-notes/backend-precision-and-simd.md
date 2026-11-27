@@ -1489,7 +1489,8 @@ files.
 - **Seeded model MMA admission** (gh-ocannl-1663): `model_default_tensorize` also defaults on
   and `reproducible` pins it off. It lets the analytic model rank legal tensorized matmuls on
   seeded CUDA/HIP, where the matrix instruction can round an f32-accumulating narrow product
-  differently from the scalar blocktile. The CUDA/HIP codegen tag hashes the enabled setting.
+  differently from the scalar blocktile. The CUDA/HIP codegen tag hashes the disabled setting
+  and keeps existing cache keys at the default.
 - **The `approximate` profile is the one word for the numerics-changing regime** (gh-ocannl-719):
   the `performance` payload plus `tf32_matmuls=true`, `cc_backend_fast_math=true`,
   `cc_backend_fp_contract=fast` and `tune_inline_flips=2`, contract "results differ from the exact
@@ -1504,8 +1505,8 @@ files.
   `ocannl_config.reference`'s quote of them; `config_profiles` pins approximate ⊇ performance.
   Every knob the profile flips today is already in the numerics or codegen digest, which is what
   keeps a default-flags run from replaying a winner tuned under the profile. A schedule-time
-  gate, which neither digest reaches by construction, is hashed into the codegen tag ON-regime
-  only and only on the backends it acts on, as `gpu_elide_covered_zeros` is (GPU) and
+  gate, which neither digest reaches by construction, is hashed into the codegen tag for its
+  nondefault setting and only on the backends it acts on, as `gpu_elide_covered_zeros` is (GPU) and
   `gpu_default_seed_narrow_storage` (gh-ocannl-1405, CUDA/HIP via the backend fact
   `seeds_untuned_default`; since gh-ocannl-2195 it gates only the reduction sink's narrow
   admission, the seeding taking widening sites in every profile): every pre-existing key stays
