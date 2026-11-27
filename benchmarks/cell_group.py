@@ -64,7 +64,7 @@ class _DriverDeathGuard:
                 # The slot's flock and sleep-inhibitor pipe are intentionally inheritable.
                 # Only the guard needs to keep them when the driver is gone.
                 self.proc = subprocess.Popen(
-                    [sys.executable, "-B", str(Path(__file__).resolve())],
+                    [sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve())],
                     stdin=reader, stdout=subprocess.DEVNULL, close_fds=False,
                     start_new_session=True,
                 )
@@ -87,7 +87,10 @@ class _DriverDeathGuard:
 
 def _guard_driver():
     registration = sys.stdin.buffer.readline()
-    if not registration.rstrip(b"\n").isdigit() or sys.stdin.buffer.read(1) == b"D":
+    # EOF in the middle of an ID cannot authorize a signal to that numeric prefix.
+    if not registration.endswith(b"\n") or not registration[:-1].isdigit():
+        return
+    if sys.stdin.buffer.read(1) == b"D":
         return
     pgid = int(registration)
     # EOF without a completion byte is a driver death. A live member can still own GPU
@@ -543,6 +546,14 @@ def _observe_posix_group(pgid, allow_zombie_gone=False):
         if not entry.name.isdigit():
             continue
         try:
+            if os.getpgid(int(entry.name)) != pgid:
+                continue
+        except ProcessLookupError:
+            continue
+        except OSError:
+            complete = False
+            continue
+        try:
             # ``comm`` can contain spaces and parentheses.  From the final ')', state is field 1
             # and process-group id field 3 of the remaining text.
             fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
@@ -556,8 +567,8 @@ def _observe_posix_group(pgid, allow_zombie_gone=False):
             continue
     # A matched group of corpses is gone for benchmark purposes only after SIGKILL has made a
     # concurrent fork impossible. During the graceful phase, a non-atomic /proc traversal cannot
-    # prove that a live member did not join after its directory snapshot. Any unread entry makes
-    # the census incomplete in either phase.
+    # prove that a live member did not join after its directory snapshot. An unread entry
+    # makes the census incomplete if it could belong to this group.
     return GONE if allow_zombie_gone and matched and complete else UNKNOWN
 
 

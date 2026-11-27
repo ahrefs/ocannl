@@ -1,5 +1,6 @@
 import ast
 import contextlib
+import io
 import os
 import re
 import signal
@@ -497,6 +498,37 @@ class CellGroupTest(unittest.TestCase):
         self.assertIs(child.observe(), cell_group.UNKNOWN)
         self.assertIs(observed, cell_group.GONE)
         child.wait()
+
+    @unittest.skipUnless(sys.platform == "linux", "the census reads Linux procfs")
+    def test_unreadable_stat_only_matters_for_a_possible_group_member(self):
+        zombie, hidden = Path("/proc/100"), Path("/proc/200")
+
+        def read_stat(path):
+            if path == zombie / "stat":
+                return "100 (cell) Z 1 100"
+            raise PermissionError(path)
+
+        for hidden_group, expected in ((200, cell_group.GONE), (100, cell_group.UNKNOWN)):
+            with (
+                self.subTest(hidden_group=hidden_group),
+                unittest.mock.patch.object(Path, "exists", return_value=True),
+                unittest.mock.patch.object(Path, "iterdir", return_value=[zombie, hidden]),
+                unittest.mock.patch.object(Path, "read_text", autospec=True, side_effect=read_stat),
+                unittest.mock.patch.object(os, "killpg"),
+                unittest.mock.patch.object(os, "getpgid", side_effect={100: 100, 200: hidden_group}.__getitem__),
+            ):
+                self.assertIs(cell_group._observe_posix_group(100, allow_zombie_gone=True), expected)
+
+    @unittest.skipUnless(sys.platform == "linux", "the shared cell death guard is Linux-specific")
+    def test_shared_cells_guard_ignores_an_incomplete_group_id(self):
+        stdin = unittest.mock.Mock(buffer=io.BytesIO(b"123"))
+        with (
+            unittest.mock.patch.object(sys, "stdin", stdin),
+            unittest.mock.patch.object(os, "killpg") as kill_group,
+            unittest.mock.patch.object(cell_group, "_observe_posix_group", return_value=cell_group.GONE),
+        ):
+            cell_group._guard_driver()
+        kill_group.assert_not_called()
 
     @unittest.skipUnless(os.name == "posix", "driver signal fixtures require POSIX")
     def test_shared_cells_reaps_a_resistant_descendant_on_cancel_or_timeout(self):
