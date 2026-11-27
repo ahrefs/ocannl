@@ -1772,18 +1772,19 @@ class SubstitutionTest(unittest.TestCase):
                     row = cell("ocannl", "cc", "default", [2.3026, 2.3010, 2.3000])
                     row.update(workload="subtest", searched=False)
                     return row, None
+                is_search = "(search pass)" in label
                 row = cell("ocannl", "cc", "tuned", [2.3026, 2.3010, 2.3000])
                 row.update(
                     workload="subtest",
-                    searched=False,
+                    searched=is_search,
                     tune={
                         "shipped": "A",
-                        "placement_replay": False,
+                        "placement_replay": not is_search,
                         "shipped_digest": "aaaa",
-                        "ship_substituted": ship_substituted,
-                        "substituted_from": substituted_from,
-                        "searches": 0,
-                        "replays": 1,
+                        "ship_substituted": False if is_search else ship_substituted,
+                        "substituted_from": None if is_search else substituted_from,
+                        "searches": 2 if is_search else 0,
+                        "replays": 0 if is_search else 1,
                         "no_searches": 0,
                         "arms": [TensorizationTest.arm(self, "A", False, "not-requested")],
                     },
@@ -1833,6 +1834,87 @@ class SubstitutionTest(unittest.TestCase):
         self.assertEqual(rc_ok, 0, stdout_ok)
         self.assertNotIn("SUBSTITUTION GATE", stdout_ok)
         self.assertNotIn(orchestrate.SUBSTITUTED_MARK, report_ok)
+
+    def test_a_substituted_search_pass_fails_the_sweep_without_marking_the_tuned_replay_row(self):
+        # A two-pass cell whose first (search) pass substituted while its fresh replay pass shipped
+        # measured still fails the sweep (with a pass-specific diagnostic) because pass 1's
+        # compile_s is published, while the replay row is not marked SHIPPED UNTUNED.
+        tmp = Path(tempfile.mkdtemp())
+        fixtures = tmp / "fixtures"
+        fixtures.mkdir()
+        (fixtures / fixture_digest.DIGEST_FILE).write_bytes(
+            (HERE / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes()
+        )
+        header = json.dumps({"__metadata__": {"model": "mlp", "mode": "train"}}).encode()
+        (fixtures / "subtest.safetensors").write_bytes(
+            len(header).to_bytes(8, "little") + header
+        )
+
+        def fake_cell(label, cmd, env=None, **_):
+            if "tuned" not in label:
+                row = cell("ocannl", "cc", "default", [2.3026, 2.3010, 2.3000])
+                row.update(workload="subtest", searched=False)
+                return row, None
+            is_search = "(search pass)" in label
+            row = cell("ocannl", "cc", "tuned", [2.3026, 2.3010, 2.3000])
+            row.update(
+                workload="subtest",
+                searched=is_search,
+                tune={
+                    "shipped": "A",
+                    "placement_replay": not is_search,
+                    "shipped_digest": "aaaa",
+                    "ship_substituted": is_search,
+                    "substituted_from": "grid 128" if is_search else None,
+                    "searches": 2 if is_search else 0,
+                    "replays": 0 if is_search else 1,
+                    "no_searches": 0,
+                    "arms": [TensorizationTest.arm(self, "A", False, "not-requested")],
+                },
+            )
+            return row, None
+
+        out = io.StringIO()
+        environ = {k: v for k, v in os.environ.items() if not k.startswith("OCANNL_")}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(unittest.mock.patch.dict(os.environ, environ, clear=True))
+            stack.enter_context(unittest.mock.patch.object(orchestrate, "HERE", tmp))
+            stack.enter_context(
+                unittest.mock.patch.object(orchestrate, "RESULTS_DIR", tmp / "results")
+            )
+            stack.enter_context(unittest.mock.patch.object(orchestrate, "run_cell", fake_cell))
+            stack.enter_context(
+                unittest.mock.patch.object(
+                    orchestrate, "install_termination_handler", lambda: None
+                )
+            )
+            stack.enter_context(
+                unittest.mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "orchestrate.py", "--only", "ocannl", "--gpu", "none",
+                        "--tuned", "--skip-build", "--no-fixture-digest-check",
+                        "--skip-box-check",
+                    ],
+                )
+            )
+            stack.enter_context(contextlib.redirect_stdout(out))
+            with self.assertRaises(SystemExit) as failed:
+                orchestrate.main()
+        self.assertEqual(failed.exception.code, 1, out.getvalue())
+        self.assertIn("SUBSTITUTION GATE: 1 tuned cell(s)", out.getvalue())
+        self.assertIn("(search pass discarded grid 128)", out.getvalue())
+        report_text = (tmp / "results" / "report.md").read_text()
+        self.assertNotIn(orchestrate.SUBSTITUTED_MARK, report_text)
+        rows = [
+            json.loads(line)
+            for line in (tmp / "results" / "results.jsonl").read_text().splitlines()
+        ]
+        [tuned_row] = [r for r in rows if r["variant"] == "tuned"]
+        self.assertIs(tuned_row["search_pass_ship_substituted"], True)
+        self.assertEqual(tuned_row["search_pass_substituted_from"], "grid 128")
+        self.assertNotIn("ship_substituted", tuned_row)
 
     def test_the_substitution_is_visible_in_the_rendered_table(self):
         cells = [self.cell(True, "grid 128"), self.cell(False)]

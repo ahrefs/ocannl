@@ -18580,8 +18580,10 @@
   arrayjit.verdict
   ll_test
   scripted_search
+  test_utils
   bench_harness
   bench_json
+  arrayjit.utils
   arrayjit.context
   arrayjit.autotune
   arrayjit.ir)

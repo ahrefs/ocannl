@@ -2353,7 +2353,7 @@ def grid_notice(flagged):
 
 
 def substitution_check(results):
-    """Annotate each cell whose timed process shipped the untuned default; return those cells.
+    """Annotate each cell whose timed process shipped the untuned default; return gated cells.
 
     `Train.tune_placements` ships a measured schedule unless its shipping compile substituted the
     untuned default for the crown, with nothing left to fall back to, or its last resort shipped the
@@ -2362,7 +2362,9 @@ def substitution_check(results):
     cell's step times are the untuned default's under a tuned variant, and nothing else in the
     record says so: its arms, `shipped` and `shipped_digest` all still name the search whose crown
     was discarded. The row is the timed process's (a two-pass cell's is pass 2's), so this reads
-    the process that produced the numbers.
+    the process that produced the numbers; for a two-pass cell whose first (search) pass
+    substituted and handed over `compile_s`, `search_pass_ship_substituted` gates the sweep too
+    without marking the replay row `SHIPPED UNTUNED` when its step times were tuned.
 
     Only `true` counts: `false` is a measured ship, and an absent key or `null` is a runner
     predating the field or a harness that recorded no ship -- unknown, not a substitution.
@@ -2370,9 +2372,12 @@ def substitution_check(results):
     substituted = []
     for r in results:
         tune = r.get("tune")
-        if isinstance(tune, dict) and tune.get("ship_substituted") is True:
+        timed_sub = isinstance(tune, dict) and tune.get("ship_substituted") is True
+        search_sub = r.get("search_pass_ship_substituted") is True
+        if timed_sub:
             r["ship_substituted"] = True
             r["substituted_from"] = tune.get("substituted_from")
+        if timed_sub or search_sub:
             substituted.append(r)
     return substituted
 
@@ -2382,16 +2387,27 @@ SUBSTITUTED_MARK = " **SHIPPED UNTUNED**"
 
 
 def substitution_gate(substituted):
-    """Name the cells whose timed artifact is the untuned default substituted for their tuning."""
-    labels = ", ".join(
-        f"{gate_label(r)} (discarded {r['substituted_from']})"
-        if r.get("substituted_from")
-        else f"{gate_label(r)} (last resort)"
-        for r in substituted
-    )
+    """Name the cells that shipped the untuned default in place of their measured schedule."""
+    def detail(r):
+        parts = []
+        if r.get("ship_substituted"):
+            parts.append(
+                f"discarded {r['substituted_from']}"
+                if r.get("substituted_from")
+                else "last resort"
+            )
+        if r.get("search_pass_ship_substituted"):
+            parts.append(
+                f"search pass discarded {r['search_pass_substituted_from']}"
+                if r.get("search_pass_substituted_from")
+                else "search pass last resort"
+            )
+        return f"{gate_label(r)} ({'; '.join(parts)})"
+
+    labels = ", ".join(detail(r) for r in substituted)
     return (
         f"SUBSTITUTION GATE: {len(substituted)} tuned cell(s) shipped the untuned default in "
-        f"place of their measured schedule, so their step times are untuned: {labels}"
+        f"place of their measured schedule: {labels}"
     )
 
 
@@ -3664,9 +3680,18 @@ def main():
                                 if pass1_verdict != "SEARCHED":
                                     print(f"    search pass verdict {pass1_verdict}: its compile_s is "
                                           "not a from-scratch search cost", flush=True)
-                                collect(label, cmd, env=env, cwd=HERE,
-                                        override={**ident, "compile_s": pass1["compile_s"],
-                                                  "search_pass": pass1_verdict})
+                                pass1_override = {
+                                    **ident,
+                                    "compile_s": pass1["compile_s"],
+                                    "search_pass": pass1_verdict,
+                                }
+                                pass1_tune = pass1.get("tune")
+                                if isinstance(pass1_tune, dict) and pass1_tune.get("ship_substituted") is True:
+                                    pass1_override["search_pass_ship_substituted"] = True
+                                    pass1_override["search_pass_substituted_from"] = pass1_tune.get(
+                                        "substituted_from"
+                                    )
+                                collect(label, cmd, env=env, cwd=HERE, override=pass1_override)
                             else:
                                 collect(label, cmd, env=env, cwd=HERE, override=ident)
         if "pytorch" in args.only:
