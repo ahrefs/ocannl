@@ -41,6 +41,7 @@ Sources naming a schedule cache directory, all with the `autotune_cache` prefix 
   test/operations/tile_mma_narrow.ml
   test/operations/tune_arm_a_replay.ml
   test/operations/tune_call_budget.ml
+  test/operations/tune_ship_substituted.ml
   test/operations/tune_warm_cache_key.ml
   test/operations/winograd_conv.ml
   test/operations/wrapper_release_paths.ml

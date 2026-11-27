@@ -84,6 +84,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, executable hip_scratch_tune_survives (Autotune.Make(_).tune): independent, by its marker
   test/operations/dune, executable metal_wait_bound_real_hang (Autotune.Make(_).tune): independent, by its marker
   test/operations/dune, executable tune_ship_arm (Train.tune_placements): independent, by its marker
+  test/operations/dune, executable tune_ship_substituted (Train.tune_placements): independent, by its marker
   test/operations/dune, test autotune_baseline_window (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_beam_finals (Scripted_search.search): pinned: autotune_beam_finals.ml calls `Fissioned_chain.small_menu` at initialization, before any search
   test/operations/dune, test autotune_budget (Scripted_search.search): pinned: autotune_budget.ml calls `Fissioned_chain.small_menu` at initialization, before any search
@@ -383,6 +384,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-top_down_prec-extension
   test/operations/dune                     @runtest-top_down_prec-unoptimized
   test/operations/dune                     @runtest-transformer_test-origins_cap_0
+  test/operations/dune                     @runtest-tune_ship_substituted
   test/operations/dune                     @runtest-unary_math_special_values-reproducible
   test/operations/dune                     @runtest-uniform_rank_zero-logged
   test/operations/dune                     @runtest-unused_compiler_deps

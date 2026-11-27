@@ -539,6 +539,7 @@
   (alias runtest-top_down_prec-extension)
   (alias runtest-top_down_prec-unoptimized)
   (alias runtest-transformer_test-origins_cap_0)
+  (alias runtest-tune_ship_substituted)
   (alias runtest-unary_math_special_values-reproducible)
   (alias runtest-unused_compiler_deps)
   (alias runtest-vendor_stub_arms_scan)
@@ -18561,6 +18562,64 @@
      tune_ship_arm.actual
      (run %{dep:tune_ship_arm.exe}))
     (diff tune_ship_arm.expected tune_ship_arm.actual)))))
+
+; gh-ocannl-1613: end-to-end Train.tune_placements winner-replay substitution through
+; Bench_harness, Bench_json.result_line, orchestrate.py, gh728_protocol.py and gh834_session.py.
+
+(executable
+ ; cc-vector-width: independent -- claims are ship outcomes on scripted timings, dyadic exact
+ ; outputs and JSON gate verdicts, alike at every vector width.
+ (name tune_ship_substituted)
+ (modules tune_ship_substituted)
+ (libraries
+  base
+  yojson
+  ocannl
+  stdio
+  stderr_capture
+  arrayjit.verdict
+  ll_test
+  scripted_search
+  bench_harness
+  bench_json
+  arrayjit.context
+  arrayjit.autotune
+  arrayjit.ir)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- Context.cpu (); winner-replay substitution and benchmark gate checks are
+ ; backend-independent.
+ (alias runtest-tune_ship_substituted)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  tune_ship_substituted.py
+  tune_ship_substituted.expected
+  ../../benchmarks/orchestrate.py
+  ../../benchmarks/gh728_protocol.py
+  ../../benchmarks/gh834_session.py
+  ../../benchmarks/bench_output.py
+  ../../benchmarks/bench_venv.py
+  ../../benchmarks/box_gate.py
+  ../../benchmarks/fixture_digest.py
+  ../../benchmarks/cell_group.py
+  ../../benchmarks/display_safe.py
+  ../../benchmarks/strict_json.py
+  ../../benchmarks/runners/bench_common.py
+  ../../benchmarks/fixtures/DIGESTS.txt
+  (sandbox always preserve_file_kind))
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     tune_ship_substituted.actual
+     (progn
+      (run %{dep:tune_ship_substituted.exe})
+      (run python3 %{dep:tune_ship_substituted.py} ../..)))
+    (diff tune_ship_substituted.expected tune_ship_substituted.actual)))))
 
 ; gh-ocannl-1560: a seeded crown whose split prelude runs before fission replays as timed (the
 ; CUDA/HIP shape of gh-ocannl-1480, end to end), and autotune_strict_replay checks every fissioned

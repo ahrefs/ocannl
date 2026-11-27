@@ -112,6 +112,11 @@ let exempt_sites =
        lines its rule's OCANNL runs captured before it -- each a `run` of its own, under the \
        rule's `ocannl_config` -- and its one subprocess is bench_output.py's command line; the \
        Python step launches no OCANNL executable" );
+    ( "test/operations:python3, handed %{dep:tune_ship_substituted.py}, ../..",
+      "the end-to-end substitution check (gh-ocannl-1613) feeds the result lines written by \
+       `tune_ship_substituted.exe` in the same rule (which lists `ocannl_config`) to stdlib Python \
+       benchmark checkers (`orchestrate.py`, `gh728_protocol.py`, `gh834_session.py`); the Python \
+       step launches no OCANNL executable" );
     ( "test/operations:python3, handed %{dep:../../benchmarks/config_records.py}",
       "the resolved-configuration reader (gh-ocannl-1766), run over a stream the OCaml half of the \
        test kept in a rule of its own, which lists `ocannl_config`; the reader is stdlib Python \
