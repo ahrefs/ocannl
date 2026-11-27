@@ -2501,7 +2501,11 @@ val mma_operand_layout :
     fallback without reaching a hook. Shared by the renderer and the cost model (gh-ocannl-1254). *)
 
 val contains_barrier : t -> bool
-(** Whether [llc] contains any {!t.Workgroup_barrier} statement. *)
+(** Whether [llc] contains any {!t.Workgroup_barrier} or {!t.Tile_mma} statement. *)
+
+val contains_explicit_barrier : t -> bool
+(** Whether [llc] contains an explicit {!t.Workgroup_barrier} statement (excluding bare
+    {!t.Tile_mma} on CPU register-tiled schedules). *)
 
 type serialized_workgroup = {
   sw_proc : optimized;
@@ -2509,15 +2513,25 @@ type serialized_workgroup = {
       (** Outermost-first hoisted [Grid] slot loops [(sym, extent)] enclosing [sw_proc.llc]. Each
           loop iterates [0 .. extent - 1]; [C_syntax] emits them around workgroup-entry shared-tile
           poisoning and [sw_proc.llc]. *)
+  sw_minted_tns : Tnode.t list;
+      (** Fresh [Local] nodes minted during serialization (replicated thread-private arrays,
+          promoted barrier-crossing locals, and narrowing-rounding temporaries), passed to
+          {!Kernel_code_cache.canonical_kernel} so repeated compilations hit the kernel cache. *)
 }
 
 val serialize_workgroup_barriers :
-  scope_prec:(scope_id -> Ops.prec) -> optimized -> serialized_workgroup
-(** gh-ocannl-678: lowers a GPU-scheduled procedure carrying [workgroup_shared] tiles and/or
-    [Workgroup_barrier]s into a serially-executable equivalent for backends without hardware
-    workgroups or shared address spaces (such as [cc]). Hoists canonical [Grid] slot loops to the
-    kernel root, binds every [Grid]/[Workgroup]/[Workgroup_reduce] loop to its positional slot
-    coordinate (with extent guards where an axis is narrower than its slot maximum), replicates
-    thread-private [Local] arrays and barrier-crossing locals per workgroup thread, and fissions the
-    workgroup loops at each synchronization point without inserting phantom barriers at serial loop
-    back-edges. *)
+  scope_prec:(scope_id -> Ops.prec) ->
+  set_local_value_prec:(scope_id -> scalar_t -> Ops.prec) ->
+  reassociable:(Tnode.t -> bool) ->
+  optimized ->
+  serialized_workgroup
+(** gh-ocannl-678: lowers a GPU-scheduled procedure carrying [workgroup_shared] tiles,
+    [simdgroup_fragments], and/or explicit [Workgroup_barrier]s into a serially-executable
+    equivalent for backends without hardware workgroups or shared address spaces (such as [cc]).
+    Hoists canonical [Grid] slot loops to the kernel root, binds every
+    [Grid]/[Workgroup]/[Workgroup_reduce] loop to its positional slot coordinate (keeping
+    reassociable lane all-reduces serial, lowering cell-target collective reductions completely
+    before subsequent lane-zero reads, and guarding narrower extents), replicates thread-private
+    [Local] arrays and barrier-crossing locals per workgroup thread (preserving assignment rounding
+    precision), and fissions the workgroup loops strictly at reached synchronization points without
+    inserting phantom barriers at serial loop back-edges or skipped conditional barriers. *)

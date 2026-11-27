@@ -80,6 +80,8 @@ Site -- arrayjit/lib/low_level.ml, materialized:
   50:routine-interface
 Site -- arrayjit/lib/low_level.ml, promote_scope_id:
   678:serial-wg-lowering
+Site -- arrayjit/lib/low_level.ml, rounding_temp_for:
+  678:serial-wg-lowering
 Site -- arrayjit/lib/low_level.ml, scatter_accum_node:
   2444:scatter-accum
 Site -- arrayjit/lib/low_level.ml, specialize_proc:

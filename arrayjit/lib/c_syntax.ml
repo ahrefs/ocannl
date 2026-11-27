@@ -3724,12 +3724,22 @@ module C_syntax (B : C_syntax_config) = struct
 
   let serial_scratch_ident = "ocannl_serial_scratch"
 
+  (* gh-ocannl-678: per-workgroup shared-tile byte poisoning emitted under serial workgroup
+     lowering, harvested into [ident_blacklist] so a tensor labeled [memset] cannot shadow it. *)
+  let shared_poison_line ~ident ~total_bytes =
+    Printf.sprintf "memset(%s, 0xff, %d);" ident total_bytes
+
+  let shared_poison_idents = extract_idents (shared_poison_line ~ident:"?" ~total_bytes:0)
+
   let ident_blacklist =
     B.ident_blacklist
     @ op_syntax_idents ~ternop_syntax:B.ternop_syntax ~binop_syntax:B.binop_syntax
         ~unop_syntax:B.unop_syntax ~vec_unop_syntax:B.vec_unop_syntax
         ~convert_precision:B.convert_precision
     @ (if B.heap_local_arrays then heap_local_idents ~typ:(B.typ_of_prec Ops.single) else [])
+    @ (if Option.is_none B.shared_decl_prefix || Option.is_none B.barrier_syntax then
+         shared_poison_idents
+       else [])
     (* A node declared under a predefined macro is expanded, not declared (gh-ocannl-1338). *)
     @ system_macro_idents
 
@@ -10650,10 +10660,13 @@ module C_syntax (B : C_syntax_config) = struct
       (string * kparam_source) list * PPrint.document list * string list * Low_level.launch_dims =
     let open PPrint in
     (* gh-ocannl-678: backends without hardware workgroups/shared memory lower workgroup-shared
-       staging and barriers to serial loop-fissioned C code rather than rejecting at compile. *)
+       staging and explicit barriers to serial loop-fissioned C code rather than rejecting at
+       compile. Bare CPU [Tile_mma] schedules (including hoisted CPU register tiles in
+       [simdgroup_fragments] with no shared storage and no explicit barrier) stay on the CPU
+       fork-join path. *)
     let serial_workgroup_staging =
       (Option.is_none B.shared_decl_prefix || Option.is_none B.barrier_syntax)
-      && ((not (Set.is_empty workgroup_shared)) || Low_level.contains_barrier llc)
+      && ((not (Set.is_empty workgroup_shared)) || Low_level.contains_explicit_barrier llc)
     in
     (* gh-ocannl-686: the routine name reaches the emitted [void <name>(] verbatim, so it must
        already be a legal, non-reserved identifier. Mangling it HERE would leave the caller's symbol
@@ -10751,14 +10764,17 @@ module C_syntax (B : C_syntax_config) = struct
          | _ -> ()
        in
        scan llc);
-    let proc, launch, grid_loops =
+    let proc, launch, grid_loops, minted_bound_names =
       if serial_workgroup_staging then
         let launch = Low_level.launch_dims llc in
-        let { Low_level.sw_proc; sw_grid_loops } =
-          Low_level.serialize_workgroup_barriers ~scope_prec:(scope_prec_in ~accum_scope_ids)
-            { proc with llc }
+        let scope_prec = scope_prec_in ~accum_scope_ids in
+        let { Low_level.sw_proc; sw_grid_loops; sw_minted_tns } =
+          Low_level.serialize_workgroup_barriers ~scope_prec
+            ~set_local_value_prec:(fun id value ->
+              set_local_value_prec ~scope_prec:(scope_prec id) id value)
+            ~reassociable:Online_softmax.reassociable_local { proc with llc }
         in
-        (sw_proc, launch, sw_grid_loops)
+        (sw_proc, launch, sw_grid_loops, List.map sw_minted_tns ~f:get_ident)
       else
         (* Launch-extent guards (construct-then-fold, axis-types proposal §2), only for kinds this
            backend binds in hardware -- the serial fallback iterates the true extent. *)
@@ -10768,7 +10784,7 @@ module C_syntax (B : C_syntax_config) = struct
             llc
         in
         let launch = Low_level.launch_dims llc in
-        ({ proc with llc }, launch, [])
+        ({ proc with llc }, launch, [], [])
     in
     let { Low_level.traced_store; llc; optimize_ctx; workgroup_shared; _ } = proc in
     let ctx = create_render_ctx ~name proc in
@@ -10925,7 +10941,7 @@ module C_syntax (B : C_syntax_config) = struct
                 let total_bytes =
                   shared_total_elems tn * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)
                 in
-                Some (string (Printf.sprintf "memset(%s, 0xff, %d);" (get_ident tn) total_bytes))
+                Some (string (shared_poison_line ~ident:(get_ident tn) ~total_bytes))
               else None)
         in
         let inner_doc =
@@ -11237,7 +11253,7 @@ module C_syntax (B : C_syntax_config) = struct
             ^^ hardline ^^ func_doc;
           ]
     in
-    (params, units, List.init (List.length part_docs) ~f:part_name, launch)
+    (params, units, List.init (List.length part_docs) ~f:part_name @ minted_bound_names, launch)
 
   let compile_proc ~name idx_params proc =
     let params, units, _, launch = compile_proc_units ~name idx_params proc in

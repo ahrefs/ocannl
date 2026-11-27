@@ -18,7 +18,7 @@ test/operations/bf16_local_scratch.ml -- records=2 traversals=0
 test/operations/branchless_select.ml -- records=1 traversals=0
 test/operations/canonical_render.ml -- records=11 traversals=0
 test/operations/cc_march_census.ml -- records=6 traversals=0
-test/operations/cc_workgroup_shared_staging.ml -- records=7 traversals=1
+test/operations/cc_workgroup_shared_staging.ml -- records=8 traversals=1
 test/operations/cost_model_extraction.ml -- records=1 traversals=0
 test/operations/cost_model_floor.ml -- records=4 traversals=0
 test/operations/cost_model_selection.ml -- records=0 traversals=1

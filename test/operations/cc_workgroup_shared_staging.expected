@@ -13,3 +13,9 @@ cross-nest aligned Grid zeroing + staged accumulation matches oracle bitwise: tr
 negative control: swapped Grid slots between zeroing and accumulation fails parity: true
 validation gate: Workgroup_barrier under an If guard is still rejected: true
 validation gate: mismatched Workgroup extents across a barrier are still rejected: true
+ordinary Set_local in Workgroup_reduce keeps per-lane binding across barrier: true
+cell-target Workgroup_reduce completes before lane-0 publish without trailing barrier: true
+promoted bf16 accumulator preserves narrowing-init rounding across barrier: true
+negative control: skipped barrier on narrower Grid does not synchronize unguarded groups: true
+tensor labeled memset compiles and matches oracle in staged kernel: true
+staged kernel with barrier-fission temporaries hits cc kernel code cache on second compile: true

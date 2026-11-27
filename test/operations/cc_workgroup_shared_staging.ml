@@ -524,4 +524,251 @@ let () =
       ]
   in
   p "validation gate: mismatched Workgroup extents across a barrier are still rejected"
-    (expect_validate_rejected ~name:"s678_vg_ext" ~shared:[ tile2 ] ~out:out2 mismatched_wg)
+    (expect_validate_rejected ~name:"s678_vg_ext" ~shared:[ tile2 ] ~out:out2 mismatched_wg);
+
+  (* === 7. Ordinary Workgroup_reduce local keeps per-lane hardware binding === *)
+  (let n = 8 in
+   let x_vals = Array.init n ~f:(fun i -> Float.of_int ((i * 7) + 3)) in
+   let x = make_node ~dims:[| n |] "wr_ord_x" in
+   let out = make_node ~dims:[| n |] "wr_ord_out" in
+   L.materialize x;
+   L.materialize out;
+   let tile = make_shared ~dims:[| n |] "wr_ord_tile" in
+   let loc_tn = make_node ~dims:[| 1 |] "wr_ord_loc" in
+   L.virtualize loc_tn;
+   let loc_id = LL.get_scope loc_tn in
+   let w1 = L.sym () and w2 = L.sym () in
+   let llc =
+     LL.unflat_lines
+       [
+         L.declare_local loc_id;
+         L.loop_n ~axis:LL.Workgroup_reduce w1 n (LL.Set_local (loc_id, L.get x [| L.iter w1 |]));
+         LL.Workgroup_barrier;
+         L.loop_n ~axis:LL.Workgroup w2 n
+           (LL.unflat_lines
+              [
+                L.set_at tile (L.iter w2) (LL.Get_local loc_id);
+                LL.Workgroup_barrier;
+                L.set_at out (L.iter w2) (L.get tile [| L.iter w2 |]);
+              ]);
+       ]
+   in
+   let got =
+     exec_handbuilt ~name:"s678_wr_ord_local" ~shared:[ tile ] ~inputs:[ (x, x_vals) ] ~out llc
+   in
+   p_all2 "ordinary Set_local in Workgroup_reduce keeps per-lane binding across barrier" got x_vals
+     ~f:Float.equal);
+
+  (* === 8. Cell-target Workgroup_reduce completes before lane-0 consumer without extra barrier
+     === *)
+  (let n = 32 in
+   let x_vals = Array.init n ~f:(fun i -> Float.of_int ((i % 7) + 1)) in
+   let x = make_node ~dims:[| n |] "wr_cell_x" in
+   let out = make_node ~dims:[| 1 |] "wr_cell_out" in
+   L.materialize x;
+   L.materialize out;
+   let acc_tile = make_shared ~dims:[| 1 |] "wr_cell_acc" in
+   let w_init = L.sym () and w_red = L.sym () and w_pub = L.sym () in
+   let llc =
+     LL.unflat_lines
+       [
+         L.loop_n ~axis:LL.Workgroup w_init n
+           (L.if_idx (L.eq (L.embed w_init) (L.ic 0)) (L.set_at acc_tile (L.fixed 0) (L.c 0.)));
+         LL.Workgroup_barrier;
+         L.loop_n ~axis:LL.Workgroup_reduce w_red n
+           (L.set_at acc_tile (L.fixed 0)
+              (L.add (L.get acc_tile [| L.fixed 0 |]) (L.get x [| L.iter w_red |])));
+         (* No extra barrier here: warp/workgroup cell collective completes before lane 0 reads. *)
+         L.loop_n ~axis:LL.Workgroup w_pub n
+           (L.if_idx
+              (L.eq (L.embed w_pub) (L.ic 0))
+              (L.set_at out (L.fixed 0) (L.get acc_tile [| L.fixed 0 |])));
+       ]
+   in
+   let got =
+     exec_handbuilt ~name:"s678_wr_cell_collective" ~shared:[ acc_tile ]
+       ~inputs:[ (x, x_vals) ]
+       ~out llc
+   in
+   let want = [| Array.fold x_vals ~init:0. ~f:( +. ) |] in
+   p_all2 "cell-target Workgroup_reduce completes before lane-0 publish without trailing barrier"
+     got want ~f:Float.equal);
+
+  (* === 9. Promoted bf16 accumulator preserves narrowing-init rounding across barrier === *)
+  (let n = 4 in
+   (* 1.00390625 = 1 + 2^-8 is bf16-exact (next bf16 after 1.0 is 1 + 2^-7 = 1.0078125; 1.00390625
+      is an exact midpoint, so 1.0 + 2^-9 = 1.001953125 rounds cleanly to 1.0 in bf16, whereas
+      unrounded f32 would stay 1.001953125). *)
+   let src_val = 1.0 +. (1.0 /. 512.0) in
+   let x_vals = Array.init n ~f:(fun _ -> src_val) in
+   let x = make_node ~dims:[| n |] "bf16_nar_x" in
+   let out = make_node ~dims:[| n |] "bf16_nar_out" in
+   L.materialize x;
+   L.materialize out;
+   let tile = make_shared ~dims:[| n |] "bf16_nar_tile" in
+   let acc_tn =
+     L.node_factory ~first_id:678900 ~prec:Ir.Ops.bfloat16 ~dims:[| 1 |] () "bf16_nar_acc"
+   in
+   L.virtualize acc_tn;
+   let acc_id = LL.get_scope acc_tn in
+   let w = L.sym () in
+   let llc =
+     L.loop_n ~axis:LL.Workgroup w n
+       (LL.unflat_lines
+          [
+            L.declare_local acc_id;
+            (* Narrowing init from f32 [x] into bf16-storage accumulator [acc_id]: rounds to 1.0
+               before widening to f32 residency. *)
+            LL.Set_local (acc_id, L.get x [| L.iter w |]);
+            L.set_at tile (L.iter w) (L.c 2.0);
+            LL.Workgroup_barrier;
+            (* Self-update keeps f32 residency: 1.0 + 2.0 = 3.0 (not 3.001953125). *)
+            LL.Set_local
+              ( acc_id,
+                LL.Binop
+                  ( Ir.Ops.Add,
+                    (LL.Get_local acc_id, Ir.Ops.bfloat16),
+                    (L.get tile [| L.iter w |], Ir.Ops.bfloat16) ) );
+            L.set_at out (L.iter w) (LL.Get_local acc_id);
+          ])
+   in
+   let got =
+     exec_handbuilt ~name:"s678_bf16_narrow_init" ~shared:[ tile ] ~inputs:[ (x, x_vals) ] ~out llc
+   in
+   let want = Array.create ~len:n 3.0 in
+   p_all2 "promoted bf16 accumulator preserves narrowing-init rounding across barrier" got want
+     ~f:Float.equal);
+
+  (* === 10. Skipped conditional barrier on narrower Grid does NOT insert phantom barrier === *)
+  (let ng = 4 and ng_inner = 2 and nw = 8 in
+   let x_vals = Array.init nw ~f:(fun i -> Float.of_int ((i * 3) + 5)) in
+   let x = make_node ~dims:[| nw |] "cond_b_x" in
+   let out = make_node ~dims:[| ng; nw |] "cond_b_out" in
+   L.materialize x;
+   L.materialize out;
+   let tile = make_shared ~dims:[| nw |] "cond_b_tile" in
+   let g1 = L.sym () and w1 = L.sym () in
+   let g2 = L.sym () and w2 = L.sym () in
+   let g3 = L.sym () and w3 = L.sym () in
+   let shifted =
+     LL.Binop
+       ( Ir.Ops.Mod,
+         ( LL.Binop (Ir.Ops.Add, (L.embed w3, Ir.Ops.index_prec ()), (L.ic 1, Ir.Ops.index_prec ())),
+           Ir.Ops.index_prec () ),
+         (L.ic nw, Ir.Ops.index_prec ()) )
+   in
+   (* Groups 0..1 hit the barrier in the middle nest; groups 2..3 skip the middle nest completely
+      and therefore have NO barrier between writing [tile] and reading [tile[(w+1)%nw]]. *)
+   let llc =
+     LL.unflat_lines
+       [
+         L.loop_n ~axis:LL.Grid g1 ng
+           (L.loop_n ~axis:LL.Workgroup w1 nw (L.set_at tile (L.iter w1) (L.get x [| L.iter w1 |])));
+         L.loop_n ~axis:LL.Grid g2 ng_inner (L.loop_n ~axis:LL.Workgroup w2 nw LL.Workgroup_barrier);
+         L.loop_n ~axis:LL.Grid g3 ng
+           (L.loop_n ~axis:LL.Workgroup w3 nw
+              (L.set out
+                 [| L.iter g3; L.iter w3 |]
+                 (LL.Get_dynamic
+                    {
+                      tn = tile;
+                      idcs = [| L.fixed 0 |];
+                      dyn_axis = 0;
+                      dyn_value = (shifted, Ir.Ops.index_prec ());
+                    })));
+       ]
+   in
+   let want_row = Array.init nw ~f:(fun w -> x_vals.((w + 1) % nw)) in
+   in_leg ~leg:cc_leg
+     "negative control: skipped barrier on narrower Grid does not synchronize unguarded groups"
+     (fun label ->
+       let got =
+         exec_handbuilt ~name:"s678_cond_barrier" ~shared:[ tile ] ~inputs:[ (x, x_vals) ] ~out llc
+       in
+       let active_mismatches =
+         List.sum
+           (module Int)
+           (List.init ng_inner ~f:Fn.id)
+           ~f:(fun g ->
+             List.count (List.init nw ~f:Fn.id) ~f:(fun w ->
+                 not (Float.equal got.((g * nw) + w) want_row.(w))))
+       in
+       let skipped_nans =
+         List.sum
+           (module Int)
+           (List.init (ng - ng_inner) ~f:(fun d -> ng_inner + d))
+           ~f:(fun g ->
+             List.count (List.init nw ~f:Fn.id) ~f:(fun w -> Float.is_nan got.((g * nw) + w)))
+       in
+       Stdio.eprintf
+         "cc_workgroup_shared_staging: cond_barrier active_mismatches=%d skipped_nans=%d (not part \
+          of the golden)\n"
+         active_mismatches skipped_nans;
+       p label (active_mismatches = 0 && skipped_nans > 0)));
+
+  (* === 11. Tensor labeled "memset" compiles and runs cleanly in a staged cc kernel === *)
+  (let n = 4 in
+   let x_vals = Array.init n ~f:(fun i -> Float.of_int ((i * 2) + 1)) in
+   let x = make_node ~dims:[| n |] "memset" in
+   let out = make_node ~dims:[| n |] "memset_out" in
+   L.materialize x;
+   L.materialize out;
+   let tile = make_shared ~dims:[| n |] "memset_tile" in
+   let w = L.sym () in
+   let llc =
+     L.loop_n ~axis:LL.Workgroup w n
+       (LL.unflat_lines
+          [
+            L.set_at tile (L.iter w) (L.get x [| L.iter w |]);
+            LL.Workgroup_barrier;
+            L.set_at out (L.iter w) (L.get tile [| L.iter w |]);
+          ])
+   in
+   let got =
+     exec_handbuilt ~name:"s678_memset_label" ~shared:[ tile ] ~inputs:[ (x, x_vals) ] ~out llc
+   in
+   p_all2 "tensor labeled memset compiles and matches oracle in staged kernel" got x_vals
+     ~f:Float.equal);
+
+  (* === 12. Repeated compilation of staged kernel with minted temporaries hits cc kernel cache
+     === *)
+  in_leg ~leg:cc_leg
+    "staged kernel with barrier-fission temporaries hits cc kernel code cache on second compile"
+    (fun label ->
+      Ir.Kernel_code_cache.with_cold_caches (fun () ->
+          let n = 8 in
+          let x_vals = Array.init n ~f:(fun i -> Float.of_int (i + 1)) in
+          let build_and_run tag =
+            let x = make_node ~dims:[| n |] (tag ^ "_x") in
+            let out = make_node ~dims:[| n |] (tag ^ "_out") in
+            L.materialize x;
+            L.materialize out;
+            let tile = make_shared ~dims:[| n |] (tag ^ "_tile") in
+            let loc_tn = make_node ~dims:[| 1 |] (tag ^ "_loc") in
+            L.virtualize loc_tn;
+            let loc_id = LL.get_scope loc_tn in
+            let w = L.sym () in
+            let llc =
+              L.loop_n ~axis:LL.Workgroup w n
+                (LL.unflat_lines
+                   [
+                     L.declare_local loc_id;
+                     LL.Set_local (loc_id, L.get x [| L.iter w |]);
+                     L.set_at tile (L.iter w) (L.get x [| L.iter w |]);
+                     LL.Workgroup_barrier;
+                     L.set_at out (L.iter w)
+                       (L.add (LL.Get_local loc_id) (L.get tile [| L.iter w |]));
+                   ])
+            in
+            exec_handbuilt ~name:"s678_cache_hit" ~shared:[ tile ] ~inputs:[ (x, x_vals) ] ~out llc
+          in
+          let got1, cost1 = Ir.Compile_cost.with_census (fun () -> build_and_run "kc1") in
+          let got2, cost2 = Ir.Compile_cost.with_census (fun () -> build_and_run "kc2") in
+          let want = Array.map x_vals ~f:(fun v -> 2.0 *. v) in
+          let mm1 = Array.counti got1 ~f:(fun i v -> not (Float.equal v want.(i))) in
+          let mm2 = Array.counti got2 ~f:(fun i v -> not (Float.equal v want.(i))) in
+          p label
+            (mm1 = 0 && mm2 = 0
+            && cost1.Ir.Compile_cost.kernels_compiled = 1
+            && cost2.Ir.Compile_cost.kernels_compiled = 0
+            && cost2.Ir.Compile_cost.kernels_reused = 1)))

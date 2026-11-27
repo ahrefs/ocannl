@@ -1012,7 +1012,7 @@ let claim_projection_store_refused =
 
 let claim_staged_form_renders =
   "the sound single-lane form — per-lane cells combined under lane-selecting guards and a plain \
-   pinned final store — is not a race: it renders (GPU) or the barrier it needs is rejected (CPU)"
+   pinned final store — is not a race: it renders and matches the sum on GPU and CPU"
 
 let claim_dead_loop_renders =
   "a self-update inside a dead inner loop (to_ < from_) beside a sibling performs no accesses: the \
@@ -1286,7 +1286,8 @@ let () =
   (* The sound single-lane form, in miniature: a workgroup-shared tile of per-lane cells, each lane
      writing its own cell, a barrier, and lane 0 combining the first two cells with a PLAIN pinned
      store into the device cell. Every store separates the lane (the tile's by its index, the device
-     cell's by the pin), so the hardware binding renders it; the C backends reject the barrier. *)
+     cell's by the pin), so both the GPU hardware binding and cc's serial barrier-fission lowering
+     (gh-ocannl-678) render and execute it. *)
   let tile =
     Tn.create (Tn.Specified single) ~id:999007 ~label:[ "race_tile" ]
       ~unpadded_dims:(lazy [| n |])
@@ -1311,14 +1312,11 @@ let () =
     { opt with workgroup_shared = Set.add opt.workgroup_shared tile }
   in
   host_query ~into:host_renders ~name:"race_staged_wshfl" ~transform:staged_transform hs;
-  if on_gpu then
+  if on_gpu || on_cpu then
     p_close claim_staged_form_renders
       [| (run_values ~name:"race_staged_wshfl" ~transform:staged_transform hs).(0) |]
       [| gv.(0) +. gv.(1) |]
       ~tol
-  else if on_cpu then
-    p claim_staged_form_renders
-      (Option.is_some (refused ~name:"race_staged_wshfl" ~transform:staged_transform hs))
   else skipped claim_staged_form_renders;
   (* A dead inner loop performs no accesses: the sibling body with its self-update inside a [to_ <
      from_] loop is not a race, and renders as the sibling store alone. *)
