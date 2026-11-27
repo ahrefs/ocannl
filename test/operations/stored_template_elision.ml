@@ -225,6 +225,39 @@ let case_precision_dependent_gate () =
   p "precision-dependent gate: the operand behind it is kept"
     (Option.equal Int.equal (template_count ctx v ~f:(read_of gx)) (Some 1))
 
+let case_gate_precision_contracts () =
+  let run ~name ~prec rhs ~first ~second ~expected =
+    let dims = [| dim |] in
+    let node = node_factory ~prec ~first_id:6470 ~dims () in
+    let x = node (name ^ "_x") and y = node (name ^ "_y") and out = node (name ^ "_out") in
+    List.iter [ x; y; out ] ~f:materialize;
+    let s = sym () in
+    let i = [| iter s |] in
+    let code = loop_n s dim (set out i (rhs (get x i) (get y i))) in
+    let o = optimize ~name code in
+    let values = execute ~name o ~seed:[ (x, first); (y, second) ] ~read:[ out ] in
+    Array.equal Float.equal (List.hd_exn values) expected
+  in
+  let gate rhs = binop_own Ir.Ops.Relu_gate (c 0.) rhs in
+  let odd = Array.init dim ~f:(fun i -> Float.of_int ((2 * i) + 3)) in
+  let inputs = Array.init dim ~f:(fun i -> Float.of_int (i + 1)) in
+  p "a shut real-valued gate still promotes the surrounding integer division"
+    (run ~name:"sts_gate_integer" ~prec:Ir.Ops.int32 ~first:odd ~second:inputs ~expected:odd
+       (fun x y ->
+         let sin_y = LL.apply_op (Ir.Ops.Unop Ir.Ops.Sin) [| y |] in
+         mul_own (binop_own Ir.Ops.Div (add_own x (gate sin_y)) (c 2.)) (c 2.)));
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.narrow_compute_f32 = true })
+    (fun () ->
+      let small = Array.init dim ~f:(fun i -> Float.of_int (i + 1) *. 0x1p-13) in
+      p "a shut RNG conversion still pins the live half arithmetic to the store width"
+        (run ~name:"sts_gate_rng" ~prec:Ir.Ops.half ~first:inputs ~second:small
+           ~expected:(Array.create ~len:dim 0.) (fun x y ->
+             let draw =
+               LL.Unop (Ir.Ops.Uint4x32_to_prec_uniform1, (LL.Constant_bits (-1L), Ir.Ops.uint4x32))
+             in
+             binop_own Ir.Ops.Sub (add_own (add_own x y) (gate draw)) x)))
+
 let case_provenance () =
   let build () =
     let gflag = mk ~dims:[| 1 |] "gflag" and extra = mk "extra" and ell = mk "pell" in
@@ -1394,6 +1427,7 @@ let () =
   case_provenance ();
   case_gate ();
   case_precision_dependent_gate ();
+  case_gate_precision_contracts ();
   case_kept_loop ();
   case_live_code ();
   case_consumer_decided ~label:"consumer where 1 x v" ~tag:"c1" (fun _ ~x ~v -> where_ (ic 1) x v);

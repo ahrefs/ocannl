@@ -936,6 +936,58 @@ let operand_eval_precisions ~eval (op : Ops.op) precs =
       else match op with Ops.Where -> [| p1; eval; eval |] | _ -> [| p1; p2; p3 |])
   | _ -> invalid_arg "Low_level.operand_eval_precisions: invalid number of operands"
 
+let rec float_valued (llsc : scalar_t) =
+  match llsc with
+  | Unop (op, (v, _)) -> (
+      match Ops.unop_integer_valuation op with
+      | Real_valued -> true
+      | Follows_operands -> float_valued v
+      | Truth | Integer_only | Projection | Integer_table -> false)
+  | Binop (op, (v1, _), (v2, _)) -> (
+      match Ops.binop_integer_valuation op with
+      | Real_valued -> true
+      | Follows_operands -> float_valued v1 || float_valued v2
+      | Projection -> (
+          match Ops.binop_conditionality op with
+          | Only_first -> float_valued v1
+          | Only_second -> float_valued v2
+          | Both_operands | Gated_second -> false)
+      | Truth | Integer_only | Integer_table -> false)
+  | Ternop (op, (v1, _), (v2, _), (v3, _)) -> (
+      match (Ops.ternop_integer_valuation op, op) with
+      | Follows_operands, Ops.Where -> float_valued v2 || float_valued v3
+      | Follows_operands, _ -> float_valued v1 || float_valued v2 || float_valued v3
+      | Real_valued, _ -> true
+      | (Truth | Integer_only | Projection | Integer_table), _ -> false)
+  | Local_scope _ | Get _ | Get_local _ | Get_dynamic _ | Get_merge_buffer _ | Constant _
+  | Constant_bits _ | Embed_index _ ->
+      false
+
+(* The RNG lane conversions pick both their result type and which of the 128 random bits they
+   consume from the precision they are rendered at ([uint4x32_to_fp8_uniform_lane] is a different
+   generator from [uint4x32_to_single_uniform_lane], not a rounding of it), so an expression
+   carrying one renders at its target's storage precision. Anywhere in the expression, not just at
+   its root: a narrow uniform is routinely consumed by further arithmetic. Not descended into
+   [Local_scope], whose body renders at its own scope precision. Shared by [C_syntax]'s storage pin
+   and [Schedule.Privatize]'s tile precision ({!accum_update_widens}). *)
+let is_rng_conversion (llsc : scalar_t) =
+  match llsc with
+  | Binop (Ops.Uint4x32_to_prec_uniform_lane, _, _) | Unop (Ops.Uint4x32_to_prec_uniform1, _) ->
+      true
+  | _ -> false
+
+let rec mentions_rng_conversion (llsc : scalar_t) =
+  is_rng_conversion llsc
+  ||
+  match llsc with
+  | Ternop (_, (a, _), (b, _), (c, _)) ->
+      mentions_rng_conversion a || mentions_rng_conversion b || mentions_rng_conversion c
+  | Binop (_, (a, _), (b, _)) -> mentions_rng_conversion a || mentions_rng_conversion b
+  | Unop (_, (a, _)) -> mentions_rng_conversion a
+  | Local_scope _ | Get _ | Get_local _ | Get_dynamic _ | Get_merge_buffer _ | Constant _
+  | Constant_bits _ | Embed_index _ ->
+      false
+
 (* gh-ocannl-1739: the operand an arm that is never evaluated becomes -- a decided [Where]'s dead
    arm, a shut gate's gated operand. Annotated at the [Constant]'s own precision, which describes it
    in every slot (the renderer evaluates a homogeneous slot at the slot's precision, whatever the
@@ -956,34 +1008,39 @@ let gate_shut ~decided ~prec op ((value, _) as gate) =
         (Some false)
   | _ -> false
 
-(* Evaluation precision follows the slot, not the annotation on a homogeneous operand. *)
+(* A shut operand can still type the gate's integer arithmetic or pin an entire store to its storage
+   width. Visit the operand normally when erasing it would lose either property. *)
+let preserves_gate_types ((a, _) : scalar_arg) ((b, _) : scalar_arg) =
+  ((not (float_valued b)) || float_valued a)
+  && ((not (mentions_rng_conversion b)) || mentions_rng_conversion a)
+
 let walk_scalar_operands ~decided ~prec ~walk (value : scalar_t) =
   let at prec (value, ann) = (walk ~prec value, ann) in
-  let own ((_, ann) as arg) = at ann arg in
   match value with
-  | Ternop (Ops.Where, condition, yes, no) -> (
-      let condition = own condition in
-      match decided condition with
-      | Some true -> Ternop (Ops.Where, condition, at prec yes, elided_operand)
-      | Some false -> Ternop (Ops.Where, condition, elided_operand, at prec no)
-      | None ->
-          let yes = at prec yes in
-          let no = at prec no in
-          Ternop (Ops.Where, condition, yes, no))
-  | Ternop (op, a, b, c) ->
-      let arg = if Ops.is_homogeneous_prec_ternop op then at prec else own in
-      let a = arg a in
-      let b = arg b in
-      let c = arg c in
+  | Ternop (op, ((_, pa) as a), ((_, pb) as b), ((_, pc) as c)) ->
+      let slots = operand_eval_precisions ~eval:prec (Ops.Ternop op) [| pa; pb; pc |] in
+      let a = at slots.(0) a in
+      let selection = match op with Ops.Where -> decided (fst a, slots.(0)) | _ -> None in
+      let b, c =
+        match selection with
+        | Some true -> (at slots.(1) b, elided_operand)
+        | Some false -> (elided_operand, at slots.(2) c)
+        | None ->
+            let b = at slots.(1) b in
+            (b, at slots.(2) c)
+      in
       Ternop (op, a, b, c)
-  | Binop (op, a, b) ->
-      let arg = if Ops.is_homogeneous_prec_binop op then at prec else own in
-      let a = arg a in
-      let b = if gate_shut ~decided ~prec op a then elided_operand else arg b in
+  | Binop (op, ((_, pa) as a), ((_, pb) as b)) ->
+      let slots = operand_eval_precisions ~eval:prec (Ops.Binop op) [| pa; pb |] in
+      let a = at slots.(0) a in
+      let b =
+        if gate_shut ~decided ~prec:slots.(0) op a && preserves_gate_types a b then elided_operand
+        else at slots.(1) b
+      in
       Binop (op, a, b)
   | Unop (op, ((_, ann) as a)) ->
-      let arg_prec = if Ops.is_homogeneous_prec_unop op then prec else ann in
-      Unop (op, at arg_prec a)
+      let slots = operand_eval_precisions ~eval:prec (Ops.Unop op) [| ann |] in
+      Unop (op, at slots.(0) a)
   | _ -> value
 
 let neutral_scalar prec op =
@@ -5991,33 +6048,6 @@ and substitute_proc ~var ~value llc =
   | Tile_mma ({ fallback; _ } as tm) -> Tile_mma { tm with fallback = loop_proc fallback }
   | If { cond = c, prec; body } -> If { cond = (loop_scalar c, prec); body = loop_proc body }
 
-let rec float_valued (llsc : scalar_t) =
-  match llsc with
-  | Unop (op, (v, _)) -> (
-      match Ops.unop_integer_valuation op with
-      | Real_valued -> true
-      | Follows_operands -> float_valued v
-      | Truth | Integer_only | Projection | Integer_table -> false)
-  | Binop (op, (v1, _), (v2, _)) -> (
-      match Ops.binop_integer_valuation op with
-      | Real_valued -> true
-      | Follows_operands -> float_valued v1 || float_valued v2
-      | Projection -> (
-          match Ops.binop_conditionality op with
-          | Only_first -> float_valued v1
-          | Only_second -> float_valued v2
-          | Both_operands | Gated_second -> false)
-      | Truth | Integer_only | Integer_table -> false)
-  | Ternop (op, (v1, _), (v2, _), (v3, _)) -> (
-      match (Ops.ternop_integer_valuation op, op) with
-      | Follows_operands, Ops.Where -> float_valued v2 || float_valued v3
-      | Follows_operands, _ -> float_valued v1 || float_valued v2 || float_valued v3
-      | Real_valued, _ -> true
-      | (Truth | Integer_only | Projection | Integer_table), _ -> false)
-  | Local_scope _ | Get _ | Get_local _ | Get_dynamic _ | Get_merge_buffer _ | Constant _
-  | Constant_bits _ | Embed_index _ ->
-      false
-
 (** {2 Interval analysis over [scalar_t]}
 
     Phase A of docs/design/interval-analysis-scalar-t.md: [interval_of] computes machine-value
@@ -6517,7 +6547,7 @@ let try_interval_fold ~ienv ~prec (llsc : scalar_t) : scalar_t option =
 
 (* gh-ocannl-625: a stored template with its UNEVALUATED operands elided -- the arm of a [Where]
    whose condition is decided, the second operand of an [And] / [Or] / [Relu_gate] whose first
-   decides the gate shut -- each replaced by the constant [0.] at the operand's own precision. That
+   decides the gate shut and erasure preserves its numeric typing -- replaced by the constant [0.]. That
    is the whole rewrite: every operand that is evaluated, conditions and gates included, stays as
    captured, and an elided operand is never evaluated, so the template computes the same value in
    the same representation wherever it replays. The routine's simplify is NOT that: its interval
@@ -6828,31 +6858,6 @@ let fp_algebra_step ?eval (licence : Fp_licence.t) ((llsc, prec) : scalar_t * Op
 (* Exact canonicalization: every rewrite here preserves IEEE results. The licensed floating-point
    algebra runs once, on the raw lowering ({!Fp_algebra}, gh-ocannl-998); here [fp_algebra_step]
    runs unlicensed, which still canonicalizes integer arithmetic. *)
-(* The RNG lane conversions pick both their result type and which of the 128 random bits they
-   consume from the precision they are rendered at ([uint4x32_to_fp8_uniform_lane] is a different
-   generator from [uint4x32_to_single_uniform_lane], not a rounding of it), so an expression
-   carrying one renders at its target's storage precision. Anywhere in the expression, not just at
-   its root: a narrow uniform is routinely consumed by further arithmetic. Not descended into
-   [Local_scope], whose body renders at its own scope precision. Shared by [C_syntax]'s storage pin
-   and [Schedule.Privatize]'s tile precision ({!accum_update_widens}). *)
-let is_rng_conversion (llsc : scalar_t) =
-  match llsc with
-  | Binop (Ops.Uint4x32_to_prec_uniform_lane, _, _) | Unop (Ops.Uint4x32_to_prec_uniform1, _) ->
-      true
-  | _ -> false
-
-let rec mentions_rng_conversion (llsc : scalar_t) =
-  is_rng_conversion llsc
-  ||
-  match llsc with
-  | Ternop (_, (a, _), (b, _), (c, _)) ->
-      mentions_rng_conversion a || mentions_rng_conversion b || mentions_rng_conversion c
-  | Binop (_, (a, _), (b, _)) -> mentions_rng_conversion a || mentions_rng_conversion b
-  | Unop (_, (a, _)) -> mentions_rng_conversion a
-  | Local_scope _ | Get _ | Get_local _ | Get_dynamic _ | Get_merge_buffer _ | Constant _
-  | Constant_bits _ | Embed_index _ ->
-      false
-
 let rec rendered_store_prec ~comp_prec ~store_prec (llsc : scalar_t) =
   match llsc with
   | Get _ | Get_dynamic _ | Get_merge_buffer _ | Get_local _ | Local_scope _ | Constant _

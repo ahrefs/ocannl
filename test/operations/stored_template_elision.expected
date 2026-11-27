@@ -18,6 +18,8 @@ gate: executed values are the live operand's: true
 gate: the deferred reading agrees with the materialized one: true
 precision-dependent gate: routine A defers v: true
 precision-dependent gate: the operand behind it is kept: true
+a shut real-valued gate still promotes the surrounding integer division: true
+a shut RNG conversion still pins the live half arithmetic to the store width: true
 kept loop: routine A defers v: true
 kept loop: the reduction extent folded the guard at store time: true
 kept loop: consuming v in a later routine is legal: true

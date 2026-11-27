@@ -339,6 +339,7 @@
   (alias runtest-schedule_strided_1x1)
   (alias runtest-scope_collapse_rounding)
   (alias runtest-sketch_family_tree)
+  (alias runtest-stored_template_elision)
   (alias runtest-tf32_fissioned_epilogue)
   (alias runtest-tile_mma_forced_decline)
   (alias runtest-tile_mma_narrow)
@@ -16761,6 +16762,7 @@
   stdio
   arrayjit.verdict
   ll_test
+  test_utils
   arrayjit.ir
   arrayjit.utils
   arrayjit.context)
