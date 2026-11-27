@@ -1591,18 +1591,26 @@ let observe_refused_run ~source output = Hashtbl.add_multi refused_runs ~key:sou
     evidence, however many sibling runs do. *)
 let claim_runs = Hashtbl.create (module String)
 
+let evidence_claims = Hashtbl.create (module String)
 let claim_key ~source ~claim = source ^ "\n" ^ claim
 
 (** [attribute ~source ~claim outputs]: of [outputs], the captured output of child runs exactly as
     {!observe_refused_run} was handed them, those of runs [source]'s scanner refused are [claim]'s
     -- the runs it asserts on. An output no refused run produced (a run that passed, or one an
     exception stopped) attributes nothing. Call it beside the [Verdict] claim it names, with the
-    claim's own label. *)
-let attribute ~source ~claim outputs =
+    claim's own label. An evidence attribution must name an entry for this scan in
+    [raw_direct_evidence]. [offer] explicitly bootstraps a new entry; ordinary Verdict labels,
+    direct observations, and offered labels are outside the evidence-label check. *)
+let attribute ?(offer = false) ~source ~claim outputs =
   let refused = Hashtbl.find_multi refused_runs source in
   List.iter outputs ~f:(fun output ->
-      if List.mem refused output ~equal:String.equal then
-        Hashtbl.add_multi claim_runs ~key:(claim_key ~source ~claim) ~data:output)
+      if List.mem refused output ~equal:String.equal then (
+        if not offer then
+          Hash_set.add
+            (Hashtbl.find_or_add evidence_claims source ~default:(fun () ->
+                 Hash_set.create (module String)))
+            claim;
+        Hashtbl.add_multi claim_runs ~key:(claim_key ~source ~claim) ~data:output))
 
 (** The refusal lines of the runs attributed to [claim] of [source]. *)
 let claim_lines ~source claim =
@@ -1648,13 +1656,13 @@ let with_tree files f =
     refused: exited 1, as Verdict ends a run with a failed check -- not 2, which is a run an
     exception stopped early. [claim] is the label of the [Verdict] claim this answers, which is the
     call this one is the argument of. *)
-let refuses ~source ~claim ~exe args =
+let refuses ?offer ~source ~claim ~exe args =
   let ((status, _, _) as run) = Fresh_process.run ~exe args in
   let refused = Poly.equal status (Unix.WEXITED 1) in
   if refused then (
     let output = Fresh_process.output run in
     observe_refused_run ~source output;
-    attribute ~source ~claim [ output ])
+    attribute ?offer ~source ~claim [ output ])
   else Fresh_process.report ~label:source run;
   refused
 
@@ -1965,6 +1973,18 @@ let parse_offer line =
     as a refusal that never ran (gh-ocannl-1499), and a run with no failed check writes no such
     line. *)
 let print_section ~source ~expected diagnostics =
+  let known =
+    List.filter_map direct_evidence ~f:(fun (key, claim) ->
+        Option.some_if (String.is_prefix key ~prefix:(source ^ ":")) (evidence_label claim))
+    |> Set.of_list (module String)
+  in
+  Option.iter (Hashtbl.find evidence_claims source) ~f:(fun attributed ->
+      Hash_set.to_list attributed |> List.sort ~compare:String.compare
+      |> List.iter ~f:(fun claim ->
+          if not (Set.mem known claim) then
+            Verdict.fail
+              (Printf.sprintf "%s attributes refusal evidence to %S, but no evidence entry names it"
+                 source claim)));
   let passed_labels = ref (Verdict.passed_labels ()) in
   let not_printed marker reason =
     eprintf "%s%s -- %s\n" Refusal_section_heads.not_printed_head marker (Verdict.one_line reason)

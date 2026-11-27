@@ -20,6 +20,8 @@ a claim whose computed label carries line breaks reports on one line of each str
 a failing run omits the success trailer it prints only when no claim failed: true
 a failed pass_fail claim's stderr line is its stdout row behind FAIL:, bare or detailed: true
 a failing scan's ending omits the failed claim's marker and the success trailer, and only those: true
+a refusal attribution without a corresponding evidence entry fails the section: true
+a provisional refusal attribution can offer evidence: true
 a scan whose refusal no longer runs, every claim holding, exits 0 and omits that refusal's marker and only it, still ending on the section's closing row: true
 a failing scan's stderr names the failed claim behind its omitted marker, and only that: true
 a scan with no failed check writes no not-printed line: true

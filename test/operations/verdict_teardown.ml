@@ -246,6 +246,15 @@ let () =
       (* What it reads a mutant by that silences one refusal while every claim still holds: no
          failed check, so no teardown line -- only the refusal's marker missing, and the section's
          closing row still printed after it (gh-ocannl-1251, gh-ocannl-1318). *)
+      let bad_attribution = run_child "manifest_bad_attribution" in
+      about "manifest_bad_attribution"
+        "a refusal attribution without a corresponding evidence entry fails the section"
+        bad_attribution ~holds:(fun status out _ ->
+          exited 1 status && has out ~substring:"but no evidence entry names it");
+      let offered_attribution = run_child "manifest_offered_attribution" in
+      about "manifest_offered_attribution" "a provisional refusal attribution can offer evidence"
+        offered_attribution ~holds:(fun status out _ ->
+          exited 0 status && has out ~substring:"End of synthetic controls.");
       let manifest_silenced = run_child "manifest_silenced" in
       about "manifest_silenced"
         "a scan whose refusal no longer runs, every claim holding, exits 0 and omits that \
@@ -359,6 +368,15 @@ let () =
           pass_fail ~detail:(fun () -> "got 1 want 2") "detailed" false;
           (* A message ending as a claim would: still no claim (gh-ocannl-1364). *)
           fail "a message ending like a claim: false"
+      | ("manifest_bad_attribution" | "manifest_offered_attribution") as mode ->
+          let module Manifest = Test_scan.Refusal_control_manifest in
+          let source = "test/operations/verdict_teardown.ml" in
+          let output = "FAIL: the manifest refusal" in
+          Manifest.observe_refused_run ~source output;
+          Manifest.attribute
+            ~offer:(String.equal mode "manifest_offered_attribution")
+            ~source ~claim:"a control claim without an entry" [ output ];
+          manifest_ending ~first_holds:true ~refusal_runs:true
       | "manifest_held" -> manifest_ending ~first_holds:true ~refusal_runs:true
       | "manifest_failed" -> manifest_ending ~first_holds:false ~refusal_runs:true
       | "manifest_silenced" -> manifest_ending ~first_holds:true ~refusal_runs:false
