@@ -1905,6 +1905,73 @@ env -u LANG -u LC_ALL LC_CTYPE=UTF-8 "$streaks" --min-streak 2 \
 [ "$?" -eq 1 ]
 set -e
 
+# Historical vs current-stamp malformed refusal under --up-to STAMP:
+# - malformed older report (< STAMP) exits 3 ("malformed historical ...")
+# - malformed current STAMP report exits 2 even when an older report is also
+#   malformed (current report validated first).
+mkdir -p "$tmp/streaks/hist-err"
+printf 'corrupted old report\n' >"$tmp/streaks/hist-err/20261124T050000Z-bypass-rates.txt"
+cp "$tmp/streaks/bypass-hit-1.txt" "$tmp/streaks/hist-err/20261125T050000Z-bypass-rates.txt"
+set +e
+hist_err=$("$streaks" --bypass-logs-dir "$tmp/streaks/hist-err" --up-to 20261125T050000Z 2>&1 >/dev/null)
+hist_rc=$?
+set -e
+[ "$hist_rc" -eq 3 ]
+grep -q '^sweep-streaks: malformed historical bypass report ' <<<"$hist_err"
+printf 'corrupted current report\n' >"$tmp/streaks/hist-err/20261125T050000Z-bypass-rates.txt"
+set +e
+cur_err=$("$streaks" --bypass-logs-dir "$tmp/streaks/hist-err" --up-to 20261125T050000Z 2>&1 >/dev/null)
+cur_rc=$?
+set -e
+[ "$cur_rc" -eq 2 ]
+grep -q '^sweep-streaks: malformed bypass report .*20261125T050000Z-bypass-rates.txt' <<<"$cur_err"
+
+# Frozen-format snapshots of the real aggregate-skips.sh and aggregate-bypasses.sh
+# report grammars (including rerun header, --unswept-box, outside-sweep owner,
+# and UNVERIFIED): catches parser/aggregator grammar drift at test time.
+cat >"$tmp/streaks/frozen-skip-1.txt" <<'FROZEN_SKIP'
+skip coverage for a1b2c3d4 (@runtest + @train + @slow; forced execution)
+red units counted after a clean serial rerun: minix/hip
+completed backends: cc, multidev_cc, metal, cuda, hip
+missing backends: <none>
+status: complete (5 of 5 known backends completed)
+result: PASS -- no claim was skipped on every known backend
+completed boxes: m4-max, minix, rog-nv
+missing boxes: <none>
+unswept declared boxes (excluded from required matrix): m4-pro
+undeclared boxes (their executions count, their absence does not): tuf
+environment status: complete (3 of 3 required sweep boxes completed)
+environment result: FAIL -- 1 claim(s) skipped on every required sweep box
+FAIL: skipped on every required sweep box: cc_temp_library_sweep.exe: frozen env claim
+outside the sweep: cc_backend_trace_name.exe: trace claim -- owned by ci-step:ci.yml:test/operations/runtest-cc_backend_trace_name:Compiler trace leg
+FROZEN_SKIP
+cp "$tmp/streaks/frozen-skip-1.txt" "$tmp/streaks/frozen-skip-2.txt"
+cat >"$tmp/streaks/frozen-bypass-1.txt" <<'FROZEN_BYPASS'
+bypass rates for a1b2c3d4 (incremental execution)
+units: m4-max/cc, m4-max/metal
+m4-max/cc: 1 of 2 hatched claim reach(es) bypassed (50%), 1 checked
+  bypassed 1 of 1 (100%): autotune_timing_modes.exe: frozen claim (mode a) [queued window contended]
+m4-max/metal: 2 of 2 hatched claim reach(es) bypassed (100%), 0 checked
+  bypassed 1 of 1 (100%): autotune_timing_modes.exe: frozen claim (mode a) [queued window contended]
+  bypassed 1 of 1 (100%): autotune_timing_modes.exe: other claim [queued window dispersed]
+result: UNVERIFIED -- 1 hatched claim(s) bypassed on every unit that reached them
+UNVERIFIED: bypassed on every unit that reached it: autotune_timing_modes.exe: frozen claim (mode a) (m4-max/cc 1 of 1, m4-max/metal 1 of 1)
+FROZEN_BYPASS
+cp "$tmp/streaks/frozen-bypass-1.txt" "$tmp/streaks/frozen-bypass-2.txt"
+set +e
+frozen_out=$("$streaks" --min-streak 2 \
+  --skip-report "$tmp/streaks/frozen-skip-1.txt" \
+  --skip-report "$tmp/streaks/frozen-skip-2.txt" \
+  --bypass-report "$tmp/streaks/frozen-bypass-1.txt" \
+  --bypass-report "$tmp/streaks/frozen-bypass-2.txt")
+frozen_rc=$?
+set -e
+[ "$frozen_rc" -eq 1 ]
+grep -qxF 'result: ALERT -- 3 streak(s) reached 2 consecutive sweeps' <<<"$frozen_out"
+grep -qxF 'STREAK: skipped on every box (2 consecutive sweeps): cc_temp_library_sweep.exe: frozen env claim' <<<"$frozen_out"
+grep -qxF 'STREAK: unit at 100% bypass (2 consecutive sweeps): m4-max/metal (2 of 2 bypassed, 0 checked)' <<<"$frozen_out"
+grep -qxF 'STREAK: UNVERIFIED bypassed claim (2 consecutive sweeps): autotune_timing_modes.exe: frozen claim (mode a) (m4-max/cc 1 of 1, m4-max/metal 1 of 1)' <<<"$frozen_out"
+
 # End-to-end sweep.sh integration in an isolated state directory:
 # 1) Nights 1 & 2 stay CLEAR under default N = 3; Night 3 alerts on both 100%-bypass
 #    unit and UNVERIFIED claim while sweep.sh still exits 0.
@@ -1956,18 +2023,42 @@ bad_streak_min_rc=$?
 set -e
 [ "$bad_streak_min_rc" -eq 2 ]
 grep -q "OCANNL_TOOL_SWEEP_STREAK_MIN must be an integer >= 2" <<<"$bad_streak_min"
-# A malformed saved report in $LOGS fails the streak check loudly (exit 2) and
-# rewrites the run record's exit kind to post-run-failed.
+# A malformed OLDER historical report in $LOGS warns loudly (exit 3 from
+# sweep-streaks.sh) and prints NOT CHECKED -- malformed history without marking
+# the sweep post-run-failed, so a grammar change in an older file never breaks
+# every subsequent nightly sweep.
 printf 'corrupted report\n' >"$streak_state/logs/20200101T000000Z-bypass-rates.txt"
-set +e
 streak_malformed=$(SWEEP_TEST_OPAM_OUT_CC=$hatch_checked run_streak_sweep --only cc 2>&1)
-streak_malformed_rc=$?
-set -e
-[ "$streak_malformed_rc" -eq 2 ]
-grep -q '^sweep: streak check failed (exit 2)$' <<<"$streak_malformed"
+grep -q '^coverage streaks: NOT CHECKED -- malformed history (.*20200101T000000Z-bypass-rates.txt.*)$' \
+  <<<"$streak_malformed"
+grep -q '^sweep: coverage streaks WARNING -- .*20200101T000000Z-bypass-rates.txt' \
+  <<<"$streak_malformed"
 streak_malformed_record=$(sed -n 's/^run:  *//p' <<<"$streak_malformed")
-[ "$(awk -F '\t' '$1 == "run" { print $8 }' "$streak_malformed_record")" = post-run-failed ]
+[ "$(awk -F '\t' '$1 == "run" { print $8 }' "$streak_malformed_record")" = complete ]
 rm -f "$streak_state/logs/20200101T000000Z-bypass-rates.txt"
+
+# By contrast, a missing/broken streak checker (exit 2) still aborts post-run
+# and rewrites the run record to post-run-failed.
+streak_missing_tools=$(cd "$(dirname "$sweep")" && pwd)
+mkdir -p "$tmp/no-streaks/tools" "$tmp/no-streaks/benchmarks"
+ln -s "$streak_missing_tools/../scripts" "$tmp/no-streaks/scripts"
+for s_sibling in "$streak_missing_tools"/*; do
+  if [ "$(basename "$s_sibling")" = sweep-streaks.sh ]; then continue; fi
+  ln -s "$s_sibling" "$tmp/no-streaks/tools/$(basename "$s_sibling")"
+done
+ln -s "$streak_missing_tools/../benchmarks/check-box.sh" "$tmp/no-streaks/benchmarks/check-box.sh"
+ln -s "$streak_missing_tools/../benchmarks/fixture_digest.py" "$tmp/no-streaks/benchmarks/fixture_digest.py"
+saved_sweep_for_streaks=$sweep
+sweep=$tmp/no-streaks/tools/sweep.sh
+set +e
+streak_missing_out=$(SWEEP_TEST_OPAM_OUT_CC=$hatch_checked run_streak_sweep --only cc 2>&1)
+streak_missing_rc=$?
+set -e
+sweep=$saved_sweep_for_streaks
+[ "$streak_missing_rc" -eq 2 ]
+grep -q '^sweep: streak checker is not executable: ' <<<"$streak_missing_out"
+streak_missing_record=$(sed -n 's/^run:  *//p' <<<"$streak_missing_out")
+[ "$(awk -F '\t' '$1 == "run" { print $8 }' "$streak_missing_record")" = post-run-failed ]
 
 # The pure aggregator's complete-matrix control is the escalation seam the real
 # sweep reaches only when both remote GPU boxes and all local units pass. All

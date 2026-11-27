@@ -32,9 +32,18 @@
 #   other files (staging files, logs, run records) are ignored.
 # Any unrecognized or truncated line, missing required section, duplicate unit
 # or claim within one report, count mismatch, unreadable file or directory, or
-# invalid option refuses the run with exit 2.
+# invalid option refuses the run: exit 2 normally (and always for the report
+# matching `--up-to STAMP`), or exit 3 when `--up-to STAMP` is given and an
+# OLDER historical report (< STAMP) is malformed so `tools/sweep.sh` can warn
+# loudly without failing every subsequent nightly sweep as `post-run-failed`.
 #
 # Streak rules (default min-streak N = 3; minimum permitted N = 2):
+# Note on cadence: N counts consecutive judged REPORTS in each family, not
+# calendar nights. Bypass-rate reports are written by every unscoped sweep
+# (daily, so N = 3 is ~3 nights); skip-coverage reports are written only by
+# forced unscoped sweeps (weekly on Sundays, so N = 3 is ~3 forced sweeps / ~3
+# weeks at the current cadence). Same-day reruns each write a report and count
+# as one sweep in that family's sequence (not collapsed by UTC date).
 # 1. `skipped on every box`: `FAIL: skipped on every declared box: ...` and
 #    `FAIL: skipped on every required sweep box: ...` normalize to one box-skip
 #    dimension so streaks spanning `--unswept-box` adoption do not split.
@@ -60,10 +69,11 @@
 #    - `result: CLEAR -- no hatched claim was reached` or `NOT AGGREGATED`:
 #      inconclusive for all claims.
 #    - `result: CLEAR -- every hatched claim reached was checked on some unit`,
-#      or `result: UNVERIFIED` not naming the claim: clears (0). Saved bypass
-#      reports do not list individually checked claims, so an incremental sweep
-#      reaching only other hatched claims conservatively clears absent claims
-#      rather than risking false positives.
+#      or `result: UNVERIFIED` not naming the claim: clears (0). Because
+#      `tools/aggregate-bypasses.sh` omits `  bypassed` detail lines when a
+#      claim has 0 bypasses (`b == 0`), a claim that ran and was 100% checked
+#      appears nowhere in the detail lines either; treating absence from detail
+#      lines as inconclusive would fail to clear streaks across 0%-bypass nights.
 # Activation: a streak is flagged only when the LATEST report in that family is
 # itself a hit for the item and its trailing judged streak is >= N. Intervening
 # inconclusive reports neither advance nor reset a streak, and a run that did
@@ -82,7 +92,10 @@
 #     [--skip-report FILE]... [--bypass-report FILE]...
 #
 # Exit 0 when no streak reached min-streak (or no reports were supplied);
-# 1 when one or more streaks reached min-streak; 2 on malformed input or error.
+# 1 when one or more streaks reached min-streak; 2 on CLI/I/O error or a
+# malformed report (including the `--up-to STAMP` report itself); 3 when
+# `--up-to STAMP` is given and only an older historical report (< STAMP) is
+# malformed.
 
 set -uo pipefail
 # Name a locale before any subshell forks (gh-ocannl-2002, gh-ocannl-2462, gh-ocannl-2484).
@@ -92,10 +105,22 @@ exec perl -e '
 use strict;
 use warnings;
 
+our $MALFORMED_EXIT = 2;
+our $MALFORMED_KIND = "";
+
 sub die_input {
   my ($msg) = @_;
   print STDERR "sweep-streaks: $msg\n";
   exit 2;
+}
+
+sub die_malformed {
+  my ($msg) = @_;
+  if ($MALFORMED_KIND ne "") {
+    $msg =~ s/^malformed /malformed $MALFORMED_KIND /;
+  }
+  print STDERR "sweep-streaks: $msg\n";
+  exit $MALFORMED_EXIT;
 }
 
 sub write_line {
@@ -187,15 +212,23 @@ sub discover_reports {
     push @matches, [$stamp, $full];
   }
   closedir($dh);
-  return map { $_->[1] } sort { $a->[0] cmp $b->[0] } @matches;
+  return map { { path => $_->[1], stamp => $_->[0] } } sort { $a->[0] cmp $b->[0] } @matches;
 }
 
+my @skip_items;
+my @bypass_items;
 if (defined $skip_logs_dir) {
-  @skip_reports = discover_reports($skip_logs_dir, "-skip-coverage.txt", $up_to);
+  @skip_items = discover_reports($skip_logs_dir, "-skip-coverage.txt", $up_to);
+} else {
+  @skip_items = map { { path => $_, stamp => undef } } @skip_reports;
 }
 if (defined $bypass_logs_dir) {
-  @bypass_reports = discover_reports($bypass_logs_dir, "-bypass-rates.txt", $up_to);
+  @bypass_items = discover_reports($bypass_logs_dir, "-bypass-rates.txt", $up_to);
+} else {
+  @bypass_items = map { { path => $_, stamp => undef } } @bypass_reports;
 }
+@skip_reports   = map { $_->{path} } @skip_items;
+@bypass_reports = map { $_->{path} } @bypass_items;
 
 sub read_lines {
   my ($path) = @_;
@@ -212,7 +245,7 @@ sub read_lines {
 sub parse_skip_report {
   my ($path) = @_;
   my $lines = read_lines($path);
-  @$lines > 0 or die_input("malformed skip report $path: empty file");
+  @$lines > 0 or die_malformed("malformed skip report $path: empty file");
 
   my $phase = "header";
   my ($seen_header_for, $seen_rerun) = (0, 0);
@@ -227,12 +260,12 @@ sub parse_skip_report {
     $lno++;
     if ($phase eq "header") {
       if ($line =~ /^skip coverage for [0-9a-f]+ \(.+; forced execution\)$/) {
-        die_input("malformed skip report $path:$lno: duplicate header") if $seen_header_for || $seen_rerun;
+        die_malformed("malformed skip report $path:$lno: duplicate header") if $seen_header_for || $seen_rerun;
         $seen_header_for = 1;
         next;
       }
       if ($line =~ /^red units counted after a clean serial rerun: .+$/) {
-        die_input("malformed skip report $path:$lno: duplicate rerun header") if $seen_rerun;
+        die_malformed("malformed skip report $path:$lno: duplicate rerun header") if $seen_rerun;
         $seen_rerun = 1;
         next;
       }
@@ -241,7 +274,7 @@ sub parse_skip_report {
         $phase = "backend_meta";
         next;
       }
-      die_input("malformed skip report $path:$lno: unexpected line before completed backends");
+      die_malformed("malformed skip report $path:$lno: unexpected line before completed backends");
     }
 
     if ($phase eq "backend_meta") {
@@ -276,30 +309,30 @@ sub parse_skip_report {
           next;
         }
         if ($b_status eq "partial" && $line =~ /^result: POTENTIAL -- ([0-9]+) claim\(s\) skipped on every completed backend; .+$/) {
-          die_input("malformed skip report $path:$lno: POTENTIAL count must be >= 1") unless $1 >= 1;
+          die_malformed("malformed skip report $path:$lno: POTENTIAL count must be >= 1") unless $1 >= 1;
           $b_result = "POTENTIAL";
           $b_expected = int($1);
           $phase = "backend_findings";
           next;
         }
       }
-      die_input("malformed skip report $path:$lno: unexpected backend metadata line");
+      die_malformed("malformed skip report $path:$lno: unexpected backend metadata line");
     }
 
     if ($phase eq "backend_findings") {
       if ($b_result eq "FAIL" && $line =~ /^FAIL: skipped on every known backend: (.+)$/) {
         my $claim = $1;
-        die_input("malformed skip report $path:$lno: duplicate backend FAIL claim") if $b_fail{$claim}++;
+        die_malformed("malformed skip report $path:$lno: duplicate backend FAIL claim") if $b_fail{$claim}++;
         $b_count++;
         next;
       }
       if ($b_result eq "POTENTIAL" && $line =~ /^POTENTIAL: skipped on every completed backend: (.+)$/) {
         my $claim = $1;
-        die_input("malformed skip report $path:$lno: duplicate backend POTENTIAL claim") if $b_pot{$claim}++;
+        die_malformed("malformed skip report $path:$lno: duplicate backend POTENTIAL claim") if $b_pot{$claim}++;
         $b_count++;
         next;
       }
-      die_input("malformed skip report $path:$lno: backend finding count mismatch (expected $b_expected, got $b_count)")
+      die_malformed("malformed skip report $path:$lno: backend finding count mismatch (expected $b_expected, got $b_count)")
         unless $b_count == $b_expected;
       $phase = "after_backend";
       # fall through to handle this line in after_backend
@@ -315,7 +348,7 @@ sub parse_skip_report {
         $phase = "outside";
         next;
       }
-      die_input("malformed skip report $path:$lno: unexpected line after backend section");
+      die_malformed("malformed skip report $path:$lno: unexpected line after backend section");
     }
 
     if ($phase eq "env_meta") {
@@ -354,7 +387,7 @@ sub parse_skip_report {
         }
         if ($e_status eq "complete" &&
             $line =~ /^environment result: FAIL -- ([0-9]+) claim\(s\) skipped on (every declared box|every required sweep box)$/) {
-          die_input("malformed skip report $path:$lno: environment FAIL count must be >= 1") unless $1 >= 1;
+          die_malformed("malformed skip report $path:$lno: environment FAIL count must be >= 1") unless $1 >= 1;
           $e_result = "FAIL";
           $e_expected = int($1);
           $e_box_every = $2;
@@ -368,30 +401,30 @@ sub parse_skip_report {
         }
         if ($e_status eq "partial" &&
             $line =~ /^environment result: POTENTIAL -- ([0-9]+) claim\(s\) skipped on every completed box; .+$/) {
-          die_input("malformed skip report $path:$lno: environment POTENTIAL count must be >= 1") unless $1 >= 1;
+          die_malformed("malformed skip report $path:$lno: environment POTENTIAL count must be >= 1") unless $1 >= 1;
           $e_result = "POTENTIAL";
           $e_expected = int($1);
           $phase = "env_findings";
           next;
         }
       }
-      die_input("malformed skip report $path:$lno: unexpected environment metadata line");
+      die_malformed("malformed skip report $path:$lno: unexpected environment metadata line");
     }
 
     if ($phase eq "env_findings") {
       if ($e_result eq "FAIL" && $line =~ /^FAIL: skipped on \Q$e_box_every\E: (.+)$/) {
         my $claim = $1;
-        die_input("malformed skip report $path:$lno: duplicate environment FAIL claim") if $e_fail{$claim}++;
+        die_malformed("malformed skip report $path:$lno: duplicate environment FAIL claim") if $e_fail{$claim}++;
         $e_count++;
         next;
       }
       if ($e_result eq "POTENTIAL" && $line =~ /^POTENTIAL: skipped on every completed box: (.+)$/) {
         my $claim = $1;
-        die_input("malformed skip report $path:$lno: duplicate environment POTENTIAL claim") if $e_pot{$claim}++;
+        die_malformed("malformed skip report $path:$lno: duplicate environment POTENTIAL claim") if $e_pot{$claim}++;
         $e_count++;
         next;
       }
-      die_input("malformed skip report $path:$lno: environment finding count mismatch (expected $e_expected, got $e_count)")
+      die_malformed("malformed skip report $path:$lno: environment finding count mismatch (expected $e_expected, got $e_count)")
         unless $e_count == $e_expected;
       $phase = "outside";
       # fall through to handle this line in outside
@@ -401,19 +434,19 @@ sub parse_skip_report {
       if ($line =~ /^outside the sweep: .+ -- (?:owned by .+|owner not recorded \(a swept commit predating gh-ocannl-926\))$/) {
         next;
       }
-      die_input("malformed skip report $path:$lno: unexpected trailing line");
+      die_malformed("malformed skip report $path:$lno: unexpected trailing line");
     }
   }
 
-  die_input("malformed skip report $path: missing backend result") unless defined $b_result;
+  die_malformed("malformed skip report $path: missing backend result") unless defined $b_result;
   if ($b_result eq "FAIL" || $b_result eq "POTENTIAL") {
-    die_input("malformed skip report $path: backend finding count mismatch (expected $b_expected, got $b_count)")
+    die_malformed("malformed skip report $path: backend finding count mismatch (expected $b_expected, got $b_count)")
       unless $b_count == $b_expected;
   }
   if ($seen_comp_e) {
-    die_input("malformed skip report $path: incomplete environment section") unless defined $e_result;
+    die_malformed("malformed skip report $path: incomplete environment section") unless defined $e_result;
     if ($e_result eq "FAIL" || $e_result eq "POTENTIAL") {
-      die_input("malformed skip report $path: environment finding count mismatch (expected $e_expected, got $e_count)")
+      die_malformed("malformed skip report $path: environment finding count mismatch (expected $e_expected, got $e_count)")
         unless $e_count == $e_expected;
     }
   }
@@ -431,7 +464,7 @@ sub parse_skip_report {
 sub parse_bypass_report {
   my ($path) = @_;
   my $lines = read_lines($path);
-  @$lines > 0 or die_input("malformed bypass report $path: empty file");
+  @$lines > 0 or die_malformed("malformed bypass report $path: empty file");
 
   my $phase = "header";
   my $seen_header_for = 0;
@@ -451,7 +484,7 @@ sub parse_bypass_report {
     my ($ctx_lno) = @_;
     return unless defined $cur_unit;
     if ($cur_sum_b != $cur_expected_b) {
-      die_input("malformed bypass report $path:$ctx_lno: unit $cur_unit bypassed total mismatch (expected $cur_expected_b, got $cur_sum_b)");
+      die_malformed("malformed bypass report $path:$ctx_lno: unit $cur_unit bypassed total mismatch (expected $cur_expected_b, got $cur_sum_b)");
     }
     $cur_unit = undef;
     $cur_expected_b = 0;
@@ -463,7 +496,7 @@ sub parse_bypass_report {
     $lno++;
     if ($phase eq "header") {
       if ($line =~ /^bypass rates for [0-9a-f]+ \((?:forced|incremental) execution\)$/) {
-        die_input("malformed bypass report $path:$lno: duplicate header") if $seen_header_for;
+        die_malformed("malformed bypass report $path:$lno: duplicate header") if $seen_header_for;
         $seen_header_for = 1;
         next;
       }
@@ -474,17 +507,17 @@ sub parse_bypass_report {
       }
       if ($line =~ /^units: (.+)$/) {
         my @parts = split(/, /, $1, -1);
-        @parts > 0 or die_input("malformed bypass report $path:$lno: empty units list");
+        @parts > 0 or die_malformed("malformed bypass report $path:$lno: empty units list");
         for my $u (@parts) {
-          $u ne "" && $u !~ /[ \t:]/ or die_input("malformed bypass report $path:$lno: invalid unit '\''$u'\''");
-          die_input("malformed bypass report $path:$lno: duplicate unit '\''$u'\'' in units line")
+          $u ne "" && $u !~ /[ \t:]/ or die_malformed("malformed bypass report $path:$lno: invalid unit '\''$u'\''");
+          die_malformed("malformed bypass report $path:$lno: duplicate unit '\''$u'\'' in units line")
             if $declared_units{$u}++;
           push @declared_order, $u;
         }
         $phase = "units";
         next;
       }
-      die_input("malformed bypass report $path:$lno: unexpected line before units");
+      die_malformed("malformed bypass report $path:$lno: unexpected line before units");
     }
 
     if ($phase eq "result_only") {
@@ -493,17 +526,17 @@ sub parse_bypass_report {
         $phase = "done";
         next;
       }
-      die_input("malformed bypass report $path:$lno: expected NOT AGGREGATED after units: <none>");
+      die_malformed("malformed bypass report $path:$lno: expected NOT AGGREGATED after units: <none>");
     }
 
     if ($phase eq "units") {
       if ($line =~ /^  bypassed ([0-9]+) of ([0-9]+) \(([0-9]+)%\): (.+): (.+) \[(.+)\]$/) {
         defined $cur_unit && $cur_expected_b > 0
-          or die_input("malformed bypass report $path:$lno: detail line outside bypassed unit");
+          or die_malformed("malformed bypass report $path:$lno: detail line outside bypassed unit");
         my ($b, $r, $p) = (int($1), int($2), int($3));
-        $b >= 1 && $b <= $r or die_input("malformed bypass report $path:$lno: invalid bypass counts");
+        $b >= 1 && $b <= $r or die_malformed("malformed bypass report $path:$lno: invalid bypass counts");
         my $want_p = int((200 * $b + $r) / (2 * $r));
-        $p == $want_p or die_input("malformed bypass report $path:$lno: inconsistent percent $p% (expected $want_p%)");
+        $p == $want_p or die_malformed("malformed bypass report $path:$lno: inconsistent percent $p% (expected $want_p%)");
         $cur_sum_b += $b;
         next;
       }
@@ -511,38 +544,38 @@ sub parse_bypass_report {
       if ($line =~ /^result: (.+)$/) {
         $finish_unit->($lno);
         for my $u (@declared_order) {
-          die_input("malformed bypass report $path:$lno: missing summary for declared unit '\''$u'\''")
+          die_malformed("malformed bypass report $path:$lno: missing summary for declared unit '\''$u'\''")
             unless $seen_units{$u};
         }
         my $rest = $1;
         if ($rest eq "CLEAR -- no hatched claim was reached") {
-          die_input("malformed bypass report $path:$lno: CLEAR no-reached contradicts unit reaches") if $any_reached;
+          die_malformed("malformed bypass report $path:$lno: CLEAR no-reached contradicts unit reaches") if $any_reached;
           $res_kind = "CLEAR_NONE";
           $phase = "done";
           next;
         }
         if ($rest eq "CLEAR -- every hatched claim reached was checked on some unit") {
-          die_input("malformed bypass report $path:$lno: CLEAR checked contradicts zero unit reaches") unless $any_reached;
+          die_malformed("malformed bypass report $path:$lno: CLEAR checked contradicts zero unit reaches") unless $any_reached;
           $res_kind = "CLEAR_CHECKED";
           $phase = "done";
           next;
         }
         if ($rest =~ /^UNVERIFIED -- ([0-9]+) hatched claim\(s\) bypassed on every unit that reached them$/) {
-          die_input("malformed bypass report $path:$lno: UNVERIFIED contradicts zero unit reaches") unless $any_reached;
-          die_input("malformed bypass report $path:$lno: UNVERIFIED count must be >= 1") unless $1 >= 1;
+          die_malformed("malformed bypass report $path:$lno: UNVERIFIED contradicts zero unit reaches") unless $any_reached;
+          die_malformed("malformed bypass report $path:$lno: UNVERIFIED count must be >= 1") unless $1 >= 1;
           $res_kind = "UNVERIFIED";
           $u_expected = int($1);
           $phase = "unverified";
           next;
         }
-        die_input("malformed bypass report $path:$lno: unexpected result line");
+        die_malformed("malformed bypass report $path:$lno: unexpected result line");
       }
 
       if ($line =~ /^([^ \t][^:]*): no hatched claim reached$/) {
         $finish_unit->($lno);
         my $u = $1;
-        $declared_units{$u} or die_input("malformed bypass report $path:$lno: undeclared unit '\''$u'\''");
-        die_input("malformed bypass report $path:$lno: duplicate unit '\''$u'\''") if $seen_units{$u}++;
+        $declared_units{$u} or die_malformed("malformed bypass report $path:$lno: undeclared unit '\''$u'\''");
+        die_malformed("malformed bypass report $path:$lno: duplicate unit '\''$u'\''") if $seen_units{$u}++;
         $unit_state{$u} = { kind => "inconclusive" };
         $cur_unit = $u;
         $cur_expected_b = 0;
@@ -553,11 +586,11 @@ sub parse_bypass_report {
       if ($line =~ /^([^ \t][^:]*): ([0-9]+) of ([0-9]+) hatched claim reach\(es\) bypassed \(([0-9]+)%\), ([0-9]+) checked$/) {
         $finish_unit->($lno);
         my ($u, $b, $r, $p, $c) = ($1, int($2), int($3), int($4), int($5));
-        $declared_units{$u} or die_input("malformed bypass report $path:$lno: undeclared unit '\''$u'\''");
-        die_input("malformed bypass report $path:$lno: duplicate unit '\''$u'\''") if $seen_units{$u}++;
-        $r >= 1 && $b + $c == $r or die_input("malformed bypass report $path:$lno: inconsistent unit counts for '\''$u'\''");
+        $declared_units{$u} or die_malformed("malformed bypass report $path:$lno: undeclared unit '\''$u'\''");
+        die_malformed("malformed bypass report $path:$lno: duplicate unit '\''$u'\''") if $seen_units{$u}++;
+        $r >= 1 && $b + $c == $r or die_malformed("malformed bypass report $path:$lno: inconsistent unit counts for '\''$u'\''");
         my $want_p = int((200 * $b + $r) / (2 * $r));
-        $p == $want_p or die_input("malformed bypass report $path:$lno: inconsistent percent $p% (expected $want_p%)");
+        $p == $want_p or die_malformed("malformed bypass report $path:$lno: inconsistent percent $p% (expected $want_p%)");
         $any_reached = 1;
         if ($b == $r && $c == 0) {
           $unit_state{$u} = { kind => "hit", detail => "$b of $r bypassed, 0 checked" };
@@ -570,38 +603,38 @@ sub parse_bypass_report {
         next;
       }
 
-      die_input("malformed bypass report $path:$lno: unexpected line in units section");
+      die_malformed("malformed bypass report $path:$lno: unexpected line in units section");
     }
 
     if ($phase eq "unverified") {
       if ($line =~ /^UNVERIFIED: bypassed on every unit that reached it: (.+) \(([^()]+)\)$/) {
         my ($claim, $reaches) = ($1, $2);
-        $claim =~ /^.+: .+$/ or die_input("malformed bypass report $path:$lno: UNVERIFIED claim missing executable separator");
+        $claim =~ /^.+: .+$/ or die_malformed("malformed bypass report $path:$lno: UNVERIFIED claim missing executable separator");
         my @items = split(/, /, $reaches, -1);
-        @items > 0 or die_input("malformed bypass report $path:$lno: empty UNVERIFIED unit list");
+        @items > 0 or die_malformed("malformed bypass report $path:$lno: empty UNVERIFIED unit list");
         for my $item (@items) {
           $item =~ /^([^ \t:]+) ([0-9]+) of ([0-9]+)$/
-            or die_input("malformed bypass report $path:$lno: malformed UNVERIFIED reach '\''$item'\''");
+            or die_malformed("malformed bypass report $path:$lno: malformed UNVERIFIED reach '\''$item'\''");
           my ($ru, $rb, $rr) = ($1, int($2), int($3));
-          $declared_units{$ru} or die_input("malformed bypass report $path:$lno: UNVERIFIED names undeclared unit '\''$ru'\''");
-          $rb >= 1 && $rb == $rr or die_input("malformed bypass report $path:$lno: UNVERIFIED reach must be all bypassed");
+          $declared_units{$ru} or die_malformed("malformed bypass report $path:$lno: UNVERIFIED names undeclared unit '\''$ru'\''");
+          $rb >= 1 && $rb == $rr or die_malformed("malformed bypass report $path:$lno: UNVERIFIED reach must be all bypassed");
         }
-        die_input("malformed bypass report $path:$lno: duplicate UNVERIFIED claim") if exists $unverified{$claim};
+        die_malformed("malformed bypass report $path:$lno: duplicate UNVERIFIED claim") if exists $unverified{$claim};
         $unverified{$claim} = $reaches;
         $u_count++;
         next;
       }
-      die_input("malformed bypass report $path:$lno: unexpected line after result: UNVERIFIED");
+      die_malformed("malformed bypass report $path:$lno: unexpected line after result: UNVERIFIED");
     }
 
     if ($phase eq "done") {
-      die_input("malformed bypass report $path:$lno: unexpected trailing line after result");
+      die_malformed("malformed bypass report $path:$lno: unexpected trailing line after result");
     }
   }
 
-  die_input("malformed bypass report $path: missing result line") unless defined $res_kind;
+  die_malformed("malformed bypass report $path: missing result line") unless defined $res_kind;
   if ($res_kind eq "UNVERIFIED") {
-    die_input("malformed bypass report $path: UNVERIFIED count mismatch (expected $u_expected, got $u_count)")
+    die_malformed("malformed bypass report $path: UNVERIFIED count mismatch (expected $u_expected, got $u_count)")
       unless $u_count == $u_expected;
   }
 
@@ -612,8 +645,35 @@ sub parse_bypass_report {
   };
 }
 
-my @parsed_skips  = map { parse_skip_report($_) } @skip_reports;
-my @parsed_bypass = map { parse_bypass_report($_) } @bypass_reports;
+sub parse_family {
+  my ($items_ref, $parser) = @_;
+  my @parsed;
+  # When --up-to STAMP is set, validate the report matching STAMP first (exit 2
+  # if malformed) so a broken current-run report always fails fatally even when
+  # an older saved report is also malformed (exit 3).
+  if (defined $up_to) {
+    for my $item (@$items_ref) {
+      next unless defined $item->{stamp} && $item->{stamp} eq $up_to;
+      local $MALFORMED_EXIT = 2;
+      local $MALFORMED_KIND = "";
+      $item->{parsed} = $parser->($item->{path});
+    }
+  }
+  for my $item (@$items_ref) {
+    if (exists $item->{parsed}) {
+      push @parsed, $item->{parsed};
+    } else {
+      my $is_old = defined $up_to && defined $item->{stamp} && $item->{stamp} lt $up_to;
+      local $MALFORMED_EXIT = $is_old ? 3 : 2;
+      local $MALFORMED_KIND = $is_old ? "historical" : "";
+      push @parsed, $parser->($item->{path});
+    }
+  }
+  return @parsed;
+}
+
+my @parsed_skips  = parse_family(\@skip_items, \&parse_skip_report);
+my @parsed_bypass = parse_family(\@bypass_items, \&parse_bypass_report);
 
 # Compute trailing streaks for skip-coverage dimensions.
 my (%box_streak, %box_latest, %backend_streak, %backend_latest);

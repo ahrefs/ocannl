@@ -3482,21 +3482,38 @@ else
   [ "$bypass_report_written" = 1 ] && streak_args+=(--bypass-logs-dir "$LOGS")
   streak_report=$LOGS/$stamp-streaks.txt
   streak_stage=$streak_report.stage.$$
+  streak_err=$streak_report.err.$$
   {
     echo "coverage streaks for $run_sha (min-streak=$STREAK_MIN)"
     "$SWEEP_STREAKS" "${streak_args[@]}"
-  } >"$streak_stage"
+  } >"$streak_stage" 2>"$streak_err"
   streak_rc=$?
   case $streak_rc in
-    0 | 1) mv "$streak_stage" "$streak_report" || die_post_run "cannot publish $streak_report" ;;
-    *) rm -f "$streak_stage"; die_post_run "streak check failed (exit $streak_rc)" ;;
+    0 | 1)
+      rm -f "$streak_err"
+      mv "$streak_stage" "$streak_report" || die_post_run "cannot publish $streak_report"
+      streak_result=$(grep '^result:' "$streak_report" | head -1)
+      echo "coverage streaks: ${streak_result#result: } -- $streak_report"
+      if [ "$streak_rc" -eq 1 ]; then
+        echo "sweep: coverage streaks ALERT -- $streak_report" >&2
+      fi
+      grep -E '^STREAK: ' "$streak_report" | sed 's/^/  /'
+      ;;
+    3)
+      # An older saved report failed the parser (e.g. grammar drift across an
+      # older sweep version); surface loudly without marking this sweep
+      # post-run-failed, while keeping exit 2 fatal for this run's own report.
+      streak_why=$(head -1 "$streak_err" | sed 's/^sweep-streaks: //')
+      rm -f "$streak_stage" "$streak_err"
+      echo "coverage streaks: NOT CHECKED -- malformed history (${streak_why:-unreadable older report})"
+      echo "sweep: coverage streaks WARNING -- ${streak_why:-malformed historical report}" >&2
+      ;;
+    *)
+      [ -s "$streak_err" ] && cat "$streak_err" >&2
+      rm -f "$streak_stage" "$streak_err"
+      die_post_run "streak check failed (exit $streak_rc)"
+      ;;
   esac
-  streak_result=$(grep '^result:' "$streak_report" | head -1)
-  echo "coverage streaks: ${streak_result#result: } -- $streak_report"
-  if [ "$streak_rc" -eq 1 ]; then
-    echo "sweep: coverage streaks ALERT -- $streak_report" >&2
-  fi
-  grep -E '^STREAK: ' "$streak_report" | sed 's/^/  /'
 fi
 echo "history: $HISTORY"
 echo "logs:    $LOGS/$stamp-*"
