@@ -12,6 +12,12 @@
 open Base
 module Tn = Tnode
 
+type pad_role = Pad_row | Pad_column | Pad_reduction
+
+val acc_masked : pad_role -> bool
+(** A tensorized pad guard follows the accumulator only for row and column roles. A reduction guard
+    is discharged against the staged operands' zero fringes. *)
+
 type optop =
   | Split of {
       axis : Indexing.symbol;  (** The loop to split, identified by its index symbol. *)
