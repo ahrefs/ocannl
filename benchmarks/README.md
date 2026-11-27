@@ -1269,6 +1269,16 @@ the inputs, as sibling links do when the root caches their read-only inputs. A f
 readiness check stops measurement until the failing check passes. A timed cell that fails or
 exhausts its cap needs a fresh directory after the failure is addressed.
 
+Add `--output-placement-probe` to the masked-only dry and timed cells to isolate the output
+pointer. For each target and rendering, the probe replays one emitted kernel on one stream with
+the original launch geometry and seed values. It writes at byte displacements 0, 4 and 128
+after a payload-sized prefix in each of two equal-sized slabs. One prefix holds the payload,
+and the two slabs exchange roles between cells so every output address serves both
+roles. The probe checks the addresses and the full output, including the untouched tail. CUDA
+events measure a fixed 128 launches after 128 warmup launches per reading. Eight balanced rounds
+include same-address repeats at the two undisplaced addresses. Read the aligned allocation
+comparison against its repeat envelope and the displaced ratios against the same-address controls.
+
 ### Metal value-select benchmark
 
 `bench_metal_select` is the Metal counterpart of `bench_cuda_select` (gh-ocannl-2400). It checks
