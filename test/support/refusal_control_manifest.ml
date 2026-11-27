@@ -704,6 +704,7 @@ let raw_entries =
         "[scanner-refusal:490ac5e3405d328c2953c38df4f0974b] arguments the rule's";
         "[scanner-refusal:2dc2479687a000324b3f828912a7f4a8] search derivation lost";
         "[scanner-refusal:a81eacf691e2faeada3ee2b79d5fd7a6] support values whose";
+        "[scanner-refusal:66c453388bca08273e82b6529a4283ff] checked for routine";
         "[scanner-refusal:50ad2bbac7aab894b82d2525afd2aaf8] that stanza's marker";
         "[scanner-refusal:fa823e2140df2fbae2d15be1794a146b] can select cc";
         "[scanner-refusal:9de3b3fd1cd96a8d87e76bfa31534244] comment that does";
@@ -736,6 +737,7 @@ let raw_entries =
         "[scanner-refusal:a06dccc27afe2153a7700609691d3c8d] attaches a rule";
         "[scanner-refusal:7f157a5478f43aa3d2da34c9975976a9] inventories the repository";
         "[scanner-refusal:91751d43d8939e1da724e6f0bcbe8f09] inventories the repository";
+        "[scanner-refusal:844fda27df3329b5f303f5b62e050a0c] @routine-logging lists";
         "[scanner-refusal:f16784d0b1f52de5e30378cb771ada5c] alias does not";
         "[scanner-refusal:4012b24c7623acd977522e8f2eacf2bb] attaches a rule";
         "[scanner-refusal:ba5d90fc4bcec944ebd169329c706968] goldens on the";
@@ -796,6 +798,10 @@ let raw_entries =
         "[scanner-refusal:d2a4a4c55f9409ff2a808631d0753f27] family stanza passes";
         "[scanner-refusal:d53b323fdb52eefd4e3968dbadf05e65] with instrumentation-capable libraries";
         "[scanner-refusal:da4ac19271accffacfcd9a6bbe210e22] member listed passes";
+        "[scanner-refusal:938f1b98b1f9b81d9669feaaffe6ce23] debug_log_from_routines";
+        "[scanner-refusal:2378dc0320ae24e5d9d5ece8a8a1cf71] routine-logging alias lists";
+        "[scanner-refusal:6338ab5898b52f4ad97f34a9b1656e74] missing routine-logging member";
+        "[scanner-refusal:81424c48c43937e31a411d9f070c649d] missing routine-logging member";
         "[scanner-refusal:bb441071afd26790b8593e48298b3afb] local declaration remains";
         "[scanner-refusal:823899fe97c22285dae0552d086d404b] passes without resolving";
         "[scanner-refusal:3f9f68401bac53be0cbb38ce715e460d] executable whose RUNNER";
@@ -1464,6 +1470,10 @@ let raw_direct_evidence =
       "backend-default reader naming an undefined default is refused: true" );
     ( "env_var_deps.ml:afd2f461af706b40bf4582f1b0a30b01",
       "backend-default reader whose backends do not overlap the default is refused: true" );
+    ( "env_var_deps.ml:66c453388bca08273e82b6529a4283ff",
+      "a source that cannot be checked for routine logging fails the scan: true" );
+    ( "env_var_deps.ml:844fda27df3329b5f303f5b62e050a0c",
+      "a false flag does not qualify a listed routine-logging member: true" );
   ]
 
 (** Direct failures no control executes, each with the reason none does: a refusal the scanner can
