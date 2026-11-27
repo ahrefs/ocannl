@@ -1232,8 +1232,8 @@ outputs and 1.047–1.097 with a shared output across both mask densities and li
 separate outputs the short repeat stayed faster and the blend repeat stayed slower in both
 timing orders, even after reversing the links. Sharing the output narrowed the gap. Use about
 1.10 (0.91 in the faster direction) as a planning floor for those shared-output rows, then use
-the row's own control range when reading a run. The physical address or alignment mechanism
-remains undetermined.
+the row's own control range when reading a run. The fixed-kernel placement replay below has its
+results in the [timing objectives note](../docs/agent-notes/scheduling-and-autotune.md#timing-objectives-and-calibration).
 [#2385](https://github.com/ahrefs/ocannl/issues/2385)
 
 The benchmark generates its inputs in memory. Build the executable and verify the emitted forms,
@@ -1268,6 +1268,17 @@ together. Reversing the links preserves the timing order. The separate-output ca
 the inputs, as sibling links do when the root caches their read-only inputs. A failed dry run or
 readiness check stops measurement until the failing check passes. A timed cell that fails or
 exhausts its cap needs a fresh directory after the failure is addressed.
+
+Add `--output-placement-probe` to the masked-only dry and timed cells to isolate the output
+pointer. For each target and rendering, the probe replays one emitted kernel on one stream with
+the original launch geometry and seed values. It writes at byte displacements 0, 4 and 128
+after a payload-sized prefix in each of two equal-sized slabs. One prefix holds the payload,
+and the two slabs exchange roles between cells so every output address serves both
+roles. The probe checks the addresses and the full output, including the untouched tail. CUDA
+events measure a fixed 128 launches after 128 warmup launches per reading. Eight balanced rounds
+include same-address repeats at the two undisplaced addresses. Read the aligned allocation
+comparison against its repeat envelope and the displaced ratios against the same-address controls.
+Use a fresh cell with `--reverse-probe-payload-order` to cross the slab roles with session order.
 
 ### Metal value-select benchmark
 

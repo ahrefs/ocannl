@@ -181,6 +181,8 @@
    bench_cuda_select.ml
    from
    (arrayjit.cuda_backend
+    cudajit.cuda
+    cudajit.nvrtc
     ll_test
     arrayjit.verdict
     ->

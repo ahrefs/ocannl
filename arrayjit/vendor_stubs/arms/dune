@@ -204,6 +204,7 @@
   arrayjit.ir
   arrayjit.utils
   arrayjit.verdict
+  cudajit_stub
   cuda_backend_stub_check)
  (preprocess
   (pps ppx_here ppx_ocannl)))

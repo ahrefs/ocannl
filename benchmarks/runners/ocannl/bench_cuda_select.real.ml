@@ -1,9 +1,9 @@
-(* gh-ocannl-2281, gh-ocannl-2326, gh-ocannl-2385. Replay fixed CUDA segments with the two
-   value-select renderings at both PTX targets, then compile and time a whole training step (a
-   two-conv classifier with ReLU and 2x2 max pooling, forward, backward and SGD) under each, beside
-   a second short-circuiting compile as its control. Context.compile and Autotune.untuned_compile
-   bypass the schedule cache. The CUDA value-select benchmark section of benchmarks/README.md gives
-   the hermetic invocation and readiness checks.
+(* gh-ocannl-2281, gh-ocannl-2326, gh-ocannl-2385, gh-ocannl-2499. Replay fixed CUDA segments with
+   the two value-select renderings at both PTX targets, then compile and time a whole training step
+   (a two-conv classifier with ReLU and 2x2 max pooling, forward, backward and SGD) under each,
+   beside a second short-circuiting compile as its control. Context.compile and
+   Autotune.untuned_compile bypass the schedule cache. The CUDA value-select benchmark section of
+   benchmarks/README.md gives the hermetic invocation and readiness checks.
 
    The source check reads only this compile's returned CUDA source. It detects the renderer's first
    arm local by its declared name and compares each segment rendering to its independently linked
@@ -11,7 +11,13 @@
    differ; its check compares the control's source with the short arm's up to what each lowering
    mints afresh ([canonical] below). Branch instructions and select coverage within a kernel are
    outside that check. The dry run checks emitted forms, actual PTX targets, and host parity in
-   every cell, and the step's values across the arms, before enabling timings. *)
+   every cell, and the step's values across the arms, before enabling timings.
+
+   The output-placement replay accepts only the emitted where_masked declaration with its three
+   ordered f32 pointer parameters. It reads the declaration modulo whitespace and leaves the kernel
+   body to NVRTC. It checks the replay's PTX target, output addresses, and bitwise output including
+   the masked tail before taking CUDA event timings. A timed run belongs in a generated-input
+   measurement window after check-box.sh and a passing dry run. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -187,6 +193,7 @@ let compile ~root ~target ~blend work =
       failwith (work.name ^ ": expected one emitted CUDA source and its PTX target")
 
 let output_seed fixture = Array.create ~len:(Array.length fixture.want) unwritten
+let same_bits a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
 
 let check label (ctx, routine) work fixture =
   let ctx = Context.set_values ctx work.output (output_seed fixture) in
@@ -197,7 +204,6 @@ let check label (ctx, routine) work fixture =
   let ctx = Context.run ctx routine in
   let got = Context.get_values ctx work.output in
   let want = fixture.want in
-  let same_bits a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b) in
   Verdict.pass_fail_all2 (label ^ " host parity") got want ~f:same_bits;
   if Verdict.any_failed () then (
     if Array.length got = Array.length want then
@@ -212,7 +218,8 @@ let measure (ctx, routine) =
 
 (* [before k] runs ahead of arm [k]'s timing, outside its clock. Each round uses the same readings
    for the treatment and its controls, so a refused reading drops the entire round. *)
-let compare_times ?(before = fun _ -> ()) ?(show_rounds = false) ~calls ~label ~arms () =
+let compare_times ?(before = fun _ -> ()) ?(show_rounds = false) ~measure_arm ~calls ~label ~arms ()
+    =
   let n = List.length arms in
   let arms = Array.of_list arms in
   let orders = Bench_design.orders ~arms:n ~batches:calls in
@@ -221,7 +228,7 @@ let compare_times ?(before = fun _ -> ()) ?(show_rounds = false) ~calls ~label ~
         let row = Array.create ~len:n None in
         Array.iter order ~f:(fun k ->
             before k;
-            row.(k) <- measure (snd arms.(k)));
+            row.(k) <- measure_arm (snd arms.(k)));
         if show_rounds then
           p "%s round=%d %s\n" label (i + 1)
             (Array.to_list order
@@ -297,7 +304,9 @@ let check_segment_buffers ~shared_output ~label arms work fixture =
   if Verdict.any_failed () then failwith (label ^ ": segment buffer placement check failed")
 
 let time_segment ~calls ~label ~show_rounds arms =
-  let times, column, balance = compare_times ~show_rounds ~calls ~label ~arms () in
+  let times, column, balance =
+    compare_times ~show_rounds ~measure_arm:measure ~calls ~label ~arms ()
+  in
   let r =
     Bench_retime.controlled_ratio ~base:(column "short") ~base_repeat:(column "short_repeat")
       ~variant:(column "blend") ~variant_repeat:(column "blend_repeat")
@@ -340,6 +349,201 @@ let compare_segment ~root ~target ~dry ~calls ~shared_output ~reverse ~show_roun
           parent := Context.set_values !parent node values);
       if shared_output then parent := Context.set_values !parent work.output (output_seed first);
       run !parent)
+
+(* A single function and stream per rendering. Within a cell the only launch argument allowed to
+   change is the output pointer. The same-address visits measure repeat noise on both slabs. *)
+let replay_output_placement ~root ~target ~dry ~calls ~elements ~reverse_payload_order work =
+  let module Cu = Cuda in
+  let module D = Cu.Deviceptr in
+  let module B = Stdlib.Bigarray in
+  let f32 values = B.(genarray_of_array1 (Array1.of_array float32 c_layout values)) in
+  let with_buffer bytes f =
+    let ptr = D.mem_alloc ~size_in_bytes:bytes in
+    Exn.protect ~finally:(fun () -> D.mem_free ptr) ~f:(fun () -> f ptr)
+  in
+  let replay ~blend =
+    let (ctx, routine), source, device_cc, arch = compile ~root ~target ~blend work in
+    Context.release ctx;
+    let launch =
+      match routine.Context.segments with
+      | [ segment ] -> LL.launch_dims segment.llc
+      | _ -> failwith "expected one where_masked launch"
+    in
+    let label = arch ^ "/" ^ work.name ^ if blend then "/blend" else "/short" in
+    let abi =
+      {|extern "C" __global__ void where_masked(
+          float *__restrict__ t_output, float *__restrict__ t_flag, float *__restrict__ t_payload) {|}
+    in
+    let compact = String.filter ~f:(fun c -> not (Char.is_whitespace c)) in
+    Verdict.pass_fail (label ^ " replay declaration")
+      (List.length
+         (String.substr_index_all (compact source) ~may_overlap:false ~pattern:(compact abi))
+       = 1
+      && Bool.equal (has_local source) blend);
+    if Verdict.any_failed () then failwith (label ^ ": unexpected replay declaration");
+    let options =
+      Ir.Compiler_options.nvrtc
+        ~cuda_include_options:(Cuda_backend.cuda_include_options ())
+        ~arch_options:(Mma.gpu_arch_options ~target ~device_cc source)
+        ~fast_math:(Ir.Cuda_like_config.cuda_fast_math ())
+        ~with_device_debug:(Utils.with_runtime_debug ())
+        ~with_line_info:Utils.settings.output_debug_files_in_build_directory ()
+    in
+    let ptx =
+      Nvrtc.compile_to_ptx ~cu_src:source ~name:(work.name ^ ".cu") ~options ~with_debug:false
+    in
+    Verdict.pass_fail (label ^ " replay PTX target")
+      (Option.equal String.equal (Some arch) (Mma.ptx_target_directive (Nvrtc.string_from_ptx ptx))
+      && Bool.equal
+           (Mma.equal_ptx_target target Mma.Native)
+           (String.equal arch (Printf.sprintf "sm_%d" device_cc)));
+    if Verdict.any_failed () then failwith (label ^ ": unexpected replay PTX target");
+    let primary = Cu.Context.get_primary (Cu.Device.get ~ordinal:(Context.ordinal root)) in
+    Cu.Context.set_current primary;
+    let func = Cu.Module.get_function (Cu.Module.load_data_ex ptx []) ~name:work.name in
+    let stream = Cu.Stream.create ~non_blocking:true () in
+    let upload ?dst_offset ~dst src =
+      Cu.Stream.memcpy_H_to_D ~length:elements ?dst_offset ~dst ~src stream;
+      Cu.Stream.synchronize stream;
+      ignore (Stdlib.Sys.opaque_identity src)
+    in
+    let start = Cu.Event.create ~enable_timing:true ()
+    and stop = Cu.Event.create ~enable_timing:true () in
+    let batch = 128 in
+    let submit args =
+      Cu.Stream.launch_kernel func ~grid_dim_x:launch.grid.(0) ~grid_dim_y:launch.grid.(1)
+        ~grid_dim_z:launch.grid.(2) ~block_dim_x:launch.block.(0) ~block_dim_y:launch.block.(1)
+        ~block_dim_z:launch.block.(2) ~shared_mem_bytes:0 stream args
+    in
+    let queue args =
+      for _ = 1 to batch do
+        submit args
+      done
+    in
+    let measure_arm args =
+      queue args;
+      Cu.Event.record start stream;
+      queue args;
+      Cu.Event.record stop stream;
+      (* The stream wait also releases cudajit's retained launch arguments for this reading. *)
+      Cu.Stream.synchronize stream;
+      let ms = Cu.Event.elapsed_time ~start ~end_:stop /. Float.of_int batch in
+      Option.some_if (Float.is_finite ms && Float.is_positive ms) ms
+    in
+    let bytes = elements * Ir.Ops.prec_in_bytes Ir.Ops.single in
+    let slab_bytes = (2 * bytes) + 128 in
+    with_buffer bytes @@ fun flag ->
+    with_buffer slab_bytes @@ fun a ->
+    with_buffer slab_bytes @@ fun b ->
+    Exn.protect
+      ~finally:(fun () -> Cu.Stream.synchronize stream)
+      ~f:(fun () ->
+        let cell ~payload_slab ~payload ~separate =
+          let label = label ^ "/payload_" ^ payload_slab in
+          let placements =
+            [
+              ("same", payload, 0);
+              ("separate", separate, 0);
+              ("same_4", payload, 4);
+              ("separate_4", separate, 4);
+              ("same_128", payload, 128);
+              ("separate_128", separate, 128);
+            ]
+            |> List.map ~f:(fun (name, ptr, shift) ->
+                (name, D.offset ptr ~bytes:(bytes + shift), shift))
+          in
+          let address ptr = Int64.of_string ("0x" ^ D.string_of ptr) in
+          let output_addr (region : D.region) =
+            Int64.(address region.base + of_int region.offset_bytes)
+          in
+          let addresses = List.map placements ~f:(fun (_, region, _) -> output_addr region) in
+          Verdict.Claims.p_all (label ^ " output address residues") placements
+            ~f:(fun (_, region, shift) ->
+              Int64.(to_int_exn (output_addr region land of_int 255)) = shift);
+          Verdict.Claims.p_pairwise_distinct
+            (label ^ " distinct output addresses")
+            addresses ~equal:Int64.equal ~to_string:(Printf.sprintf "0x%Lx");
+          if Verdict.any_failed () then failwith (label ^ ": output address check failed");
+          List.iter placements ~f:(fun (name, (region : D.region), _) ->
+              p "%s %s base=0x%Lx offset_bytes=%d address=0x%Lx\n" label name (address region.base)
+                region.offset_bytes (output_addr region));
+          p "%s flag=0x%Lx payload=0x%Lx grid=%dx%dx%d block=%dx%dx%d launches_per_reading=%d\n"
+            label (address flag) (address payload) launch.grid.(0) launch.grid.(1) launch.grid.(2)
+            launch.block.(0) launch.block.(1) launch.block.(2) batch;
+          let args region = Cu.Stream.[ Tensor_at region; Tensor flag; Tensor payload ] in
+          let arms = List.map placements ~f:(fun (name, region, _) -> (name, args region)) in
+          let repeat name = (name ^ "_repeat", List.Assoc.find_exn arms ~equal:String.equal name) in
+          let arms = arms @ [ repeat "same"; repeat "separate" ] in
+          let planned =
+            Bench_design.balance ~arms:(List.length arms)
+              (Bench_design.orders ~arms:(List.length arms) ~batches:calls)
+          in
+          if not (planned.histograms_equal && planned.pairs_exchanged) then
+            invalid_arg
+              "output-placement probe requires BENCH_RETIME_CALLS to be a multiple of eight";
+          List.iter work.fixtures ~f:(fun (density, make_fixture) ->
+              let label = label ^ "/" ^ density in
+              let fixture = make_fixture () in
+              let seed = f32 (output_seed fixture) in
+              let readback = B.Array1.create B.float32 B.c_layout elements in
+              let got = Array.create ~len:elements 0. in
+              (match fixture.seeds with
+              | [ (_, flags); (_, data) ] ->
+                  upload ~dst:flag (f32 flags);
+                  upload ~dst:payload (f32 data)
+              | _ -> failwith "expected where_masked flag and payload");
+              List.iter placements ~f:(fun (name, (region : D.region), _) ->
+                  upload ~dst_offset:region.offset_bytes ~dst:region.base seed;
+                  submit (args region);
+                  Cu.Stream.synchronize stream;
+                  D.memcpy_D_to_H ~length:elements ~src_offset:region.offset_bytes ~src:region.base
+                    ~dst:(B.genarray_of_array1 readback) ();
+                  for i = 0 to elements - 1 do
+                    got.(i) <- readback.{i}
+                  done;
+                  Verdict.pass_fail_all2
+                    (label ^ "/" ^ name ^ " host parity")
+                    got fixture.want ~f:same_bits);
+              if Verdict.any_failed () then failwith (label ^ ": placement readback failed");
+              if not dry then (
+                let _, column, balance =
+                  compare_times ~show_rounds:true ~measure_arm ~calls ~label ~arms ()
+                in
+                if not (balance.histograms_equal && balance.pairs_exchanged) then
+                  failwith (label ^ ": unbalanced output-placement readings");
+                let aligned =
+                  Bench_retime.controlled_ratio ~base:(column "same")
+                    ~base_repeat:(column "same_repeat") ~variant:(column "separate")
+                    ~variant_repeat:(column "separate_repeat")
+                in
+                p
+                  "%s separate_over_same_all_pairs_lo=%.3f separate_over_same_all_pairs_hi=%.3f \
+                   control_factor=%.3f aligned_allocation_resolved=%b\n"
+                  label aligned.effect_lo aligned.effect_hi aligned.control_factor
+                  aligned.treatment.resolved;
+                List.iter
+                  [
+                    ("same_repeat", "same");
+                    ("separate_repeat", "separate");
+                    ("separate", "same");
+                    ("separate_4", "same_4");
+                    ("separate_128", "same_128");
+                    ("same_4", "same");
+                    ("same_128", "same");
+                    ("separate_4", "separate");
+                    ("separate_128", "separate");
+                  ]
+                  ~f:(fun (num, den) ->
+                    let r = Bench_retime.paired_ratio ~num:(column num) ~den:(column den) in
+                    p "%s %s\n" label (Bench_retime.ratio_fields ~name:(num ^ "_over_" ^ den) r))))
+        in
+        (* Each output address serves both roles, with fixed inputs in each timing cell. *)
+        let roles = [ ("a", a, b); ("b", b, a) ] in
+        let roles = if reverse_payload_order then List.rev roles else roles in
+        List.iter roles ~f:(fun (payload_slab, payload, separate) ->
+            cell ~payload_slab ~payload ~separate))
+  in
+  List.iter [ false; true ] ~f:(fun blend -> replay ~blend)
 
 (* === The training step === *)
 
@@ -498,7 +702,7 @@ let compare_step ~target ~dry ~calls step =
       in
       if not dry then
         let times, column, _ =
-          compare_times ~before:restore ~calls ~label
+          compare_times ~before:restore ~measure_arm:measure ~calls ~label
             ~arms:(List.map arms ~f:(fun (name, (c, _, _, _)) -> (name, c)))
             ()
         in
@@ -512,9 +716,15 @@ let () =
   let elements = Bench_args.int args 0 ~name:"elements" ~default:(1 lsl 22) in
   let batch = Bench_args.int args 1 ~flag:"step-batch" ~name:"step-batch" ~default:64 in
   let dry = Bench_args.flag args ~name:"dry-run" in
+  let output_placement = Bench_args.flag args ~name:"output-placement-probe" in
+  let reverse_payload_order = Bench_args.flag args ~name:"reverse-probe-payload-order" in
   let masked_only = Bench_args.flag args ~name:"where-masked-only" in
   let shared_output = not (Bench_args.flag args ~name:"separate-segment-outputs") in
   let reverse = Bench_args.flag args ~name:"reverse-segment-link-order" in
+  if output_placement && ((not masked_only) || (not shared_output) || reverse) then
+    invalid_arg "--output-placement-probe requires --where-masked-only and sets its own layouts";
+  if reverse_payload_order && not output_placement then
+    invalid_arg "--reverse-probe-payload-order requires --output-placement-probe";
   if elements % 256 <> 0 then invalid_arg "elements must be a multiple of 256";
   if not (String.equal (Utils.get_global_arg ~arg_name:"cuda_kernel_cache_mib" ~default:"64") "0")
   then invalid_arg "set OCANNL_CUDA_KERNEL_CACHE_MIB=0 to witness every PTX compile";
@@ -526,11 +736,18 @@ let () =
       if not (String.equal backend "cuda") then
         invalid_arg "bench_cuda_select requires --ocannl_backend=cuda";
       let calls = Bench_retime.calls_of_env ~default:8 () in
-      p
-        "backend=%s elements=%d mask_density=1/32,31/32 timing=queued calls=%d dry_run=%b \
-         where_masked_only=%b shared_segment_output=%b\n"
-        backend elements calls dry masked_only shared_output;
-      p "%s\n" (Bench_design.describe ~arms:4 ~batches:calls);
+      if output_placement then
+        p
+          "backend=%s elements=%d mask_density=1/32,31/32 timing=cuda_event_fixed_batch calls=%d \
+           dry_run=%b where_masked_output_placement=true payload_order=%s\n"
+          backend elements calls dry
+          (if reverse_payload_order then "b,a" else "a,b")
+      else
+        p
+          "backend=%s elements=%d mask_density=1/32,31/32 timing=queued calls=%d dry_run=%b \
+           where_masked_only=%b shared_segment_output=%b\n"
+          backend elements calls dry masked_only shared_output;
+      p "%s\n" (Bench_design.describe ~arms:(if output_placement then 8 else 4) ~batches:calls);
       let node = Ll_test.node_factory ~first_id:20000 ~dims:[| elements |] () in
       let segment target =
         compare_segment ~root ~target ~dry ~calls ~shared_output ~reverse ~show_rounds:masked_only
@@ -538,7 +755,11 @@ let () =
       let targets = [ Mma.Floor; Mma.Native ] in
       if masked_only then
         let work = pointwise ~elements ~node Where_masked in
-        List.iter targets ~f:(fun target -> segment target work)
+        List.iter targets ~f:(fun target ->
+            if output_placement then
+              replay_output_placement ~root ~target ~dry ~calls ~elements ~reverse_payload_order
+                work
+            else segment target work)
       else
         let step_calls = Bench_retime.calls_of_env () in
         p "pool_images=%d step=cifar_conv step_batch=%d step_calls=%d\n" (elements / 16) batch
