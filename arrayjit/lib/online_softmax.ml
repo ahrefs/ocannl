@@ -14,6 +14,32 @@ let enabled () =
   | Some b -> b
   | None -> Utils.get_global_flag ~default:false ~arg_name:"online_softmax"
 
+type root = Declared of Tn.provenance | Observable | Reader of int
+
+(* This runs before optimization. A placement chosen for a lineage cannot protect a definition. *)
+let intent_root (tn : Tn.t) =
+  match tn.memory_mode_intent with
+  | Some (_, provenance) when Tn.known_non_virtual tn -> Some (tn, Declared provenance)
+  | _ when Tn.is_observable tn -> Some (tn, Observable)
+  | _ -> None
+
+let report_refusal ~rewrite (tn, root) =
+  if Utils.settings.log_level > 1 then
+    let why =
+      match root with
+      | Declared provenance -> "declared memory mode at " ^ Tn.provenance_to_string provenance
+      | Observable -> "observable flag"
+      | Reader pos -> Printf.sprintf "raw reader at statement %d" pos
+    in
+    Stdio.eprintf "online_softmax: %s declined for %s (%s)\n%!" rewrite (Tn.debug_name tn) why
+
+let allow_unobserved ~rewrite nodes =
+  match List.find_map nodes ~f:intent_root with
+  | None -> Some ()
+  | Some root ->
+      report_refusal ~rewrite root;
+      None
+
 (* {1 Minted nodes}
 
    The rewrite mints scalar nodes for its scope locals -- the carried state of the scan, the score
@@ -602,6 +628,12 @@ let outside_readers r tn =
   let ws = writers r tn in
   List.filter (readers r tn) ~f:(fun pos -> not (List.mem ws pos ~equal:Int.equal))
 
+let target_of r pos =
+  match (r.stmts.(pos), r.nests.(pos)) with
+  | LL.Zero_out tn, _ -> Some tn
+  | _, Some n -> Some n.tn
+  | _ -> None
+
 (* [tn]'s writers are a zeroing followed by accumulating nests: its value is the sum of their
    contributions, [(zeroing, [(position, nest, contribution)])]. *)
 let accumulated r tn =
@@ -737,6 +769,13 @@ let find_backward r (nz : normalizer) : backward option =
   let rows_roles = roles_of nz.sig_m in
   let all_rows sg = List.for_all rows_roles ~f:(has_role sg) in
   let* { p_tn; sig_p; v_pos; vp_voc = voc; o_tn; sig_o; v_tn; sig_v; _ } = find_value_pass r nz in
+  let only_readers tn expected =
+    let actual = outside_readers r tn in
+    List.iter actual ~f:(fun pos ->
+        if not (List.mem expected pos ~equal:Int.equal) then
+          report_refusal ~rewrite:"backward fusion" (tn, Reader pos));
+    List.equal Int.equal actual (List.sort expected ~compare:Int.compare)
+  in
   (* 3. A: [dP += dO * v] over the value width, into a node of the scores' roles; its other operand,
      read with [O]'s roles, names [dO]. *)
   let* a_pos, a_env, a_rhs, dp_tn, sig_dp, do_tn =
@@ -801,13 +840,7 @@ let find_backward r (nz : normalizer) : backward option =
         | _ -> None)
   in
   let* d_pos, lg_tn, sig_lg, aux = one dn in
-  let* () =
-    Option.some_if
-      (List.equal Int.equal
-         (List.sort (outside_readers r dp_tn) ~compare:Int.compare)
-         (List.sort [ c1_pos; d_pos ] ~compare:Int.compare))
-      ()
-  in
+  let* () = Option.some_if (only_readers dp_tn [ c1_pos; d_pos ]) () in
   (* C2: [e.grad += l.grad], broadcast over the key axis. *)
   let* z_lg, lg_accs = accumulated r lg_tn in
   let* () = Option.some_if (List.equal Int.equal (List.map lg_accs ~f:pos_of) [ d_pos ]) () in
@@ -824,11 +857,17 @@ let find_backward r (nz : normalizer) : backward option =
         | _ -> None)
     | _ -> None
   in
-  let* () =
-    Option.some_if (d_pos < c2_pos && List.equal Int.equal (outside_readers r lg_tn) [ c2_pos ]) ()
-  in
+  let* () = Option.some_if (d_pos < c2_pos && only_readers lg_tn [ c2_pos ]) () in
   (* E: [n.grad += e.grad * e]. *)
-  let* e_pos = one (outside_readers r eg_tn) in
+  let* e_pos =
+    match outside_readers r eg_tn with
+    | [ pos ] -> Some pos
+    | positions ->
+        List.iter positions ~f:(fun pos ->
+            report_refusal ~rewrite:"backward fusion with multiple exponential-gradient readers"
+              (eg_tn, Reader pos));
+        None
+  in
   let* e_nest = r.nests.(e_pos) in
   let* ng_tn, sig_ng =
     match reduction e_nest with
@@ -866,6 +905,11 @@ let find_backward r (nz : normalizer) : backward option =
         let* () = Option.some_if (same_roles sg nz.sig_x) () in
         chain n.tn sg ((pos, z, env, rhs, cur, n.tn) :: links) (depth - 1)
     | [ p1; p2 ] -> Some (cur, sig_cur, List.rev links, p1, p2)
+    | _ :: _ :: _ :: _ as positions ->
+        List.iter positions ~f:(fun pos ->
+            report_refusal ~rewrite:"backward fusion with multiple score-gradient readers"
+              (cur, Reader pos));
+        None
     | _ -> None
   in
   let* ds_tn, sig_ds, links, p1, p2 = chain ng_tn sig_ng [] 16 in
@@ -1012,7 +1056,13 @@ let find_backward r (nz : normalizer) : backward option =
      it. *)
   let complete_before_read tn =
     let accs = List.drop (writers r tn) 1 in
-    List.for_all (outside_readers r tn) ~f:(fun rd -> List.for_all accs ~f:(fun w -> w < rd))
+    match
+      List.find (outside_readers r tn) ~f:(fun rd -> List.exists accs ~f:(fun w -> w >= rd))
+    with
+    | None -> true
+    | Some pos ->
+        report_refusal ~rewrite:"backward fusion" (tn, Reader pos);
+        false
   in
   let filled_before_read =
     List.for_all links ~f:(fun (pos, _, _, rhs, _, _) ->
@@ -1028,8 +1078,6 @@ let find_backward r (nz : normalizer) : backward option =
        where the fused locals would not. *)
     && float_at x_prec p_tn
     && List.for_all intermediates ~f:(float_at grad_prec)
-    (* A requested intermediate keeps its composed definition: the fusion never writes it. *)
-    && List.for_all intermediates ~f:(fun tn -> not (Tn.known_non_virtual tn))
     (* [O] is the value pass alone, so that [D] is the row sum of [P * dP]. *)
     && Option.equal (List.equal Int.equal)
          (Option.map (accumulated r o_tn) ~f:(fun (_, accs) -> List.map accs ~f:pos_of))
@@ -1047,34 +1095,34 @@ let find_backward r (nz : normalizer) : backward option =
     && not (List.exists (List.range emit (last + 1)) ~f:(fun pos -> r.opaque.(pos)))
   in
   let* () = Option.some_if contract () in
+  (* The fusion has no writer for the gradients it represents as locals. *)
+  let* () = allow_unobserved ~rewrite:"backward fusion" intermediates in
   (* The definitions only the replaced nests read -- [l ** 2], [-1 * e] and their constants, the
      masked branch's zero -- go with them. *)
   let aux_candidates =
     aux @ List.filter_map substituted ~f:(fun tn -> Option.map (constant_of tn) ~f:snd)
-  in
-  let target_of pos =
-    match (r.stmts.(pos), r.nests.(pos)) with
-    | LL.Zero_out tn, _ -> Some tn
-    | _, Some n -> Some n.tn
-    | _ -> None
   in
   let rec closure consumed =
     let added =
       List.filter aux_candidates ~f:(fun pos ->
           (not (Set.mem consumed pos))
           &&
-          match target_of pos with
+          match target_of r pos with
           | Some tn ->
               List.equal Int.equal (writers r tn) [ pos ]
               && List.for_all (readers r tn) ~f:(Set.mem consumed)
-              && (not (List.mem read_inputs tn ~equal:Tn.equal))
-              && not (Tn.known_non_virtual tn)
+              && not (List.mem read_inputs tn ~equal:Tn.equal)
           | None -> false)
     in
     if List.is_empty added then consumed
     else closure (Set.union consumed (Set.of_list (module Int) added))
   in
   let consumed = closure consumed_so_far in
+  let removed_aux = Set.to_list (Set.diff consumed consumed_so_far) in
+  let* () =
+    allow_unobserved ~rewrite:"backward fusion auxiliary cleanup"
+      (List.filter_map removed_aux ~f:(target_of r))
+  in
   (* {2 Emission} *)
   let open LL in
   (* The locals at the wider of the two sides' state precisions: f32 under narrow storage, f64 where
@@ -1335,7 +1383,7 @@ type fold = {
   f_code : LL.t;  (** The fold, then the moved definitions. *)
 }
 
-let find_fold r (nz : normalizer) ~block : fold option =
+let find_fold r (nz : normalizer) ~block : (fold, Tn.t * root) Result.t option =
   let* vp = find_value_pass r nz in
   let* z_o, o_accs = accumulated r vp.o_tn in
   let* () = Option.some_if (List.equal Int.equal (List.map o_accs ~f:pos_of) [ vp.v_pos ]) () in
@@ -1418,20 +1466,23 @@ let find_fold r (nz : normalizer) ~block : fold option =
   let rec closure c_nodes c_defs =
     let watched = nz.m :: nz.l :: c_nodes in
     let fresh =
-      List.filter
+      List.filter_map
         (List.range (nz.a + 1) f_at)
         ~f:(fun p ->
-          (not (is_consumed0 p))
-          && (not (List.mem c_defs p ~equal:Int.equal))
-          && List.exists watched ~f:(Set.mem (reads_at r p)))
+          if is_consumed0 p || List.mem c_defs p ~equal:Int.equal then None
+          else List.find watched ~f:(Set.mem (reads_at r p)) |> Option.map ~f:(fun tn -> (p, tn)))
     in
     if List.is_empty fresh then Some (c_nodes, c_defs)
     else
       let* added =
-        List.map fresh ~f:(fun p ->
-            let* n = r.nests.(p) in
-            let* dp, _ = definition r n.tn in
-            Option.some_if (dp = p) (n.tn, p))
+        List.map fresh ~f:(fun (p, tn) ->
+            let movable =
+              let* n = r.nests.(p) in
+              let* dp, _ = definition r n.tn in
+              Option.some_if (dp = p) (n.tn, p)
+            in
+            if Option.is_none movable then report_refusal ~rewrite:"block fold" (tn, Reader p);
+            movable)
         |> Option.all
       in
       closure (c_nodes @ List.map added ~f:fst) (c_defs @ List.map added ~f:snd)
@@ -1439,16 +1490,15 @@ let find_fold r (nz : normalizer) ~block : fold option =
   let* c_nodes, c_defs = closure [] [] in
   let c_defs = List.sort c_defs ~compare:Int.compare in
   let state = nz.m :: nz.l :: c_nodes in
-  (* Liveness per node, from the downstream roots: a node of the row state is live when it was
-     requested, when a statement after the value pass reads it, or when a live definition reads it.
-     Only live definitions move; a dead one goes, so that it keeps nothing it reads -- the score
-     chain above all -- alive. *)
-  let target_of_def p = Option.map r.nests.(p) ~f:(fun n -> n.tn) in
-  let rooted tn = Tn.known_non_virtual tn || List.exists (readers r tn) ~f:(fun p -> p > f_at) in
+  (* The fold serves dataflow readers. Observation intent instead protects the composed writers. *)
+  let later_roots =
+    List.filter_map state ~f:(fun tn ->
+        List.find (readers r tn) ~f:(fun p -> p > f_at) |> Option.map ~f:(fun p -> (tn, Reader p)))
+  in
   let rec liveness live =
     let more =
       List.filter c_defs ~f:(fun p ->
-          Option.exists (target_of_def p) ~f:(fun tn -> List.mem live tn ~equal:Tn.equal))
+          Option.exists (target_of r p) ~f:(fun tn -> List.mem live tn ~equal:Tn.equal))
       |> List.concat_map ~f:(fun p ->
           List.filter state ~f:(fun tn ->
               Set.mem (reads_at r p) tn && not (List.mem live tn ~equal:Tn.equal)))
@@ -1456,9 +1506,9 @@ let find_fold r (nz : normalizer) ~block : fold option =
     in
     if List.is_empty more then live else liveness (live @ more)
   in
-  let live_nodes = liveness (List.filter state ~f:rooted) in
+  let live_nodes = liveness (List.map later_roots ~f:fst) in
   let is_live tn = List.mem live_nodes tn ~equal:Tn.equal in
-  let live_defs = List.filter c_defs ~f:(fun p -> Option.exists (target_of_def p) ~f:is_live) in
+  let live_defs = List.filter c_defs ~f:(fun p -> Option.exists (target_of r p) ~f:is_live) in
   let dead_defs = List.filter c_defs ~f:(fun p -> not (List.mem live_defs p ~equal:Int.equal)) in
   (* [O] must be written whole: the fold replaces its zeroing, and writes the cells the value pass's
      signature spans -- every role over its whole extent, a fixed index only on a unit axis. *)
@@ -1502,10 +1552,13 @@ let find_fold r (nz : normalizer) ~block : fold option =
        -- a value pass reading probabilities an earlier call left (read before write) is not the
        pass over this call's normalizer. *)
     && nz.c < vp.p_pos
-    && vp.p_pos < f_at && List.for_all live_defs ~f:movable
+    && vp.p_pos < f_at
     && not (List.exists (List.range span_lo (f_at + 1)) ~f:(fun pos -> r.opaque.(pos)))
   in
   let* () = Option.some_if contract () in
+  let can_move = List.for_all live_defs ~f:movable in
+  if not can_move then List.iter later_roots ~f:(report_refusal ~rewrite:"block fold");
+  let* () = Option.some_if can_move () in
   (* {2 Emission} *)
   let open LL in
   let extent (voc : vocabulary) role = List.Assoc.find_exn voc.extents ~equal:equal_role role + 1 in
@@ -1696,15 +1749,9 @@ let find_fold r (nz : normalizer) ~block : fold option =
   let moved = List.map live_defs ~f:(fun p -> r.stmts.(p)) in
   (* The score chain the fold no longer reads -- the reduction, its zeroing, the scale and the
      mask's [where] -- goes too once nothing else reads it: a node the recompute cap keeps would
-     otherwise be computed into a [seq, seq] buffer for no reader. Removed only when every writer of
-     the node is removed with it and nothing requested it. *)
+     otherwise be computed into a [seq, seq] buffer for no reader. Check observation intent against
+     the result of the closure so surviving raw readers keep their existing definitions. *)
   let removed0 = consumed0 @ dead_defs in
-  let target_of pos =
-    match (r.stmts.(pos), r.nests.(pos)) with
-    | Zero_out tn, _ -> Some tn
-    | _, Some n -> Some n.tn
-    | _ -> None
-  in
   let candidates = List.dedup_and_sort ~compare:Int.compare (z_s :: sr_pos :: chain_defs) in
   let rec dead removed =
     let gone p = List.mem removed p ~equal:Int.equal in
@@ -1712,11 +1759,10 @@ let find_fold r (nz : normalizer) ~block : fold option =
       List.filter candidates ~f:(fun pos ->
           (not (gone pos))
           &&
-          match target_of pos with
+          match target_of r pos with
           | Some tn ->
               let ws = writers r tn in
-              (not (Tn.known_non_virtual tn))
-              && List.for_all ws ~f:(fun w -> gone w || List.mem candidates w ~equal:Int.equal)
+              List.for_all ws ~f:(fun w -> gone w || List.mem candidates w ~equal:Int.equal)
               && List.for_all (readers r tn) ~f:(fun p -> gone p || List.mem ws p ~equal:Int.equal)
           | None -> false)
     in
@@ -1730,12 +1776,23 @@ let find_fold r (nz : normalizer) ~block : fold option =
      moves behind itself: a value operand that is also a node of the score chain or of the row state
      would lose its definition, or get it only after the fold read it. *)
   let* () =
-    Option.some_if
-      (List.for_all (vp.v_tn :: inputs) ~f:(fun tn ->
-           not (List.exists (writers r tn) ~f:(List.mem consumed ~equal:Int.equal))))
-      ()
+    match
+      List.find (vp.v_tn :: inputs) ~f:(fun tn ->
+          List.exists (writers r tn) ~f:(List.mem consumed ~equal:Int.equal))
+    with
+    | None -> Some ()
+    | Some tn ->
+        let pos = if Tn.equal tn vp.v_tn then f_at else first_read tn in
+        report_refusal ~rewrite:"block fold" (tn, Reader pos);
+        None
   in
-  Some { f_consumed = consumed; f_at; f_code = unflat_lines (fold :: moved) }
+  let removed_scores = List.filter candidates ~f:(List.mem removed ~equal:Int.equal) in
+  Some
+    (match
+       List.find_map (state @ List.filter_map removed_scores ~f:(target_of r)) ~f:intent_root
+     with
+    | Some root -> Error root
+    | None -> Ok { f_consumed = consumed; f_at; f_code = unflat_lines (fold :: moved) })
 
 (* {1 The pass} *)
 
@@ -1746,24 +1803,28 @@ let rewrite ?(auto_block = 0) (llc : LL.t) : LL.t =
   else
     let stmts = Array.copy r.stmts in
     let block = block ~auto_block () in
-    (* The block fold replaces a normalizer together with its value pass; one it declines keeps the
-       two-pass form. *)
-    let folded =
+    (* A shape miss can still use the two-pass form. An observation refusal keeps the composed
+       region and withholds its anchor from the backward fusion and hoist. *)
+    let folded, active =
       List.fold normalizers
-        ~init:(Set.empty (module Int))
-        ~f:(fun consumed nz ->
+        ~init:(Set.empty (module Int), [])
+        ~f:(fun (consumed, active) nz ->
           match if block > 0 then find_fold r nz ~block else None with
-          | Some f when not (List.exists f.f_consumed ~f:(Set.mem consumed)) ->
+          | Some (Error root) ->
+              report_refusal ~rewrite:"block fold" root;
+              (consumed, active)
+          | Some (Ok f) when not (List.exists f.f_consumed ~f:(Set.mem consumed)) ->
               List.iter f.f_consumed ~f:(fun pos -> stmts.(pos) <- LL.Noop);
               stmts.(f.f_at) <- f.f_code;
-              Set.union consumed (Set.of_list (module Int) f.f_consumed)
+              (Set.union consumed (Set.of_list (module Int) f.f_consumed), nz :: active)
           | _ ->
               stmts.(nz.a_init) <- LL.Noop;
               stmts.(nz.c_init) <- LL.Noop;
               stmts.(nz.c) <- LL.Noop;
               stmts.(nz.a) <- emit_normalizer nz;
-              consumed)
+              (consumed, nz :: active))
     in
+    let normalizers = List.rev active in
     (* The fused backward consumes its nests before the hoist sees them: B reads the probabilities
        and would otherwise be hoisted in place. Two attention blocks never share a nest, but a match
        overlapping an earlier one is dropped rather than trusted. *)

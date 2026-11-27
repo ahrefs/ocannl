@@ -750,6 +750,9 @@ files.
   ahead of the analyses, so the traced store and the placements see the rewritten routine, and a
   member may REMOVE a node's definition (the online normalizer replaces a max- and a sum-reduction
   with one `Scan_loop`), which a post-analysis pass such as `rewrite_one_hot_reductions` may not.
+  A member must decline when it would lose an observed definition ([tier policy](../design/gh-ocannl-483.md#observed-nodes)).
+  `test/operations/online_softmax_block.ml` reads each protected target back and pins the
+  distinction between observation intent and the visit cap's decision in a placement fork.
   A member is a static list entry with its own `Code_borne` gate key -- not a `Numerics.t` field:
   the rewritten code carries the decision, while a numerics field enters every cache fingerprint
   and would split entries for routines the rewrite never touched. The tier runs the enabled
