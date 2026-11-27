@@ -52,9 +52,9 @@ Stand-in libraries, each copied module with the genuine stanza it is held to:
     cuda_pool_probe <- (test cuda_launch_reservation) of test/operations/dune
   cuda_wmma_floor_arm
     cuda_wmma_floor <- (test cuda_wmma_floor) of test/operations/dune
-  fp8_soak_arms
-    fp8_soak <- (executable fp8_soak) of tools/dune
+  fp8_soak_cuda_arm
     fp8_soak_cuda <- (executable fp8_soak) of tools/dune
+  fp8_soak_hip_arm
     fp8_soak_hip <- (executable fp8_soak) of tools/dune
   hip_backend_impl_arm
     hip_backend_impl <- (library context) of arrayjit/lib/dune
@@ -89,10 +89,11 @@ Stand-in libraries, each copied module with the genuine stanza it is held to:
     test_metal_pool_slot_width <- (test test_metal_pool_slot_width) of test/operations/dune
   test_metal_storage_mode_arm
     test_metal_storage_mode <- (test test_metal_storage_mode) of arrayjit/test/dune
-  vendor_idents_arms
-    vendor_idents <- (executable vendor_idents) of tools/dune
+  vendor_idents_cuda_arm
     vendor_idents_arm_cuda <- (executable vendor_idents) of tools/dune
+  vendor_idents_hip_arm
     vendor_idents_arm_hip <- (executable vendor_idents) of tools/dune
+  vendor_idents_metal_arm
     vendor_idents_arm_metal <- (executable vendor_idents) of tools/dune
 
 Stand-in libraries compiling no copy (held to nothing): hipjit_hip_ffi_stub_agreement, metal_runtime_stub_agreement

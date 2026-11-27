@@ -3,13 +3,15 @@
 ; executable picks its `*.real.ml` / `*.cudajit.ml` / `*.hipjit.ml` / `*.metal.ml` arm only where
 ; the vendor library is installed and a stub everywhere else, so `@check` off the vendor's box
 ; compiled only the stub. Here every arm is copied under the module name its executable gives it
-; and compiled, one library per executable, with that executable's libraries and preprocessing --
-; the vendor packages replaced by their stand-ins, and the vendor backends by the `typecheck/`
-; copies one directory over; `test/operations/vendor_stub_arms_scan` refuses a library or ppx a
-; library here declares and its executable does not (gh-ocannl-2288), so a package stand-in goes
-; only where the executable names the package itself. An executable whose arm reaches no vendor
-; module at all (the `test/operations` arms, which drive the backend through `Context`) needs no
-; stand-in: its copy compiles against `ocannl` alone. Nothing links these libraries.
+; and compiled, one library per arm, with that arm's executable's unconditional libraries, its own
+; `select` condition's libraries, and its preprocessing -- the vendor packages replaced by their
+; stand-ins, and the vendor backends by the `typecheck/` copies one directory over;
+; `test/operations/vendor_stub_arms_scan` refuses a library or ppx a library here declares and its
+; arm's genuine stanza does not (gh-ocannl-2288, gh-ocannl-2338), so a package stand-in goes only
+; where the arm itself names the package, and a sibling `select`'s libraries are never in scope.
+; An executable whose arm reaches no vendor module at all (the `test/operations` arms, which drive
+; the backend through `Context`) needs no stand-in: its copy compiles against `ocannl` alone.
+; Nothing links these libraries.
 ;
 ; A library compiles an arm slightly more permissively than its executable: a top-level value no
 ; module uses is an error in an executable (dune gives its modules an empty interface) and silent
@@ -108,39 +110,38 @@
   arrayjit.ir
   arrayjit.utils))
 
-; tools: fp8_soak, the shared program with both of its arms, so that each arm is checked against
-; the signature fp8_soak.ml packs it under, not only on its own.
+; tools: fp8_soak, one stand-in library per arm, each checked against its `.mli` (matching
+; `Fp8_soak.ARM`, which `fp8_soak.ml` enforces when packing the arms; gh-ocannl-2338).
 
 (copy_files#
- (files ../../../tools/fp8_soak.ml))
+ (files ../../../tools/fp8_soak_cuda.mli))
 
 (rule
  (action
   (copy# ../../../tools/fp8_soak_cuda.cudajit.ml fp8_soak_cuda.ml)))
+
+(library
+ (name fp8_soak_cuda_arm)
+ (modules fp8_soak_cuda)
+ (libraries base arrayjit.ir cudajit_stub cuda_backend_stub_check integers))
+
+(copy_files#
+ (files ../../../tools/fp8_soak_hip.mli))
 
 (rule
  (action
   (copy# ../../../tools/fp8_soak_hip.hipjit.ml fp8_soak_hip.ml)))
 
 (library
- (name fp8_soak_arms)
- (modules fp8_soak fp8_soak_cuda fp8_soak_hip)
- (libraries
-  base
-  stdio
-  unix
-  arrayjit.ir
-  arrayjit.verdict
-  cudajit_stub
-  cuda_backend_stub_check
-  hipjit_stub
-  hip_backend_stub_check
-  integers))
+ (name fp8_soak_hip_arm)
+ (modules fp8_soak_hip)
+ (libraries base hipjit_stub hip_backend_stub_check integers))
 
-; tools: vendor_idents, the shared program with its three arms.
+; tools: vendor_idents, one stand-in library per arm, each checked against its `.mli`
+; (gh-ocannl-2338).
 
 (copy_files#
- (files ../../../tools/vendor_idents.ml))
+ (files ../../../tools/vendor_idents_arm_cuda.mli))
 
 (rule
  (action
@@ -148,11 +149,27 @@
    ../../../tools/vendor_idents_arm_cuda.cudajit.ml
    vendor_idents_arm_cuda.ml)))
 
+(library
+ (name vendor_idents_cuda_arm)
+ (modules vendor_idents_arm_cuda)
+ (libraries base arrayjit.ir cuda_backend_stub_check))
+
+(copy_files#
+ (files ../../../tools/vendor_idents_arm_hip.mli))
+
 (rule
  (action
   (copy#
    ../../../tools/vendor_idents_arm_hip.hipjit.ml
    vendor_idents_arm_hip.ml)))
+
+(library
+ (name vendor_idents_hip_arm)
+ (modules vendor_idents_arm_hip)
+ (libraries base arrayjit.ir hip_backend_stub_check))
+
+(copy_files#
+ (files ../../../tools/vendor_idents_arm_metal.mli))
 
 (rule
  (action
@@ -161,23 +178,9 @@
    vendor_idents_arm_metal.ml)))
 
 (library
- (name vendor_idents_arms)
- (modules
-  vendor_idents
-  vendor_idents_arm_cuda
-  vendor_idents_arm_hip
-  vendor_idents_arm_metal)
- (libraries
-  base
-  stdio
-  vendor_idents_headers
-  arrayjit.ir
-  arrayjit.builtins_cuda
-  arrayjit.builtins_hip
-  arrayjit.builtins_metal
-  cuda_backend_stub_check
-  hip_backend_stub_check
-  metal_backend_stub_check))
+ (name vendor_idents_metal_arm)
+ (modules vendor_idents_arm_metal)
+ (libraries base arrayjit.ir metal_backend_stub_check))
 
 ; benchmarks/runners/ocannl: bench_cuda_select uses the CUDA backend's compile scope.
 

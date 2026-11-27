@@ -2,6 +2,11 @@ a stand-in declaring a library its genuine stanza lacks is refused, naming both 
 a genuine stanza declaring more than its stand-in, by public names and preprocessors, is accepted: true
 a library the genuine stanza names only in a select condition counts as declared: true
 a library only a sibling alternative of the arm's own select names is refused: true
+a library only a sibling select of the same stanza names is refused: true
+a multi-arm stand-in declaring the union of sibling selects' libraries is refused on both arms: true
+separate stand-in libraries for sibling selects of one stanza are accepted: true
+a non-arm helper compiled alongside its stanza's single arm shares that arm's select: true
+a stand-in compiling a non-arm module alone cannot use its stanza's select libraries: true
 a stand-in re-export the genuine stanza does not make is refused: true
 a package stand-in whose package the genuine stanza never names is refused: true
 a library an availability-only exception names is excused: true
@@ -21,6 +26,8 @@ a copy of a same-named file from another directory does not count: true
 a copy outside arrayjit/vendor_stubs does not count: true
 a copied arm no library compiles is refused: true
 a copy naming `Nvrtc` whose genuine stanza declares only `cudajit.cuda` is refused (the sub-library shape): true
+a package module whose sub-library only a sibling select declares is refused: true
+a non-arm helper naming a package module only its companion arm's select declares is refused: true
 a module a copy opens is named by it: true
 a module only the copied interface names is held to its library: true
 a module a copied interface substitutes is named by it: true
