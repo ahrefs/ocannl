@@ -7366,6 +7366,33 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `*.verdict-records` copies. Records from a commit predating the records, or with a malformed
   hatched record, refuse the aggregation (exit 2, `post-run-failed`), as the skip aggregator does.
 
+- **Coverage streaks across consecutive sweeps** (gh-ocannl-2424): a single-night skip or bypass
+  can come from a box outage or contended host, while the same coverage gap persisting across
+  several sweeps is coverage that silently stopped. `tools/sweep-streaks.sh` compares chronological
+  saved `*-skip-coverage.txt` and `*-bypass-rates.txt` reports (fail-closed against both
+  aggregators' output grammars, accepting legacy pre-environment skip reports with the environment
+  dimension unjudged; exit 0 clear/not-checked, 1 alert, 2 malformed input) and flags trailing
+  streaks of length `>= N` with default **`N = 3` consecutive judged sweeps**
+  (`--min-streak N` / `OCANNL_TOOL_SWEEP_STREAK_MIN`, integer `>= 2`; single-night and two-night
+  cases stay unreported at the default): (1) a claim `FAIL`-skipped on every box (`every declared
+  box` and `every required sweep box` normalized together so streaks spanning `--unswept-box`
+  adoption do not split), (2) a claim `FAIL`-skipped on every known backend, (3) a unit at 100%
+  bypass (`B == R && C == 0` on exact counts, never the rounded percentage, so `199 of 200 (100%),
+  1 checked` clears), and (4) a claim listed as `UNVERIFIED` across all units that reached it.
+  Inconclusive reports (`partial` skip reports that still list the claim in `POTENTIAL`,
+  `insufficient`/`unavailable`/`NOT AGGREGATED` reports, or bypass reports where a unit reached no
+  hatched claims or was absent) neither advance nor clear an ongoing streak, whereas positive
+  evidence (`PASS`, a `partial` skip report whose `POTENTIAL` omits the claim, `C > 0` checked on
+  the unit, or a hatched-reaching bypass report whose `UNVERIFIED` set omits the claim) resets the
+  streak; a streak alerts only when the latest report itself is a hit. `tools/sweep.sh` runs
+  `tools/sweep-streaks.sh` after publishing the run's skip and/or bypass reports (checking only
+  the report family or families written by that run, up to `$stamp`), writes
+  `logs/<stamp>-streaks.txt`, and quotes `coverage streaks:` plus each indented `STREAK:` line on
+  stdout (and `sweep: coverage streaks ALERT` on stderr) without failing the sweep. **Who reads the
+  notice**: the scheduled sweep routine reads the `STREAK:` findings and files or updates **one
+  standing issue per streak** (the way CI-red records are filed), and the **CI-red triage routine**
+  reads those standing issues.
+
 - Floor/native-PTX runtime-refusal signatures have one owner, `tools/environment-refusals.sh`
   (gh-ocannl-2219). It reads only its allowlisted uncaught exceptions/statuses and named runtime
   assertion; the floor still combines that with its collected kernel window and serial recovery.

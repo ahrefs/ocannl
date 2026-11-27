@@ -1028,6 +1028,7 @@ run_sweep_args() {
     "OCANNL_TOOL_SWEEP_JOBS=${SWEEP_TEST_JOBS:-}" \
     "OCANNL_TOOL_SWEEP_CAP=${SWEEP_TEST_UNIT_CAP:-}" \
     "OCANNL_TOOL_SWEEP_TEST_CAP=${SWEEP_TEST_TEST_CAP:-}" \
+    "OCANNL_TOOL_SWEEP_STREAK_MIN=${SWEEP_TEST_STREAK_MIN:-}" \
     "SWEEP_TEST_OPAM_HANG=${SWEEP_TEST_OPAM_HANG:-}" \
     "SWEEP_TEST_OPAM_HANG_PID=${SWEEP_TEST_OPAM_HANG_PID:-}" \
     "SWEEP_TEST_OPAM_HANG_SERIAL=${SWEEP_TEST_OPAM_HANG_SERIAL:-}" \
@@ -1549,6 +1550,424 @@ bypass_dup_rc=$?
 set -e
 [ "$bypass_dup_rc" -eq 2 ]
 grep -q "^aggregate-bypasses: duplicate unit 'a/cc'$" "$tmp/bypass-dup.err"
+
+# Cross-sweep streak detection (gh-ocannl-2424): tools/sweep-streaks.sh compares
+# saved *-skip-coverage.txt and *-bypass-rates.txt reports and flags trailing
+# consecutive streaks of (a) a claim skipped on every box (or every known
+# backend), (b) a unit at 100% bypass (exact B == R && C == 0, never rounded %),
+# and (c) an UNVERIFIED claim. Default threshold N = 3; single-night cases stay
+# quiet.
+streaks=$(dirname "$sweep")/sweep-streaks.sh
+[ -x "$streaks" ]
+mkdir -p "$tmp/streaks"
+
+# Build real saved reports from aggregate-skips.sh and aggregate-bypasses.sh.
+# Skip report with complete backend + box FAIL (every declared box):
+records_of "$verdict_probe" "$tmp/streaks/cc-skip.records" cc
+records_of "$verdict_probe" "$tmp/streaks/metal-skip.records" metal
+records_of "$verdict_probe" "$tmp/streaks/cc-pass.records" cc execute-environment
+set +e
+"$aggregate" --known cc --known metal --known-box m4-max \
+  --run cc m4-max "$tmp/streaks/cc-skip.records" \
+  --run metal m4-max "$tmp/streaks/metal-skip.records" \
+  >"$tmp/streaks/skip-fail-1.txt"
+[ "$?" -eq 1 ]
+# Second FAIL report using --unswept-box wording ("every required sweep box") so
+# streak continuity across gh-ocannl-1832's wording shift is pinned.
+{
+  printf 'skip coverage for deadbeef (@runtest + @train; forced execution)\n'
+  "$aggregate" --known cc --known metal --known-box m4-max --unswept-box m4-pro \
+    --run cc m4-max "$tmp/streaks/cc-skip.records" \
+    --run metal m4-max "$tmp/streaks/metal-skip.records"
+} >"$tmp/streaks/skip-fail-2.txt"
+[ "$?" -eq 1 ]
+set -e
+cp "$tmp/streaks/skip-fail-2.txt" "$tmp/streaks/skip-fail-3.txt"
+
+# Complete-matrix PASS skip report (environment executed on cc; backend claim still
+# absent when metal does not skip it — build a clean PASS report for both).
+"$aggregate" --known cc --known-box m4-max \
+  --run cc m4-max "$tmp/streaks/cc-pass.records" \
+  >"$tmp/streaks/skip-pass-box.txt"
+# Partial skip report with POTENTIAL on the same box claim (missing rog-nv) and
+# partial CLEAR skip report (box executed the env claim). Both complete the two
+# known backends (cc, metal), so aggregate-skips exits 1 on the backend FAIL
+# while reporting partial box status.
+set +e
+"$aggregate" --known cc --known metal --known-box m4-max --known-box minix --known-box rog-nv \
+  --run cc m4-max "$tmp/streaks/cc-skip.records" \
+  --run metal minix "$tmp/streaks/metal-skip.records" \
+  >"$tmp/streaks/skip-partial-pot.txt"
+[ "$?" -eq 1 ]
+"$aggregate" --known cc --known metal --known-box m4-max --known-box minix --known-box rog-nv \
+  --run cc m4-max "$tmp/streaks/cc-pass.records" \
+  --run metal minix "$tmp/streaks/metal-skip.records" \
+  >"$tmp/streaks/skip-partial-clear-box.txt"
+[ "$?" -eq 1 ]
+set -e
+# Also a purely partial skip report (neither backend nor box complete -> exit 0)
+# to pin that partial-only sequences never alert on either dimension.
+"$aggregate" --known cc --known metal --known cuda --known-box m4-max --known-box minix --known-box rog-nv \
+  --run cc m4-max "$tmp/streaks/cc-skip.records" \
+  --run metal minix "$tmp/streaks/metal-skip.records" \
+  >"$tmp/streaks/skip-partial-both.txt"
+# Legacy pre-environment skip report (no completed boxes / environment section).
+cat >"$tmp/streaks/skip-legacy-fail.txt" <<'LEGACY'
+completed backends: cc, metal
+missing backends: <none>
+status: complete (2 of 2 known backends completed)
+result: FAIL -- 1 claim(s) skipped on every known backend
+FAIL: skipped on every known backend: verdict_skip_probe.exe: common unevaluated claim
+LEGACY
+
+# Bypass reports:
+# 1) both a 100%-bypassed unit (m4-max/metal) and an UNVERIFIED claim (with parens
+#    in its claim label, to pin reach-list stripping).
+hatch_paren_bypass=$'BYPASSED (queued window contended): timing bound (median < 2x)\nOCANNL_TOOL_VERDICT_BYPASS\tqueued window contended\tfixture.exe\ttiming bound (median < 2x)'
+hatched_records "$tmp/streaks/b-cc-half.records" "$hatch_paren_bypass"$'\n'"$hatch_checked"
+hatched_records "$tmp/streaks/b-metal-full.records" "$hatch_paren_bypass"$'\n'"$hatch_bypassed_too"
+hatched_records "$tmp/streaks/b-cc-clear.records" "$hatch_checked"
+hatched_records "$tmp/streaks/b-none.records" "$common"
+{
+  printf 'bypass rates for deadbeef (forced execution)\n'
+  "$bypasses" --run m4-max/cc "$tmp/streaks/b-cc-half.records" \
+    --run m4-max/metal "$tmp/streaks/b-metal-full.records"
+} >"$tmp/streaks/bypass-hit-1.txt"
+cp "$tmp/streaks/bypass-hit-1.txt" "$tmp/streaks/bypass-hit-2.txt"
+cp "$tmp/streaks/bypass-hit-1.txt" "$tmp/streaks/bypass-hit-3.txt"
+"$bypasses" --run m4-max/cc "$tmp/streaks/b-cc-clear.records" \
+  --run m4-max/metal "$tmp/streaks/b-cc-clear.records" \
+  >"$tmp/streaks/bypass-clear.txt"
+"$bypasses" --run m4-max/cc "$tmp/streaks/b-none.records" \
+  --run m4-max/metal "$tmp/streaks/b-none.records" \
+  >"$tmp/streaks/bypass-none.txt"
+# Independent dimensions:
+# - m4-max/metal at 100% bypass while every claim is checked on m4-max/cc (CLEAR, no UNVERIFIED)
+hatched_records "$tmp/streaks/b-metal-only-sometimes.records" "$hatch_bypassed_too"
+"$bypasses" --run m4-max/cc "$tmp/streaks/b-cc-clear.records" \
+  --run m4-max/metal "$tmp/streaks/b-metal-only-sometimes.records" \
+  >"$tmp/streaks/bypass-unit-only-1.txt"
+cp "$tmp/streaks/bypass-unit-only-1.txt" "$tmp/streaks/bypass-unit-only-2.txt"
+# - UNVERIFIED claim while every unit is at 50% (no unit at 100%)
+"$bypasses" --run m4-max/cc "$tmp/streaks/b-cc-half.records" \
+  --run m4-max/metal "$tmp/streaks/b-cc-half.records" \
+  >"$tmp/streaks/bypass-unver-only-1.txt"
+cp "$tmp/streaks/bypass-unver-only-1.txt" "$tmp/streaks/bypass-unver-only-2.txt"
+# - Rounded 100% (199 of 200 bypassed, 1 checked): must clear, NOT advance 100% streak.
+cat >"$tmp/streaks/bypass-rounded-100.txt" <<'ROUNDED'
+units: m4-max/metal
+m4-max/metal: 199 of 200 hatched claim reach(es) bypassed (100%), 1 checked
+  bypassed 199 of 200 (100%): fixture.exe: noisy claim [queued window contended]
+result: CLEAR -- every hatched claim reached was checked on some unit
+ROUNDED
+
+# Single-night skip + bypass report: never alerts (at --min-streak 2 or default 3).
+single_streak=$("$streaks" --min-streak 2 \
+  --skip-report "$tmp/streaks/skip-fail-1.txt" \
+  --bypass-report "$tmp/streaks/bypass-hit-1.txt")
+grep -qxF 'min-streak: 2' <<<"$single_streak"
+grep -qxF 'skip reports: 1' <<<"$single_streak"
+grep -qxF 'bypass reports: 1' <<<"$single_streak"
+grep -qxF 'result: CLEAR -- no streak reached 2 consecutive sweeps' <<<"$single_streak"
+absent '^STREAK:' <<<"$single_streak"
+
+# Planted 2-night streak in two saved skip reports and two saved bypass reports
+# (--min-streak 2): reports all 4 streak kinds and exits 1.
+set +e
+two_streak=$("$streaks" --min-streak 2 \
+  --skip-report "$tmp/streaks/skip-fail-1.txt" \
+  --skip-report "$tmp/streaks/skip-fail-2.txt" \
+  --bypass-report "$tmp/streaks/bypass-hit-1.txt" \
+  --bypass-report "$tmp/streaks/bypass-hit-2.txt")
+two_streak_rc=$?
+set -e
+[ "$two_streak_rc" -eq 1 ]
+grep -qxF 'result: ALERT -- 4 streak(s) reached 2 consecutive sweeps' <<<"$two_streak"
+grep -qxF 'STREAK: skipped on every box (2 consecutive sweeps): verdict_skip_probe.exe: common environment-gated claim' \
+  <<<"$two_streak"
+grep -qxF 'STREAK: skipped on every known backend (2 consecutive sweeps): verdict_skip_probe.exe: common unevaluated claim' \
+  <<<"$two_streak"
+grep -qxF 'STREAK: unit at 100% bypass (2 consecutive sweeps): m4-max/metal (2 of 2 bypassed, 0 checked)' \
+  <<<"$two_streak"
+grep -qxF 'STREAK: UNVERIFIED bypassed claim (2 consecutive sweeps): verdict_skip_probe.exe: timing bound (median < 2x) (m4-max/cc 1 of 1, m4-max/metal 1 of 1)' \
+  <<<"$two_streak"
+
+# Default threshold N = 3: 2 consecutive nights stay CLEAR; 3 consecutive nights ALERT.
+two_default=$("$streaks" \
+  --skip-report "$tmp/streaks/skip-fail-1.txt" \
+  --skip-report "$tmp/streaks/skip-fail-2.txt" \
+  --bypass-report "$tmp/streaks/bypass-hit-1.txt" \
+  --bypass-report "$tmp/streaks/bypass-hit-2.txt")
+grep -qxF 'min-streak: 3' <<<"$two_default"
+grep -qxF 'result: CLEAR -- no streak reached 3 consecutive sweeps' <<<"$two_default"
+absent '^STREAK:' <<<"$two_default"
+
+set +e
+three_default=$("$streaks" \
+  --skip-report "$tmp/streaks/skip-fail-1.txt" \
+  --skip-report "$tmp/streaks/skip-fail-2.txt" \
+  --skip-report "$tmp/streaks/skip-fail-3.txt" \
+  --bypass-report "$tmp/streaks/bypass-hit-1.txt" \
+  --bypass-report "$tmp/streaks/bypass-hit-2.txt" \
+  --bypass-report "$tmp/streaks/bypass-hit-3.txt")
+three_default_rc=$?
+set -e
+[ "$three_default_rc" -eq 1 ]
+grep -qxF 'min-streak: 3' <<<"$three_default"
+grep -qxF 'result: ALERT -- 4 streak(s) reached 3 consecutive sweeps' <<<"$three_default"
+grep -qxF 'STREAK: skipped on every box (3 consecutive sweeps): verdict_skip_probe.exe: common environment-gated claim' \
+  <<<"$three_default"
+grep -qxF 'STREAK: unit at 100% bypass (3 consecutive sweeps): m4-max/metal (2 of 2 bypassed, 0 checked)' \
+  <<<"$three_default"
+
+# Independent bypass dimensions: 100%-unit without UNVERIFIED, and UNVERIFIED without 100%-unit.
+set +e
+unit_only_out=$("$streaks" --min-streak 2 \
+  --bypass-report "$tmp/streaks/bypass-unit-only-1.txt" \
+  --bypass-report "$tmp/streaks/bypass-unit-only-2.txt")
+unit_only_rc=$?
+unver_only_out=$("$streaks" --min-streak 2 \
+  --bypass-report "$tmp/streaks/bypass-unver-only-1.txt" \
+  --bypass-report "$tmp/streaks/bypass-unver-only-2.txt")
+unver_only_rc=$?
+set -e
+[ "$unit_only_rc" -eq 1 ]
+grep -qxF 'result: ALERT -- 1 streak(s) reached 2 consecutive sweeps' <<<"$unit_only_out"
+grep -qxF 'STREAK: unit at 100% bypass (2 consecutive sweeps): m4-max/metal (1 of 1 bypassed, 0 checked)' \
+  <<<"$unit_only_out"
+absent 'UNVERIFIED' <<<"$unit_only_out"
+[ "$unver_only_rc" -eq 1 ]
+grep -qxF 'result: ALERT -- 1 streak(s) reached 2 consecutive sweeps' <<<"$unver_only_out"
+grep -qxF 'STREAK: UNVERIFIED bypassed claim (2 consecutive sweeps): verdict_skip_probe.exe: timing bound (median < 2x) (m4-max/cc 1 of 1, m4-max/metal 1 of 1)' \
+  <<<"$unver_only_out"
+absent 'unit at 100% bypass' <<<"$unver_only_out"
+
+# Reset and inconclusive controls:
+# - Intervening rounded 100% (199/200, 1 checked) clears the 100% unit streak.
+"$streaks" --min-streak 2 \
+  --bypass-report "$tmp/streaks/bypass-hit-1.txt" \
+  --bypass-report "$tmp/streaks/bypass-rounded-100.txt" \
+  --bypass-report "$tmp/streaks/bypass-hit-2.txt" \
+  | grep -qxF 'result: CLEAR -- no streak reached 2 consecutive sweeps'
+# - Intervening CLEAR breaks both unit-100% and UNVERIFIED streaks.
+"$streaks" --min-streak 2 \
+  --bypass-report "$tmp/streaks/bypass-hit-1.txt" \
+  --bypass-report "$tmp/streaks/bypass-clear.txt" \
+  --bypass-report "$tmp/streaks/bypass-hit-2.txt" \
+  | grep -qxF 'result: CLEAR -- no streak reached 2 consecutive sweeps'
+# - Intervening no-hatched-reached is inconclusive: preserves streak without incrementing.
+set +e
+bypass_gap=$("$streaks" --min-streak 2 \
+  --bypass-report "$tmp/streaks/bypass-hit-1.txt" \
+  --bypass-report "$tmp/streaks/bypass-none.txt" \
+  --bypass-report "$tmp/streaks/bypass-hit-2.txt")
+bypass_gap_rc=$?
+set -e
+[ "$bypass_gap_rc" -eq 1 ]
+grep -qxF 'STREAK: unit at 100% bypass (2 consecutive sweeps): m4-max/metal (2 of 2 bypassed, 0 checked)' \
+  <<<"$bypass_gap"
+grep -qxF 'STREAK: UNVERIFIED bypassed claim (2 consecutive sweeps): verdict_skip_probe.exe: timing bound (median < 2x) (m4-max/cc 1 of 1, m4-max/metal 1 of 1)' \
+  <<<"$bypass_gap"
+# - Trailing inconclusive report does NOT alert.
+"$streaks" --min-streak 2 \
+  --bypass-report "$tmp/streaks/bypass-hit-1.txt" \
+  --bypass-report "$tmp/streaks/bypass-hit-2.txt" \
+  --bypass-report "$tmp/streaks/bypass-none.txt" \
+  | grep -qxF 'result: CLEAR -- no streak reached 2 consecutive sweeps'
+# - Skip resets & partial rules:
+#   PASS breaks box streak; partial(CLEAR on box) ALSO breaks box streak because a completed box evaluated it.
+set +e
+pass_box_check=$("$streaks" --min-streak 2 \
+  --skip-report "$tmp/streaks/skip-fail-1.txt" \
+  --skip-report "$tmp/streaks/skip-pass-box.txt" \
+  --skip-report "$tmp/streaks/skip-fail-2.txt")
+pass_box_rc=$?
+set -e
+[ "$pass_box_rc" -eq 1 ]
+grep -qxF 'STREAK: skipped on every known backend (2 consecutive sweeps): verdict_skip_probe.exe: common unevaluated claim' \
+  <<<"$pass_box_check"
+absent 'skipped on every box' <<<"$pass_box_check"
+set +e
+partial_clear_check=$("$streaks" --min-streak 2 \
+  --skip-report "$tmp/streaks/skip-fail-1.txt" \
+  --skip-report "$tmp/streaks/skip-partial-clear-box.txt" \
+  --skip-report "$tmp/streaks/skip-fail-2.txt")
+partial_clear_rc=$?
+set -e
+[ "$partial_clear_rc" -eq 1 ]
+absent 'skipped on every box' <<<"$partial_clear_check"
+#   Intervening partial(POTENTIAL) preserves FAIL streak without incrementing; partial alone never alerts.
+set +e
+partial_gap=$("$streaks" --min-streak 2 \
+  --skip-report "$tmp/streaks/skip-fail-1.txt" \
+  --skip-report "$tmp/streaks/skip-partial-pot.txt" \
+  --skip-report "$tmp/streaks/skip-fail-2.txt")
+partial_gap_rc=$?
+set -e
+[ "$partial_gap_rc" -eq 1 ]
+grep -qxF 'STREAK: skipped on every box (2 consecutive sweeps): verdict_skip_probe.exe: common environment-gated claim' \
+  <<<"$partial_gap"
+cp "$tmp/streaks/skip-partial-both.txt" "$tmp/streaks/skip-partial-both-2.txt"
+"$streaks" --min-streak 2 \
+  --skip-report "$tmp/streaks/skip-partial-both.txt" \
+  --skip-report "$tmp/streaks/skip-partial-both-2.txt" \
+  | grep -qxF 'result: CLEAR -- no streak reached 2 consecutive sweeps'
+#   Trailing partial(POTENTIAL) on both dimensions does not alert.
+"$streaks" --min-streak 2 \
+  --skip-report "$tmp/streaks/skip-fail-1.txt" \
+  --skip-report "$tmp/streaks/skip-fail-2.txt" \
+  --skip-report "$tmp/streaks/skip-partial-both.txt" \
+  | grep -qxF 'result: CLEAR -- no streak reached 2 consecutive sweeps'
+#   Legacy pre-environment skip report accepted; backend dimension still participates.
+set +e
+legacy_out=$("$streaks" --min-streak 2 \
+  --skip-report "$tmp/streaks/skip-legacy-fail.txt" \
+  --skip-report "$tmp/streaks/skip-fail-1.txt")
+legacy_rc=$?
+set -e
+[ "$legacy_rc" -eq 1 ]
+grep -qxF 'STREAK: skipped on every known backend (2 consecutive sweeps): verdict_skip_probe.exe: common unevaluated claim' \
+  <<<"$legacy_out"
+absent 'skipped on every box' <<<"$legacy_out"
+
+# Directory discovery (--logs-dir, --up-to) and ignoring non-stamp / stray files.
+mkdir -p "$tmp/streaks/logs-dir"
+cp "$tmp/streaks/skip-fail-1.txt" "$tmp/streaks/logs-dir/20261124T050000Z-skip-coverage.txt"
+cp "$tmp/streaks/skip-fail-2.txt" "$tmp/streaks/logs-dir/20261125T050000Z-skip-coverage.txt"
+cp "$tmp/streaks/skip-fail-3.txt" "$tmp/streaks/logs-dir/20261126T050000Z-skip-coverage.txt"
+cp "$tmp/streaks/bypass-hit-1.txt" "$tmp/streaks/logs-dir/20261124T050000Z-bypass-rates.txt"
+cp "$tmp/streaks/bypass-hit-2.txt" "$tmp/streaks/logs-dir/20261125T050000Z-bypass-rates.txt"
+cp "$tmp/streaks/bypass-hit-3.txt" "$tmp/streaks/logs-dir/20261126T050000Z-bypass-rates.txt"
+printf 'not a report\n' >"$tmp/streaks/logs-dir/not-a-stamp-skip-coverage.txt"
+printf 'stage\n' >"$tmp/streaks/logs-dir/20261126T050000Z-skip-coverage.txt.stage.99"
+"$streaks" --logs-dir "$tmp/streaks/logs-dir" --up-to 20261125T050000Z \
+  | grep -qxF 'result: CLEAR -- no streak reached 3 consecutive sweeps'
+set +e
+dir_alert=$("$streaks" --logs-dir "$tmp/streaks/logs-dir" --up-to 20261126T050000Z)
+dir_alert_rc=$?
+set -e
+[ "$dir_alert_rc" -eq 1 ]
+grep -qxF 'skip reports: 3' <<<"$dir_alert"
+grep -qxF 'bypass reports: 3' <<<"$dir_alert"
+grep -qxF 'result: ALERT -- 4 streak(s) reached 3 consecutive sweeps' <<<"$dir_alert"
+mkdir -p "$tmp/streaks/empty-dir"
+"$streaks" --logs-dir "$tmp/streaks/empty-dir" \
+  | grep -qxF 'result: NOT CHECKED -- no skip or bypass reports supplied'
+
+# Fail-closed refusals (exit 2): bad CLI, malformed skip reports, malformed bypass reports, unwritable stdout.
+printf '' >"$tmp/streaks/bad-empty.txt"
+printf 'garbage line\n' >"$tmp/streaks/bad-garbage.txt"
+grep -v '^FAIL:' "$tmp/streaks/skip-fail-1.txt" >"$tmp/streaks/bad-skip-count.txt"
+sed '/^environment result:/,$d' "$tmp/streaks/skip-fail-1.txt" >"$tmp/streaks/bad-skip-trunc-env.txt"
+sed 's/2 of 2 hatched/2 of 3 hatched/' "$tmp/streaks/bypass-hit-1.txt" >"$tmp/streaks/bad-bypass-math.txt"
+sed 's/(100%)/(99%)/' "$tmp/streaks/bypass-hit-1.txt" >"$tmp/streaks/bad-bypass-pct.txt"
+grep -v '^  bypassed ' "$tmp/streaks/bypass-hit-1.txt" >"$tmp/streaks/bad-bypass-detail.txt"
+grep -v '^UNVERIFIED:' "$tmp/streaks/bypass-hit-1.txt" >"$tmp/streaks/bad-bypass-unver-count.txt"
+for bad_skip in bad-empty bad-garbage bad-skip-count bad-skip-trunc-env; do
+  set +e
+  bad_err=$("$streaks" --skip-report "$tmp/streaks/$bad_skip.txt" 2>&1 >/dev/null)
+  bad_rc=$?
+  set -e
+  [ "$bad_rc" -eq 2 ]
+  grep -q '^sweep-streaks: malformed skip report ' <<<"$bad_err"
+done
+for bad_bypass in bad-empty bad-garbage bad-bypass-math bad-bypass-pct bad-bypass-detail bad-bypass-unver-count; do
+  set +e
+  bad_err=$("$streaks" --bypass-report "$tmp/streaks/$bad_bypass.txt" 2>&1 >/dev/null)
+  bad_rc=$?
+  set -e
+  [ "$bad_rc" -eq 2 ]
+  grep -q '^sweep-streaks: malformed bypass report ' <<<"$bad_err"
+done
+for bad_cli in "--min-streak 1" "--min-streak abc" "--up-to 20261125T050000Z" "--unknown"; do
+  set +e
+  # shellcheck disable=SC2086
+  "$streaks" $bad_cli >/dev/null 2>"$tmp/streaks/cli.err"
+  bad_cli_rc=$?
+  set -e
+  [ "$bad_cli_rc" -eq 2 ]
+  grep -q '^sweep-streaks: ' "$tmp/streaks/cli.err"
+done
+set +e
+"$streaks" --skip-report "$tmp/streaks/skip-fail-1.txt" --skip-report "$tmp/streaks/skip-fail-1.txt" \
+  >/dev/null 2>"$tmp/streaks/dup.err"
+[ "$?" -eq 2 ]
+"$streaks" --logs-dir "$tmp/streaks/logs-dir" --skip-report "$tmp/streaks/skip-fail-1.txt" \
+  >/dev/null 2>"$tmp/streaks/mix.err"
+[ "$?" -eq 2 ]
+# Unwritable stdout must exit 2 rather than silently succeeding.
+"$streaks" --logs-dir "$tmp/streaks/empty-dir" >&- 2>"$tmp/streaks/stdout.err"
+[ "$?" -eq 2 ]
+# Unset-locale guard (gh-ocannl-2484).
+env -u LANG -u LC_ALL LC_CTYPE=UTF-8 "$streaks" --min-streak 2 \
+  --skip-report "$tmp/streaks/skip-fail-1.txt" \
+  --skip-report "$tmp/streaks/skip-fail-2.txt" >/dev/null
+[ "$?" -eq 1 ]
+set -e
+
+# End-to-end sweep.sh integration in an isolated state directory:
+# 1) Nights 1 & 2 stay CLEAR under default N = 3; Night 3 alerts on both 100%-bypass
+#    unit and UNVERIFIED claim while sweep.sh still exits 0.
+# 2) Night 4 (--only cc checked) stays CLEAR: absent metal does not spuriously alert,
+#    and cc checking resets UNVERIFIED.
+# 3) Scoped --target and cached-no-records sweeps report not checked; invalid
+#    OCANNL_TOOL_SWEEP_STREAK_MIN=1 refuses at startup with no run record.
+streak_state=$tmp/streak-state
+run_streak_sweep() {
+  local saved_state=$state
+  state=$streak_state
+  run_sweep_args "$@"
+  local rc=$?
+  state=$saved_state
+  return "$rc"
+}
+streak_r1=$(SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log$'\n'$hatch_bypass$'\n'$hatch_checked \
+  SWEEP_TEST_OPAM_OUT_METAL=$metal_unit_log$'\n'$hatch_bypass$'\n'$hatch_bypassed_too \
+  run_streak_sweep --force --only cc --only metal)
+grep -q '^coverage streaks: CLEAR -- no streak reached 3 consecutive sweeps -- ' <<<"$streak_r1"
+absent '^  STREAK:' <<<"$streak_r1"
+streak_r2=$(SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log$'\n'$hatch_bypass$'\n'$hatch_checked \
+  SWEEP_TEST_OPAM_OUT_METAL=$metal_unit_log$'\n'$hatch_bypass$'\n'$hatch_bypassed_too \
+  run_streak_sweep --force --only cc --only metal)
+grep -q '^coverage streaks: CLEAR -- no streak reached 3 consecutive sweeps -- ' <<<"$streak_r2"
+absent '^  STREAK:' <<<"$streak_r2"
+streak_r3=$(SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log$'\n'$hatch_bypass$'\n'$hatch_checked \
+  SWEEP_TEST_OPAM_OUT_METAL=$metal_unit_log$'\n'$hatch_bypass$'\n'$hatch_bypassed_too \
+  run_streak_sweep --force --only cc --only metal 2>&1)
+streak_r3_report=$(sed -n 's/^coverage streaks: .* -- //p' <<<"$streak_r3" | tail -1)
+[ -f "$streak_r3_report" ]
+grep -qxF "coverage streaks: ALERT -- 2 streak(s) reached 3 consecutive sweeps -- $streak_r3_report" \
+  <<<"$streak_r3"
+grep -qxF "sweep: coverage streaks ALERT -- $streak_r3_report" <<<"$streak_r3"
+grep -qxF '  STREAK: unit at 100% bypass (3 consecutive sweeps): m4-max/metal (2 of 2 bypassed, 0 checked)' \
+  <<<"$streak_r3"
+grep -qxF '  STREAK: UNVERIFIED bypassed claim (3 consecutive sweeps): fixture.exe: always-bypassed claim (m4-max/cc 1 of 1, m4-max/metal 1 of 1)' \
+  <<<"$streak_r3"
+streak_r4=$(SWEEP_TEST_OPAM_OUT_CC=$hatch_checked run_streak_sweep --only cc)
+grep -q '^coverage streaks: CLEAR -- no streak reached 3 consecutive sweeps -- ' <<<"$streak_r4"
+absent '^  STREAK:' <<<"$streak_r4"
+grep -q '^coverage streaks: not checked (requires no --target)$' \
+  <<<"$(run_streak_sweep --target streak-probe)"
+grep -q '^coverage streaks: not checked (no skip or bypass report written)$' \
+  <<<"$(SWEEP_TEST_OPAM_NO_RECORDS=1 SWEEP_TEST_OPAM_OUT_CC=$hatch_checked run_streak_sweep --only cc)"
+set +e
+bad_streak_min=$(SWEEP_TEST_STREAK_MIN=1 run_streak_sweep --only cc 2>&1)
+bad_streak_min_rc=$?
+set -e
+[ "$bad_streak_min_rc" -eq 2 ]
+grep -q "OCANNL_TOOL_SWEEP_STREAK_MIN must be an integer >= 2" <<<"$bad_streak_min"
+# A malformed saved report in $LOGS fails the streak check loudly (exit 2) and
+# rewrites the run record's exit kind to post-run-failed.
+printf 'corrupted report\n' >"$streak_state/logs/20200101T000000Z-bypass-rates.txt"
+set +e
+streak_malformed=$(SWEEP_TEST_OPAM_OUT_CC=$hatch_checked run_streak_sweep --only cc 2>&1)
+streak_malformed_rc=$?
+set -e
+[ "$streak_malformed_rc" -eq 2 ]
+grep -q '^sweep: streak check failed (exit 2)$' <<<"$streak_malformed"
+streak_malformed_record=$(sed -n 's/^run:  *//p' <<<"$streak_malformed")
+[ "$(awk -F '\t' '$1 == "run" { print $8 }' "$streak_malformed_record")" = post-run-failed ]
+rm -f "$streak_state/logs/20200101T000000Z-bypass-rates.txt"
 
 # The pure aggregator's complete-matrix control is the escalation seam the real
 # sweep reaches only when both remote GPU boxes and all local units pass. All
@@ -4719,6 +5138,47 @@ unswept_overlap_rc=$?
 set -e
 [ "$unswept_overlap_rc" -eq 2 ]
 grep -q "cannot be both known and unswept" <<<"$unswept_overlap"
+
+# End-to-end box-skip streak through sweep.sh (gh-ocannl-2424): on a single-box
+# declared matrix, two consecutive forced local sweeps whose environment claim
+# skips on m4-max produce a complete-matrix FAIL each time; run 1 stays CLEAR
+# and run 2 alerts on the planted 2-sweep streak (SWEEP_TEST_STREAK_MIN=2) while
+# sweep.sh still exits 0.
+printf '# measurement-boxes: m4-max\n' >"$main/benchmarks/fixtures/DIGESTS.txt"
+git -C "$main" add benchmarks/fixtures/DIGESTS.txt
+git -C "$main" commit -qm 'single-box matrix for skip streak'
+git -C "$main" push -q origin master
+box_streak_state=$tmp/box-streak-state
+run_box_streak_sweep() {
+  local saved_state=$state
+  state=$box_streak_state
+  SWEEP_TEST_STREAK_MIN=2 run_sweep_args --force --only cc --only metal "$@"
+  local rc=$?
+  state=$saved_state
+  return "$rc"
+}
+box_s1=$(SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log SWEEP_TEST_OPAM_OUT_METAL=$metal_unit_log \
+  run_box_streak_sweep)
+grep -q '^coverage streaks: CLEAR -- no streak reached 2 consecutive sweeps -- ' <<<"$box_s1"
+absent '^  STREAK:' <<<"$box_s1"
+box_s2=$(SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log SWEEP_TEST_OPAM_OUT_METAL=$metal_unit_log \
+  run_box_streak_sweep 2>&1)
+grep -q '^coverage streaks: ALERT -- 1 streak(s) reached 2 consecutive sweeps -- ' <<<"$box_s2"
+grep -qxF '  STREAK: skipped on every box (2 consecutive sweeps): fixture.exe: environment-gated claim' \
+  <<<"$box_s2"
+# A weekday incremental run does not write a skip-coverage report, so it must
+# not re-alert on the earlier forced skip-coverage streak.
+run_box_streak_inc() {
+  local saved_state=$state
+  state=$box_streak_state
+  SWEEP_TEST_STREAK_MIN=2 run_sweep_args --only cc
+  local rc=$?
+  state=$saved_state
+  return "$rc"
+}
+box_s3=$(SWEEP_TEST_OPAM_OUT_CC=$hatch_checked run_box_streak_inc)
+grep -q '^coverage streaks: CLEAR -- no streak reached 2 consecutive sweeps -- ' <<<"$box_s3"
+absent '^  STREAK:' <<<"$box_s3"
 
 # Negative control for the one-list contract: changing only the declaration to
 # add a box with no execution unit makes the sweep refuse before claiming any
