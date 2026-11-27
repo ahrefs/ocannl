@@ -6679,6 +6679,7 @@ let search_control () =
              ~probe:helper ()) );
       ("marked", passed (run ~marker ~probe:named ()));
       ("setenv", passed (run ~action:(setenv "32") ~probe:named ()));
+      ("setenv_read_only", refused (run ~action:(setenv "32") ~probe:read ()));
       ( "setenv_main_reset",
         refused (run ~action:(setenv "32") ~probe:(state width_key "-1" ^ named) ()) );
       ( "setenv_functor_argument_reset",
@@ -6876,7 +6877,7 @@ let search_control () =
     "a program starting a search with a run that can select cc is reported when it neither pins \
      the width nor carries the marker"
     (ok "unanswered" && ok "sibling_before_pin" && ok "setenv_main_reset"
-   && ok "setenv_sibling_reset"
+   && ok "setenv_sibling_reset" && ok "setenv_read_only"
     && ok "setenv_functor_argument_reset"
     && ok "setenv_case_variant_reset");
   Verdict.p "an unmarked search through an Autotune.Make instance is refused"
