@@ -2791,6 +2791,12 @@ files.
   four cross pairings to clear the repeat envelope in the same direction. The timed witness
   covers only `where_masked` at both densities and PTX targets. The measured floor and controls
   are in the [value-select benchmark](../../benchmarks/README.md#cuda-value-select-benchmark).
+- The fixed-kernel `where_masked` replay on rog found placement-dependent CUDA event times
+  (gh-ocannl-2499). In the A-then-B run, separate/same-allocation medians with payload in slab A were
+  1.304–1.473 at matched output offsets. With the same output addresses and payload in slab B,
+  they were 0.978–1.002. Shifting an output by 4 or 128 bytes within either slab changed medians
+  by at most 1.9%. The gap depends on the sampled combination of input and output locations.
+  The physical mapping and its contribution to the original separate-link gap remain open.
 - **What the tuner's numbers are a measurement OF is a config choice, and the two objectives do not
   crown the same candidate** (gh-ocannl-755). `Autotune.time_routine` takes a `timing_mode`, from
   config `autotune_timing`: `isolated` is the historical one launch plus one host sync — a lone

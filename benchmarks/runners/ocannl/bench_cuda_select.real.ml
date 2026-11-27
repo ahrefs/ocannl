@@ -352,7 +352,7 @@ let compare_segment ~root ~target ~dry ~calls ~shared_output ~reverse ~show_roun
 
 (* A single function and stream per rendering. Within a cell the only launch argument allowed to
    change is the output pointer. The same-address visits measure repeat noise on both slabs. *)
-let replay_output_placement ~root ~target ~dry ~calls ~elements work =
+let replay_output_placement ~root ~target ~dry ~calls ~elements ~reverse_payload_order work =
   let module Cu = Cuda in
   let module D = Cu.Deviceptr in
   let module B = Stdlib.Bigarray in
@@ -533,8 +533,10 @@ let replay_output_placement ~root ~target ~dry ~calls ~elements work =
                     p "%s %s\n" label (Bench_retime.ratio_fields ~name:(num ^ "_over_" ^ den) r))))
         in
         (* Each output address serves both roles, with fixed inputs in each timing cell. *)
-        cell ~payload_slab:"a" ~payload:a ~separate:b;
-        cell ~payload_slab:"b" ~payload:b ~separate:a)
+        let roles = [ ("a", a, b); ("b", b, a) ] in
+        let roles = if reverse_payload_order then List.rev roles else roles in
+        List.iter roles ~f:(fun (payload_slab, payload, separate) ->
+            cell ~payload_slab ~payload ~separate))
   in
   List.iter [ false; true ] ~f:(fun blend -> replay ~blend)
 
@@ -710,11 +712,14 @@ let () =
   let batch = Bench_args.int args 1 ~flag:"step-batch" ~name:"step-batch" ~default:64 in
   let dry = Bench_args.flag args ~name:"dry-run" in
   let output_placement = Bench_args.flag args ~name:"output-placement-probe" in
+  let reverse_payload_order = Bench_args.flag args ~name:"reverse-probe-payload-order" in
   let masked_only = Bench_args.flag args ~name:"where-masked-only" in
   let shared_output = not (Bench_args.flag args ~name:"separate-segment-outputs") in
   let reverse = Bench_args.flag args ~name:"reverse-segment-link-order" in
   if output_placement && ((not masked_only) || (not shared_output) || reverse) then
     invalid_arg "--output-placement-probe requires --where-masked-only and sets its own layouts";
+  if reverse_payload_order && not output_placement then
+    invalid_arg "--reverse-probe-payload-order requires --output-placement-probe";
   if elements % 256 <> 0 then invalid_arg "elements must be a multiple of 256";
   if not (String.equal (Utils.get_global_arg ~arg_name:"cuda_kernel_cache_mib" ~default:"64") "0")
   then invalid_arg "set OCANNL_CUDA_KERNEL_CACHE_MIB=0 to witness every PTX compile";
@@ -729,8 +734,9 @@ let () =
       if output_placement then
         p
           "backend=%s elements=%d mask_density=1/32,31/32 timing=cuda_event_fixed_batch calls=%d \
-           dry_run=%b where_masked_output_placement=true\n"
+           dry_run=%b where_masked_output_placement=true payload_order=%s\n"
           backend elements calls dry
+          (if reverse_payload_order then "b,a" else "a,b")
       else
         p
           "backend=%s elements=%d mask_density=1/32,31/32 timing=queued calls=%d dry_run=%b \
@@ -746,7 +752,8 @@ let () =
         let work = pointwise ~elements ~node Where_masked in
         List.iter targets ~f:(fun target ->
             if output_placement then
-              replay_output_placement ~root ~target ~dry ~calls ~elements work
+              replay_output_placement ~root ~target ~dry ~calls ~elements ~reverse_payload_order
+                work
             else segment target work)
       else
         let step_calls = Bench_retime.calls_of_env () in

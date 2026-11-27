@@ -1232,8 +1232,8 @@ outputs and 1.047–1.097 with a shared output across both mask densities and li
 separate outputs the short repeat stayed faster and the blend repeat stayed slower in both
 timing orders, even after reversing the links. Sharing the output narrowed the gap. Use about
 1.10 (0.91 in the faster direction) as a planning floor for those shared-output rows, then use
-the row's own control range when reading a run. The physical address or alignment mechanism
-remains undetermined.
+the row's own control range when reading a run. The fixed-kernel placement replay below has its
+results in the [timing objectives note](../docs/agent-notes/scheduling-and-autotune.md#timing-objectives-and-calibration).
 [#2385](https://github.com/ahrefs/ocannl/issues/2385)
 
 The benchmark generates its inputs in memory. Build the executable and verify the emitted forms,
@@ -1278,6 +1278,7 @@ roles. The probe checks the addresses and the full output, including the untouch
 events measure a fixed 128 launches after 128 warmup launches per reading. Eight balanced rounds
 include same-address repeats at the two undisplaced addresses. Read the aligned allocation
 comparison against its repeat envelope and the displaced ratios against the same-address controls.
+Use a fresh cell with `--reverse-probe-payload-order` to cross the slab roles with session order.
 
 ### Metal value-select benchmark
 
