@@ -1,5 +1,6 @@
 import ast
 import contextlib
+import errno
 import io
 import os
 import re
@@ -530,6 +531,121 @@ class CellGroupTest(unittest.TestCase):
             cell_group._guard_driver()
         kill_group.assert_not_called()
 
+    @unittest.skipUnless(sys.platform == "linux", "the shared cell death guard is Linux-specific")
+    def test_guarded_cell_keeps_caller_fds(self):
+        with tempfile.TemporaryFile() as descriptor:
+            descriptor.write(b"caller data")
+            descriptor.seek(0)
+            group = cell_group.spawn(
+                self.python("import os, sys; print(os.read(int(sys.argv[1]), 100).decode())",
+                            descriptor.fileno()),
+                watch_driver=True, pass_fds=(descriptor.fileno(),), stdout=subprocess.PIPE,
+            )
+            try:
+                stdout, _ = group.communicate(timeout=10)
+                self.assertEqual((group.returncode, stdout), (0, b"caller data\n"))
+            finally:
+                cell_group.terminate(group, grace=0.2)
+
+    @unittest.skipUnless(sys.platform == "linux", "the shared cell death guard is Linux-specific")
+    def test_guarded_cell_refuses_a_caller_preexec_callback(self):
+        with (
+            unittest.mock.patch.object(cell_group, "_DriverDeathGuard") as guard,
+            unittest.mock.patch.object(subprocess, "Popen"),
+        ):
+            with self.assertRaisesRegex(ValueError, "preexec_fn"):
+                cell_group.spawn(self.python("pass"), watch_driver=True, preexec_fn=lambda: None)
+            guard.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "linux", "the shared cell death guard is Linux-specific")
+    def test_dead_guard_keeps_the_completed_cell_status(self):
+        group = cell_group.spawn(self.python("raise SystemExit(4)"), watch_driver=True)
+        try:
+            self.assertEqual(group.wait(timeout=10), 4)
+            group.guard.proc.kill()
+            group.guard.proc.wait(timeout=10)
+        finally:
+            result = cell_group.terminate(group, grace=0.2)
+        self.assertIs(result.observation, cell_group.GONE)
+        self.assertEqual(group.returncode, 4)
+
+    def launcher_with_driver(self, mode):
+        ready = self.dir / "driver.pid"
+        thread_exited = self.dir / "thread-exited"
+        after_thread = self.dir / "driver-after-thread"
+        driver = (
+            "import os, pathlib, signal, sys, time, cells\n"
+            "parent = os.getppid()\n"
+            "cells.install_cancellation('test launcher')\n"
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "if sys.argv[4] == 'thread':\n"
+            "    while not pathlib.Path(sys.argv[2]).exists(): time.sleep(0.01)\n"
+            "    pathlib.Path(sys.argv[3]).touch()\n"
+            "    signal.pause()\n"
+            "else:\n"
+            "    while os.getppid() == parent: time.sleep(0.01)\n"
+            "    signal.raise_signal(signal.SIGHUP)\n"
+            "    print('driver survived launcher exit', flush=True)\n"
+        )
+        launcher = (
+            "import pathlib, signal, subprocess, sys, threading, time\n"
+            "mode = sys.argv[1]\n"
+            "def launch():\n"
+            "    subprocess.Popen(sys.argv[4:], stdin=subprocess.DEVNULL)\n"
+            "    while not pathlib.Path(sys.argv[2]).exists(): time.sleep(0.01)\n"
+            "if mode == 'nohup':\n"
+            "    signal.signal(signal.SIGHUP, signal.SIG_IGN)\n"
+            "    launch()\n"
+            "else:\n"
+            "    signal.signal(signal.SIGHUP, signal.SIG_DFL)\n"
+            "    thread = threading.Thread(target=launch)\n"
+            "    thread.start()\n"
+            "    thread.join()\n"
+            "    pathlib.Path(sys.argv[3]).touch()\n"
+            "sys.stdin.buffer.read(1)\n"
+        )
+        with subprocess.Popen(
+            self.python(launcher, mode, ready, thread_exited,
+                        *self.python(driver, ready, thread_exited, after_thread, mode)),
+            cwd=HERE, start_new_session=True, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ) as proc:
+            try:
+                self.wait_file(ready)
+                if mode == "thread":
+                    self.wait_file(after_thread)
+                out, err = proc.communicate(input=b"x", timeout=10)
+                self.assertEqual(proc.returncode, 0, err)
+                return out, err
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                if ready.exists():
+                    pid = int(ready.read_text())
+                    if self.alive(pid):
+                        with contextlib.suppress(ProcessLookupError):
+                            os.kill(pid, signal.SIGKILL)
+
+    @unittest.skipUnless(sys.platform == "linux", "the shared launcher guard is Linux-specific")
+    def test_nohup_driver_survives_when_its_launcher_exits(self):
+        out, err = self.launcher_with_driver("nohup")
+        self.assertEqual(out, b"driver survived launcher exit\n", err)
+
+    @unittest.skipUnless(
+        hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"),
+        "requires Linux process pidfds",
+    )
+    def test_launcher_guard_waits_for_the_process_after_its_spawning_thread_exits(self):
+        try:
+            pidfd = os.pidfd_open(os.getpid())
+        except OSError as exc:
+            if exc.errno == errno.ENOSYS:
+                self.skipTest("the kernel does not provide process pidfds")
+            raise
+        os.close(pidfd)
+        _, err = self.launcher_with_driver("thread")
+        self.assertIn(b"test launcher: terminated by signal", err)
+
     @unittest.skipUnless(os.name == "posix", "driver signal fixtures require POSIX")
     def test_shared_cells_reaps_a_resistant_descendant_on_cancel_or_timeout(self):
         for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, None):
@@ -598,7 +714,8 @@ class CellGroupTest(unittest.TestCase):
             "'.', os.environ, 60, subprocess.DEVNULL, subprocess.DEVNULL)\n"
         )
         launcher_source = (
-            "import subprocess, sys\n"
+            "import signal, subprocess, sys\n"
+            "signal.signal(signal.SIGHUP, signal.SIG_DFL)\n"
             "driver = subprocess.Popen(sys.argv[2:], close_fds=False)\n"
             + publish_pid("sys.argv[1]", "driver.pid")
             + "sys.exit(driver.wait())\n"

@@ -968,11 +968,14 @@ files.
   descendants, and it is why a SIGTERM to the DRIVER no longer reaches them, so a driver that
   spawns cells this way owes itself a SIGTERM handler that takes the running cell with it.
 
-- On Linux, the shared `cells.py` driver turns direct launcher death into SIGTERM. Its cell
-  guard keeps the inherited fleet slot and inhibitor alive after a driver SIGKILL until the
-  cell group is observed gone (gh-ocannl-2497). The child registers before exec so driver death
-  during spawn is covered as well. Processes that leave the managed group, loss of the guard
-  itself and kernel waits SIGKILL cannot complete require operator recovery.
+- On Linux, the shared `cells.py` driver turns direct launcher death into SIGTERM. Inherited
+  ignored SIGHUP keeps a detached launch, such as `nohup`, independent of its launcher. An
+  attached driver watches the launcher process with a pidfd. On kernels without pidfds, the
+  parent-death signal follows the launching thread. The cell guard keeps the inherited fleet
+  slot and inhibitor alive after a driver SIGKILL until the cell group is observed gone
+  (gh-ocannl-2497). The child registers before exec so driver death during spawn is covered.
+  Processes that leave the managed group, loss of the guard itself and kernel waits SIGKILL
+  cannot complete require operator recovery.
 
 - Two traps in that handler, both paid for in gh-ocannl-760's review. A cancellation must be
   DEFERRED across the spawn and across the kill — between `_execute_child` and `Popen` returning

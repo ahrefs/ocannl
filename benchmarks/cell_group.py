@@ -11,9 +11,12 @@ to a kill-on-close Job Object, and only then resumed; unlike ``taskkill /T``, th
 descendant after its original leader exits.
 """
 
+import atexit
 import contextlib
 import enum
+import errno
 import os
+import select
 import signal
 import socket
 import subprocess
@@ -40,11 +43,33 @@ class CleanupFailed(SystemExit):
 
 def cancel_on_launcher_exit():
     """Ask Linux to route direct-launcher death through the driver's SIGTERM handler."""
-    if sys.platform != "linux":
+    # A driver that explicitly inherited ignored HUP can outlive its launcher.
+    if sys.platform != "linux" or signal.getsignal(signal.SIGHUP) is signal.SIG_IGN:
         return
-    import ctypes
 
     parent = os.getppid()
+    if parent and hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
+        try:
+            launcher_fd = os.pidfd_open(parent)
+        except ProcessLookupError:
+            signal.raise_signal(signal.SIGTERM)
+            return
+        except OSError as exc:
+            if exc.errno != errno.ENOSYS:
+                raise
+        else:
+            try:
+                if os.getppid() != parent:
+                    signal.raise_signal(signal.SIGTERM)
+                    return
+                _start_launcher_guard(launcher_fd)
+            finally:
+                os.close(launcher_fd)
+            return
+
+    # Linux without pidfds still delivers a notification for the launching thread.
+    import ctypes
+
     prctl = ctypes.CDLL(None, use_errno=True).prctl
     # PR_SET_PDEATHSIG. A launcher that exits during registration cannot send this signal.
     if prctl(1, signal.SIGTERM, 0, 0, 0) == -1:
@@ -52,6 +77,38 @@ def cancel_on_launcher_exit():
         raise OSError(error, os.strerror(error))
     if os.getppid() != parent:
         signal.raise_signal(signal.SIGTERM)
+
+
+def _guard_command(*args):
+    return [sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve()), *args]
+
+
+def _start_launcher_guard(launcher_fd):
+    driver_fd = os.pidfd_open(os.getpid())
+    try:
+        guard = subprocess.Popen(
+            _guard_command("--launcher-guard", str(launcher_fd), str(driver_fd)),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            pass_fds=(launcher_fd, driver_fd), start_new_session=True,
+        )
+    finally:
+        os.close(driver_fd)
+
+    def reap():
+        guard.terminate()
+        guard.wait()
+
+    atexit.register(reap)
+
+
+def _guard_launcher(launcher_fd, driver_fd):
+    # A process pidfd becomes readable after the last thread exits.
+    deaths = select.poll()
+    deaths.register(launcher_fd, select.POLLIN)
+    deaths.register(driver_fd, select.POLLIN)
+    if driver_fd not in dict(deaths.poll()):
+        with contextlib.suppress(ProcessLookupError):
+            signal.pidfd_send_signal(driver_fd, signal.SIGTERM)
 
 
 class _DriverDeathGuard:
@@ -64,7 +121,7 @@ class _DriverDeathGuard:
                 # The slot's flock and sleep-inhibitor pipe are intentionally inheritable.
                 # Only the guard needs to keep them when the driver is gone.
                 self.proc = subprocess.Popen(
-                    [sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve())],
+                    _guard_command("--driver-guard"),
                     stdin=reader, stdout=subprocess.DEVNULL, close_fds=False,
                     start_new_session=True,
                 )
@@ -80,7 +137,8 @@ class _DriverDeathGuard:
         os.set_inheritable(self.owner.fileno(), False)
 
     def finish(self):
-        with self.owner:
+        # The group is already gone. Preserve its outcome if the guard died independently.
+        with self.owner, contextlib.suppress(OSError):
             self.owner.sendall(b"D")
         self.proc.wait()
 
@@ -459,12 +517,15 @@ def spawn(args, *, watch_driver=False, **kwargs):
     if os.name == "posix":
         if kwargs.pop("start_new_session", True) is not True:
             raise ValueError("benchmark children must start in their own session")
-        guard = _DriverDeathGuard() if watch_driver and sys.platform == "linux" else None
-        if guard is not None:
+        guard = None
+        if watch_driver and sys.platform == "linux":
+            if kwargs.get("preexec_fn") is not None:
+                raise ValueError("the driver death guard owns the benchmark child's preexec_fn")
+            guard = _DriverDeathGuard()
             # The synchronous cells driver owns this path. The child callback only
             # publishes its group ID on the inherited socket.
             kwargs["preexec_fn"] = guard.register_child
-            kwargs["pass_fds"] = (guard.owner.fileno(),)
+            kwargs["pass_fds"] = (*kwargs.get("pass_fds", ()), guard.owner.fileno())
         try:
             proc = subprocess.Popen(args, start_new_session=True, **kwargs)
         except BaseException:
@@ -654,4 +715,7 @@ def terminate(group, grace, poll_interval=0.05, final_reap=1.0, observe=None):
 
 
 if __name__ == "__main__":
-    _guard_driver()
+    if sys.argv[1:] == ["--driver-guard"]:
+        _guard_driver()
+    elif len(sys.argv) == 4 and sys.argv[1] == "--launcher-guard":
+        _guard_launcher(*map(int, sys.argv[2:]))
