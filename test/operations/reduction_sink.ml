@@ -16,7 +16,7 @@
    the sketch seeding OFF (threshold 0), so every change is the sink's. Both gradients must be
    BITWISE the default's: the inputs are not dyadic, and a control claim shows a reversed f32
    reduction of the bias gradient differs from it in some cell, so the equality holds only if the
-   sink keeps each cell's summation order. On CUDA and HIP the sink must apply, leave fewer
+   sink keeps each cell's summation order. On capable backends the sink must apply, leave fewer
    accumulations rendered against their cells (the peel census), and be turned off by
    [~reduction_sink:false]; elsewhere it must sink nothing. *)
 
@@ -32,10 +32,8 @@ module Idx = Ir.Indexing
 open Verdict.Claims
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
-
-let sinks_here =
-  String.is_substring backend_name ~substring:"cuda"
-  || String.is_substring backend_name ~substring:"hip"
+let facts = Context.backend_facts_of_name backend_name
+let sinks_here = facts.Ir.Backend_intf.sinks_untuned_reductions
 
 (* {2 Which statements qualify} *)
 
@@ -116,6 +114,8 @@ let () =
   in
   let ops, over = chain ~name:"rs_aff" shifted in
   p_empty "an accumulator a reduction loop's affine index also moves is left alone" ~over ops;
+  p "a plain-cell gradient sinks beside an overlapping-window input gradient"
+    (swaps_are [ (q, o); (r, o) ] (fst (chain ~name:"rs_mixed" (Ll_test.seq bias shifted))));
   let _, overwrite =
     reduce3 ~tag:"ovw" ~acc:(fun _ a -> a) ~idx:(fun _ _ o -> [| it o |]) ~d_dims:[| no |] ()
   in
@@ -243,17 +243,107 @@ let sunk ?reduction_sink () =
    off, and for cc, nothing is sunk. *)
 let () =
   let opt = Context.lowered_for_decisions (Context.auto ()) comp Ir.Indexing.Empty in
-  let census ?(backend = "cuda") reduction_sink =
-    Ll_test.seeded_census
-      (Autotune.seeded_plan ~min_reduction:0 ~reduction_sink
-         ~facts:(Context.backend_facts_of_name backend)
-         ~limits:Ir.Backend_intf.no_hardware_limits ~accum_prec:Fn.id ~static_indices:[] opt)
+  let open Ir.Backend_intf in
+  let plan ?(min_reduction = 0) ?min_serial ?seed_narrow ~facts reduction_sink =
+    Autotune.seeded_plan ~min_reduction ?min_serial ?seed_narrow ~reduction_sink ~facts
+      ~limits:no_hardware_limits ~accum_prec:Fn.id ~static_indices:[] opt
+  in
+  let census ?(facts = cuda_facts) reduction_sink =
+    Ll_test.seeded_census (plan ~facts reduction_sink)
   in
   p "structural: for cuda the untuned plan sinks a segment with the seeding off, seeding none"
     (Option.exists (census true) ~f:(fun c -> c.Ll_test.sunk >= 1 && c.sketched = 0));
+  p "structural: the untuned Metal plan sinks a segment without sketching or splitting"
+    (Option.exists (census ~facts:metal_facts true) ~f:(fun c ->
+         c.Ll_test.sunk >= 1 && c.sketched = 0 && List.is_empty c.split));
+  p "structural: Metal still only sinks with sketching, splitting and narrow admission requested"
+    (let digest = Option.map ~f:Autotune.seeded_plan_digest in
+     let ordinary = digest (plan ~facts:metal_facts true) in
+     Option.exists ordinary ~f:(fun d ->
+         Option.equal String.equal (Some d)
+           (digest (plan ~facts:metal_facts ~min_reduction:1 ~min_serial:1 ~seed_narrow:true true))));
+  p "structural control: Metal with the sink off derives no plan"
+    (Option.is_none (census ~facts:metal_facts false));
   p "structural control: for cuda with the sink off nothing is sunk"
     (Option.for_all (census false) ~f:(fun c -> c.Ll_test.sunk = 0));
-  p "structural control: for cc no plan is derived" (Option.is_none (census ~backend:"cc" true))
+  p "structural control: for cc no plan is derived" (Option.is_none (census ~facts:cc_facts true));
+  p "structural: an inactive Metal schedule ignores a malformed sink flag"
+    (let saved_log = Utils.settings.debug_log_from_routines
+     and saved_level = Utils.settings.log_level in
+     Exn.protect
+       ~finally:(fun () ->
+         Utils.settings.debug_log_from_routines <- saved_log;
+         Utils.settings.log_level <- saved_level)
+       ~f:(fun () ->
+         Utils.settings.debug_log_from_routines <- true;
+         Utils.settings.log_level <- 2;
+         match
+           Utils.with_stated_config
+             [ ("gpu_default_reduction_sink", "invalid") ]
+             (fun () ->
+               Autotune.seeded_plan ~facts:metal_facts ~limits:no_hardware_limits ~accum_prec:Fn.id
+                 ~static_indices:[] opt)
+         with
+         | None -> true
+         | Some _ -> false
+         | exception Utils.Invalid_config_value _ -> false));
+  let target =
+    {
+      Autotune.mt_facts = metal_facts;
+      mt_limits = { Ll_test.f32_mma_limits with peak_flops = Some 5e12; simdgroup_width = Some 32 };
+      mt_capabilities = Ll_test.gpu_like_capabilities ();
+    }
+  in
+  (* A convolution gives the model candidates outside the scalar-blocktile restriction. *)
+  let conv_input =
+    NTDSL.init ~l:"rs_model_input" ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 10; 10; 8 ]
+      ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
+      ()
+  and conv_kernel =
+    NTDSL.init ~l:"rs_model_kernel" ~prec:Ir.Ops.single ~i:[ 3; 3; 8 ] ~o:[ 16 ]
+      ~f:(Ll_test.weighted ~weights:[| 2; 1; 1; 3 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+      ()
+  in
+  let%op conv =
+    conv_input
+    +* "...| 1*oh<+kh, 1*ow<+kw, ..ic..; |kh, kw, ..ic.. -> ..oc.. => ...| oh, ow, ..oc.."
+         conv_kernel
+  in
+  Train.set_materialized conv.Tensor.value;
+  let model_comp = Ir.Assignments.sequence [ comp; Train.forward conv ] in
+  let explain ?(facts = metal_facts) sink =
+    Utils.with_stated_config
+      [
+        ("gpu_default_reduction_sink", Bool.to_string sink);
+        ("gpu_default_sketch_min_reduction", "0");
+        ("gpu_default_split_reduce_min_serial", "0");
+      ]
+      (fun () ->
+        Autotune.model_explain ~target:{ target with mt_facts = facts } (Context.auto ()) model_comp
+          Ir.Indexing.Empty)
+  in
+  let on = explain true and off = explain false in
+  p "structural: the Metal model compares sketches against the sunk plan when enabled"
+    (match (on.Autotune.x_routine, off.Autotune.x_routine) with
+    | ("seeded", _) :: _, ("default", _) :: _ -> true
+    | _ -> false);
+  let candidates (x : Autotune.explanation) =
+    List.drop x.x_routine 1
+    @ List.concat_map x.x_segments ~f:(fun seg -> List.drop seg.xs_candidates 1)
+  in
+  let admitted x =
+    List.filter_map (candidates x) ~f:(fun (label, row) -> Option.some_if row.ex_admitted label)
+    |> Array.of_list
+  in
+  p_all2 "structural: the Metal model admits the same sketches with the sink on and off"
+    (admitted on) (admitted off) ~f:String.equal;
+  let restricted = explain ~facts:{ metal_facts with seeds_untuned_default = true } true in
+  let ordinary = candidates off in
+  p_exists "structural control: the sketch-seeding restriction excludes an ordinary Metal sketch"
+    (candidates restricted) ~f:(fun (label, row) ->
+      (not row.ex_admitted)
+      && Option.exists (List.Assoc.find ordinary label ~equal:String.equal) ~f:(fun x ->
+          x.ex_admitted))
 
 let () =
   let w_default, b_default, peel_default = run Context.compile in
@@ -263,21 +353,21 @@ let () =
     backend_name (List.length r.Autotune.sd_sunk)
     (Ir.C_syntax.peel_summary_string peel_default)
     (Ir.C_syntax.peel_summary_string peel_sunk);
-  Verdict.gated ~when_:sinks_here ~on:backend_name
-    "on CUDA/HIP the untuned compile sinks a segment with the seeding off"
-    (not (List.is_empty r.sd_sunk));
-  Verdict.gated ~when_:sinks_here ~on:backend_name
-    "on CUDA/HIP the sunk routine compiles without falling back to the default" (not r.sd_fell_back);
+  let gpu_leg = Verdict.leg ~when_:sinks_here ~on:backend_name () in
+  Verdict.in_leg ~leg:gpu_leg "the untuned GPU compile sinks a segment with the seeding off"
+    (fun label -> p label (not (List.is_empty r.sd_sunk)));
+  Verdict.in_leg ~leg:gpu_leg "the sunk routine compiles without falling back to the default"
+    (fun label -> p label (not r.sd_fell_back));
   (* Declined sites are the accumulations rendered against their cells. A sunk one that localizes
      may not be censused at all: the covered-zero elision can open it in the localized scope form
      itself, a scope minted upstream of the peel. *)
-  Verdict.gated ~when_:sinks_here ~on:backend_name
-    "on CUDA/HIP the default renders some accumulation against its cell" (peel_default.declined > 0);
-  Verdict.gated ~when_:sinks_here ~on:backend_name
-    "on CUDA/HIP the sunk routine renders fewer accumulations against their cells"
-    (peel_sunk.declined < peel_default.declined);
-  Verdict.gated ~when_:(not sinks_here) ~on:backend_name "off CUDA/HIP nothing is sunk"
-    (List.is_empty r.sd_sunk);
+  Verdict.in_leg ~leg:gpu_leg "the default renders some accumulation against its cell" (fun label ->
+      p label (peel_default.declined > 0));
+  Verdict.in_leg ~leg:gpu_leg "the sunk routine renders fewer accumulations against their cells"
+    (fun label -> p label (peel_sunk.declined < peel_default.declined));
+  let cc_leg = Verdict.leg ~when_:(not sinks_here) ~on:backend_name () in
+  Verdict.in_leg ~leg:cc_leg "the backend without the sink compiles without sinking" (fun label ->
+      p_empty label ~over:[ r ] r.sd_sunk);
   p "with the seeding off nothing is seeded" (List.is_empty r.sd_seeded);
   p_exists "the bias gradient is not trivially zero" (Array.to_list b_default) ~f:(fun v ->
       Float.(abs v > 1e-3));

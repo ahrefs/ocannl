@@ -1171,11 +1171,13 @@ type backend_facts = {
           keep this [false] (their serial barrier-fission lowering of [workgroup_shared] is for
           emulation/parity, not production shared placement). *)
   seeds_untuned_default : bool;
-      (** The untuned compile seeds its plan ([Autotune.seeded_default], gh-ocannl-1183): the
-          backends that plan's before/after was measured on. Also scopes the seeded plan's numerics
-          gate in [Schedule_cache.codegen_tag] (gh-ocannl-1405) and gates ordered row-owned
-          embedding scatter packets in [Schedule.scatter_packets_enabled] (gh-ocannl-2443,
-          gh-ocannl-2494). *)
+      (** The untuned compile seeds contraction sketches and splits reductions
+          ([Autotune.seeded_default], gh-ocannl-1183). Also scopes the seeded plan's numerics gate
+          in [Schedule_cache.codegen_tag] (gh-ocannl-1405) and gates ordered row-owned embedding
+          scatter packets in [Schedule.scatter_packets_enabled] (gh-ocannl-2443, gh-ocannl-2494). *)
+  sinks_untuned_reductions : bool;
+      (** The untuned compile can interchange plain-cell reductions before GPU mapping
+          ([Autotune.reduction_sink], gh-ocannl-1348 and gh-ocannl-2507). *)
   queued_timing : queued_timing;
   retries_contended_window : bool;
       (** A queued timing window refused as contended is retried once: the device scheduler's
@@ -1274,9 +1276,9 @@ let binds_hardware_grid facts = equal_grid_execution facts.grid_execution Hardwa
 let renders_on_host_pool facts = equal_grid_execution facts.grid_execution Host_pool
 
 (** The relations between facts no backend may break, as the violations found ([[]] when
-    consistent): workgroup-shared placement, the seeded untuned plan (a GPU sketch), the deep queued
-    policy and the contended-window retry (device-dispatch timing) all presuppose a hardware grid,
-    and a dialect prefixes its node identifiers exactly when its vendor headers are a GPU
+    consistent): workgroup-shared placement, untuned sketch seeding and reduction sinking, the deep
+    queued policy and the contended-window retry (device-dispatch timing) all presuppose a hardware
+    grid, and a dialect prefixes its node identifiers exactly when its vendor headers are a GPU
     toolchain's. *)
 let facts_inconsistencies facts =
   let grid = binds_hardware_grid facts in
@@ -1285,6 +1287,8 @@ let facts_inconsistencies facts =
       ( facts.workgroup_shared_placement && not grid,
         "workgroup_shared_placement without a hardware grid" );
       (facts.seeds_untuned_default && not grid, "seeds_untuned_default without a hardware grid");
+      ( facts.sinks_untuned_reductions && not grid,
+        "sinks_untuned_reductions without a hardware grid" );
       ( equal_queued_timing facts.queued_timing Queued_deep && not grid,
         "Queued_deep without a hardware grid" );
       ( facts.retries_contended_window && not grid,
@@ -1300,6 +1304,7 @@ let cc_facts =
     grid_execution = Host_pool;
     workgroup_shared_placement = false;
     seeds_untuned_default = false;
+    sinks_untuned_reductions = false;
     queued_timing = Queued_legacy;
     retries_contended_window = false;
     host_load_attributable = true;
@@ -1314,6 +1319,7 @@ let cuda_facts =
     grid_execution = Hardware_grid;
     workgroup_shared_placement = true;
     seeds_untuned_default = true;
+    sinks_untuned_reductions = true;
     queued_timing = Queued_deep;
     retries_contended_window = false;
     host_load_attributable = false;
@@ -1328,6 +1334,7 @@ let hip_facts =
     grid_execution = Hardware_grid;
     workgroup_shared_placement = true;
     seeds_untuned_default = true;
+    sinks_untuned_reductions = true;
     queued_timing = Queued_deep;
     retries_contended_window = false;
     host_load_attributable = false;
@@ -1342,6 +1349,7 @@ let metal_facts =
     grid_execution = Hardware_grid;
     workgroup_shared_placement = true;
     seeds_untuned_default = false;
+    sinks_untuned_reductions = true;
     queued_timing = Queued_legacy;
     retries_contended_window = true;
     host_load_attributable = false;

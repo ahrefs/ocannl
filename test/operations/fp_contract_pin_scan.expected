@@ -85,7 +85,7 @@ not-executed -- no claim is about executed values: fixtures, codegen text, host 
 
 Test sources with bitwise equality subjects:
 test/operations/autotune_grid_record.ml -- exact-operands: Ll_test.exact_partials derives the operands' sums exact at f32
-test/operations/autotune_seeded_seed.ml -- not-cc: the value claims hold only where CUDA or HIP seeds or splits; cc skips them
+test/operations/autotune_seeded_seed.ml -- not-cc: the value claims compare real untuned-plan candidates on GPU
 test/operations/bf16_local_scratch.ml -- no-contraction: the kernel moves, converts and zeroes values, and the packed uniform conversion contains no multiply-add
 test/operations/bf16_subnormal_storage.ml -- no-contraction: the legs copy, convert, add or halve; no product feeds an add
 test/operations/branchless_select.ml -- exact-operands: selects, adds and a pool gradient multiplying dyadic weights by one

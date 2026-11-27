@@ -841,6 +841,16 @@ files.
   `lowered_nest_order`'s narrow legs and `narrow_grad_residency` (a bf16 dense layer's three
   gradients onto nonzero incoming values equal an f32 twin's exact sums narrowed once on the default,
   the privatized preset and the seeded CUDA/HIP default, whose shipped `acc` tiles are f32).
+- In the gh-ocannl-2422 LeNet comparison, affine-window sinking changed which gradients shared
+  a Metal kernel (gh-ocannl-2507). The conv2 bias went from 16 lanes to one thread. The weight
+  gradient moved from 2,400 active lanes in its own launch to 2,400 of the 75,264 lanes in the
+  combined launch with the input gradient. The input gradient's 14×14 owner grid scans 5×5
+  candidate taps per cell for a 10×10 valid output, so only 2,500 of the 4,900 owner/tap pairs
+  reach the channel loop. The Metal schedule-time sink keeps affine-window writes on the preset.
+- In the same `cifar_resnet` comparison, all six input gradients that gained a new launch geometry
+  were standalone both before and after the affine-window rewrite. Each gained spatial lanes
+  alongside batch and channel ownership. The LeNet companion effects depend on the fission
+  outcome, so tap size and padding alone give an incomplete profitability test.
 - **What forces one of the two RMW forms**, i.e. the declines a property test must be able to
   provoke: `debug_log_from_routines` (the per-step `Set` trace names the source assignment and the
   node's cell each step; a localized scope's steps would log a codegen-minted local instead —

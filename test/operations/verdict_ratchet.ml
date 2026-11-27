@@ -334,10 +334,6 @@ let exempt_quantified_helpers =
       "the threshold exceeds every contraction of the fixture, so no segment qualifies and an \
        empty seed list is the claim; the bitwise-gradient claim beside it witnesses the routine's \
        non-empty output" );
-    ( "test/operations/reduction_sink.ml:off CUDA/HIP nothing is sunk",
-      "the reduction sink is CUDA/HIP-only by design, so off those backends an empty sunk list is \
-       the claim; it is gated to them, and on CUDA/HIP the claim beside it requires a non-empty \
-       list from the same fixture" );
     ( "test/operations/reduction_sink.ml:with the seeding off nothing is seeded",
       "the fixture compiles at threshold 0, the documented off switch of the seeding, so that \
        every change is the sink's; an empty seed list is the claim, and seeded_default pins a \

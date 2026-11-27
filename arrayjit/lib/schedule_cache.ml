@@ -872,8 +872,9 @@ type entry = {
    25: gh-ocannl-1843 -- CPU seeds' companions take the default preset's per-nest Grid geometry
    26: gh-ocannl-2275 -- plain packed Grid with split k and over-cap conv Grid panels leave the menu
    27: gh-ocannl-2443 -- the GPU fission floor and candidates gain ordered row-owned scatter kernels
+   28: gh-ocannl-2507 -- Metal's search gains the untuned plain-cell reduction sink as its floor
 *)
-let entry_version = 27
+let entry_version = 28
 
 let sanitize name =
   String.map name ~f:(fun c ->
@@ -1334,8 +1335,9 @@ type placement_entry = {
 (*= placement_entry_version history -- one line per value, oldest first; a bump appends one:
    1: gh-ocannl-786 -- the placement decision and the arm timings that chose it
    2: gh-ocannl-1388 -- decisions compared arm searches that lacked the seeded untuned floor
+   3: gh-ocannl-2507 -- decisions compared Metal arm searches without the reduction-sink floor
 *)
-let placement_entry_version = 2
+let placement_entry_version = 3
 
 let placement_key ?objective ~timing_identity ~limits ~capabilities ~facts canonical ~backend =
   Option.map (cache_key ?objective ~timing_identity ~limits ~capabilities ~facts canonical ~backend)

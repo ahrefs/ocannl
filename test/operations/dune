@@ -2071,14 +2071,12 @@
 
 ; gh-ocannl-1388: the autotuner seeds the seeded untuned plan first, so a search cut to its first
 ; candidate (every later window refused through the measurement seam) crowns the step the untuned
-; compile ships: the same code, digest for digest, computing bitwise the same gradients; a refused
-; seeded window is retried once and still crowns. CUDA/HIP
-; legs, skipped elsewhere, where the search must derive no plan. Every threshold is the config's
-; but the seeding gate, which the test pins at threshold 32 so the plan seeds on every device.
+; compile ships: the same code, digest for digest, computing bitwise the same gradients. Metal
+; keeps the ordinary per-segment candidates around its sink-only floor. The retry and cache
+; claims use the CUDA/HIP seeded plan. The fixture pins the sketch threshold at 32 and the sink on.
 
 (test
- ; cc-vector-width: independent -- on cc no search runs: the seeded plan is CUDA/HIP-only, gated on
- ; the backend name.
+ ; cc-vector-width: independent -- the searches require an untuned GPU plan.
  ; ocannl-backend-default: seeded-plan -- CUDA/HIP seeded plan governs the seeded-sweep claims
  (name autotune_seeded_seed)
  (package neural_nets_lib)
@@ -13909,7 +13907,7 @@
 ; gh-ocannl-1348: the untuned compile sinks a batch reduction's loops below its write loops -- which
 ; statements qualify, on hand-built nests, and a backpropagated dense layer compiled with the
 ; seeding off, whose gradients stay bitwise the default pipeline's on non-dyadic inputs while more
-; accumulators localize on CUDA/HIP. The sink is requested and refused explicitly, so the golden
+; accumulators localize on CUDA, HIP and Metal. The sink is requested and refused explicitly, so the golden
 ; does not depend on gpu_default_reduction_sink; the claims compare compiles with each other, so it
 ; is backend-uniform.
 

@@ -2929,12 +2929,12 @@ val seeded_split_backend : Ir.Backend_intf.backend_facts -> bool
 
 val search_shaping_key_read : facts:Ir.Backend_intf.backend_facts -> string -> bool
 (** Whether a search on a backend with [facts] can read the [Utils.Search_shaping] configuration key
-    [key] (gh-ocannl-1331): the seeded plan's [gpu_default_*] keys where {!seeded_default_backend}
-    (and, for the split threshold, {!seeded_split_backend}) holds, [autotune_register_tile_rm_twin]
-    where {!Ir.Backend_intf.renders_on_host_pool} does (only the CPU register-tiled rendering reads
-    it), the default pipeline's keys per {!Ir.Schedule.search_shaping_key_read}, and every other key
-    everywhere. A key a backend's search cannot read keys nothing in its trajectory identity
-    ({!search_shaping_identity}). *)
+    [key] (gh-ocannl-1331): the [gpu_default_*] keys follow the backend's contraction seeding, split
+    and sink capabilities, respectively. [autotune_seeded_singles] applies where the backend seeds
+    sketches. [autotune_register_tile_rm_twin] is read where {!Ir.Backend_intf.renders_on_host_pool}
+    does (only the CPU register-tiled rendering reads it), the default pipeline's keys per
+    {!Ir.Schedule.search_shaping_key_read}, and every other key everywhere. A key a backend's search
+    cannot read keys nothing in its trajectory identity ({!search_shaping_identity}). *)
 
 val search_shaping_identity :
   facts:Ir.Backend_intf.backend_facts -> limits:Ir.Backend_intf.hardware_limits -> string
@@ -3015,10 +3015,9 @@ val model_seeding :
   facts:Ir.Backend_intf.backend_facts ->
   limits:Ir.Backend_intf.hardware_limits ->
   (seed_gate * int * bool * bool) option
-(** Whether {!model_default} starts from the seeded untuned plan on this backend under the current
-    configuration (CUDA and HIP with the seeding settings resolving): its gate, split threshold,
-    reduction-sink flag and the sink's narrow-storage admission (gh-ocannl-1405), as
-    {!seeded_default} resolves them; [None] where the incumbent is the default pipeline. *)
+(** Whether {!model_default} uses the seeded plan's sketch admission policy, and the settings it
+    uses there. A backend with only reduction sinking can use the sunk incumbent while ranking the
+    ordinary sketch menu. *)
 
 (** What the seeded plan does with one segment (gh-ocannl-1388). *)
 
@@ -4412,14 +4411,16 @@ module Make (D : Driver) : sig
       blocks, chosen from the routine alone -- as the default plan's cooperative all-reduces
       (gh-ocannl-1124) do.
 
-      Every [`Normal] segment no sketch takes gets {!reduction_sink}'s interchange, then the default
-      preset of the interchanged code (gh-ocannl-1348), probed alone like a seed, and covered by the
-      same fallback to the default pipeline when the compile fails classified: a batch reduction
-      into a bias or layer-norm parameter gradient then keeps its accumulator in a register instead
-      of reading and writing its device cell every step under the preset's in-loop guard — which
-      HIP's compiler does not promote, though NVRTC does. Values stay bitwise the default's.
-      [reduction_sink] (default: config [gpu_default_reduction_sink], true) turns it off; it applies
-      with the seeding disabled too. Reads and writes no schedule cache. *)
+      On CUDA, HIP and Metal, every eligible [`Normal] segment no sketch takes gets
+      {!reduction_sink}'s interchange, then the default preset of the interchanged code
+      (gh-ocannl-1348, gh-ocannl-2507), probed alone like a seed, and covered by the same fallback
+      to the default pipeline when the compile fails classified: a batch reduction into a bias or
+      layer-norm parameter gradient then keeps its accumulator in a register instead of reading and
+      writing its device cell every step under the preset's in-loop guard — which HIP's compiler
+      does not promote, though NVRTC does. Values stay bitwise the default's. [reduction_sink]
+      (default: config [gpu_default_reduction_sink], true) turns it off; it applies with the seeding
+      disabled too. Metal uses only the plain-cell, same-precision sink. Reads and writes no
+      schedule cache. *)
 
   val model_pick :
     ?name:string ->
@@ -4777,8 +4778,8 @@ module Make (D : Driver) : sig
       compile" -- search disabled with nothing to replay, a refused lineage, a deferred cache replay
       that failed, a search that timed nothing, a budget cut that left the floor unmeasured, a
       winner replay that failed -- compiles the step the recipes ship untuned without
-      [model_default_schedule]: {!seeded_default}'s seeded plan wherever its settings admit one
-      (CUDA and HIP, seeding on), the plain default pipeline elsewhere. After a search the plan is
+      [model_default_schedule]: {!seeded_default}'s plan wherever its settings admit one (including
+      the sink-only plan on Metal), the plain default pipeline elsewhere. After a search the plan is
       the one the search seeded, replayed as its [F_seeded] candidate; without one it is derived
       inside the fallback's own compile, as {!seeded_default} derives it. Under
       [model_default_schedule=true] the fallback is still the seeded plan, not {!model_default}'s
