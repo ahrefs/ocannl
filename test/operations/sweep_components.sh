@@ -383,9 +383,18 @@ BEGIN {
     return $p unless defined $p;
     if (!$p) {
       if (my $pf = $ENV{SUP_TEST_CHILD_PID}) {
-        if (open my $fh, ">", $pf) { print $fh "$$\n"; close $fh; }
+        if (open my $fh, ">", "$pf.tmp") {
+          print $fh "$$\n";
+          close $fh;
+          rename "$pf.tmp", $pf;
+        }
       }
-      select undef, undef, undef, 0.3 if $mode eq "delay_child";
+      if ($mode eq "delay_child" && $ENV{SUP_TEST_GATE}) {
+        for (1 .. 1000) {
+          last if -e $ENV{SUP_TEST_GATE};
+          select undef, undef, undef, 0.01;
+        }
+      }
       return 0;
     }
     if ($mode eq "term_after_ready") {
@@ -394,11 +403,30 @@ BEGIN {
         last if -e $ready;
         select undef, undef, undef, 0.01;
       }
-      kill "TERM", $$;
+      CORE::kill("TERM", $$);
     } elsif ($mode eq "delay_child") {
-      kill "TERM", $$;
+      if (my $pf = $ENV{SUP_TEST_CHILD_PID}) {
+        for (1 .. 400) {
+          last if -e $pf;
+          select undef, undef, undef, 0.01;
+        }
+      }
+      CORE::kill("TERM", $$);
     }
     return $p;
+  };
+  *CORE::GLOBAL::kill = sub {
+    my ($sig, @pids) = @_;
+    my $r = CORE::kill($sig, @pids);
+    if ($sig eq "TERM" && @pids && $pids[0] < 0) {
+      if (($ENV{SUP_TEST_MODE} // "") eq "delay_child" && $ENV{SUP_TEST_GATE}) {
+        if (open my $fh, ">", $ENV{SUP_TEST_GATE}) { close $fh; }
+      }
+      if (my $kl = $ENV{SUP_TEST_KILL_LOG}) {
+        if (open my $fh, ">>", $kl) { print $fh "$sig @pids\n"; close $fh; }
+      }
+    }
+    return $r;
   };
 }
 1;
@@ -421,11 +449,12 @@ PERL
     report 1 'supervisor: TERM between fork and handler install reaps the child' \
       "rc=$rc cpid=${cpid:-missing} alive=$alive"
   fi
-  # 2. TERM delivered in parent before child reaches setpgid(0, 0): parent-side
+  # 2. TERM delivered in parent while child is held before setpgid(0, 0) on a
+  # gate that opens only once `$reap` sends `kill TERM -$pid`: parent-side
   # setpgid puts the child into its own group before unblocking, so the pending
   # TERM kills the child before exec @ARGV runs.
-  rm -f "$TMP/sup-pgid.pid" "$TMP/sup-pgid.execd"
-  SUP_TEST_MODE=delay_child SUP_TEST_CHILD_PID=$TMP/sup-pgid.pid \
+  rm -f "$TMP/sup-pgid.pid" "$TMP/sup-pgid.pid.tmp" "$TMP/sup-pgid.gate" "$TMP/sup-pgid.execd"
+  SUP_TEST_MODE=delay_child SUP_TEST_CHILD_PID=$TMP/sup-pgid.pid SUP_TEST_GATE=$TMP/sup-pgid.gate \
     perl -I"$TMP" -MForkHook "$sup_pl" 30 \
       /bin/sh -c ': >"$1.execd"' _ "$TMP/sup-pgid" 2>/dev/null
   rc=$?
@@ -439,12 +468,15 @@ PERL
     report 1 'supervisor: parent-side setpgid reaps a child signalled before exec' \
       "rc=$rc cpid=${cpid:-missing} alive=$alive execd=$([ -e "$TMP/sup-pgid.execd" ] && echo yes || echo no)"
   fi
-  # 3. A second TERM arriving while $reap is waiting on the child's TERM grace
-  # does not re-enter or abort reaping.
-  rm -f "$TMP/sup-double.pid" "$TMP/sup-double.ready" "$TMP/sup-double.termed"
-  perl "$sup_pl" 30 \
-    /bin/sh -c 'trap ": >\"\$1.termed\"; sleep 0.3; exit 0" TERM; printf "%s\n" "$$" >"$1.pid"; : >"$1.ready"; while :; do sleep 0.05; done' \
-    _ "$TMP/sup-double" 2>/dev/null &
+  # 3. Another termination signal (HUP) arriving while $reap is held open on the
+  # child's TERM grace does not re-enter cleanup or overwrite the exit status
+  # (observed via both the group-TERM call count and exit 143 vs 129).
+  rm -f "$TMP/sup-double.pid" "$TMP/sup-double.ready" "$TMP/sup-double.termed" \
+    "$TMP/sup-double.release" "$TMP/sup-double.kills"
+  SUP_TEST_KILL_LOG=$TMP/sup-double.kills \
+    perl -I"$TMP" -MForkHook "$sup_pl" 30 \
+      /bin/sh -c 'trap ": >\"\$1.termed\"; while [ ! -e \"\$1.release\" ]; do sleep 0.02; done; exit 0" TERM; printf "%s\n" "$$" >"$1.pid"; : >"$1.ready"; while :; do sleep 0.05; done' \
+      _ "$TMP/sup-double" 2>/dev/null &
   sup=$!
   waited=0
   until [ -e "$TMP/sup-double.ready" ] || [ "$waited" -ge 200 ]; do
@@ -457,18 +489,22 @@ PERL
     sleep 0.02
     waited=$((waited + 1))
   done
-  kill -TERM "$sup" 2>/dev/null || true
+  local second_kill_rc=0 term_kills=0
+  kill -HUP "$sup" 2>/dev/null || second_kill_rc=$?
+  sleep 0.2
+  : >"$TMP/sup-double.release"
   wait "$sup"
   rc=$?
   cpid=$(cat "$TMP/sup-double.pid" 2>/dev/null || true)
+  term_kills=$(wc -l <"$TMP/sup-double.kills" 2>/dev/null | tr -d ' ' || echo 0)
   alive=no
   if [ -n "$cpid" ] && pid_alive "$cpid"; then alive=yes; fi
-  if [ "$rc" -eq 143 ] && [ -n "$cpid" ] && [ "$alive" = no ]; then
-    report 0 'supervisor: second TERM during reap still waits for and reaps the child'
+  if [ "$rc" -eq 143 ] && [ "$second_kill_rc" -eq 0 ] && [ "$term_kills" -eq 1 ] && [ -n "$cpid" ] && [ "$alive" = no ]; then
+    report 0 'supervisor: second signal during reap does not re-enter cleanup'
   else
     [ -n "$cpid" ] && kill -KILL -- "-$cpid" "$cpid" 2>/dev/null || true
-    report 1 'supervisor: second TERM during reap still waits for and reaps the child' \
-      "rc=$rc cpid=${cpid:-missing} alive=$alive"
+    report 1 'supervisor: second signal during reap does not re-enter cleanup' \
+      "rc=$rc second_kill_rc=$second_kill_rc term_kills=$term_kills cpid=${cpid:-missing} alive=$alive"
   fi
 }
 
@@ -476,7 +512,7 @@ PERL
 # runs one component, so these controls never recurse into another control set.
 controls_fixture() {
   local kind target_component module pattern control rc
-  for kind in lab fleet fingerprint state tokens supervisor-mask supervisor-setpgid; do
+  for kind in lab fleet fingerprint state tokens supervisor-mask supervisor-setpgid supervisor-reentry; do
     target_component=${kind%%-*}
     control=$TMP/mutant-$kind
     mkdir -p "$control"
@@ -526,6 +562,13 @@ controls_fixture() {
           "$TOOLS/$module" >"$control/$module"
         grep -q '# mutant: parent setpgid removed' "$control/$module" || echo 'supervisor-setpgid mutant did not apply' >&2
         pattern='FAIL  supervisor: parent-side setpgid reaps a child signalled before exec'
+        ;;
+      supervisor-reentry)
+        module=sweep-supervisor.sh
+        perl -pe 's/\$SIG\{ALRM\} = \$SIG\{INT\} = \$SIG\{TERM\} = \$SIG\{HUP\} = "IGNORE";/# mutant: ignore removed/' \
+          "$TOOLS/$module" >"$control/$module"
+        grep -q '# mutant: ignore removed' "$control/$module" || echo 'supervisor-reentry mutant did not apply' >&2
+        pattern='FAIL  supervisor: second signal during reap does not re-enter cleanup'
         ;;
     esac
     rc=0
