@@ -15,6 +15,7 @@
 # fail-fast disabled, and checks an unconditional step with a direct env
 # binding and command.
 # Expressions, extra axes, and alternate command forms are outside that grammar.
+# The shard-balance job's closed guard is the first uncancelled scheduled attempt.
 # Named legs are independent; shared readers/setup run before each selected leg.
 # The renamed-gate fixture reads only top-level literal `harness_leg_run 'name'
 # run_contract` lines with lowercase, digit and hyphen names, and replaces one
@@ -145,6 +146,12 @@ def raw_jobs(text, event, windows=False, compiler=''):
     return jobs
 
 
+def shard_balance_guard(guard):
+    # This job waits on the matrix and still needs to see both build step records on a red run.
+    expected = "${{ !cancelled() && github.event_name == 'schedule' && github.run_attempt == '1' }}"
+    assert guard == expected, 'shard balance needs both jobs of the first scheduled attempt'
+
+
 def matrix(text, event, windows=False, compiler=''):
     jobs = raw_jobs(text, event, windows, compiler)
     # The build matrix carries a guard of its own: off the per-PR path, where
@@ -163,6 +170,9 @@ def matrix(text, event, windows=False, compiler=''):
     for job in side:
         guard = re.search(r'^  ' + re.escape(job) + r':\n    if: (.*)$', text, re.M)
         assert guard, job + ' selection missing'
+        if job == 'shard-balance':
+            shard_balance_guard(guard[1])
+            continue
         # A guard opening with the schedule names a SCHEDULED side job, too
         # costly per PR (gh-ocannl-1367): it must select exactly where the
         # ordinary side jobs do AND the event is the schedule or a dispatch.
@@ -256,9 +266,8 @@ def suite_step(text):
             assert '\n      shell: bash\n' in step, 'a step pipes into tee without pipefail: ' + step.splitlines()[0]
     # The sharded step hands the script the job's suite: without it every
     # `train` shard would build a share of `main` instead, green either way.
-    shard = text.split("    - if: ${{ matrix.shard }}\n", 1)
-    assert len(shard) == 2, 'sharded suite step missing'
-    shard = shard[1].split('\n    - ', 1)[0]
+    shard = workflow_step(text, 'Build the shard')
+    assert '      if: ${{ matrix.shard }}\n' in shard, 'sharded suite step does not select shards'
     assert '        SUITE: ${{ matrix.suite }}\n' in shard, 'sharded step does not read matrix.suite'
     assert re.search(r'^        targets=\$\(opam exec -- tools/ci-shard\.sh targets "\$SHARD" "\$SUITE"\)$',
                      shard, re.M), 'sharded step does not pass its suite to ci-shard.sh'
@@ -289,6 +298,9 @@ def per_pr_jobs(text):
             continue
         guard = re.search(r'^  ' + re.escape(job) + r':\n    if: (.*)$', text, re.M)
         assert guard, job + ' selection missing'
+        if job == 'shard-balance':
+            shard_balance_guard(guard[1])
+            continue
         if expression(guard[1], 'pull_request'):
             selected.append(job)
     return sorted(selected)
@@ -613,8 +625,11 @@ if leg == 'matrix':
         ('unsharded bash build without pipefail',
          source.replace("    - if: ${{ !matrix.shard && runner.os != 'Windows' }}\n      shell: bash\n",
                         "    - if: ${{ !matrix.shard && runner.os != 'Windows' }}\n", 1)),
+        ('shard balance on partial reruns', source.replace(" && github.run_attempt == '1'", "", 1)),
         ('sharded build without pipefail',
-         source.replace('    - if: ${{ matrix.shard }}\n      shell: bash\n', '    - if: ${{ matrix.shard }}\n', 1)),
+         source.replace('      if: ${{ matrix.shard }}\n      shell: bash\n',
+                        '      if: ${{ matrix.shard }}\n', 1)),
+        ('the timestamp step renamed', source.replace('Build the shard', 'Compile the shard', 1)),
         ('PowerShell build exits with the pipe status', source.replace('        exit $LASTEXITCODE\n', '', 1)),
         ('PowerShell build names its aliases as literals',
          source.replace("@($env:SUITE_TARGETS -split ' ')", '@default @runtest @bin-smoke', 1)),

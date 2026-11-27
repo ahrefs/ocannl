@@ -852,4 +852,47 @@ argument_twin "merge-weights lines as arguments" \
   '{ sub(/- "\$MIN_WEIGHT" 3<<</, "- \"$MIN_WEIGHT\" \"${runs[@]}\" 3<<<") } { print }' big_merge_holds
 default_listings
 
+# The build steps start on different minutes. Each fixture also carries a training job.
+gap_fixture() {
+  python3 - "$1" "$2" <<'PY_GAP_FIXTURE'
+import json
+import sys
+
+first, second = [
+    {"name": f"Build (ubuntu-latest, 5.5.x, main, {i}/2)", "steps": [{
+        "name": "Build the shard",
+        "started_at": f"2026-01-01T03:0{i}:00Z",
+        "completed_at": f"2026-01-01T03:{10 + i}:" + ("00Z" if i == 1 else sys.argv[1]),
+        "status": "completed",
+        "conclusion": "success",
+    }]}
+    for i in (1, 2)
+]
+second["steps"][0]["started_at"] = "2025-12-31T18:59:00.000-08:00"
+if sys.argv[2] == "failed":
+    second["steps"][0]["conclusion"] = "failure"
+other = {"name": "Build (ubuntu-latest, 5.5.x, train, 1/2)", "steps": []}
+print(json.dumps([{"jobs": [other, first]}, {"jobs": [] if sys.argv[2] == "missing" else [second]}]))
+PY_GAP_FIXTURE
+}
+gap_fixture 00Z complete >"$TMP/gap.json"
+out=$(subject check-gap "$TMP/gap.json") && [[ $out == "ci-shard: "*"(gap 180s)" ]]
+report $? "main shard balance accepts exactly three minutes" "$out"
+path=$(mutant gap-at-threshold '{ sub(/if gap > timedelta/, "if gap >= timedelta"); print }')
+install_subject "$path"
+out=$(subject check-gap "$TMP/gap.json") && [[ $out == "::warning title=Ubuntu main shard imbalance::"*"(gap 180s)" ]]
+report $? "negative control: a non-strict threshold triggers the warning at three minutes" "$out"
+install_subject "$SRC"
+gap_fixture 01Z complete >"$TMP/gap.json"
+out=$(subject check-gap "$TMP/gap.json") && [[ $out == "::warning title=Ubuntu main shard imbalance::"*"(gap 181s)" ]]
+report $? "main shard balance warns at three minutes and one second" "$out"
+gap_fixture 00.001Z complete >"$TMP/gap.json"
+out=$(subject check-gap "$TMP/gap.json") && [[ $out == "::warning title=Ubuntu main shard imbalance::"*"(gap 180.001s)" ]]
+report $? "main shard balance compares fractional timestamps without truncating" "$out"
+gap_fixture 01Z failed >"$TMP/gap.json"
+out=$(subject check-gap "$TMP/gap.json") && [[ $out == "ci-shard: balance unavailable"* ]]
+report $? "main shard balance reports no verdict for a failed build" "$out"
+gap_fixture 01Z missing >"$TMP/gap.json"
+refused "a main shard record missing from Jobs JSON" 'expected one' subject check-gap "$TMP/gap.json"
+
 finish
