@@ -1379,7 +1379,10 @@ type batch_settle =
   | Prior_depth
       (** The caller's prior depth, which the singles agreed with, kept without the probes
           (gh-ocannl-1697): a seeded single calibrates at its seeded plan's settled depth. *)
-  | Measured_batch  (** A resolved fit confirmed a depth a probe (or the singles) measured. *)
+  | Measured_batch
+      (** A resolved fit (or a bounded superlinear confirmation ruling out fixed-overhead dominance
+          on a target-sized base, gh-ocannl-2376) confirmed a depth a probe (or the singles)
+          measured. *)
   | Affine_projection  (** A resolved fit's projection to a depth no probe measured. *)
   | Wall_scaled  (** A linear scale from the deepest measured batch, the fit being unresolved. *)
   | Cap_measured  (** The cap, measured by a probe. *)

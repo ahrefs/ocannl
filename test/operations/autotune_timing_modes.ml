@@ -1495,6 +1495,187 @@ let () =
     (List.fold !synthetic_calls ~init:0 ~f:(fun m (_, c) -> Int.max m c.all_launches))
     (List.fold !synthetic_calls ~init:0 ~f:(fun m (_, c) -> Int.max m (List.length c.probes)))
 
+(* {1 Bounded superlinear confirmation under boost-clock settle (gh-ocannl-2376)}
+
+   A +25% confirmation step amplifies a 4-15% per-launch boost-clock drop by 5-6x into a negative
+   fitted intercept ([Fit_negative_fixed]). Before gh-ocannl-2376, [confirm_or_scale] treated that
+   as [Cap_unresolved], collapsing a directly measured target-sized batch to depth 1 and refusing
+   the call as [refused_unbatched] whenever the rescue probe also read over 10 ms. *)
+let () =
+  Stdio.printf "\n== bounded superlinear confirmation ==\n";
+  let gpu_cap = Autotune.queue_depth_cap_for_backend Ir.Backend_intf.hip_facts in
+  let device what ~launch_ms clean =
+    let c =
+      synthetic_call ~timing:Autotune.Queued ~cap:gpu_cap ~fixed_ms:0. ~launch_ms
+        ~walls:(fun _nth d -> clean d)
+        ()
+    in
+    describe what c;
+    c
+  in
+  let decision c = match c.decisions with [ d ] -> Some d | _ -> None in
+  let roles c = List.map c.probes ~f:(fun (pr : Autotune.calibration_probe) -> pr.role) in
+  (* Provisional depth 20 reads 10.125 ms (resolved); +25% confirmation at 25 reads 13.75 ms (+8.6%
+     per launch -> fixed = -4.375 ms, Fit_negative_fixed, within 2x of 10.125). Rescue at 19 reads
+     10.5 ms (> 10.0), so the unfixed calibration refused it as [refused_unbatched]. *)
+  let clock_settle =
+    device "boost-clock settle at provisional confirmation" ~launch_ms:0.5 (function
+      | 1 -> 0.5
+      | 20 -> 10.125
+      | 25 -> 13.75
+      | 19 -> 10.5
+      | d -> 0.55 *. Float.of_int d)
+  in
+  (* Validation narrows 23 -> 22 (resolved at 10.4375 ms), then +25% confirmation at 27 reads 13.5
+     ms (+5.4% per launch -> fixed = -3.0375 ms, Fit_negative_fixed). *)
+  let clock_settle_after_val =
+    device "boost-clock settle after validation narrowing" ~launch_ms:0.4375 (function
+      | 1 -> 0.4375
+      | 23 -> 10.75
+      | 22 -> 10.4375
+      | 27 -> 13.5
+      | 21 -> 12.25
+      | d -> 0.5 *. Float.of_int d)
+  in
+  (* Crossing interpolation with mild superlinear step: (16, 10.25) -> (20, 10.375) projects
+     crossing 8, which reads 3.5 ms; refit (8, 3.5)/(16, 10.25) has fixed = -3.25 ms
+     (Fit_negative_fixed) with per-launch ratio 1.464 <= 2.0, keeping the measured depth-16 target
+     batch instead of falling back to depth 8 under [Cap_unresolved]. *)
+  let crossing_clock_settle =
+    device "crossing interpolation with mild superlinear step" ~launch_ms:0.625 (function
+      | 1 -> 0.625
+      | 16 -> 10.25
+      | 20 -> 10.375
+      | 8 -> 3.5
+      | d -> 0.625 *. Float.of_int d)
+  in
+  (* Negative control 1: persistent >2x stall on confirmation must still retry once and fall back to
+     [Cap_unresolved] -> [refused_unbatched], never settling at depth 20. *)
+  let persistent_confirm_stall =
+    device "persistent >2x stall on confirmation" ~launch_ms:0.5 (function
+      | 1 -> 0.5
+      | 20 -> 10.125
+      | 25 -> 25.0
+      | 19 -> 10.5
+      | d -> 0.5 *. Float.of_int d)
+  in
+  (* Negative control 2: stalled upper batch in crossing interpolation (per-launch ratio 5.125 >
+     2.0) must not settle at depth 16; it stays [Cap_unresolved] and falls back to depth 8. *)
+  let stalled_upper_crossing =
+    device "stalled upper batch in crossing interpolation" ~launch_ms:0.625 (function
+      | 1 -> 0.625
+      | 16 -> 10.25
+      | 20 -> 10.375
+      | 8 -> 1.0
+      | d -> 0.1 *. Float.of_int d)
+  in
+  (* Negative control 3: fixed-dominated base already over 2x target (26 ms at depth 2) with
+     Fit_negative_fixed at depth 3 (45 ms <= 2*26) must stay [Cap_unresolved], not accept depth
+     2. *)
+  let over_target_fixed_base =
+    device "over-target fixed-dominated base with negative-fixed confirmation" ~launch_ms:19.
+      (function
+      | 1 -> 19.
+      | 2 -> 26.
+      | 3 -> 45.
+      | d -> 19. *. Float.of_int d)
+  in
+  (* Negative control 4: validation jumps across the target via an unresolved [Fit_negative_fixed]
+     pair ((8, 6.5) -> (13, 16.0), [base_resolved = false]), and confirmation at 16 reads 26.0 ms
+     (<= 2*16, [Fit_negative_fixed]). Every other guard in [confirm_or_scale] holds (16 < 20, 26 <=
+     32, Fit_negative_fixed), so only [base_resolved] keeps this [Cap_unresolved] and falls back to
+     the resolved depth-8 batch rather than settling at depth 13. *)
+  let unresolved_base_confirm =
+    device "unresolved validation base with bounded negative-fixed confirmation" ~launch_ms:1.25
+      (function
+      | 1 -> 1.25
+      | 8 -> 6.5
+      | 13 -> 16.0
+      | 16 -> 26.0
+      | d -> 1.25 *. Float.of_int d)
+  in
+  p "a boost-clock settle during confirmation keeps the resolved target-sized base batch"
+    (clock_settle.settled_depth = 20
+    && Option.is_some (Autotune.admitted_timing_ms clock_settle.reading)
+    && List.equal Poly.equal (roles clock_settle) [ Provisional_probe; Confirmation_probe ]
+    &&
+    match decision clock_settle with
+    | Some d -> (
+        Poly.equal d.settle Autotune.Measured_batch
+        && Poly.equal d.admission Autotune.Admitted
+        && Option.is_none d.rescue
+        &&
+        match d.fit with
+        | Some f -> Poly.equal f.verdict Autotune.Fit_negative_fixed
+        | None -> false)
+    | None -> false);
+  p "a boost-clock settle after validation narrowing keeps the validated target-sized batch"
+    (clock_settle_after_val.settled_depth = 22
+    && Option.is_some (Autotune.admitted_timing_ms clock_settle_after_val.reading)
+    && List.equal Poly.equal (roles clock_settle_after_val)
+         [ Provisional_probe; Validation_probe; Confirmation_probe ]
+    &&
+    match decision clock_settle_after_val with
+    | Some d -> (
+        Poly.equal d.settle Autotune.Measured_batch
+        && Poly.equal d.admission Autotune.Admitted
+        &&
+        match d.fit with
+        | Some f -> Poly.equal f.verdict Autotune.Fit_negative_fixed
+        | None -> false)
+    | None -> false);
+  p "a mild superlinear crossing refit keeps the measured target-sized upper batch"
+    (crossing_clock_settle.settled_depth = 16
+    && Option.is_some (Autotune.admitted_timing_ms crossing_clock_settle.reading)
+    &&
+    match decision crossing_clock_settle with
+    | Some d -> (
+        Poly.equal d.settle Autotune.Measured_batch
+        && Poly.equal d.admission Autotune.Admitted
+        &&
+        match d.fit with
+        | Some f -> Poly.equal f.verdict Autotune.Fit_negative_fixed
+        | None -> false)
+    | None -> false);
+  p "a persistent >2x confirmation stall still retries once and refuses unbatched"
+    (persistent_confirm_stall.settled_depth = 1
+    && persistent_confirm_stall.reading.unbatched
+    && Option.is_none (Autotune.admitted_timing_ms persistent_confirm_stall.reading)
+    && List.equal Poly.equal (roles persistent_confirm_stall)
+         [ Provisional_probe; Confirmation_probe; Stall_retry_probe; Rescue_probe ]
+    &&
+    match decision persistent_confirm_stall with
+    | Some d ->
+        Poly.equal d.settle Autotune.Cap_unresolved
+        && Poly.equal d.admission Autotune.Refused_unbatched
+    | None -> false);
+  p "a stalled upper batch (>2x per-launch) in crossing interpolation still falls back to crossing"
+    (stalled_upper_crossing.settled_depth = 8
+    && Option.is_some (Autotune.admitted_timing_ms stalled_upper_crossing.reading)
+    &&
+    match decision stalled_upper_crossing with
+    | Some d -> Poly.equal d.settle Autotune.Cap_unresolved
+    | None -> false);
+  p "an over-2x-target base with Fit_negative_fixed confirmation stays Cap_unresolved"
+    (over_target_fixed_base.settled_depth = 1
+    &&
+    match decision over_target_fixed_base with
+    | Some d -> Poly.equal d.settle Autotune.Cap_unresolved
+    | None -> false);
+  p "an unresolved validation base with Fit_negative_fixed confirmation stays Cap_unresolved"
+    (unresolved_base_confirm.settled_depth = 8
+    && List.equal Poly.equal (roles unresolved_base_confirm)
+         [ Provisional_probe; Validation_probe; Confirmation_probe ]
+    &&
+    match decision unresolved_base_confirm with
+    | Some d -> (
+        Poly.equal d.settle Autotune.Cap_unresolved
+        &&
+        match d.fit with
+        | Some f -> Poly.equal f.verdict Autotune.Fit_negative_fixed
+        | None -> false)
+    | None -> false)
+
 (* {1 The setting's spelling} *)
 
 let () =

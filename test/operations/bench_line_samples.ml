@@ -181,7 +181,46 @@ let trace ?(cut = false) ?(stop = false) ~inject () =
     Autotune.tune ~search:true ~rounds:0 ~cache_dir:"" ~name:"bls_matmul" ctx (Train.forward c)
       Ir.Indexing.Empty
   in
-  H.trace_search_done ~compile_s:(Unix.gettimeofday () -. t0)
+  H.trace_search_done ~compile_s:(Unix.gettimeofday () -. t0);
+  if (not inject) && (not cut) && not stop then (
+    (* Pin Autotune's settle and admission vocabularies for bench_line_readers.py so
+       gh1253_gate_compare.py's closed allowlist stays tied to the producer (gh-ocannl-2376). *)
+    let settle_name (s : Autotune.batch_settle) =
+      match s with
+      | Isolated_objective | Single_estimate | Singles_reach_target | Singles_far_over_target
+      | Prior_depth | Measured_batch | Affine_projection | Wall_scaled | Cap_measured
+      | Cap_unresolved | Budget_exhausted ->
+          Autotune.batch_settle_name s
+    in
+    let admission_name (a : Autotune.batch_admission) =
+      match a with
+      | Admitted | Refused_unbatched | Refused_contended | Refused_unreadable ->
+          Autotune.batch_admission_name a
+    in
+    let settles =
+      List.map
+        [
+          Autotune.Isolated_objective;
+          Single_estimate;
+          Singles_reach_target;
+          Singles_far_over_target;
+          Prior_depth;
+          Measured_batch;
+          Affine_projection;
+          Wall_scaled;
+          Cap_measured;
+          Cap_unresolved;
+          Budget_exhausted;
+        ]
+        ~f:settle_name
+    in
+    let admissions =
+      List.map
+        [ Autotune.Admitted; Refused_unbatched; Refused_contended; Refused_unreadable ]
+        ~f:admission_name
+    in
+    Stdio.printf "timing-vocab: settles=%s\n" (String.concat ~sep:"," settles);
+    Stdio.printf "timing-vocab: admissions=%s\n%!" (String.concat ~sep:"," admissions))
 
 let seeded () =
   let ctx = Context.auto () in

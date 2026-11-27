@@ -1988,6 +1988,23 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
                   (calibration_dispatches, upper_depth, upper_ms, Measured_batch)
                 else if Float.is_finite confirmed_wall_ms then
                   (calibration_dispatches, confirmed_depth, confirmed_wall_ms, Affine_projection)
+                else if
+                  Float.(
+                    upper_ms >= queued_batch_ms
+                    && upper_ms < contention_ratio *. queued_batch_ms
+                    && upper_ms >= measured.ms)
+                  && Option.exists !last_fit ~f:(fun f -> Poly.equal f.verdict Fit_negative_fixed)
+                  && Float.(
+                       upper_ms /. Float.of_int upper_depth
+                       <= contention_ratio *. (measured.ms /. Float.of_int depth))
+                then
+                  (* A mild boost-clock step between two nearby depths can make [fixed_ms] exceed
+                     [fixed_fit_noise_fraction] ([Fit_negative_fixed]). Because the slope is
+                     strictly superlinear and within [contention_ratio] per launch, the upper
+                     target-sized batch is not fixed-overhead dominated (gh-ocannl-2376). *)
+                  if Float.(measured.ms >= queued_batch_ms) then
+                    (calibration_dispatches, depth, measured.ms, Measured_batch)
+                  else (calibration_dispatches, upper_depth, upper_ms, Measured_batch)
                 else if Float.(upper_ms >= queued_batch_ms && upper_ms >= measured.ms) then
                   (calibration_dispatches, queue_depth_cap, Float.nan, Cap_unresolved)
                 else
@@ -2005,7 +2022,8 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
               if depth = 1 then (calibration_dispatches, 1, single_estimate.ms, Measured_batch)
               else confirm_interpolated calibration_dispatches depth ~upper_depth ~upper_ms
             in
-            let rec confirm_or_scale ?(retry_stall = true) calibration_dispatches depth wall_ms =
+            let rec confirm_or_scale ?(retry_stall = true) ~base_resolved calibration_dispatches
+                depth wall_ms =
               if depth = queue_depth_cap then
                 (* The cap itself cannot provide a depth-separated confirmation. Its directly
                    measured wall is still the best scale evidence; repeating the same depth only
@@ -2041,7 +2059,22 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
                        target-sized base. Retry the same depth once: jumping straight to the cap
                        would inflate the timed batch and its 2x refusal threshold precisely when
                        calibration observed the stall that rule is meant to reject. *)
-                    confirm_or_scale ~retry_stall:false calibration_dispatches depth wall_ms
+                    confirm_or_scale ~retry_stall:false ~base_resolved calibration_dispatches depth
+                      wall_ms
+                  else if
+                    base_resolved
+                    && Float.(
+                         wall_ms < contention_ratio *. queued_batch_ms
+                         && confirmation.ms <= wall_ms *. contention_ratio)
+                    && Option.exists !last_fit ~f:(fun f -> Poly.equal f.verdict Fit_negative_fixed)
+                  then
+                    (* A +25% confirmation step amplifies a 4-15% per-launch boost-clock settle by
+                       5-6x into a negative fitted intercept ([Fit_negative_fixed]). Because the
+                       slope is strictly superlinear and [confirmation.ms] stays within
+                       [contention_ratio] of [wall_ms], the confirmation rules out fixed-overhead
+                       dominance on the already-resolved target-sized base rather than indicating an
+                       unresolved queue cliff (gh-ocannl-2376). *)
+                    (calibration_dispatches, depth, wall_ms, Measured_batch)
                   else (calibration_dispatches, queue_depth_cap, Float.nan, Cap_unresolved)
                 else
                   let depth, wall_ms =
@@ -2090,7 +2123,9 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
                     else
                       validate_depth (probes_left - 1) calibration_dispatches base_depth base_ms
                         next_depth next_wall_ms
-                  else confirm_or_scale calibration_dispatches depth validation.ms
+                  else
+                    confirm_or_scale ~base_resolved:(Float.is_finite next_wall_ms)
+                      calibration_dispatches depth validation.ms
                 else if next_depth < depth && Float.is_finite next_wall_ms then
                   (* Past the bracket, so the base is itself over the target and the resolved pair
                      puts the crossing below the validation, possibly below the base too. Probing it
@@ -2148,7 +2183,9 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
                 validate_depth max_depth_validation_probes calibration_dispatches 1
                   single_estimate.ms depth estimated_batch_wall_ms
               else if depth = probe_depth && Float.(probe.ms >= queued_batch_ms) then
-                confirm_or_scale calibration_dispatches probe_depth probe.ms
+                confirm_or_scale
+                  ~base_resolved:(Float.is_finite estimated_batch_wall_ms)
+                  calibration_dispatches probe_depth probe.ms
               else
                 validate_depth max_depth_validation_probes calibration_dispatches probe_depth
                   probe.ms depth estimated_batch_wall_ms
