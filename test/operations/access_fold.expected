@@ -90,3 +90,16 @@ same_plan refuses a plan whose conditions are one on one side and two on the oth
 an integer condition is one condition under an integer and a float select: true
 a float-valued condition is two: only the float path converts it: true
 a homogeneous operand's annotation does not split a condition: true
+buffer spans touch both arms of a Where select: true
+contrast: evaluation_reads charges only the wider arm (3 nodes) while buffer spans hold all 5: true
+buffer spans touch a projection's discarded operand: true
+buffer spans touch a dead loop's body: true
+buffer spans enter a Local_scope body: true
+buffer spans touch a Scan_loop's init and body buffers: true
+buffer spans touch both a gather's table and its index node: true
+buffer spans ignore Get_merge_buffer and scope locals: true
+buffer spans touch Tile_mma's d, a, b header operands and its fallback: true
+buffer spans decline with None on Staged_compilation: true
+first_access_positions records a statement's write before its reads, left to right: true
+first_access_positions records a gather's table before its dynamic index expression: true
+every node read_charge collects at any level appears in buffer_access_spans: true

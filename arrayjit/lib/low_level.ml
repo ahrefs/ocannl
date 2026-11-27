@@ -1048,6 +1048,20 @@ module Read_site = struct
   include Comparator.Make (T)
 end
 
+(** The tensor node a scalar expression reads ITSELF -- not through a sub-expression -- with its
+    static indices and {!Read_site.t}, or [None] (gh-ocannl-1628). Exhaustive on purpose: the scalar
+    twin of {!direct_write}, shared by {!eval_reads_traversal} and {!iter_buffer_accesses} so
+    buffer-read classification (such as a gather counting its table) cannot drift.
+    [Get_merge_buffer] reads the merge buffer, not the node's context buffer, so it returns [None].
+*)
+let direct_read : scalar_t -> (Tn.t * Indexing.axis_index array * Read_site.t) option = function
+  | Get (tn, idcs) -> Some (tn, idcs, Read_site.Static idcs)
+  | Get_dynamic { tn; idcs; dyn_axis; dyn_value } ->
+      Some (tn, idcs, Read_site.Gather { idcs; dyn_axis; dyn_value })
+  | Get_merge_buffer _ | Get_local _ | Local_scope _ | Ternop _ | Binop _ | Unop _ | Constant _
+  | Constant_bits _ | Embed_index _ ->
+      None
+
 type read_charge = {
   loads : Set.M(Tnode).t;  (** Contributors loaded whichever way the selects below go. *)
   sites : Set.M(Read_site).t Map.M(Tnode).t;
@@ -1815,21 +1829,21 @@ let eval_reads_traversal ~self ~iterated =
       after_statement = (fun _ acc _ -> acc);
       after_scalar =
         (fun ctx acc sc ->
-          match sc with
-          | Get (q, idcs) -> contributor ctx acc q idcs (Read_site.Static idcs)
-          | Get_dynamic { tn = q; idcs; dyn_axis; dyn_value } ->
-              contributor ctx acc q idcs (Read_site.Gather { idcs; dyn_axis; dyn_value })
-          | Local_scope _ -> (
-              match acc.e_saved with
-              | cur :: saved ->
-                  {
-                    acc with
-                    e_stmt = merge_charges acc.e_stmt acc.e_cur;
-                    e_cur = cur;
-                    e_saved = saved;
-                  }
-              | [] -> assert false)
-          | _ -> acc);
+          match direct_read sc with
+          | Some (q, idcs, site) -> contributor ctx acc q idcs site
+          | None -> (
+              match sc with
+              | Local_scope _ -> (
+                  match acc.e_saved with
+                  | cur :: saved ->
+                      {
+                        acc with
+                        e_stmt = merge_charges acc.e_stmt acc.e_cur;
+                        e_cur = cur;
+                        e_saved = saved;
+                      }
+                  | [] -> assert false)
+              | _ -> acc));
       branches =
         (fun _ acc ~select arms ->
           let speculable =
@@ -9701,58 +9715,24 @@ let loop_ranges (llc : t) : Affine.Loop_ranges.t =
     merge buffer, not the node's context buffer. The single source of buffer-access truth for the
     gh-ocannl-489 liveness passes ({!buffer_access_spans}, {!sink_zero_outs}). *)
 let iter_buffer_accesses ~(touch : Tn.t -> unit) ~(on_opaque : unit -> unit) (c : t) : unit =
-  let rec scal (sc : scalar_t) : unit =
-    match sc with
-    | Local_scope { body; id = _; orig_indices = _; mint = _ } -> stmt body
-    | Get_local _ -> ()
-    | Get (tn, _) -> touch tn
-    | Get_dynamic { tn; dyn_value = dv, _; idcs = _; dyn_axis = _ } ->
-        touch tn;
-        scal dv
-    | Get_merge_buffer (_, _) -> (* Reads the merge buffer, not the node's context buffer. *) ()
-    | Ternop (_, (a, _), (b, _), (c, _)) ->
-        scal a;
-        scal b;
-        scal c
-    | Binop (_, (a, _), (b, _)) ->
-        scal a;
-        scal b
-    | Unop (_, (a, _)) -> scal a
-    | Constant _ | Constant_bits _ | Embed_index _ -> ()
-  and stmt (c : t) : unit =
-    match c with
-    | Noop | Comment _ -> ()
+  let open Access_fold in
+  let statement _ () stmt =
+    Option.iter (direct_write stmt) ~f:touch;
+    (match stmt with
     | Staged_compilation _ -> on_opaque ()
-    | Seq (t1, t2) ->
-        stmt t1;
-        stmt t2
-    | For_loop { body; _ } -> stmt body
-    | Scan_loop { carried; body; _ } ->
-        List.iter carried ~f:(fun c -> scal c.init);
-        stmt body
-    | Zero_out tn -> touch tn
-    | Set { tn; llsc; idcs = _; debug = _ } ->
-        touch tn;
-        scal llsc
-    | Set_dynamic { tn; dyn_value = dv, _; llsc; idcs = _; dyn_axis = _; debug = _ } ->
-        touch tn;
-        scal dv;
-        scal llsc
-    | Set_from_vec { tn; arg = a, _; idcs = _; length = _; vec_unop = _; debug = _ } ->
-        touch tn;
-        scal a
-    | Set_local (_, sc) -> scal sc
-    | Declare_local _ | Workgroup_barrier -> ()
-    | If { cond = cond, _; body } ->
-        scal cond;
-        stmt body
-    | Tile_mma { d = d, _; a = a, _; b = b, _; fallback; _ } ->
-        touch d;
+    | Tile_mma { a = a, _; b = b, _; _ } ->
+        (* [d] was touched by [direct_write stmt] above; [Access_fold] descends into [fallback]
+           next. *)
         touch a;
-        touch b;
-        stmt fallback
+        touch b
+    | _ -> ());
+    Continue ()
   in
-  stmt c
+  let scalar _ () sc =
+    Option.iter (direct_read sc) ~f:(fun (tn, _, _) -> touch tn);
+    Continue ()
+  in
+  fold ~policy:structural ~hooks:{ (hooks ()) with statement; scalar } ~init:() c
 
 (** gh-ocannl-489 liveness-based buffer aliasing: per-tnode access span over the final (post-
     schedule, post-fission) code of a routine, as a closed interval of positions. [segments] are the
