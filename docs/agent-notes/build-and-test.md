@@ -1470,6 +1470,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   order with `--shard K/N` (gh-ocannl-2353). `--list [--shard K/N]` prints that same candidate
   selection without launching a member. `tools/test-harness-legs-alone.sh` compares the
   shards with the unsharded fixture and checks that closed stdout makes the listing exit 1.
+  A failed run shows up to 40 lines (512 bytes per line) of captured stdout and stderr near
+  its first harness failure marker, or from the end when there is no marker (gh-ocannl-2389).
+  The fixture pins the compiler error after the Dune directory line amid noisy output,
+  including a UTF-8 character across the byte cap. The failure header names the complete log.
   `tools/harness-legs-alone.sh` uses the `/bin/sh` launcher pattern above (gh-ocannl-2401).
   `ci_matrix.sh` checks the workflow supplies every shard once and leaves siblings running
   after a failure. Run it locally, slot-wrapped,

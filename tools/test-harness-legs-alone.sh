@@ -3,6 +3,8 @@
 # parse complete usage output or classify arbitrary diagnostics.
 # The shard checks read only the fixture member paths in HARNESS headers or on
 # --list's stdout. Per-leg output and wording are outside their membership check.
+# The excerpt check matches only the fixture's diagnostic and noise markers
+# in the single failing leg's output.
 # Opposing controls for tools/harness-legs-alone.sh (gh-ocannl-1367): on a
 # fixture repository whose manifest names a gated and an ungated harness, a
 # clean harness passes leg by leg and group by group; a leg that reads what an
@@ -54,7 +56,13 @@ leg_1() {
 }
 leg_2() {
   if [ "${SHAREDSKIP:-0}" = 1 ] && [ "${shared:-}" != made ]; then skip 'shared label' 'two alone'
-  elif [ "${LEAK:-0}" = 1 ] && [ "${shared:-}" != made ]; then report 1 'two reads what one made'
+  elif [ "${LEAK:-0}" = 1 ] && [ "${shared:-}" != made ]; then
+    printf 'fixture setup progress %s\n' {1..60}
+    report 1 'two reads what one made' "Entering directory 'fixture'
+File \"demo.ml\", line 1, characters 8-14:
+$(printf '%-511s%s' 'compiler source line:' 'éomitted source suffix')
+Error: Unbound value shared
+$(printf 'fixture build progress %s\n' {1..60})"
   else report 0 'two'; fi
 }
 leg_3() {
@@ -157,6 +165,14 @@ dot abc #c'
      && [ "$(grep -c '^  ALONE \(FAIL\|MISS\|SKIP\)' "$TMP/out")" = 1 ] && grep -q '^logs: ' "$TMP/out"; then
     report 0 'a leg reading an earlier leg'"'"'s state fails alone and passes in the full run and its group'
   else report 1 'a leg reading an earlier leg'"'"'s state fails alone and passes in the full run and its group' "exit $rc; $(cat "$TMP/out")"; fi
+  # The next source character straddles the 512-byte boundary.
+  if [ "$rc" = 1 ] && has '        File "demo.ml", line 1, characters 8-14:' &&
+     has '        Error: Unbound value shared' &&
+     has "        $(printf '%-511s' 'compiler source line:')" &&
+     [ "$(grep -c '^        ' "$TMP/out")" = 40 ] &&
+     ! grep -qE 'fixture setup progress 1$|omitted source suffix|fixture build progress 60' "$TMP/out"; then
+    report 0 'a failed leg includes its multiline compiler error in a bounded excerpt'
+  else report 1 'a failed leg includes its multiline compiler error in a bounded excerpt' "exit $rc; $(cat "$TMP/out")"; fi
 
   SKIPLEAK=1 run
   if [ "$rc" = 1 ] && grep -q '^  ALONE SKIP  3: three \[z\]+ #b: skips alone what the full run decided: ' "$TMP/out" \
