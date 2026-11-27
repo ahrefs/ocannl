@@ -402,6 +402,11 @@ let replay_output_placement ~root ~target ~dry ~calls ~elements ~reverse_payload
     Cu.Context.set_current primary;
     let func = Cu.Module.get_function (Cu.Module.load_data_ex ptx []) ~name:work.name in
     let stream = Cu.Stream.create ~non_blocking:true () in
+    let upload ?dst_offset ~dst src =
+      Cu.Stream.memcpy_H_to_D ~length:elements ?dst_offset ~dst ~src stream;
+      Cu.Stream.synchronize stream;
+      ignore (Stdlib.Sys.opaque_identity src)
+    in
     let start = Cu.Event.create ~enable_timing:true ()
     and stop = Cu.Event.create ~enable_timing:true () in
     let batch = 128 in
@@ -420,7 +425,8 @@ let replay_output_placement ~root ~target ~dry ~calls ~elements ~reverse_payload
       Cu.Event.record start stream;
       queue args;
       Cu.Event.record stop stream;
-      Cu.Event.synchronize stop;
+      (* The stream wait also releases cudajit's retained launch arguments for this reading. *)
+      Cu.Stream.synchronize stream;
       let ms = Cu.Event.elapsed_time ~start ~end_:stop /. Float.of_int batch in
       Option.some_if (Float.is_finite ms && Float.is_positive ms) ms
     in
@@ -483,12 +489,11 @@ let replay_output_placement ~root ~target ~dry ~calls ~elements ~reverse_payload
               let got = Array.create ~len:elements 0. in
               (match fixture.seeds with
               | [ (_, flags); (_, data) ] ->
-                  D.memcpy_H_to_D ~dst:flag ~src:(f32 flags) ();
-                  D.memcpy_H_to_D ~dst:payload ~src:(f32 data) ()
+                  upload ~dst:flag (f32 flags);
+                  upload ~dst:payload (f32 data)
               | _ -> failwith "expected where_masked flag and payload");
               List.iter placements ~f:(fun (name, (region : D.region), _) ->
-                  D.memcpy_H_to_D ~length:elements ~dst_offset:region.offset_bytes ~dst:region.base
-                    ~src:seed ();
+                  upload ~dst_offset:region.offset_bytes ~dst:region.base seed;
                   submit (args region);
                   Cu.Stream.synchronize stream;
                   D.memcpy_D_to_H ~length:elements ~src_offset:region.offset_bytes ~src:region.base
