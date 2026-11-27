@@ -29,10 +29,11 @@ the interface a rule copies into the module's own `.mli` is the one read: true
 a copy naming `Cuda` and `Nvrtc` is accepted where both libraries are declared: true
 a constructor, a comment, a string and a nested path spelling `Nvrtc` name no module of the stand-in: true
 a module the availability-only exception for its package stand-in names is excused: true
-the module map reads each module's agreement gate, negated or not, and no alias stands for any library: true
+the module map reads each module's agreement gate, negated or not: true
 a copied source the scan was not given is refused: true
 a copied source that does not parse is refused: true
 a package stand-in compiling dune's default module set is refused: true
+a package stand-in module with no agreement alias is refused: true
 an agreement alias gated on two libraries is refused: true
 an agreement alias gated on another package's library is refused: true
 an agreement alias whose rules gate on no library is refused: true
@@ -65,7 +66,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:ec6cead6a475041460ddead2715a32a1] copies it into
   [scanner-refusal:b420bc79cbc7a037b600c9d47c9b2525] arrayjit/vendor_stubs/
   [scanner-refusal:047374463fd606fe95cf257ebf928364] arrayjit/vendor_stubs/
-  [scanner-refusal:518629fae55a4ef4b29ab72b3a71d8ce] each module's agreement
+  [scanner-refusal:01d2620700383180c6db86cc19d41665] each module's agreement
   [scanner-refusal:f4e3a8ac36957f5a6f54cd735b3c2092] package stand-in declared
   [scanner-refusal:6cd3c184704a37f8cb97e98efd6a0a87] beside unrelated sources
 End of synthetic controls.
