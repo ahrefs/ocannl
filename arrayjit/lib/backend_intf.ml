@@ -547,6 +547,16 @@ type hardware_limits = {
           by [model_default]'s ranking only: the [auto] seeding gate, which weighs a staged sketch
           against an unstaged preset the term was not fitted for, prices neither the term nor the
           tail. Same cache identity as {!field-cache_capacity_bytes}. *)
+  staged_idle_rate : float option; [@sexp.option]
+      (** [Untimed]: how many refused bytes per second a launch's partition-guarded operand staging
+          copies pay for workgroup lanes left idle across the phase barrier (gh-ocannl-2280,
+          {!Ir.Cost_model.staged_idle_copies}): when a [Workgroup] [i < c] guard encloses a staged
+          copy (e.g. a 64x64x8/4x4 blocktile whose 16-thread workgroup axis copies an 8-deep
+          k-tile), the refused lanes' bytes over their fill are added to the compute leg over this
+          rate. A FITTED constant ([benchmarks/gh1600_txn_fit.py --idle-rate]), per device class.
+          Overridable by config [model_staged_idle_rate]; [None] where unmeasured, which adds no
+          term. Read by the leaf ranking ([model_default], [model_explain]); the [auto] seeding gate
+          prices no idle bytes. Same cache identity as {!field-cache_capacity_bytes}. *)
   shared_load_rate : float option; [@sexp.option]
       (** [Untimed]: how many workgroup-memory cells per second a launch's threads load beyond the
           calibration register tile's reuse -- the rate of the ranking score's register-reuse term
@@ -1096,6 +1106,7 @@ let no_hardware_limits =
     transaction_rate = None;
     workgroup_bytes_per_multiprocessor = None;
     staged_copy_rate = None;
+    staged_idle_rate = None;
     shared_load_rate = None;
     fill_lane_width = None;
     mma_peak_f16 = None;
@@ -1420,6 +1431,7 @@ let limits_key
        transaction_rate = _;
        workgroup_bytes_per_multiprocessor = _;
        staged_copy_rate = _;
+       staged_idle_rate = _;
        shared_load_rate = _;
        fill_lane_width = _;
        mma_peak_f16 = _;
@@ -1471,6 +1483,7 @@ type untimed_limits = {
   workgroup_capacity : int option;
       (** {!field-hardware_limits.workgroup_bytes_per_multiprocessor}. *)
   copy_rate : float option;  (** {!field-hardware_limits.staged_copy_rate}. *)
+  idle_rate : float option;  (** {!field-hardware_limits.staged_idle_rate}. *)
   shared_rate : float option;  (** {!field-hardware_limits.shared_load_rate}. *)
   lane_width : int option;  (** {!field-hardware_limits.fill_lane_width}. *)
 }
@@ -1492,6 +1505,7 @@ let untimed_limits (l : hardware_limits) : untimed_limits =
     sector_rate = l.transaction_rate;
     workgroup_capacity = l.workgroup_bytes_per_multiprocessor;
     copy_rate = l.staged_copy_rate;
+    idle_rate = l.staged_idle_rate;
     shared_rate = l.shared_load_rate;
     lane_width = l.fill_lane_width;
   }

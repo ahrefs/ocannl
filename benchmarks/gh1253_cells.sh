@@ -109,6 +109,10 @@
 # EXPLAIN_ONLY's shipped arm, as FILL_CHAINS does); its kernel lines' shl= (the filled excess
 # shared loads, listed whether or not a rate prices them) are what gh1600_txn_fit.py
 # --shared-rate re-scores.
+# gh-ocannl-2280: and `noidl` (model_staged_idle_rate none: no partition-guarded staged-idle term).
+# STAGED_COPY_RATE=R and STAGED_IDLE_RATE=R state them to the fitted/shipped arm (and to
+# EXPLAIN_ONLY's shipped arm); its kernel lines' idl= (the filled refused workgroup bytes, listed
+# whether or not a rate prices them) are what gh1600_txn_fit.py --idle-rate re-scores.
 # FIT_FILL=1 with RANK_ONLY=1 runs the issue cell first (MULTIPROCESSORS=P passes --multiprocessors,
 # needed only where the device reports none: a non-AGX Metal GPU) and passes its fitted constants to the listing and pick
 # cells, which otherwise run the shipped ones. PICK_GATE0=1 adds pick cells with the seeding off
@@ -167,7 +171,7 @@ if [[ $compare_gate == 1 ]]; then
   for knob in RANK_ONLY CAPACITY_ONLY FIT_FILL PICK_GATE0 BENCH_PICK NO_COALESCED; do
     [[ ${!knob:-0} == 0 ]] || gate_usage "$knob conflicts with this mode"
   done
-  for knob in EXPLAIN_ONLY PICK_PROFILES TXN_RATE MULTIPROCESSORS FILL_CHAINS SHARED_LOAD_RATE FILL_LANE_WIDTH; do
+  for knob in EXPLAIN_ONLY PICK_PROFILES TXN_RATE MULTIPROCESSORS FILL_CHAINS SHARED_LOAD_RATE FILL_LANE_WIDTH STAGED_COPY_RATE STAGED_IDLE_RATE; do
     [[ -z ${!knob:-} ]] || gate_usage "$knob conflicts with this mode"
   done
   gate_repeats=${TIME_REPEATS:-1}
@@ -351,6 +355,9 @@ if [[ -n "${FILL_CHAINS:-}" ]]; then ilp_flag=("--ocannl_model_fill_chains=$FILL
 # gh-ocannl-2262: the register-reuse rate and the lane group under fit, carried the same way.
 if [[ -n "${SHARED_LOAD_RATE:-}" ]]; then ilp_flag+=("--ocannl_model_shared_load_rate=$SHARED_LOAD_RATE"); fi
 if [[ -n "${FILL_LANE_WIDTH:-}" ]]; then ilp_flag+=("--ocannl_model_fill_lane_width=$FILL_LANE_WIDTH"); fi
+# gh-ocannl-2280: the staged-copy and staged-idle rates under fit, carried the same way.
+if [[ -n "${STAGED_COPY_RATE:-}" ]]; then ilp_flag+=("--ocannl_model_staged_copy_rate=$STAGED_COPY_RATE"); fi
+if [[ -n "${STAGED_IDLE_RATE:-}" ]]; then ilp_flag+=("--ocannl_model_staged_idle_rate=$STAGED_IDLE_RATE"); fi
 model=(${ilp_flag[@]+"${ilp_flag[@]}"})
 tiers=()
 fitted_arm=fitted
@@ -514,10 +521,20 @@ for site in $sites; do
   cell "rank_${name}_noocc" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
     --ocannl_gpu_default_sketch_min_reduction=32 \
     ${model[@]+"${model[@]}"} --ocannl_model_workgroup_bytes_per_multiprocessor=none
-  # gh-ocannl-1821: the same constants without the staged-copy term and its launch tail.
+  # gh-ocannl-1821/2280: the same constants without the staged-copy term (and its launch tail),
+  # and without the partition-guarded staged-idle term (first statement of a key wins).
+  nostg=()
+  noidl=()
+  for flag in ${model[@]+"${model[@]}"}; do
+    case "$flag" in --ocannl_model_staged_copy_rate=*) ;; *) nostg+=("$flag") ;; esac
+    case "$flag" in --ocannl_model_staged_idle_rate=*) ;; *) noidl+=("$flag") ;; esac
+  done
   cell "rank_${name}_nostg" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
     --ocannl_gpu_default_sketch_min_reduction=32 \
-    ${model[@]+"${model[@]}"} --ocannl_model_staged_copy_rate=none
+    ${nostg[@]+"${nostg[@]}"} --ocannl_model_staged_copy_rate=none
+  cell "rank_${name}_noidl" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+    --ocannl_gpu_default_sketch_min_reduction=32 \
+    ${noidl[@]+"${noidl[@]}"} --ocannl_model_staged_idle_rate=none
   # gh-ocannl-1639: the same constants with the thread-only launch fill (no ILP cap stated).
   noilp=()
   for flag in ${model[@]+"${model[@]}"}; do
@@ -586,7 +603,8 @@ for site in $sites; do
       "ceilings=$out/rank_${name}_ceilings.out" "nofill=$out/rank_${name}_nofill.out" \
       "nomma=$out/rank_${name}_nomma.out" "mmaonly=$out/rank_${name}_mmaonly.out" \
       "noocc=$out/rank_${name}_noocc.out" "notxn=$out/rank_${name}_notxn.out" \
-      "nostg=$out/rank_${name}_nostg.out" "noilp=$out/rank_${name}_noilp.out" \
+      "nostg=$out/rank_${name}_nostg.out" "noidl=$out/rank_${name}_noidl.out" \
+      "noilp=$out/rank_${name}_noilp.out" \
       "noshl=$out/rank_${name}_noshl.out" "nolane=$out/rank_${name}_nolane.out" \
       "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" --stock-tsv "$stock_rows" \
       ${timing_census[@]+"${timing_census[@]}"} \

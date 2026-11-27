@@ -9,8 +9,20 @@ two nests, two copy contexts: true
 a listing at rate L re-scores at R by stg * (1/R - 1/L), over every context: true
 an outer [w < 4] and an inner [w < 2] admit 2 threads: true
 an outer [w < 2] and an inner [w < 4] admit 2 threads: true
+an outer [w < 4] and an inner [w < 2] report 6 refused workgroup threads as idle: true
+an outer [w < 2] and an inner [w < 4] report 6 refused workgroup threads as idle: true
+a Serial i < c guard on a staged copy reports no idle workgroup bytes: true
+a Grid i < c guard on a staged copy reports no idle workgroup bytes: true
+a Where fringe guard without a Workgroup If reports no idle workgroup bytes: true
+mixed Serial and Workgroup guards charge idle lanes only for admitted serial steps (both orders): true
+the staged-idle term adds filled idle bytes over the rate to the compute leg, exactly: true
+staged_idle_rate None, 0, or empty idle copies leave both legs bitwise unchanged: true
+model_staged_idle_rate value beats the backend's advisory staged_idle_rate: true
+model_staged_idle_rate=none beats the backend's advisory staged_idle_rate: true
+empty model_staged_idle_rate resolves to the backend's advisory staged_idle_rate: true
 only the operand copy counts, at the iterations its index guard admits, in its own context: true
 a kernel with a Tile_mma statement has no counted copies: true
+a kernel with a Tile_mma statement has no counted idle copies: true
 the tail is the continuous fill at B <= P: true
 and at B = P: true
 and at a saturated multiple of P: true
@@ -31,3 +43,5 @@ the actual gate's delivery charge separates the tied arithmetic: true
 auto-legacy keeps the arithmetic tie and admits neither sketch: true
 every staged leaf's census equals M*N*K*(BM+BN)/(BM*BN) cells of 4 bytes: true
 a coalesced leaf is among them: true
+every lowered 64x64x8/4x4 outproj leaf reports idle bytes equal to its staged bytes: true
+every unguarded 4x4 outproj leaf reports zero idle bytes: true

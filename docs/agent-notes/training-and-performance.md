@@ -454,12 +454,24 @@ files.
   (gh-ocannl-2306).
   The leaf ranker still uses the staged volume from the fit. CUDA ships 1e12 B/s
   (any of 5e11-8e12 does the same at M1); the admitted+coalesced argmin is then the fastest leaf at
-  outproj and qkv b256 and an uncoalesced leaf at b8. HIP has none: on tuf (discrete) the term
-  favors the uncoalesced `64x64x8/4x4 bgrid` measured 4.5x slow there and its deep tiles need the
-  occupancy factor. Not modeled: BK order within one block tile (exact score ties, the walk's
-  listing order decides); the register-tile and sub-warp gaps at one block tile are gh-ocannl-2262's
-  terms (below). Re-fit with `gh1600_txn_fit.py --staged-rate sweep --listed-staged-rate L` on listings
-  carrying `stg=`, judged against the cell's `nostg` arm (`gh1253_cells.sh`).
+  outproj and qkv b256 and an uncoalesced leaf at b8. On discrete RDNA wave32 HIP (tuf, RX 7700S,
+  2026-11-27 exclusive 5-rep window; gh-ocannl-2280), `Cost_model.operand_census`
+  also reports `oc_idle` (`staged_idle_copies`): the
+  bytes refused by `Workgroup` `i < c` partition guards enclosing staged copies (`Serial` and `Grid`
+  guards shrink both admitted and workgroup counts and emit 0 idle bytes). In `64x64x8/4x4`,
+  `if (ty < 8)` / `if (tx < 8)` leaves half the block idle across `__syncthreads()`, so `64x64x8`
+  trails `32x32x8` on every discrete-HIP cell (1.29x at wgrad b8 with 0 VGPR spills; 2.55x at
+  outproj b8 and 2.88x vs `32x32x8` / 4.51x vs fastest at uncoalesced outproj b256 where hiprtc
+  additionally spills 110 VGPRs). Discrete RDNA wave32 HIP
+  ships `transaction_rate = 1e11`, `workgroup_bytes_per_multiprocessor = 131072` (physical LDS/WGP),
+  `staged_copy_rate = 5e11`, and `staged_idle_rate = 3e11` (leaf-ranking only, unset in the auto
+  seeding gate; CUDA and unified HIP keep `staged_idle_rate = None`, and unified HIP keeps
+  `staged_copy_rate = None`), putting `outproj` b8/b256 argmin at `64x64x32/4x4 bgrid coal-k`
+  (1.001x/1.000x of fastest; model pick 0.56x/0.20x of seeded). Not modeled: BK order within one block tile (exact score ties, the
+  walk's listing order decides); the register-tile and sub-warp gaps at one block tile are
+  gh-ocannl-2262's terms (below). Re-fit with `gh1600_txn_fit.py --staged-rate sweep
+  --listed-staged-rate L [--idle-rate sweep --listed-idle-rate I]` on listings carrying `stg=` and
+  `idl=`, judged against the cell's `nostg` arm (`gh1253_cells.sh`, which also emits `noidl`).
 - **Compare ranked seeding on one build (gh-ocannl-2335).** `COMPARE_AUTO_GATE=1` in
   `gh1253_cells.sh` runs `auto` and `auto-legacy` at each site. Both select the ranked gate on
   CUDA and HIP. The legacy gate omits the operand-delivery rate and its launch tail, as before

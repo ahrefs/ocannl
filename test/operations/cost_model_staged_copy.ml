@@ -33,6 +33,15 @@ module LL = Ir.Low_level
 module CM = Ir.Cost_model
 module BI = Ir.Backend_intf
 
+let () =
+  if Array.length Stdlib.Sys.argv >= 2 && String.equal Stdlib.Sys.argv.(1) "idle-override" then (
+    let advised = { BI.no_hardware_limits with staged_idle_rate = Some 3.0e11 } in
+    Stdio.printf "%s\n%!"
+      (Option.value_map
+         (Autotune.ranking_staged_idle_rate ~limits:advised)
+         ~default:"none" ~f:(Printf.sprintf "%.6e"));
+    Stdlib.exit 0)
+
 let fresh_tn =
   let make = Ll_test.node_factory ~first_id:972_000_000 ~dims:[||] () in
   fun label dims -> make ~dims label
@@ -72,10 +81,12 @@ let staged_kernel ~tag ~nb ~nw ~ns =
 let peak = 1024.
 let issue = 256.
 
-let legs ?staged_copies ?direct_loads ?staged_copy_rate ?(fill = fm) code =
+let legs ?staged_copies ?idle_copies ?direct_loads ?staged_copy_rate ?staged_idle_rate ?(fill = fm)
+    code =
   CM.ranking_legs_of ~peak_flops:peak ~peak_memory_bandwidth:peak ~issue_rate:issue
     ~launch:(fill, CM.launch_contexts code)
-    ?staged_copies ?direct_loads ?staged_copy_rate (CM.analyze code) None
+    ?staged_copies ?idle_copies ?direct_loads ?staged_copy_rate ?staged_idle_rate (CM.analyze code)
+    None
 
 let legs_equal (c1, m1) (c2, m2) = Option.equal Float.equal c1 c2 && Option.equal Float.equal m1 m2
 let ctx_list copies = List.map copies ~f:(fun c -> (c.CM.sc_blocks, c.CM.sc_threads, c.CM.sc_bytes))
@@ -138,11 +149,103 @@ let () =
     Ll_test.loop_n ~axis:LL.Workgroup w nw
       (guard outer (guard inner (Ll_test.set ta [| it w |] (Ll_test.get a [| it w |]))))
   in
-  (* 2 of 8 threads, 4-byte cells. *)
+  (* 2 of 8 threads, 4-byte cells; 6 of 8 threads refused (24 idle bytes). *)
   p "an outer [w < 4] and an inner [w < 2] admit 2 threads"
     (List.equal Poly.equal (ctx_list (CM.staged_copies ~is_staged (nested 4 2))) [ (1, 8, 8.) ]);
   p "an outer [w < 2] and an inner [w < 4] admit 2 threads"
-    (List.equal Poly.equal (ctx_list (CM.staged_copies ~is_staged (nested 2 4))) [ (1, 8, 8.) ])
+    (List.equal Poly.equal (ctx_list (CM.staged_copies ~is_staged (nested 2 4))) [ (1, 8, 8.) ]);
+  p "an outer [w < 4] and an inner [w < 2] report 6 refused workgroup threads as idle"
+    (List.equal Poly.equal
+       (ctx_list (CM.staged_idle_copies ~is_staged (nested 4 2)))
+       [ (1, 8, 24.) ]);
+  p "an outer [w < 2] and an inner [w < 4] report 6 refused workgroup threads as idle"
+    (List.equal Poly.equal
+       (ctx_list (CM.staged_idle_copies ~is_staged (nested 2 4)))
+       [ (1, 8, 24.) ]);
+  (* gh-ocannl-2280: Serial and Grid i < c guards reduce admitted and workgroup totals alike (0 idle
+     bytes); mixed Serial + Workgroup guards charge only the admitted serial steps' idle lanes, in
+     either nesting order; unguarded copies and Where fringe guards report 0 idle bytes; and
+     ranking_legs_of adds filled idle bytes over staged_idle_rate to compute alone. *)
+  let guard_lt idx n body = Ll_test.if_ (Ll_test.lt (Ll_test.embed idx) (Ll_test.ic n)) body in
+  let serial_only =
+    let s = Ll_test.sym () and w = Ll_test.sym () in
+    Ll_test.loop_n ~axis:LL.Workgroup w nw
+      (Ll_test.loop_n s 4 (guard_lt s 2 (Ll_test.set ta [| it w |] (Ll_test.get a [| it w |]))))
+  in
+  let grid_only =
+    let g = Ll_test.sym () and w = Ll_test.sym () in
+    Ll_test.loop_n ~axis:LL.Grid g 4
+      (guard_lt g 2
+         (Ll_test.loop_n ~axis:LL.Workgroup w nw
+            (Ll_test.set ta [| it w |] (Ll_test.get a [| it w |]))))
+  in
+  let mixed_order ~wg_outer =
+    let s = Ll_test.sym () and w = Ll_test.sym () in
+    let copy = Ll_test.set ta [| it w |] (Ll_test.get a [| it w |]) in
+    let guarded =
+      if wg_outer then guard_lt w 3 (guard_lt s 2 copy) else guard_lt s 2 (guard_lt w 3 copy)
+    in
+    Ll_test.loop_n ~axis:LL.Workgroup w nw (Ll_test.loop_n s 4 guarded)
+  in
+  let fringe_only =
+    let w = Ll_test.sym () in
+    let rhs =
+      Ll_test.where_
+        (Ll_test.lt (Ll_test.embed w) (Ll_test.ic 3))
+        (Ll_test.get a [| it w |])
+        (Ll_test.c 0.)
+    in
+    Ll_test.loop_n ~axis:LL.Workgroup w nw (Ll_test.set ta [| it w |] rhs)
+  in
+  p_empty "a Serial i < c guard on a staged copy reports no idle workgroup bytes"
+    ~over:(CM.staged_copies ~is_staged serial_only)
+    (CM.staged_idle_copies ~is_staged serial_only);
+  p_empty "a Grid i < c guard on a staged copy reports no idle workgroup bytes"
+    ~over:(CM.staged_copies ~is_staged grid_only)
+    (CM.staged_idle_copies ~is_staged grid_only);
+  p_empty "a Where fringe guard without a Workgroup If reports no idle workgroup bytes"
+    ~over:(CM.staged_copies ~is_staged fringe_only)
+    (CM.staged_idle_copies ~is_staged fringe_only);
+  let check_mixed ~wg_outer =
+    let c = CM.operand_census ~is_staged (mixed_order ~wg_outer) in
+    (* 2 serial steps x 3 admitted threads x 4 B = 24; 2 serial steps x 5 idle threads x 4 B =
+       40. *)
+    List.equal Poly.equal (ctx_list c.oc_staged) [ (1, 8, 24.) ]
+    && List.equal Poly.equal (ctx_list c.oc_idle) [ (1, 8, 40.) ]
+  in
+  p
+    "mixed Serial and Workgroup guards charge idle lanes only for admitted serial steps (both \
+     orders)"
+    (check_mixed ~wg_outer:true && check_mixed ~wg_outer:false);
+  (* Exact leg addition and bitwise-unchanged controls for staged_idle_rate: 1 block x 8 threads
+     under fm (4 MPs x 64 threads) has fill 8/256 = 1/32, so 24 idle bytes / (1/32) / 8 = 96 s. *)
+  let k_guard = nested 4 2 in
+  let idle_ctxs = CM.staged_idle_copies ~is_staged k_guard in
+  let base_g = legs k_guard in
+  let priced_g = legs ~idle_copies:idle_ctxs ~staged_idle_rate:8. k_guard in
+  p "the staged-idle term adds filled idle bytes over the rate to the compute leg, exactly"
+    (match (base_g, priced_g) with
+    | (Some c0, m0), (Some c1, m1) -> Float.equal c1 (c0 +. 96.) && Option.equal Float.equal m0 m1
+    | _ -> false);
+  p "staged_idle_rate None, 0, or empty idle copies leave both legs bitwise unchanged"
+    (legs_equal (legs ~idle_copies:idle_ctxs k_guard) base_g
+    && legs_equal (legs ~idle_copies:idle_ctxs ~staged_idle_rate:0. k_guard) base_g
+    && legs_equal (legs ~idle_copies:[] ~staged_idle_rate:8. k_guard) base_g);
+  (* Config override resolution via fresh processes (staged_idle_rate_override is a module lazy). *)
+  let probe_override flags =
+    let ((status, stdout, _) as child) = Fresh_process.run ("idle-override" :: flags) in
+    match status with
+    | Unix.WEXITED 0 -> String.strip stdout
+    | _ ->
+        Fresh_process.report ~label:"idle-override" child;
+        ""
+  in
+  p "model_staged_idle_rate value beats the backend's advisory staged_idle_rate"
+    (String.equal (probe_override [ "--ocannl_model_staged_idle_rate=7e11" ]) "7.000000e+11");
+  p "model_staged_idle_rate=none beats the backend's advisory staged_idle_rate"
+    (String.equal (probe_override [ "--ocannl_model_staged_idle_rate=none" ]) "none");
+  p "empty model_staged_idle_rate resolves to the backend's advisory staged_idle_rate"
+    (String.equal (probe_override [ "--ocannl_model_staged_idle_rate=" ]) "3.000000e+11")
 
 let () =
   (* What is not a copy, and what lends a copy no context. *)
@@ -195,7 +298,15 @@ let () =
   in
   p_empty "a kernel with a Tile_mma statement has no counted copies"
     ~over:(CM.staged_copies ~is_staged copy)
-    (CM.staged_copies ~is_staged (Ll_test.seq copy mma))
+    (CM.staged_copies ~is_staged (Ll_test.seq copy mma));
+  let guarded_copy =
+    let w = Ll_test.sym () in
+    Ll_test.loop_n ~axis:LL.Workgroup w 4
+      (Ll_test.if_ (Ll_test.lt (Ll_test.embed w) (Ll_test.ic 2)) copy)
+  in
+  p_empty "a kernel with a Tile_mma statement has no counted idle copies"
+    ~over:(CM.staged_idle_copies ~is_staged guarded_copy)
+    (CM.staged_idle_copies ~is_staged (Ll_test.seq guarded_copy mma))
 
 let () =
   let tail =
@@ -482,18 +593,31 @@ let () =
             in
             if Set.is_empty post.LL.workgroup_shared then None
             else
-              let copies = CM.staged_copies ~is_staged post.LL.llc in
-              let bytes = List.sum (module Float) copies ~f:(fun c -> c.CM.sc_bytes) in
+              let census = CM.operand_census ~is_staged post.LL.llc in
+              let bytes = List.sum (module Float) census.oc_staged ~f:(fun c -> c.CM.sc_bytes) in
+              let idle_bytes = List.sum (module Float) census.oc_idle ~f:(fun c -> c.CM.sc_bytes) in
               let expected =
                 Float.of_int (m * n * k / (sp.sk_bm * sp.sk_bn) * (sp.sk_bm + sp.sk_bn) * 4)
               in
               Stdio.eprintf
-                "cost_model_staged_copy: %s staged %.0f bytes, block-tile arithmetic %.0f (not \
-                 part of the golden)\n"
-                (Autotune.sketch_params_label sp) bytes expected;
-              Some (sp, bytes, expected))
+                "cost_model_staged_copy: %s staged %.0f bytes, idle %.0f bytes, block-tile \
+                 arithmetic %.0f (not part of the golden)\n"
+                (Autotune.sketch_params_label sp) bytes idle_bytes expected;
+              Some (sp, bytes, idle_bytes, expected))
   in
   p_all ~min:8 "every staged leaf's census equals M*N*K*(BM+BN)/(BM*BN) cells of 4 bytes" counted
-    ~f:(fun (_, bytes, expected) -> Float.equal bytes expected);
-  p_exists "a coalesced leaf is among them" counted ~f:(fun (sp, _, _) ->
-      Option.is_some sp.Autotune.sk_coalesce)
+    ~f:(fun (_, bytes, _, expected) -> Float.equal bytes expected);
+  p_exists "a coalesced leaf is among them" counted ~f:(fun (sp, _, _, _) ->
+      Option.is_some sp.Autotune.sk_coalesce);
+  let guarded_64x8 =
+    List.filter counted ~f:(fun (sp, _, _, _) ->
+        sp.Autotune.sk_bm = 64 && sp.sk_bn = 64 && sp.sk_bk = 8 && sp.sk_tm = 4 && sp.sk_tn = 4)
+  in
+  let unguarded_4x4 =
+    List.filter counted ~f:(fun (sp, _, _, _) ->
+        sp.Autotune.sk_tm = 4 && sp.sk_tn = 4 && not (sp.sk_bm = 64 && sp.sk_bn = 64 && sp.sk_bk = 8))
+  in
+  p_all ~min:1 "every lowered 64x64x8/4x4 outproj leaf reports idle bytes equal to its staged bytes"
+    guarded_64x8 ~f:(fun (_, bytes, idle_bytes, _) -> Float.equal idle_bytes bytes);
+  p_all ~min:4 "every unguarded 4x4 outproj leaf reports zero idle bytes" unguarded_4x4
+    ~f:(fun (_, _, idle_bytes, _) -> Float.equal idle_bytes 0.)

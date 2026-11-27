@@ -772,6 +772,8 @@ module Impl = struct
            workgroup_bytes_per_multiprocessor = None;
            (* gh-ocannl-1821: unmeasured; configured (model_staged_copy_rate), never advisory. *)
            staged_copy_rate = None;
+           (* gh-ocannl-2280: unmeasured; configured (model_staged_idle_rate), never advisory. *)
+           staged_idle_rate = None;
            (* gh-ocannl-2262: unfitted; configured (model_shared_load_rate,
               model_fill_lane_width). *)
            shared_load_rate = None;

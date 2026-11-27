@@ -2450,6 +2450,12 @@ val ranking_staged_copy_rate : limits:Ir.Backend_intf.hardware_limits -> float o
     continuous launch fill, and no coalesced leaves admitted through it in {!model_default}) over
     the backend's advisory [staged_copy_rate]. An [Untimed] reading, like {!ranking_capacity}. *)
 
+val ranking_staged_idle_rate : limits:Ir.Backend_intf.hardware_limits -> float option
+(** The ranking score's staged-idle rate, in refused bytes/s (gh-ocannl-2280,
+    {!Ir.Cost_model.staged_idle_copies}): config [model_staged_idle_rate] ([none]: no staged-idle
+    term) over the backend's advisory [staged_idle_rate]. Read by the leaf ranking, not the [auto]
+    seeding gate. An [Untimed] reading, like {!ranking_capacity}. *)
+
 val ranking_shared_load_rate : limits:Ir.Backend_intf.hardware_limits -> float option
 (** The ranking score's shared-load rate, in cells/s (gh-ocannl-2262,
     {!Ir.Cost_model.excess_shared_loads}): config [model_shared_load_rate] ([none]: no
@@ -3200,6 +3206,12 @@ type explain_kernel = {
           no rate prices them. The leg adds them over the rate before the occupancy divides it, so a
           listing scored at rate [L] re-scores at [R] by adding [stg * (1/R - 1/L) / occ] to [c]
           (the launch tail stays on at both). *)
+  ek_idle_bytes : float;
+      (** gh-ocannl-2280: its partition-guarded workgroup idle bytes
+          ({!Ir.Cost_model.staged_idle_copies}) as the compute leg divides them by the staged-idle
+          rate ({!Ir.Cost_model.filled_staged_bytes}), counted whether or not a rate prices them. A
+          listing scored at rate [L] (none: [1/L = 0]) re-scores at [R] by adding
+          [idl * (1/R - 1/L) / occ] to [c]. *)
   ek_shared_loads : float;
       (** gh-ocannl-2262: its shared loads beyond the calibration tile's reuse
           ({!Ir.Cost_model.excess_shared_loads}) as the compute leg divides them by the shared-load
