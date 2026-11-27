@@ -2561,6 +2561,9 @@ let warp_reduce_derivations = (("wred_v_", "__"), ("wred_partials_", "__"))
 (* An MMA fragment register, named by its node's uid. *)
 let mma_fragment_derivation = ("__mma_fragment_", "")
 
+(* A guarded localized accumulator's write-back flag, named by its scope id (gh-ocannl-2500). *)
+let acc_touched_derivation = ("ocannl_acc_touched_", "")
+
 let minted_derivations =
   let c, l, h = grid_chunk_derivations in
   [
@@ -2574,6 +2577,7 @@ let minted_derivations =
     fst warp_reduce_derivations;
     snd warp_reduce_derivations;
     mma_fragment_derivation;
+    acc_touched_derivation;
   ]
 
 (** The cc builtins a register tile's A column widens its rows through, as [(pack, row)], where the
@@ -4571,6 +4575,10 @@ module C_syntax (B : C_syntax_config) = struct
     render_stmt_reads : int list ref option ref;
     peel_scope_depth : int ref;
     peeled_scope_ids : int Hash_set.t;
+    touched_flags : (int, string * bool ref) Hashtbl.t;
+        (** Guarded localized accumulators currently being rendered, keyed by [scope_id]: the C flag
+            name and whether the opening [Set_local] to [id] has already been rendered
+            (gh-ocannl-2500). *)
     mma_census : (string * mma_rendering) list ref;
     mma_scope_census : string list ref;
     mma_emitted_census : emitted_mma list ref;
@@ -6993,6 +7001,41 @@ module C_syntax (B : C_syntax_config) = struct
       let rendering = classify_set_store ctx ~tn ~reads llsc in
       record_store_render ctx tn ~reads rendering
 
+  (* gh-ocannl-2500: whether [c] is guaranteed to execute at least one [Set_local] to [id] along
+     every control-flow path (non-dead loops always execute at least once; guards may skip their
+     body). *)
+  let rec definitely_updates_local ~id (c : Low_level.t) =
+    match c with
+    | Low_level.Set_local (id', _) -> Low_level.Scope_id.equal id id'
+    | Seq (a, b) -> definitely_updates_local ~id a || definitely_updates_local ~id b
+    | For_loop { from_; to_; body; _ } -> to_ >= from_ && definitely_updates_local ~id body
+    | Noop | Comment _ | If _ | Scan_loop _ | Staged_compilation _ | Zero_out _ | Set _
+    | Set_dynamic _ | Set_from_vec _ | Declare_local _ | Workgroup_barrier | Tile_mma _ ->
+        false
+
+  (* gh-ocannl-2500: a schedule-minted or codegen-peeled localized accumulator whose body opens by
+     loading [tn[idcs]] and whose remaining updates are not guaranteed to run (e.g. under a peeled
+     [If] guard) must not write back an untouched cell — narrowing a widened value back to storage
+     can canonicalize NaN payloads (E5M2 [0x7d -> 0x7f] on cc) or saturate infinities (CUDA).
+     Returns [(id, flag_name)] so the [Set] arm declares [int flag_name = 0;], every update to [id]
+     after its opening [Set_local] sets [flag_name = 1;], and the closing store runs only under [if
+     (flag_name)]. *)
+  let guarded_accum_scope ~tn ~idcs (llsc : Low_level.scalar_t) =
+    match llsc with
+    | Low_level.Local_scope { id; body; mint = Low_level.Schedule_minted; _ } -> (
+        match
+          List.filter (Low_level.flat_lines [ body ]) ~f:(function
+            | Low_level.Noop | Comment _ -> false
+            | _ -> true)
+        with
+        | Low_level.Set_local (id', Low_level.Get (tn', idcs')) :: rest
+          when Low_level.Scope_id.equal id id' && Tn.equal tn tn'
+               && Array.equal Indexing.equal_axis_index idcs idcs'
+               && not (definitely_updates_local ~id (Low_level.unflat_lines rest)) ->
+            Some (id, derived_name acc_touched_derivation (Int.to_string id.Low_level.scope_id))
+        | _ -> None)
+    | _ -> None
+
   exception Vectorization_declined
 
   let rec pp_ll ctx ?(in_loop = false) (c : Low_level.t) : PPrint.document =
@@ -7269,15 +7312,30 @@ module C_syntax (B : C_syntax_config) = struct
             doc
         | None ->
             let prec, narrowing = store_precs ~store_prec llsc in
+            let touched_flag = guarded_accum_scope ~tn ~idcs llsc in
             let (local_defs, val_doc, volatile_read_emitted), emitted_reads =
-              capture_stmt_reads ctx (fun () ->
-                  let (local_defs, val_doc), volatile_read_emitted =
-                    (with_volatile_accumulation_reads ctx) rmw_volatile (fun () ->
-                        (pp_scalar ctx) prec llsc)
-                  in
-                  let val_doc = wrap_conversion narrowing val_doc in
-                  let local_defs = pp_local_defs ctx ~check:(Some c, [ (prec, llsc) ]) local_defs in
-                  (local_defs, val_doc, volatile_read_emitted))
+              let render () =
+                capture_stmt_reads ctx (fun () ->
+                    let (local_defs, val_doc), volatile_read_emitted =
+                      (with_volatile_accumulation_reads ctx) rmw_volatile (fun () ->
+                          (pp_scalar ctx) prec llsc)
+                    in
+                    let val_doc = wrap_conversion narrowing val_doc in
+                    let local_defs =
+                      pp_local_defs ctx ~check:(Some c, [ (prec, llsc) ]) local_defs
+                    in
+                    (local_defs, val_doc, volatile_read_emitted))
+              in
+              match touched_flag with
+              | None -> render ()
+              | Some (id, flag) ->
+                  let prev = Hashtbl.find ctx.touched_flags id.Low_level.scope_id in
+                  Hashtbl.set ctx.touched_flags ~key:id.Low_level.scope_id ~data:(flag, ref false);
+                  Exn.protect ~f:render ~finally:(fun () ->
+                      match prev with
+                      | Some prev ->
+                          Hashtbl.set ctx.touched_flags ~key:id.Low_level.scope_id ~data:prev
+                      | None -> Hashtbl.remove ctx.touched_flags id.Low_level.scope_id)
             in
             record_classified_store ctx ~tn ~reads:(reads_of_uids emitted_reads) llsc;
             let offset_doc =
@@ -7296,6 +7354,20 @@ module C_syntax (B : C_syntax_config) = struct
                 (ident_doc ^^ brackets offset_doc ^^ string " ="
                 ^^ ifflat (space ^^ stored_doc) (nest 4 (hardline ^^ stored_doc))
                 ^^ semi)
+            in
+            let guard_store doc =
+              match touched_flag with
+              | None -> doc
+              | Some (_, flag) ->
+                  string ("if (" ^ flag ^ ") ")
+                  ^^ lbrace
+                  ^^ nest 2 (hardline ^^ doc)
+                  ^^ hardline ^^ rbrace
+            in
+            let prepend_flag_decl doc =
+              match touched_flag with
+              | None -> doc
+              | Some (_, flag) -> string ("int " ^ flag ^ " = 0;") ^^ hardline ^^ doc
             in
             if Utils.debug_log_from_routines () then
               (* [val_doc] is already narrowed to the storage precision, so the temporary carrying
@@ -7337,16 +7409,23 @@ module C_syntax (B : C_syntax_config) = struct
                 ident_doc ^^ brackets offset_doc ^^ string " = " ^^ store_cell ctx tn new_var
                 ^^ semi
               in
+              let store_doc =
+                guard_store (decl ^^ hardline ^^ log_doc ^^ hardline ^^ assignment')
+              in
               let block_content =
-                if PPrint.is_empty local_defs then
-                  decl ^^ hardline ^^ log_doc ^^ hardline ^^ assignment'
-                else
-                  local_defs ^^ hardline ^^ decl ^^ hardline ^^ log_doc ^^ hardline ^^ assignment'
+                prepend_flag_decl
+                  (if PPrint.is_empty local_defs then store_doc
+                   else local_defs ^^ hardline ^^ store_doc)
               in
               lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
-            else if PPrint.is_empty local_defs then assignment
+            else if PPrint.is_empty local_defs && Option.is_none touched_flag then assignment
             else
-              let block_content = local_defs ^^ hardline ^^ assignment in
+              let store_doc = guard_store assignment in
+              let block_content =
+                prepend_flag_decl
+                  (if PPrint.is_empty local_defs then store_doc
+                   else local_defs ^^ hardline ^^ store_doc)
+              in
               lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace)
     | Set_dynamic { tn; idcs; dyn_axis; dyn_value = iv, iprec; llsc; debug } ->
         (* gh-466: the scatter counterpart of the [Get_dynamic] gather — the write offset splices
@@ -7609,6 +7688,15 @@ module C_syntax (B : C_syntax_config) = struct
             local_defs
         in
         let assignment = pp_scope_id id ^^ string " = " ^^ value_doc ^^ semi in
+        let with_touched doc =
+          match Hashtbl.find ctx.touched_flags id.Low_level.scope_id with
+          | Some (flag, opening_seen) ->
+              if !opening_seen then doc ^^ hardline ^^ string (flag ^ " = 1;")
+              else (
+                opening_seen := true;
+                doc)
+          | None -> doc
+        in
         if Utils.debug_log_from_routines () then
           let new_var = string log_set_local_temporary in
           let num_typ = string (B.typ_of_prec prec) in
@@ -7642,16 +7730,16 @@ module C_syntax (B : C_syntax_config) = struct
             in
             comment_log ^^ hardline ^^ value_log ^^ hardline ^^ flush_log
           in
-          let assignment' = pp_scope_id id ^^ string " = " ^^ new_var ^^ semi in
+          let assignment' = with_touched (pp_scope_id id ^^ string " = " ^^ new_var ^^ semi) in
           let block_content =
             if PPrint.is_empty local_defs then
               decl ^^ hardline ^^ log_doc ^^ hardline ^^ assignment'
             else local_defs ^^ hardline ^^ decl ^^ hardline ^^ log_doc ^^ hardline ^^ assignment'
           in
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
-        else if PPrint.is_empty local_defs then assignment
+        else if PPrint.is_empty local_defs then with_touched assignment
         else
-          let block_content = local_defs ^^ hardline ^^ assignment in
+          let block_content = local_defs ^^ hardline ^^ with_touched assignment in
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
     | Declare_local { id = { tn = { storage_prec = _; _ }; _ } as id; needs_init } ->
         (record_accumulation_scope ctx) id;
@@ -9305,10 +9393,15 @@ module C_syntax (B : C_syntax_config) = struct
                     ^^ wrap_conversion narrow
                          (B.binop_syntax prec op (wrap_conversion widen (cell ())) (string total))
                     ^^ semi
-                | `Local id ->
-                    pp_scope_id id ^^ string " = "
-                    ^^ B.binop_syntax prec op (pp_scope_id id) (string total)
-                    ^^ semi
+                | `Local id -> (
+                    let update =
+                      pp_scope_id id ^^ string " = "
+                      ^^ B.binop_syntax prec op (pp_scope_id id) (string total)
+                      ^^ semi
+                    in
+                    match Hashtbl.find ctx.touched_flags id.Low_level.scope_id with
+                    | Some (flag, _) -> update ^^ hardline ^^ string (flag ^ " = 1;")
+                    | None -> update)
               in
               (init_docs, update_docs, folds, tail_body, store)
             in
@@ -9543,7 +9636,11 @@ module C_syntax (B : C_syntax_config) = struct
                                 (List.map (warp_shuffle_stages ~width:warp) ~f:shuffle_stage)
                            ^^ hardline ^^ across_simdgroups ^^ pp_scope_id id ^^ string " = "
                            ^^ combine (pp_scope_id id) (string vname)
-                           ^^ semi)
+                           ^^ semi
+                           ^^
+                           match Hashtbl.find ctx.touched_flags id.Low_level.scope_id with
+                           | Some (flag, _) -> hardline ^^ string (flag ^ " = 1;")
+                           | None -> empty)
                       ^^ hardline ^^ rbrace)))
     | _ -> None
   (* Warp-shuffle rendering of a [Workgroup_reduce] accumulation loop (gh-ocannl-462; llm.c's
@@ -10431,6 +10528,7 @@ module C_syntax (B : C_syntax_config) = struct
         render_stmt_reads = ref None;
         peel_scope_depth = ref 0;
         peeled_scope_ids = Hash_set.create (module Int);
+        touched_flags = Hashtbl.create (module Int);
         volatility_census_enabled = ref !(volatility_census_enabled ());
         volatility_census = volatility_census ();
         volatility_requested = volatility_requested ();

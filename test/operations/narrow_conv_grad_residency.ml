@@ -397,51 +397,165 @@ let () =
 let () =
   let open Ll_test in
   let module Nd = Ir.Ndarray in
-  let dims = [| 8 |] in
-  let d = sym () and i = sym () in
-  let out = node_factory ~prec:Ir.Ops.fp8 ~first_id:24791 ~dims () "ncgr_guarded_fp8" in
-  materialize out;
-  let cell = aff [ (2, i) ] 0 in
-  let contribution = embed_idx (aff [ (1, i); (1, d) ] 1) in
-  let guard = cmp Ir.Ops.Cmplt (embed_idx (aff [ (1, d) ] 1)) (embed i) in
-  let update = set_at out cell (add_own (get out [| cell |]) contribution) in
-  let source = loop_n d 3 (loop_n i 4 (if_ guard update)) in
-  let sunk = LL.sink_narrow_reduction_loops source in
-  (* Cells 0 and 2 receive no updates. Seed them with an E5M2 infinity and a NaN payload through raw
-     storage so the host codec cannot canonicalize either byte before the test starts. *)
-  let initial = [| 0x7c; 0x40; 0x7d; 0x44; 0x3c; 0x48; 0x3c; 0x4c |] in
-  let seed =
-    Bigarray.Array1.of_array Bigarray.Char Bigarray.C_layout (Array.map initial ~f:Char.of_int_exn)
-    |> Bigarray.genarray_of_array1
-  in
-  let run ~name code =
-    let opt = optimize_scoped ~name ~raw:source code in
-    let ctx, routine = link ~name opt in
-    let ctx = Context.from_host ctx out (Nd.Fp8_nd seed) in
-    let ctx = Context.run ctx routine in
-    let result = Context.to_host ctx out in
-    Context.release ctx;
-    match result with
-    | Nd.Fp8_nd bytes ->
-        let bytes = Bigarray.array1_of_genarray bytes in
-        Array.init dims.(0) ~f:(fun j -> Char.to_int bytes.{j})
-    | _ -> failwith "expected FP8 storage"
+  let same_index = List.equal Ir.Indexing.equal_symbol in
+  let check_guarded_fp8 ~label ~first_id ~dims ~initial ~untouched ~updated ~expected_sunk_paths
+      ~build () =
+    let out = node_factory ~prec:Ir.Ops.fp8 ~first_id ~dims () ("ncgr_guarded_fp8_" ^ label) in
+    materialize out;
+    let source = build out in
+    let sunk = LL.sink_narrow_reduction_loops source in
+    let seed =
+      Bigarray.Array1.of_array Bigarray.Char Bigarray.C_layout
+        (Array.map initial ~f:Char.of_int_exn)
+      |> Bigarray.genarray_of_array1
+    in
+    let run ~name code =
+      let opt = optimize_scoped ~name ~raw:source code in
+      let ctx, routine = link ~name opt in
+      let ctx = Context.from_host ctx out (Nd.Fp8_nd seed) in
+      let ctx = Context.run ctx routine in
+      let result = Context.to_host ctx out in
+      Context.release ctx;
+      match result with
+      | Nd.Fp8_nd bytes ->
+          let bytes = Bigarray.array1_of_genarray bytes in
+          Array.init dims.(0) ~f:(fun j -> Char.to_int bytes.{j})
+      | _ -> failwith "expected FP8 storage"
+    in
+    let reference = run ~name:("ncgr_guarded_fp8_" ^ label ^ "_reference") source in
+    let actual = run ~name:("ncgr_guarded_fp8_" ^ label ^ "_sunk") sunk in
+    let fmt_bytes bs =
+      Array.to_list bs |> List.map ~f:(Printf.sprintf "0x%02x") |> String.concat ~sep:" "
+    in
+    Stdlib.Printf.eprintf "guarded_fp8 %s: ref=[%s] actual=[%s] (not part of the golden)\n%!" label
+      (fmt_bytes reference) (fmt_bytes actual);
+    let widths = LL.serial_accum_widths ~serialized:(fun _ _ -> false) ~tn:out sunk in
+    p
+      (label ^ ": guarded FP8 reduction sinks to expected nest order")
+      (expected_sunk_paths (nest_paths sunk));
+    p_all (label ^ ": every sunk guarded FP8 reduction widens") widths ~f:(fun s -> s.LL.sa_widens);
+    p_all (label ^ ": the guarded FP8 reference preserves untouched bytes") untouched ~f:(fun idx ->
+        reference.(idx) = initial.(idx));
+    p_all (label ^ ": the guarded FP8 reference updates its finite cells") updated ~f:(fun idx ->
+        reference.(idx) <> initial.(idx));
+    p_all2
+      (label ^ ": guarded FP8 preserves the materialized result byte for byte")
+      actual reference ~f:Int.equal
   in
   Test_utils.with_policy
     (fun policy -> { policy with Ir.Numerics.narrow_compute_f32 = true })
     (fun () ->
-      let reference = run ~name:"ncgr_guarded_fp8_reference" source in
-      let actual = run ~name:"ncgr_guarded_fp8_sunk" sunk in
-      let same_index = List.equal Ir.Indexing.equal_symbol in
-      p "a guarded FP8 axis keeps its reduction outside"
-        (List.equal same_index (nest_paths sunk) [ [ d; i ] ]);
-      p "the guarded FP8 reference preserves untouched bytes and updates its finite cells"
-        (reference.(0) = initial.(0)
-        && reference.(2) = initial.(2)
-        && reference.(4) <> initial.(4)
-        && reference.(6) <> initial.(6));
-      p_all2 "the guarded FP8 axis preserves the materialized result byte for byte" actual reference
-        ~f:Int.equal)
+      (* Plain iterator path: [for d, for i, if (d + 1 < i) out[i] += i + d + 1]. *)
+      let d = sym () and i = sym () in
+      check_guarded_fp8 ~label:"plain" ~first_id:24791 ~dims:[| 4 |]
+        ~initial:[| 0x7c; 0x7d; 0x3c; 0x3c |] ~untouched:[ 0; 1 ] ~updated:[ 2; 3 ]
+        ~expected_sunk_paths:(fun paths -> List.equal same_index paths [ [ i; d ] ])
+        ~build:(fun out ->
+          let cell = iter i in
+          let contribution = embed_idx (aff [ (1, i); (1, d) ] 1) in
+          let guard = cmp Ir.Ops.Cmplt (embed_idx (aff [ (1, d) ] 1)) (embed i) in
+          let update = set_at out cell (add_own (get out [| cell |]) contribution) in
+          loop_n d 3 (loop_n i 4 (if_ guard update)))
+        ();
+      (* Single-term positive affine path: [for d, for i, if (d + 1 < i) out[2*i] += i + d + 1]. *)
+      let d = sym () and i = sym () in
+      check_guarded_fp8 ~label:"single_term" ~first_id:24792 ~dims:[| 8 |]
+        ~initial:[| 0x7c; 0x40; 0x7d; 0x44; 0x3c; 0x48; 0x3c; 0x4c |]
+        ~untouched:[ 0; 1; 2; 3; 5; 7 ] ~updated:[ 4; 6 ]
+        ~expected_sunk_paths:(fun paths -> List.equal same_index paths [ [ i; d ] ])
+        ~build:(fun out ->
+          let cell = aff [ (2, i) ] 0 in
+          let contribution = embed_idx (aff [ (1, i); (1, d) ] 1) in
+          let guard = cmp Ir.Ops.Cmplt (embed_idx (aff [ (1, d) ] 1)) (embed i) in
+          let update = set_at out cell (add_own (get out [| cell |]) contribution) in
+          loop_n d 3 (loop_n i 4 (if_ guard update)))
+        ();
+      (* Injective-pair path: [for d, for i, for j, if (d + 1 < 2*i + j) out[2*i + j] += 2*i + j + d
+         + 1]. *)
+      let d = sym () and i = sym () and j = sym () in
+      check_guarded_fp8 ~label:"injective_pair" ~first_id:24793 ~dims:[| 4 |]
+        ~initial:[| 0x7c; 0x7d; 0x3c; 0x3c |] ~untouched:[ 0; 1 ] ~updated:[ 2; 3 ]
+        ~expected_sunk_paths:(fun paths -> List.equal same_index paths [ [ i; j; d ] ])
+        ~build:(fun out ->
+          let cell = aff [ (2, i); (1, j) ] 0 in
+          let contribution = embed_idx (aff [ (2, i); (1, j); (1, d) ] 1) in
+          let guard = cmp Ir.Ops.Cmplt (embed_idx (aff [ (1, d) ] 1)) (embed_idx cell) in
+          let update = set_at out cell (add_own (get out [| cell |]) contribution) in
+          loop_n d 3 (loop_n i 2 (loop_n j 2 (if_ guard update))))
+        ();
+      (* Overlapping-pair path: [for d, for i, for j, if (d + 1 < i + j) out[i + j] += 0.5 * (-i -
+         2*j + d + 1)]. *)
+      let d = sym () and i = sym () and j = sym () in
+      check_guarded_fp8 ~label:"overlapping_pair" ~first_id:24794 ~dims:[| 5 |]
+        ~initial:[| 0x7c; 0x7d; 0x3c; 0x3c; 0x3c |]
+        ~untouched:[ 0; 1 ] ~updated:[ 2; 3; 4 ]
+        ~expected_sunk_paths:(fun paths ->
+          match paths with [ [ _owner; d'; _step ] ] -> Ir.Indexing.equal_symbol d d' | _ -> false)
+        ~build:(fun out ->
+          let cell = aff [ (1, i); (1, j) ] 0 in
+          let contribution = mul_own (c 0.5) (embed_idx (aff [ (-1, i); (-2, j); (1, d) ] 1)) in
+          let guard = cmp Ir.Ops.Cmplt (embed_idx (aff [ (1, d) ] 1)) (embed_idx cell) in
+          let update = set_at out cell (add_own (get out [| cell |]) contribution) in
+          loop_n d 3 (loop_n i 3 (loop_n j 3 (if_ guard update))))
+        ();
+      (* Schedule-minted [Unroll ~materialize:true] and [Partition] over a guarded FP8 reduction
+         share the same conditional write-back, and wide residency is preserved across the whole
+         nest including partition seams: [8.0 (0x48) + 4 * 0.5] stays [8.0 (0x48)] both under
+         per-step E5M2 rounding (8.5 rounds to 8.0) and under per-segment rounding across two 2-step
+         segments (8.0 + 1.0 = 9.0 ties to even 8.0), while single-rounding across all 4 steps
+         produces [10.0 (0x49)], and untouched [0x7c]/[0x7d] stay intact. *)
+      let run_fp8 ~name ~raw ~out ~initial ?(sched = []) code =
+        let seed =
+          Bigarray.Array1.of_array Bigarray.Char Bigarray.C_layout
+            (Array.map initial ~f:Char.of_int_exn)
+          |> Bigarray.genarray_of_array1
+        in
+        let opt = optimize_scoped ~name ~raw code in
+        let opt = if List.is_empty sched then opt else Sched.apply sched opt in
+        let ctx, routine = link ~name opt in
+        let ctx = Context.from_host ctx out (Nd.Fp8_nd seed) in
+        let ctx = Context.run ctx routine in
+        let result = Context.to_host ctx out in
+        Context.release ctx;
+        match result with
+        | Nd.Fp8_nd bytes ->
+            let bytes = Bigarray.array1_of_genarray bytes in
+            Array.init (Array.length initial) ~f:(fun j -> Char.to_int bytes.{j})
+        | _ -> failwith "expected FP8 storage"
+      in
+      let d = sym () and i = sym () in
+      let out = node_factory ~prec:Ir.Ops.fp8 ~first_id:24795 ~dims:[| 3 |] () "ncgr_fp8_wide" in
+      materialize out;
+      let cell = iter i in
+      (* Guard [d < 4 * i - 4]: cells 0 and 1 receive zero updates; cell 2 receives four updates of
+         0.5 onto 8.0 (0x48). *)
+      let guard = cmp Ir.Ops.Cmplt (embed d) (embed_idx (aff [ (4, i) ] (-4))) in
+      let update = set_at out cell (add_own (get out [| cell |]) (c 0.5)) in
+      let source = loop_n d 4 (loop_n i 3 (if_ guard update)) in
+      let sunk = LL.sink_narrow_reduction_loops source in
+      let initial = [| 0x7c; 0x7d; 0x48 |] in
+      let per_step = run_fp8 ~name:"ncgr_fp8_wide_ref" ~raw:source ~out ~initial source in
+      let wide = run_fp8 ~name:"ncgr_fp8_wide_sunk" ~raw:source ~out ~initial sunk in
+      let unrolled =
+        run_fp8 ~name:"ncgr_fp8_wide_unroll" ~raw:source ~out ~initial
+          ~sched:[ Sched.Unroll { axis = d; materialize = true } ]
+          sunk
+      in
+      let s0 = sym () and s1 = sym () in
+      let partitioned =
+        run_fp8 ~name:"ncgr_fp8_wide_partition" ~raw:source ~out ~initial
+          ~sched:[ Sched.Partition { axis = d; breakpoints = [ 2 ]; segment_indices = [ s0; s1 ] } ]
+          sunk
+      in
+      let want_wide = [| 0x7c; 0x7d; 0x49 |] in
+      p "guarded FP8 per-step rounding loses 4*0.5 onto 8.0 while preserving untouched bytes"
+        (Array.equal Int.equal per_step [| 0x7c; 0x7d; 0x48 |]);
+      p_all2 "guarded FP8 sunk accumulation rounds once to 10.0 and preserves untouched bytes" wide
+        want_wide ~f:Int.equal;
+      p_all2 "guarded FP8 materialized unroll rounds once to 10.0 and preserves untouched bytes"
+        unrolled want_wide ~f:Int.equal;
+      p_all2 "guarded FP8 partition rounds once to 10.0 and preserves untouched bytes" partitioned
+        want_wide ~f:Int.equal)
 
 let () =
   let open Ll_test in
