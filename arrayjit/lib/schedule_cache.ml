@@ -696,6 +696,13 @@ let codegen_tag ~(facts : Backend_intf.backend_facts) ~(limits : Backend_intf.ha
          && Utils.get_global_flag ~default:false ~arg_name:"gpu_default_seed_narrow_storage"
        then [ "seed-narrow-storage" ]
        else [])
+    (* gh-ocannl-1663: distinguish the stricter seeded-model numerics policy on the backends that
+       seed. Hash the disabled setting to preserve existing keys at the built-in default. *)
+    @ (if
+         facts.Backend_intf.seeds_untuned_default
+         && not (Utils.get_global_flag ~default:true ~arg_name:"model_default_tensorize")
+       then [ "no-model-default-tensorize" ]
+       else [])
     (* gh-ocannl-1308: the test-only forced Tile_mma decline renders every tensorized candidate as
        its scalar fallback, so a winner crowned under it is not the normal regime's, nor the
        reverse. The ON regime is the one hashed, so no key changes while the hook is off. *)

@@ -2206,8 +2206,10 @@ files.
   `Train.tune_placements` above it (`tune_inline_flips`, `tune_flip_ordering`,
   `tune_flip_profit_margin`, `tune_ship_arm`, `tune_placement_store`) are their own
   `Placement_shaping` class, outside the fingerprint (gh-ocannl-1192), and so are the
-  `model_default_*` keys, read only by the zero-timing `Autotune.model_default`, as the
-  `Untimed_model` class (gh-ocannl-1241). While they were
+  model's scope keys (`model_default_schedule`, `model_default_placements`,
+  `model_default_geometry_lattice`), in the `Untimed_model` class (gh-ocannl-1241).
+  `model_default_tensorize` changes rounding under the seeded model and enters the CUDA/HIP
+  cache's codegen tag instead (gh-ocannl-1663). While the scope keys were
   `Search_shaping`, merely STATING one changed the identity, since the fingerprint then rendered
   every key some source sets: on rog's approximate CUDA gpt2_mini cell a warm chain run under
   `tune_placement_store=false` (gh-1020's way to compare the arms afresh) replayed both arms yet

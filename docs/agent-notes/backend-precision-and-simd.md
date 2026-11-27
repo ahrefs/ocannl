@@ -1474,8 +1474,8 @@ files.
   and `Hip_mma.k_loop_lines` are the loops both hooks render, beside the `operand_fragments` that
   describes them. A new site calls the predicate rather than restating a conjunct; a loop change
   is a change to that function, which `mma_format_arm_tables` counts device-free.
-- **One maintainer-approved exception to the numerics-gate rule** (the next bullet, and AGENTS.md's
-  config-profiles rule): **the untuned GPU split** (gh-ocannl-1325, CUDA and HIP since gh-ocannl-1412,
+- **Maintainer-approved default-on numerics gate for the untuned GPU split**
+  (gh-ocannl-1325, CUDA and HIP since gh-ocannl-1412,
   `gpu_default_split_reduce_min_serial`). It reassociates the long, narrow reductions of a training
   step (bias and layer-norm parameter gradients, the loss sum) into a deterministic tree over
   blocks chosen from the routine alone, and ships ON by default in the exact regime rather than
@@ -1485,7 +1485,12 @@ files.
   reductions: within ~1.1e-6 relative on their losses, for 15.2 → 12.6 ms at b8. The `reproducible` profile pins it at 0. The precedent the decision rests
   on: the default GPU plan's cooperative all-reduces (gh-ocannl-1124) and, under the default
   `autotune_search=true`, the tuner's own split-reduce candidates already reassociate in the
-  exact regime. A new numerics-changing gate still follows the rule below.
+  exact regime.
+- **Seeded model MMA admission** (gh-ocannl-1663): `model_default_tensorize` also defaults on
+  and `reproducible` pins it off. It lets the analytic model rank legal tensorized matmuls on
+  seeded CUDA/HIP, where the matrix instruction can round an f32-accumulating narrow product
+  differently from the scalar blocktile. The CUDA/HIP codegen tag hashes the disabled setting
+  and keeps existing cache keys at the default.
 - **The `approximate` profile is the one word for the numerics-changing regime** (gh-ocannl-719):
   the `performance` payload plus `tf32_matmuls=true`, `cc_backend_fast_math=true`,
   `cc_backend_fp_contract=fast` and `tune_inline_flips=2`, contract "results differ from the exact
@@ -1500,8 +1505,8 @@ files.
   `ocannl_config.reference`'s quote of them; `config_profiles` pins approximate ⊇ performance.
   Every knob the profile flips today is already in the numerics or codegen digest, which is what
   keeps a default-flags run from replaying a winner tuned under the profile. A schedule-time
-  gate, which neither digest reaches by construction, is hashed into the codegen tag ON-regime
-  only and only on the backends it acts on, as `gpu_elide_covered_zeros` is (GPU) and
+  gate, which neither digest reaches by construction, is hashed into the codegen tag for its
+  nondefault setting and only on the backends it acts on, as `gpu_elide_covered_zeros` is (GPU) and
   `gpu_default_seed_narrow_storage` (gh-ocannl-1405, CUDA/HIP via the backend fact
   `seeds_untuned_default`; since gh-ocannl-2195 it gates only the reduction sink's narrow
   admission, the seeding taking widening sites in every profile): every pre-existing key stays

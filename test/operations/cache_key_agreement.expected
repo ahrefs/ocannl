@@ -79,3 +79,4 @@ Keyed keys hashed only on some backends:
   cuda_ptx_target -- CUDA
   gpu_elide_covered_zeros -- GPU backends
   gpu_default_seed_narrow_storage -- CUDA and HIP
+  model_default_tensorize -- CUDA and HIP
