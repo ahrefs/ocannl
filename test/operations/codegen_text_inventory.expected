@@ -975,6 +975,7 @@ test/operations/virtual_guarded_setter.ml [through Ll_test.execute; through Ll_t
 test/operations/virtual_inliner_oracle.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-virtual_inliner_oracle, @test/operations/runtest-virtual_inliner_oracle-shards, @test/operations/slow-virtual_inliner_oracle-plant-transpose, @test/operations/slow-virtual_inliner_oracle-widen-0, @test/operations/slow-virtual_inliner_oracle-widen-1, @test/operations/slow-virtual_inliner_oracle-widen-2, @test/operations/slow-virtual_inliner_oracle-widen-3]
 test/operations/virtual_rejection_boundary.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-virtual_rejection_boundary, @test/operations/runtest-virtual_rejection_boundary_raise]
 test/operations/virtual_shared_loop.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_shared_loop]
+test/operations/virtual_shared_loop_replay.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-virtual_shared_loop_replay]
 test/operations/virtual_uncaptured_loop.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_uncaptured_loop]
 test/operations/wait_bound_declines.ml [prelowered compile; run by @test/operations/runtest-wait_bound_declines]
 test/operations/where_arm_scopes.ml [through Ll_test.execute; through Ll_test.link; through Ll_test.optimize_and_execute; run by @test/operations/runtest-where_arm_scopes]
@@ -1145,6 +1146,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-virtual_rejection_boundary
 @test/operations/runtest-virtual_rejection_boundary_raise
 @test/operations/runtest-virtual_shared_loop
+@test/operations/runtest-virtual_shared_loop_replay
 @test/operations/runtest-virtual_uncaptured_loop
 @test/operations/runtest-wait_bound_declines
 @test/operations/runtest-where_arm_scopes

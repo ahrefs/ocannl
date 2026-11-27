@@ -19411,6 +19411,25 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-2510: shared-loop read of a virtual value before a sibling update (decision-coverage
+; seam) and shared-versus-split comparison of two distinct dependency writes (deferred from #2493).
+
+(test
+ (name virtual_shared_loop_replay)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules virtual_shared_loop_replay)
+ (libraries
+  base
+  stdio
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.verdict
+  ll_test))
+
 (test
  (name virtual_uncaptured_loop)
  (package neural_nets_lib)

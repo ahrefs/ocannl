@@ -577,9 +577,12 @@ observes the *new* value, whereas the materialized reading of the same program t
 leaf as of the deferring routine's execution point.
 
 If a stored template retains a read of a separately stored virtual dependency, that read
-evaluates the dependency's stored components in program order at consumption. A later assignment
-to the dependency within the deferring routine can therefore affect the replayed value. An
-already-inlined dependency is replayed through its captured scope.
+evaluates the dependency's stored components visible at consumption in program order. A later
+assignment to the dependency — whether later in the deferring routine (after the shared loop) or
+in a subsequent routine of the same lineage — can therefore affect the replayed value, whereas a
+read placed inside a shared loop before a candidate's last in-loop setter replays only the
+candidate's pre-loop components. An already-inlined dependency is replayed through its captured
+scope.
 
 This is deliberate: **at the arrayjit level, the recompute-vs-materialize semantics of a deferred
 computation is not fixed** — a placement decision selects which reading executes, and both are
