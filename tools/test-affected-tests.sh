@@ -946,6 +946,33 @@ DUNE
   else report 1 'a blank line added inside a quoted extension keeps ordinary cross-cutting reach' "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
 
   git_q reset -q --hard "$comment_head" || exit 2
+  cat >"$repo/lib/helper.ml" <<'ML'
+(* Example item: {%%fixture.item|*)
+|} Before the quoted extension. *)
+let used = ignore {%fixture.payload tag|a bare |} and a literal (*
+*) close neither the extension nor an OCaml comment|tag}; 1
+let unused = 2
+ML
+  git_q commit -qam tagged-quoted-base || exit 2
+  perl -pi -e 's/^\*\) close/\n*) close/' "$repo/lib/helper.ml"
+  affected --referenced-only HEAD
+  trailer
+  if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] &&
+     grep -qxF "$comment_alias" "$out" && ! grep -q '^affected: comment-only reason:' "$err"; then
+    report 0 'a blank payload line in a tagged quoted extension reaches its named definition'
+  else report 1 'a blank payload line in a tagged quoted extension reaches its named definition' "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
+
+  git_q checkout -q -- lib/helper.ml || exit 2
+  perl -pi -e 's/Before the quoted extension/Near the quoted extension/' "$repo/lib/helper.ml"
+  affected HEAD
+  trailer
+  if [ "$rc" = 0 ] && [ "$verdict" = ok ] &&
+     grep -qxF "affected: comment-only reason: $comment_reason" "$err" &&
+     grep -qxF "affected: link-only: $comment_alias" "$err"; then
+    report 0 'a comment beside a quoted extension keeps the compile-and-scans fallback'
+  else report 1 'a comment beside a quoted extension keeps the compile-and-scans fallback' "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
+
+  git_q reset -q --hard "$comment_head" || exit 2
   cat >>"$repo/lib/helper.ml" <<'ML'
 let render' c s = String.make 1 c ^ s
 let quoted = render' '"' "(*

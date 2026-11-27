@@ -107,9 +107,12 @@
 # both sides using the definition reader's lexical pass, with unchanged lines
 # still reading the same. Both snapshots must match the patch's Git blob
 # IDs, with CRLF converted to LF when that matches Git's canonical content.
-# Code inside literals, quoted extensions and
-# non-ASCII quoted delimiters, added or deleted sources, mode changes,
-# unreadable hunks, unknown owners and `--files` keep ordinary reach.
+# Quoted extensions use one or two percent signs, ASCII dotted identifiers,
+# and either an empty delimiter or a lowercase ASCII tag (letters and
+# underscores) separated from the name by horizontal whitespace. Payload
+# lines are literal code outside OCaml comments. Unrecognized quoted openers
+# and unterminated quoted strings keep ordinary reach, as do added or deleted
+# sources, mode changes, unreadable hunks, unknown owners and `--files`.
 # Compiler output, source locations and Markdown contents are outside this
 # check. Compile and scans cover the library edit's link-only reach. The
 # ordinary list still prints it, but only the first tier counts for width.
@@ -5095,8 +5098,17 @@ sub tokens_of {
 # attribute -- counts always, as do a definition's own lines whatever names
 # they mention. A misread line boundary only merges two definitions, which errs
 # towards "names it".
+my $ext_ident = qr/[A-Za-z_][A-Za-z_0-9']*(?:\.[A-Za-z_][A-Za-z_0-9']*)*/;
+my $quoted_open = qr/\{(?:%{1,2}$ext_ident(?:[\t\f ]+|(?=\|)))?([a-z_]*)\|/;
+# Spelling outside the byte lexer's allowlist can hide apparent comments in
+# literal text. Keep ordinary reach even when the byte lexer missed that span.
+my $unsupported_quote = qr{
+  (?!$quoted_open) \{
+    (?: %{1,2}[A-Za-z_\x80-\xff][A-Za-z_0-9'.\x80-\xff]*(?:[\t\f ]+[A-Za-z_\x80-\xff]*)?
+      | [A-Za-z_\x80-\xff]* )\|
+}x;
 sub code_of {   # OCaml text with every comment blanked, newlines kept; strings inside comments are comment
-  my ($s, $mark) = @_;   # MARK: every line a literal spans is made non-blank (`S`), its newlines kept
+  my ($s, $mark, $unterminated) = @_;   # MARK: make every literal line non-blank, keeping newlines
   my ($out, $depth) = ("", 0);
   pos($s) = 0;
   while (pos($s) < length $s) {
@@ -5106,12 +5118,25 @@ sub code_of {   # OCaml text with every comment blanked, newlines kept; strings 
     # A trailing apostrophe belongs to the identifier. Treating it as a
     # character opener can swallow the quote before a following literal.
     elsif ($s =~ /\G([A-Za-z_\x80-\xff][A-Za-z_0-9'\x80-\xff]*)/gc) { $piece = $1 }
-    elsif ($s =~ /\G("(?:[^"\\]++|\\.)*+")/gcs || $s =~ /\G(\{([a-z_]*)\|.*?\|\2\})/gcs
+    elsif ($s =~ /\G$quoted_open/gc) {
+      my $start = $-[0];
+      my $close = "|$1}";
+      my $end = index($s, $close, pos($s));
+      if ($end < 0) {
+        $$unterminated = 1 if $unterminated;
+        $end = length $s;
+      } else {
+        $end += length $close;
+      }
+      $piece = substr($s, $start, $end - $start);
+      pos($s) = $end;
+    }
+    elsif ($s =~ /\G("(?:[^"\\]++|\\.)*+")/gcs
            || $s =~ /\G('(?:[^'\\\n]|\\(?:[\\'"ntbr ]|[0-9]{3}|x[0-9A-Fa-f]{2}|o[0-7]{3}))')/gc
            || $s =~ /\G([^(*"{'\nA-Za-z_\x80-\xff]+|.)/gcs) {
       $piece = $1;
-      $piece = $piece =~ s/[^\n]/S/gr =~ s/\n/\nS/gr if $mark && !$depth && $piece =~ /^["'{]./s;
     }
+    $piece = $piece =~ s/[^\n]/S/gr =~ s/\n/\nS/gr if $mark && !$depth && $piece =~ /^["'{]./s;
     $out .= $depth || $piece eq "  " ? $piece =~ s/[^\n]/ /gr : $piece;
   }
   return $out;
@@ -5336,12 +5361,6 @@ sub own_tokens {   # the names an owner's own code mentions, or undef when its c
 # new file).
 my %path_defs;   # path -> {NAME => 1}, or undef: the whole module
 my %comment_only_module;
-# The ranking lexer does not recognize quoted extensions or normalize
-# UTF-8 delimiters. Either can put apparent comments inside a literal.
-my $unsupported_quote = qr{
-  \{(?: %{1,2}[A-Za-z_\x80-\xff][A-Za-z_0-9'.\x80-\xff]*(?:[\t\f\x20]+[a-z_\x80-\xff]*)?
-      | [a-z_]*[\x80-\xff][a-z_\x80-\xff]* )\|
-}x;
 sub type_names {   # TYPE-NAME CHANGED-LINE -> the names a change to that line of the type touches
   my ($t, $line) = @_;
   my $code = code_of($line);
@@ -5414,7 +5433,8 @@ if (-f "$tmp/ml-diff") {
     # A changed line holding no code -- blank, or comment only, outside every
     # literal -- changes no definition (gh-ocannl-1765: the blank line above an
     # added definition was attributed to the definition above it).
-    my %code = map { ($_ => [split /\n/, code_of($source{$_}, 1), -1]) } qw(old new);
+    my $unterminated = 0;
+    my %code = map { ($_ => [split /\n/, code_of($source{$_}, 1, \$unterminated), -1]) } qw(old new);
     my %inert = map { my $l = $code{$_}; ($_ => { map { $l->[$_] =~ /\S/ ? () : ($_ + 1 => 1) } 0 .. $#$l }) } qw(old new);
     # A file new on this side (an `.mli` added beside its `.ml`, say) or gone from
     # it can hide or expose any member: the whole module.
@@ -5453,7 +5473,7 @@ if (-f "$tmp/ml-diff") {
     }
     # No definition at all: only comments or blank lines changed.
     $path_defs{$p} = $defs{"\0whole"} ? undef : \%defs;
-    $comment_only_module{$p} = 1 if $canonical && $library_module{$p} && defined $path_defs{$p} && !$changed_code
+    $comment_only_module{$p} = 1 if $canonical && $library_module{$p} && defined $path_defs{$p} && !$changed_code && !$unterminated
       && !grep { /$unsupported_quote/ } values %source;
   }
 }
