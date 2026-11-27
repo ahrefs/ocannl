@@ -322,6 +322,11 @@ let run_leg { prec; width; sample; patterns; upload; read_back; host; leg } =
     (fun label ->
       let routine, _, _ = Lazy.force result in
       Generated.assert_emits ~routine ~contains:(name ^ "_to_uint4x32(") label);
+  Verdict.in_leg ~leg (claim "the conversion kernel contains no double literal counter")
+    (fun label ->
+      let routine, _, _ = Lazy.force result in
+      let literals = Generated.double_to_uint4x32_literals (Generated.read routine) in
+      p_empty label ~over:[ routine ] literals);
   Verdict.in_leg ~leg (claim "the device holds the sampled bit patterns, in order") (fun label ->
       let _, stored, _ = Lazy.force result in
       p label (Array.equal Int64.equal stored patterns));
@@ -340,6 +345,24 @@ let run_leg { prec; width; sample; patterns; upload; read_back; host; leg } =
               (Test_utils.hex_words got.(i))
               (Test_utils.hex_words want.(i)));
       p_all2 label got want ~f:(Array.equal Int.equal))
+
+let () =
+  let source =
+    "uint4 double_to_uint4x32(double v) { return from_bits(v); }\n" ^ "void conversion() {\n"
+    ^ Ir.C_syntax.main_logic_marker ^ "\n"
+    ^ {|  // double_to_uint4x32(0.0)
+  log("double_to_uint4x32(0.0)");
+  live = double_to_uint4x32(values[i]);
+  cast = double_to_uint4x32((double) values[i]);
+  signed_hex = double_to_uint4x32(
+      (-0x1.8p-3));
+  decimal = double_to_uint4x32(1.25e+03);
+}
+|}
+  in
+  let detected = List.map (Generated.double_to_uint4x32_literals source) ~f:snd in
+  p "literal counter audit reports only direct numeric arguments, including signed hex"
+    (List.equal String.equal detected [ "-0x1.8p-3"; "1.25e+03" ])
 
 let () =
   Stdio.eprintf "uint4x32_counter_conversion: backend %s (not part of the golden)\n%!" backend_name;
