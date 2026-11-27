@@ -45,7 +45,8 @@ let show_idx = function
 
 let show_loops loops =
   String.concat ~sep:","
-    (List.map loops ~f:(fun (s, (lo, hi)) -> Printf.sprintf "%s:%d..%d" (Idx.symbol_ident s) lo hi))
+    (List.map (Aff.Loop_chain.to_alist loops) ~f:(fun (s, (lo, hi)) ->
+         Printf.sprintf "%s:%d..%d" (Idx.symbol_ident s) lo hi))
 
 let show_path path =
   String.concat ~sep:"."
@@ -166,14 +167,8 @@ let () =
   List.iter accesses ~f:show;
 
   Stdio.printf "\n=== which loops of the reduction nest parallelize? ===\n";
-  let nest_accs =
-    List.filter accesses ~f:(fun ac ->
-        List.exists ac.Aff.a_loops ~f:(fun (sym, _) -> Idx.equal_symbol sym i2))
-  in
-  let range sym =
-    List.find_map nest_accs ~f:(fun ac ->
-        List.Assoc.find ac.Aff.a_loops sym ~equal:Idx.equal_symbol)
-  in
+  let nest_accs = List.filter accesses ~f:(fun ac -> Aff.Loop_chain.mem ac.Aff.a_loops i2) in
+  let range sym = List.find_map nest_accs ~f:(fun ac -> Aff.Loop_chain.find ac.Aff.a_loops sym) in
   let dup sym = Option.is_some (range sym) in
   let check_par name ~parallelizable sym =
     (* Every pair over a common node with at least one write must confine its conflicts to one

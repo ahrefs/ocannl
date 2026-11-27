@@ -500,7 +500,7 @@ let access ?(write = true) ~loops ~path (a : acc) : unit Aff.access =
     a_rmw = false;
     a_val_syms = [];
     a_stmt_write = None;
-    a_loops = loops;
+    a_loops = Aff.Loop_chain.of_bindings_exn loops;
     a_path = [ Aff.Stmt path; (if write then Aff.Write else Aff.Rhs) ];
   }
 

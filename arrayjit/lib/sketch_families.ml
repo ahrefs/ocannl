@@ -585,14 +585,10 @@ let serial_kernel_of axes (g : Ir.Tnode.t A.access list) =
         | Some LL.Serial -> true
         | Some _ | None -> false
       in
-      let loops_equal =
-        List.equal (fun (s1, (l1, h1)) (s2, (l2, h2)) ->
-            Idx.equal_symbol s1 s2 && l1 = l2 && h1 = h2)
-      in
       if
-        List.for_all w.A.a_loops ~f:serial0
+        List.for_all (A.Loop_chain.to_alist w.A.a_loops) ~f:serial0
         && List.for_all g ~f:(fun a ->
-            A.same_statement a.A.a_path w.A.a_path && loops_equal a.A.a_loops w.A.a_loops)
+            A.same_statement a.A.a_path w.A.a_path && A.Loop_chain.equal a.A.a_loops w.A.a_loops)
       then
         let same_d a =
           phys_equal a.A.a_tn w.A.a_tn && Array.equal Idx.equal_axis_index a.A.a_map w.A.a_map
@@ -610,7 +606,9 @@ let detect_matmul_affine (llc : LL.t) : matmul_site option =
   List.find_map (accesses_by_statement accs) ~f:(fun g ->
       match serial_kernel_of axes g with
       | Some (w, (_ :: _ as _d_reads), [ o1; o2 ]) ->
-          let loops = List.map w.A.a_loops ~f:(fun (s, (_, hi)) -> (s, hi + 1)) in
+          let loops =
+            List.map (A.Loop_chain.to_alist w.A.a_loops) ~f:(fun (s, (_, hi)) -> (s, hi + 1))
+          in
           classify_matmul ~loops ~d:w.A.a_tn ~di:w.A.a_map ~o1:(o1.A.a_tn, o1.A.a_map)
             ~o2:(o2.A.a_tn, o2.A.a_map)
             ~zeroed:(List.exists zeroed ~f:(fun z -> phys_equal z.A.a_tn w.A.a_tn))
@@ -1101,8 +1099,10 @@ let detect_conv_affine (llc : LL.t) : conv_site option =
   let zeroed = List.filter accs ~f:(fun a -> a.A.a_write && a.A.a_whole) in
   List.find_map (accesses_by_statement accs) ~f:(fun g ->
       match serial_kernel_of axes g with
-      | Some (w, _ :: _, [ ro1; ro2 ]) when List.length w.A.a_loops >= 4 -> (
-          let loops = List.map w.A.a_loops ~f:(fun (s, (_, hi)) -> (s, hi + 1)) in
+      | Some (w, _ :: _, [ ro1; ro2 ]) when A.Loop_chain.length w.A.a_loops >= 4 -> (
+          let loops =
+            List.map (A.Loop_chain.to_alist w.A.a_loops) ~f:(fun (s, (_, hi)) -> (s, hi + 1))
+          in
           let extent s = List.Assoc.find loops s ~equal:Idx.equal_symbol in
           let d = w.A.a_tn and di = w.A.a_map in
           let o1 = (ro1.A.a_tn, ro1.A.a_map) and o2 = (ro2.A.a_tn, ro2.A.a_map) in

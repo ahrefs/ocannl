@@ -2119,7 +2119,9 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
     let write =
       setter_write_access ~tn ~idcs ~vec_len
         ~loops:
-          (List.rev_map ctx.loops ~f:(fun (b : Access_fold.binder) -> (b.index, (b.from_, b.to_))))
+          (Affine.Loop_chain.of_bindings_exn
+             (List.rev_map ctx.loops ~f:(fun (b : Access_fold.binder) ->
+                  (b.index, (b.from_, b.to_)))))
     in
     Hashtbl.add_multi setters ~key:tn ~data:(write, read_charge ~iterated ~self:tn rhs);
     traced.inline_reduction_extent <-
@@ -3038,7 +3040,7 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
     effs :=
       {
         Affine.e_kind = kind;
-        e_loops = List.rev loops;
+        e_loops = loops;
         e_guarded = guarded;
         e_gated = gated;
         e_path = List.rev path;
@@ -3061,7 +3063,7 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
         a_rmw = rmw;
         a_val_syms = val_syms;
         a_stmt_write = stmt_write;
-        a_loops = List.rev loops;
+        a_loops = loops;
         a_path = List.rev path;
       }
       :: !acc
@@ -3098,7 +3100,7 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
         List.iteri (flat_lines [ llc ]) ~f:(fun k stmt ->
             code ~arm ~loops ~path:(Affine.Stmt k :: path) ~guarded stmt)
     | For_loop { index; from_; to_; body; _ } ->
-        code ~arm ~loops:((index, (from_, to_)) :: loops) ~path ~guarded body
+        code ~arm ~loops:(Affine.Loop_chain.enter_exn loops index (from_, to_)) ~path ~guarded body
     | Scan_loop { index; from_; to_; carried; body; _ } ->
         (* gh-ocannl-696: the inits are statement [0] of the construct, one [Set_local]-shaped
            position each, and the body statement [1] -- so every init read orders before every body
@@ -3111,7 +3113,7 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
               ?stmt_write:None c.init;
             add_effect ~loops ~path:(Affine.Write :: path) ~guarded
               (Affine.Local_write (affine_local c.prev)));
-        let loops = (index, (from_, to_)) :: loops in
+        let loops = Affine.Loop_chain.enter_exn loops index (from_, to_) in
         code ~arm ~loops ~path:(Affine.Stmt 1 :: path) ~guarded body;
         List.iteri carried ~f:(fun j c ->
             let path = Affine.Stmt j :: Affine.Stmt 2 :: path in
@@ -3204,7 +3206,7 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
             operand `Gated b)
     | Unop (_, (a, _)) -> operand `Always a
   in
-  code ~loops:[] ~path:[] ~guarded:false llc;
+  code ~loops:Affine.Loop_chain.empty ~path:[] ~guarded:false llc;
   (List.rev !acc, List.rev !effs)
 
 let affine_accesses (llc : t) : Tn.t Affine.access list = fst (affine_relations llc)
@@ -11585,15 +11587,12 @@ let zero_seed_candidate ?(allow_workgroup_barriers = false) (tn : Tn.t) (next : 
            && Affine.same_statement read.a_path write.a_path
            && Option.exists read.a_stmt_write ~f:(same_map write.a_map)
            && same_map read.a_map write.a_map ->
-        let range symbol =
-          List.find_map write.a_loops ~f:(fun (bound, range) ->
-              if Indexing.equal_symbol symbol bound then Some range else None)
-        in
-        if List.exists write.a_loops ~f:(fun (_, (lo, hi)) -> hi < lo) then None
+        let range symbol = Affine.Loop_chain.find write.a_loops symbol in
+        if not (Affine.loops_live write.a_loops) then None
         else if Affine.covers_box ~range (Affine.view ~dims:(Lazy.force tn.Tn.dims) write.a_map)
         then
           let repeated =
-            List.filter_map write.a_loops ~f:(fun (symbol, (lo, hi)) ->
+            List.filter_map (Affine.Loop_chain.to_alist write.a_loops) ~f:(fun (symbol, (lo, hi)) ->
                 Option.some_if
                   (hi > lo
                   && not (Array.exists write.a_map ~f:(Indexing.axis_index_mentions_symbol symbol))
@@ -11657,7 +11656,7 @@ let zero_initializer_target (stmt : t) : Tn.t option =
       | _ -> (
           match affine_accesses stmt with
           | [ { Affine.a_write = true; a_guarded = false; a_loops; a_map; _ } ] ->
-              let range sym = List.Assoc.find a_loops sym ~equal:Indexing.equal_symbol in
+              let range sym = Affine.Loop_chain.find a_loops sym in
               Option.some_if
                 (Affine.covers_box ~range (Affine.view ~dims:(Lazy.force tn.Tn.dims) a_map))
                 tn
@@ -11800,8 +11799,7 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
          their sum at the sum of the bounds, since none can be below its own. *)
       let first_of syms =
         let from_ s =
-          Option.value_map ~default:0 ~f:fst
-            (List.Assoc.find write.Affine.a_loops s ~equal:Indexing.equal_symbol)
+          Option.value_map ~default:0 ~f:fst (Affine.Loop_chain.find write.Affine.a_loops s)
         in
         Binop
           ( Ops.Cmple,
@@ -11823,7 +11821,7 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
       let pays syms =
         let trips =
           List.fold syms ~init:1 ~f:(fun acc s ->
-              match List.Assoc.find write.Affine.a_loops s ~equal:Indexing.equal_symbol with
+              match Affine.Loop_chain.find write.Affine.a_loops s with
               | Some (lo, hi) -> acc * (hi - lo + 1)
               | None -> acc)
         in
@@ -12361,7 +12359,10 @@ let read_multiplicity_query (static_indices : Indexing.static_symbol list)
         let sites = Array.of_list sites in
         let bounds =
           Array.map sites ~f:(fun a ->
-              let domain = List.map a.Affine.a_loops ~f:(fun (s, (lo, hi)) -> (s, hi - lo + 1)) in
+              let domain =
+                List.map (Affine.Loop_chain.to_alist a.Affine.a_loops) ~f:(fun (s, (lo, hi)) ->
+                    (s, hi - lo + 1))
+              in
               match Affine.fiber_cardinality_ub ~domain a.a_map with `Exact n | `At_most n -> n)
         in
         Array.foldi sites ~init:0 ~f:(fun i acc a ->
@@ -12559,14 +12560,14 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
               in
               let fiber =
                 let domain =
-                  List.filter_map a.a_loops ~f:(fun (s, (lo, hi)) ->
+                  List.filter_map (Affine.Loop_chain.to_alist a.a_loops) ~f:(fun (s, (lo, hi)) ->
                       Option.some_if (Set.mem syms s) (s, hi - lo + 1))
                 in
                 match Affine.fiber_cardinality ~domain a.a_map with `Exact f | `At_least f -> f
               in
               Result.map ~f:(fun cells -> (cells, fiber, writers))
               @@ Set.fold_result syms ~init:1 ~f:(fun cells s ->
-                  match List.Assoc.find a.a_loops s ~equal:Indexing.equal_symbol with
+                  match Affine.Loop_chain.find a.a_loops s with
                   | Some (0, hi) -> Ok (cells * (hi + 1))
                   | Some _ -> Error "enclosing loop is not zero-based"
                   | None -> Error "index symbol bound by no enclosing loop")
@@ -12730,16 +12731,14 @@ let affine_replay_cap_query ~static_indices ~live_accesses (accesses : Tn.t Affi
     List.compare Affine.compare_path_comp a.a_path b.a_path < 0
   in
   let price ~cap ~reads tn (write : _ Affine.access) =
-    let write_loops = List.rev write.a_loops in
     let range s =
-      match List.Assoc.find write_loops s ~equal:Indexing.equal_symbol with
-      | Some (lo, hi) -> hi - lo + 1
-      | None -> 1
+      match Affine.Loop_chain.find write.a_loops s with Some (lo, hi) -> hi - lo + 1 | None -> 1
     in
     Indexing.affine_injective ~symbol_range:range write.a_map
     &&
     let body =
-      List.fold_right write.a_loops
+      List.fold_right
+        (Affine.Loop_chain.to_alist write.a_loops)
         ~init:(Set { tn; idcs = write.a_map; llsc = Constant 1.; debug = "" })
         ~f:(fun (index, (from_, to_)) body -> For_loop { index; from_; to_; body; axis = Serial })
     in
@@ -12750,10 +12749,9 @@ let affine_replay_cap_query ~static_indices ~live_accesses (accesses : Tn.t Affi
               (Option.equal Int.equal (Affine.stmt_head write.a_path) (Affine.stmt_head read.a_path)))
         && before write read
         &&
-        let loops = List.rev read.a_loops in
         match
           instantiate_computations ~fresh_symbol:pricing_symbol ~placements
-            ~call_range:(fun s -> List.Assoc.find loops s ~equal:Indexing.equal_symbol)
+            ~call_range:(Affine.Loop_chain.find read.a_loops)
             ~coverage_exempt:false ~id:(pricing_scope tn) tn
             [ (Some write.a_map, body) ]
             static_indices read.a_map
@@ -12772,8 +12770,9 @@ let affine_replay_cap_query ~static_indices ~live_accesses (accesses : Tn.t Affi
     match List.partition_tf writes ~f:(fun a -> a.a_whole) with
     | [], [ write ] when ordinary_scatter write -> price ~cap ~reads tn write
     | [ init ], [ write ]
-      when ordinary_scatter write && List.is_empty init.a_loops && (not init.a_guarded)
-           && before init write ->
+      when ordinary_scatter write
+           && Affine.Loop_chain.is_empty init.a_loops
+           && (not init.a_guarded) && before init write ->
         price ~cap ~reads tn write
     | _ -> false
 
@@ -14797,9 +14796,7 @@ let computations_at_reads ~placements ~static_indices ~raw self computations =
       List.fold_result reads ~init:() ~f:(fun () (a : Tn.t Affine.access) ->
           Result.map ~f:ignore
             (instantiate_computations ~fresh_symbol:pricing_symbol ~placements
-               ~call_range:(fun s ->
-                 (* Outermost first: the innermost binder of [s] is the last. *)
-                 List.Assoc.find (List.rev a.a_loops) s ~equal:Indexing.equal_symbol)
+               ~call_range:(Affine.Loop_chain.find a.a_loops)
                  (* A flip candidate is a node [decide_placements] decides: the coverage rule, not
                     the inliner, proves its guards' fallback (gh-ocannl-1897). *)
                ~coverage_exempt:false ~id:(pricing_scope self) self computations static_indices

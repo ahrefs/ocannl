@@ -475,7 +475,7 @@ let () =
       a_rmw = false;
       a_val_syms = [];
       a_stmt_write = None;
-      a_loops = loops;
+      a_loops = Aff.Loop_chain.of_bindings_exn loops;
       a_path = path;
     }
   in
@@ -493,9 +493,10 @@ let () =
     in
     let lookup env s = List.Assoc.find_exn env s ~equal:Idx.equal_symbol in
     let opaque = ref false and all_covered = ref true in
+    let read_loops = Aff.Loop_chain.to_alist read.a_loops in
     List.iter (envs static_ranges statics) ~f:(fun senv ->
         List.iter
-          (envs read.a_loops (List.map read.a_loops ~f:fst))
+          (envs read_loops (List.map read_loops ~f:fst))
           ~f:(fun renv ->
             match eval_vec (renv @ senv) read.a_map rank with
             | None -> opaque := true
@@ -503,6 +504,7 @@ let () =
                 let covered_by (w : _ Aff.access) =
                   if not w.Aff.a_write then false
                   else
+                    let w_loops = Aff.Loop_chain.to_alist w.a_loops in
                     let rec common rl wl =
                       match (rl, wl) with
                       | (s1, (lo1, hi1)) :: rt, (s2, (lo2, hi2)) :: wt
@@ -510,12 +512,12 @@ let () =
                           s1 :: common rt wt
                       | _ -> []
                     in
-                    let cw = common read.a_loops w.a_loops in
+                    let cw = common read_loops w_loops in
                     List.exists
-                      (envs w.a_loops (List.map w.a_loops ~f:fst))
+                      (envs w_loops (List.map w_loops ~f:fst))
                       ~f:(fun wenv ->
                         let thread_ok =
-                          List.for_all w.a_loops ~f:(fun (s, _) ->
+                          List.for_all w_loops ~f:(fun (s, _) ->
                               (not (thread s))
                               || (not (List.Assoc.mem renv s ~equal:Idx.equal_symbol))
                               || lookup wenv s = lookup renv s)

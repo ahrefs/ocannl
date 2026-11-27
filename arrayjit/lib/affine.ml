@@ -464,6 +464,49 @@ module Loop_ranges = struct
   let is_empty (r : t) = Map.is_empty r
 end
 
+module Loop_chain = struct
+  type t = (Idx.symbol * (int * int)) list [@@deriving sexp_of, equal]
+
+  type duplicate = { symbol : Idx.symbol; outer : int * int; inner : int * int }
+  [@@deriving sexp_of, equal]
+
+  exception Duplicate_binder of duplicate [@@deriving sexp_of]
+
+  let empty : t = []
+  let is_empty (c : t) = List.is_empty c
+  let length (c : t) = List.length c
+  let find (c : t) s = List.Assoc.find c s ~equal:Idx.equal_symbol
+  let mem (c : t) s = List.Assoc.mem c s ~equal:Idx.equal_symbol
+  let to_alist (c : t) = c
+  let ranges (c : t) = Loop_ranges.of_bindings c
+
+  let enter (c : t) symbol inner =
+    match find c symbol with
+    | Some outer -> Error { symbol; outer; inner }
+    | None -> Ok (c @ [ (symbol, inner) ])
+
+  let enter_exn c symbol inner =
+    match enter c symbol inner with Ok c -> c | Error dup -> raise (Duplicate_binder dup)
+
+  let of_bindings bindings =
+    let rec go seen acc = function
+      | [] -> Ok (List.rev acc)
+      | (symbol, inner) :: rest -> (
+          match Map.find seen symbol with
+          | Some outer -> Error { symbol; outer; inner }
+          | None -> go (Map.set seen ~key:symbol ~data:inner) ((symbol, inner) :: acc) rest)
+    in
+    go (Map.empty (module Idx.Symbol)) [] bindings
+
+  let of_bindings_exn bindings =
+    match of_bindings bindings with Ok c -> c | Error dup -> raise (Duplicate_binder dup)
+
+  let map_symbols (c : t) ~f = of_bindings (List.map c ~f:(fun (s, b) -> (f s, b)))
+
+  let map_symbols_exn (c : t) ~f =
+    match map_symbols c ~f with Ok c -> c | Error dup -> raise (Duplicate_binder dup)
+end
+
 (** [pair_conflict ~left_range ~right_range ~dup_left ~dup_right ~pairs ~left ~right]: verdict on
     whether the accesses viewed as [left] and [right] (over the same tensor node, re-coarsened here
     to a common frame) can touch a common cell from different threads. [left_range s] /
@@ -1268,8 +1311,8 @@ type 'tn access = {
           subject of the read-modify-write exemption ([Low_level.rmw_exempt]): matching by statement
           subordination rather than by program path, so a guarded body's write cannot alias its [If]
           condition's read (they share a path). *)
-  a_loops : (Idx.symbol * (int * int)) list;
-      (** Enclosing loops, outermost first, with inclusive iteration bounds. *)
+  a_loops : Loop_chain.t;
+      (** Enclosing loops, outermost first, with inclusive iteration bounds and unique binders. *)
   a_path : path_comp list;
       (** Lexicographic program-order position: statement indices per [Seq] nesting level,
           interleaved with intra-statement components ({!path_comp}) at each statement the traversal
@@ -1317,8 +1360,7 @@ type 'tn effect_kind =
 
 type 'tn statement_effect = {
   e_kind : 'tn effect_kind;
-  e_loops : (Idx.symbol * (int * int)) list;
-      (** Enclosing loops, outermost first, as {!field-a_loops}. *)
+  e_loops : Loop_chain.t;  (** Enclosing loops, outermost first, as {!field-a_loops}. *)
   e_guarded : bool;  (** Under an [If] guard, as {!field-a_guarded}. *)
   e_gated : bool;
       (** Under a scalar gate, as {!field-a_gated}: only a [Merge_read] or a [Local_read] can be; a
@@ -1335,8 +1377,8 @@ type 'tn statement_effect = {
 
 (** Whether every enclosing loop of an access or effect executes: a row under a dead loop
     ([to_ < from_]) never happens. *)
-let loops_live (loops : (Idx.symbol * (int * int)) list) : bool =
-  List.for_all loops ~f:(fun (_, (lo, hi)) -> hi >= lo)
+let loops_live (loops : Loop_chain.t) : bool =
+  List.for_all (Loop_chain.to_alist loops) ~f:(fun (_, (lo, hi)) -> hi >= lo)
 
 (** Whether a path lies inside a [Local_scope] body (it crosses an [Arg] component). *)
 let in_scope_body (path : path_comp list) : bool =
@@ -1371,7 +1413,7 @@ let may_touch_same_cell ?(static_range = fun _ -> None) ~dims (a : 'tn access) (
     (* Each side's own loop bounds, the static range beyond them: they range the side's symbols in
        the pair solver and prove its run's no-spill in the view. *)
     let side_range (x : 'tn access) =
-      let own = Loop_ranges.of_bindings x.a_loops in
+      let own = Loop_chain.ranges x.a_loops in
       fun s -> match Loop_ranges.find own s with Some _ as r -> r | None -> static_range s
     in
     let side_view (x : 'tn access) =
@@ -1379,8 +1421,8 @@ let may_touch_same_cell ?(static_range = fun _ -> None) ~dims (a : 'tn access) (
         ?vec:(if x.a_vec_last then Some (Run x.a_vec_len) else None)
         ~dims x.a_map
     in
-    let dup_left s = List.Assoc.mem a.a_loops s ~equal:Idx.equal_symbol in
-    let dup_right s = List.Assoc.mem b.a_loops s ~equal:Idx.equal_symbol in
+    let dup_left s = Loop_chain.mem a.a_loops s in
+    let dup_right s = Loop_chain.mem b.a_loops s in
     match
       pair_conflict ~left_range:(side_range a) ~right_range:(side_range b) ~dup_left ~dup_right
         ~pairs:[] ~left:(side_view a) ~right:(side_view b)
@@ -1482,7 +1524,7 @@ let vec_runs_disjoint ~dims (a : 'tn access) : bool =
   | _, Known { size; terms; offset; _ } -> (
       let ranged =
         List.map terms ~f:(fun (c, s) ->
-            Option.map (List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol) ~f:(fun r -> (c, r)))
+            Option.map (Loop_chain.find a.a_loops s) ~f:(fun r -> (c, r)))
         |> Option.all
       in
       match ranged with
@@ -1561,7 +1603,7 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
     if List.is_empty usable then raise (Fail "no prior writes");
     if List.exists usable ~f:(fun w -> w.a_whole) then `Covered
     else begin
-      let read_range s = List.Assoc.find read.a_loops s ~equal:Idx.equal_symbol in
+      let read_range s = Loop_chain.find read.a_loops s in
       (* Per write: per-coordinate relation to the read's cells, in the common coordinate frame of
          the two views and the residual frame left by parameter cancellation. [None] = this write
          proves nothing. *)
@@ -1575,7 +1617,7 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
             let v = view ?dyn_axis:w.a_dyn_axis ~dims w.a_map in
             if w.a_vec_last then
               let range s =
-                match List.Assoc.find w.a_loops s ~equal:Idx.equal_symbol with
+                match Loop_chain.find w.a_loops s with
                 | Some _ as bounds -> bounds
                 | None -> static_range s
               in
@@ -1594,6 +1636,8 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
             | _ -> raise Skip
           in
           let rank = Array.length r_view in
+          let read_loops = Loop_chain.to_alist read.a_loops
+          and w_loops = Loop_chain.to_alist w.a_loops in
           let c_len =
             let rec go n rl wl =
               match (rl, wl) with
@@ -1602,11 +1646,11 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
                   go (n + 1) rt wt
               | _ -> n
             in
-            go 0 read.a_loops w.a_loops
+            go 0 read_loops w_loops
           in
-          let common = List.map (List.take read.a_loops c_len) ~f:fst in
+          let common = List.map (List.take read_loops c_len) ~f:fst in
           let is_common s = List.mem common s ~equal:Idx.equal_symbol in
-          let w_own_loops = List.drop w.a_loops c_len in
+          let w_own_loops = List.drop w_loops c_len in
           let w_own_range s = List.Assoc.find w_own_loops s ~equal:Idx.equal_symbol in
           (* Existential symbols used so far, per write: a symbol tying two axes of the write makes
              the per-axis image factorization an overapproximation of the written set — unsound on
@@ -1674,8 +1718,7 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
                              (the thread would read a cell another thread wrote); a write not under
                              the thread loop executes redundantly on every thread — each thread's
                              copy receives it — so the read side universalizes. *)
-                          if thread s && List.Assoc.mem w.a_loops s ~equal:Idx.equal_symbol then
-                            raise Skip;
+                          if thread s && Loop_chain.mem w.a_loops s then raise Skip;
                           match
                             if is_common s || thread s then read_range s else static_range s
                           with

@@ -352,7 +352,9 @@ files.
   range per symbol, an abstract map so no lookup can keep a first binding and drop the siblings'
   (gh-ocannl-1305: the per-binding list it replaced invited `List.Assoc.find`, the within-nest hole
   of gh-1282); `aligned_chains_shared_symbol.ml` pins the query, `loop_ranges_hull.ml` the hull. An
-  access's own `a_loops` stays a list: it is one enclosing chain, not a routine's loops.
+  access or effect's own `a_loops`/`e_loops` is an `Affine.Loop_chain.t` (gh-ocannl-1628): one
+  outermost-first enclosing chain whose constructor refuses duplicate binders with a typed
+  `Duplicate_binder` refusal, so `Loop_chain.find` is unambiguous without reversing.
 - **Pair equalities compose across axes** (gh-ocannl-2277): `Affine.pair_conflict` unions exact
   unit differences with zero offset and the existing mixed-radix equalities. Each edge holds
   for every collision. The equality classes keep `Left_v`, `Right_v` and `Shared` distinct even
