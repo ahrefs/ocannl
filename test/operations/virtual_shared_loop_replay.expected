@@ -16,7 +16,7 @@ local shared loop (in-loop out): stored v_reader retains Get(v_loc) and no Local
 local shared loop (in-loop out): v_reader stays Virtual: true
 local shared loop (in-loop out): observability reports Unobservable_local [v_reader; v_loc; loc]: true
 local shared loop (in-loop out): seeding v_loc keeps the Unobservable_local path to loc: true
-local shared loop (in-loop out): out matches replay-time reference: true
+local shared loop (in-loop out): in-loop out before sibling W2 matches producer-time reference: true
 local shared loop (in-loop out): out_replay matches replay-time reference: true
 local shared loop (observable reader): materialized producer-time reference matches closed form: true
 local shared loop (observable reader): materialized replay-time reference matches closed form: true
@@ -24,7 +24,7 @@ local shared loop (observable reader): loc settles Local: true
 local shared loop (observable reader): v_loc stays Virtual: true
 local shared loop (observable reader): stored v_reader retains Get(v_loc) and no Local_scope(v_loc): true
 local shared loop (observable reader): observable v_reader materializes On_device: true
-local shared loop (observable reader): observable v_reader matches replay-time reference: true
+local shared loop (observable reader): observable v_reader matches producer-time reference (captured before sibling W2): true
 local shared loop (observable reader): out matches replay-time reference: true
 local shared loop (observable reader): out_replay matches replay-time reference: true
 shared vs split: materialized producer-time reference matches closed form: true
@@ -57,3 +57,14 @@ cyclic retained reads (declared virtual): raises named User_error: true
 inherited updated dep: routine A defers both tap and dep: true
 inherited updated dep: read before local update sees routine A's final dep (early + 16): true
 inherited updated dep: read after local update sees routine B's dep (early + 100): true
+in-loop late input: dep and reader stay virtual: true
+in-loop late input: late_x is not read before write: true
+in-loop late input: out_before sees pre-loop dep and never reads uninitialized late_x: true
+in-loop late input: out_after sees updated dep after late_x is initialized: true
+mid-write read: candidate materializes with 163: true
+mid-write read: in-loop out sees first write (11 + i): true
+mid-write read: post-loop out_after sees second write (150 + i): true
+dead-arm local cycle: undecided capture falls back to 156 and compiles: true
+dead-arm local cycle: live arm executes to x + 7: true
+disjoint cell replay: both a and b stay virtual with no false cycle: true
+disjoint cell replay: executed out matches closed form (x + 33): true

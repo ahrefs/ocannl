@@ -2359,6 +2359,7 @@ type capture_hit =
   | Capture_reads_merge of Tn.t
   | Capture_reads_local of Tn.t
   | Capture_read_uninlinable of Tn.t * string
+  | Capture_replay_refusal of string
 [@@deriving sexp_of]
 
 (* The refusal the hit's read raises where it executes. *)
@@ -2366,6 +2367,7 @@ let capture_hit_rejection = function
   | Capture_reads_merge tn -> cross_routine_merge_splice_rejection tn
   | Capture_reads_local tn -> inherited_local_read_rejection tn
   | Capture_read_uninlinable (tn, code) -> inherited_uninlinable_rejection tn ~code
+  | Capture_replay_refusal msg -> msg
 
 (* [elide_stored] is {!elide_unevaluated_operands} (defined below the interval machinery it needs),
    applied to what is stored once the candidate is accepted (gh-ocannl-625). The legality walk
@@ -2813,7 +2815,8 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
         match hit with
         | Capture_reads_merge _ -> raise @@ Non_virtual "154:capture-reads-merge"
         | Capture_reads_local _ -> raise @@ Non_virtual "155:capture-reads-local"
-        | Capture_read_uninlinable _ -> raise @@ Non_virtual "156:capture-read-uninlinable");
+        | Capture_read_uninlinable _ | Capture_replay_refusal _ ->
+            raise @@ Non_virtual "156:capture-read-uninlinable");
     (* gh-651: the candidate's whole nest sits inside an enclosing [If], which is NOT part of
        [top_llc] — the walk below would never see it, and the stored computation would replay
        unguarded at every read site. Same verdict as the interior-guard arm, decided here because
@@ -3406,10 +3409,10 @@ and proc_mentions ~merge (tn : Tn.t) (llc : t) : bool =
 
 let scalar_mentions_tn tn llsc = scalar_mentions ~merge:true tn llsc
 
-let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
-    ~(placements : Tn.Placements.t) ~(call_range : Indexing.symbol -> (int * int) option)
-    ~(coverage_exempt : bool) ~id (self : Tn.t)
-    (computations : (Indexing.axis_index array option * t) list)
+let instantiate_computations ?(active_components : Set.M(Int).t ref option)
+    ~(fresh_symbol : unit -> Indexing.symbol) ~(placements : Tn.Placements.t)
+    ~(call_range : Indexing.symbol -> (int * int) option) ~(coverage_exempt : bool) ~id
+    (self : Tn.t) (computations : (Indexing.axis_index array option * t) list)
     (static_indices : Indexing.static_symbol list) (call_args : Indexing.axis_index array) :
     (t, string) Result.t =
   let exception Non_virtual of string in
@@ -4230,10 +4233,20 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
   in
   try
     match set_from_vec_def with
-    | Some def -> Ok (lane_extract_body def)
+    | Some def ->
+        Option.iter active_components ~f:(fun r -> r := Set.singleton (module Int) (-1));
+        Ok (lane_extract_body def)
     | None ->
+        let active_set_components = ref (Set.empty (module Int)) in
+        let n_comps = List.length computations in
         let body =
-          List.rev_filter_map computations ~f:(fun c -> try loop_proc c with Omitted -> None)
+          List.rev_filter_mapi computations ~f:(fun idx ((def_args, _) as c) ->
+              try
+                let res = loop_proc c in
+                if Option.is_some res && Option.is_some def_args then
+                  active_set_components := Set.add !active_set_components (n_comps - 1 - idx);
+                res
+              with Omitted -> None)
         in
         (* gh-ocannl-1954: no guard is left to ask about, but a coverage-exempt node's first
            replayed access may still read the cell's entry value, which is nothing the replay holds:
@@ -4256,13 +4269,14 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
             if !global_needs_init && not has_zero_init then Set_local (id, Constant 0.0) :: body
             else body
           in
+          Option.iter active_components ~f:(fun r -> r := !active_set_components);
           Ok (unflat_lines body)
   with Non_virtual i -> Error i
 
 let%track7_sexp inline_computation ?(fresh_symbol = Indexing.get_symbol) ?on_inherited_unservable
     ~call_range ~id ~inherited_merge_tainted ~inherited_tns (optim_ctx : optimize_ctx)
     (traced : traced_array) (static_indices : Indexing.static_symbol list)
-    (call_args : Indexing.axis_index array) : t option =
+    (call_args : Indexing.axis_index array) : (t * Set.M(Int).t) option =
   let computations =
     Hashtbl.find optim_ctx.computations traced.tn
     |> Option.value_or_thunk ~default:(fun () ->
@@ -4284,11 +4298,12 @@ let%track7_sexp inline_computation ?(fresh_symbol = Indexing.get_symbol) ?on_inh
      node is one of these or was judged by that rule here (no local write covers its reads, so it
      owns a buffer and no read of it is inlined), so [inherited_tns] adds nothing. *)
   let coverage_exempt = Tn.Placements.known_virtual optim_ctx.placements traced.tn in
+  let active_components = ref (Set.empty (module Int)) in
   match
-    instantiate_computations ~fresh_symbol ~placements:optim_ctx.placements ~call_range
-      ~coverage_exempt ~id traced.tn computations static_indices call_args
+    instantiate_computations ~active_components ~fresh_symbol ~placements:optim_ctx.placements
+      ~call_range ~coverage_exempt ~id traced.tn computations static_indices call_args
   with
-  | Ok body -> Some body
+  | Ok body -> Some (body, !active_components)
   | Error i ->
       (* Review round 11: an INHERITED computation has no materialization fallback — the deferring
          routine already dropped the setters from its schedule, so committing [Never_virtual] here
@@ -4656,11 +4671,75 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
      an earlier candidate's stored template can retain a [Get] of a later virtual candidate. Expand
      those retained reads whenever the template is instantiated -- locally or across routines --
      after sibling setters and omitted components have been dropped, using the dependency's stored
-     components at consumption time. Reads still in [outer_process_for] (not-yet-stored siblings
-     during phase-1 capture, or the target of an enclosing setter) stay intact; a genuine cyclic
-     replay (a node already on [replay_stack] outside [outer_process_for]) materializes an undecided
-     local node so its scopes retract cleanly, or raises a named [User_error] when the node is
-     already committed virtual / inherited and has no buffer. *)
+     components visible at the consuming statement. Reads still in [outer_process_for]
+     (not-yet-stored siblings during phase-1 capture, or the target of an enclosing setter) stay
+     intact. [replay_stack] tracks the active [Set] component indices per node so disjoint cell
+     replays (e.g. [a[1,i] -> b[i] -> a[0,i]]) succeed while genuine cycles re-entering an active
+     component materialize an undecided local node ([162:cyclic-virtual-replay]) or refuse a
+     committed-virtual / inherited node (deferred as a capture hit during speculative phase-1
+     capture so dead [Where] arms do not fail). During phase 2 of a shared loop, [phase2_pending]
+     keeps each candidate on its pre-loop computations until its final setter in the loop body runs,
+     preventing reads before a later sibling write from observing uninitialized inputs; a read
+     between two writes of the same candidate inside one loop materializes an undecided local node
+     ([163:shared-loop-mid-write-read]) or refuses a committed-virtual / inherited node. *)
+  let phase2_pending :
+      (Tn.t, int * bool * (Indexing.axis_index array option * t) list option) Hashtbl.t =
+    Hashtbl.create (module Tnode)
+  in
+  let set_computations_opt tn = function
+    | None -> Hashtbl.remove optim_ctx.computations tn
+    | Some data -> Hashtbl.set optim_ctx.computations ~key:tn ~data
+  in
+  let count_live_setters targets code =
+    let counts = Hashtbl.create (module Tnode) in
+    let bump tn =
+      if Set.mem targets tn then
+        Hashtbl.update counts tn ~f:(function None -> 1 | Some n -> n + 1)
+    in
+    let rec walk = function
+      | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier | Set_local _
+      | Set_dynamic _ | Tile_mma _ ->
+          ()
+      | Seq (a, b) ->
+          walk a;
+          walk b
+      | For_loop { from_; to_; _ } when to_ < from_ -> ()
+      | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> walk body
+      | Zero_out tn | Set { tn; _ } | Set_from_vec { tn; _ } -> bump tn
+    in
+    walk code;
+    counts
+  in
+  let finish_phase2_setter ~in_storage_pass tn =
+    if not in_storage_pass then
+      match Hashtbl.find phase2_pending tn with
+      | None -> ()
+      | Some (remaining, _, after_comp) ->
+          let remaining = remaining - 1 in
+          if remaining <= 0 then (
+            Hashtbl.remove phase2_pending tn;
+            set_computations_opt tn after_comp)
+          else Hashtbl.set phase2_pending ~key:tn ~data:(remaining, true, after_comp)
+  in
+  let refuse_mid_write tn =
+    match Hashtbl.find phase2_pending tn with
+    | Some (_, true, _) ->
+        if Tn.Placements.known_virtual plc tn || Hash_set.mem inherited_tns tn then (
+          let msg =
+            [%string
+              "shared-loop mid-write read: cannot inline %{Tn.debug_name tn} between two writes of \
+               %{Tn.debug_name tn} in the same shared loop, because %{Tn.debug_name tn} is virtual \
+               (%{Tn.Placements.debug plc tn}) and has no buffer. Materialize %{Tn.debug_name tn} \
+               (e.g. via Train.set_materialized) in the routine that computes it."]
+          in
+          if Option.is_some !capture then record_hit (Capture_replay_refusal msg)
+          else raise (Utils.User_error msg);
+          true)
+        else (
+          Tn.Placements.update plc tn Never_virtual (Site "163:shared-loop-mid-write-read");
+          true)
+    | Some (_, false, _) | None -> false
+  in
   let retract_footprint_if_capped tn =
     match Hashtbl.find footprint_scoped tn with
     | Some (Some cap) ->
@@ -4710,41 +4789,41 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     match value with
     | Get (tn, indices) when not (Tn.Placements.known_non_virtual plc tn) -> (
         if Set.mem outer_process_for tn then value
-        else if Set.mem replay_stack tn then
-          if Tn.Placements.known_virtual plc tn || Hash_set.mem inherited_tns tn then
-            if Option.is_some !capture && Hash_set.mem inherited_tns tn then (
-              record_hit (Capture_read_uninlinable (tn, "162:cyclic-virtual-replay"));
-              value)
-            else
-              raise
-                (Utils.User_error
-                   [%string
-                     "cyclic virtual replay: expanding a retained read of %{Tn.debug_name tn} \
-                      reached %{Tn.debug_name tn} itself, but %{Tn.debug_name tn} is virtual \
-                      (%{Tn.Placements.debug plc tn}) and has no buffer. Materialize \
-                      %{Tn.debug_name tn} (e.g. via Train.set_materialized) in the routine that \
-                      computes it."])
-          else (
-            Tn.Placements.update plc tn Never_virtual (Site "162:cyclic-virtual-replay");
-            value)
-        else if capture_reads_inherited_merge tn || retract_footprint_if_capped tn then value
+        else if
+          capture_reads_inherited_merge tn || retract_footprint_if_capped tn || refuse_mid_write tn
+        then value
         else
           let traced = get_node traced_store tn in
           let id = fresh_scope tn in
           match instantiate_read ~traced indices ~enclosing ~id with
           | None -> value
-          | Some body ->
-              let body =
-                close_replay ~opaque ~outer_process_for ~replay_stack:(Set.add replay_stack tn)
-                  ~enclosing body
+          | Some (body, active) ->
+              let prev_active =
+                Map.find replay_stack tn |> Option.value ~default:(Set.empty (module Int))
               in
-              if Hash_set.mem inherited_tns tn then record_spliced_reads body;
-              replay_scope id indices body)
+              if not (Set.are_disjoint prev_active active) then (
+                if Tn.Placements.known_virtual plc tn || Hash_set.mem inherited_tns tn then
+                  let msg =
+                    [%string
+                      "cyclic virtual replay: expanding a retained read of %{Tn.debug_name tn} \
+                       reached %{Tn.debug_name tn} itself, but %{Tn.debug_name tn} is virtual \
+                       (%{Tn.Placements.debug plc tn}) and has no buffer. Materialize \
+                       %{Tn.debug_name tn} (e.g. via Train.set_materialized) in the routine that \
+                       computes it."]
+                  in
+                  if Option.is_some !capture then record_hit (Capture_replay_refusal msg)
+                  else raise (Utils.User_error msg)
+                else Tn.Placements.update plc tn Never_virtual (Site "162:cyclic-virtual-replay");
+                value)
+              else
+                let replay_stack =
+                  Map.set replay_stack ~key:tn ~data:(Set.union prev_active active)
+                in
+                let body = close_replay ~opaque ~outer_process_for ~replay_stack ~enclosing body in
+                if Hash_set.mem inherited_tns tn then record_spliced_reads body;
+                replay_scope id indices body)
     | Local_scope opts when not (scope_retracts_to_buffer plc opts.id.tn) ->
-        let body =
-          close_replay ~opaque ~outer_process_for ~replay_stack:(Set.add replay_stack opts.id.tn)
-            ~enclosing opts.body
-        in
+        let body = close_replay ~opaque ~outer_process_for ~replay_stack ~enclosing opts.body in
         Local_scope { opts with body }
     | Get_dynamic opts -> Get_dynamic { opts with dyn_value = arg opts.dyn_value }
     | Ternop (Ops.Where, cond, yes, no) -> walk_where ~opaque ~enclosing ~loop cond yes no
@@ -4765,20 +4844,21 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         value
   in
   let instantiate_at_read ~opaque ~process_for ~(traced : traced_array) indices ~enclosing ~id =
-    Option.map (instantiate_read ~traced indices ~enclosing ~id) ~f:(fun body ->
+    Option.map (instantiate_read ~traced indices ~enclosing ~id) ~f:(fun (body, active) ->
+        let replay_stack = Map.singleton (module Tnode) traced.tn active in
         let body =
-          close_replay ~opaque ~outer_process_for:process_for
-            ~replay_stack:(Set.singleton (module Tnode) traced.tn)
-            ~enclosing body
+          close_replay ~opaque ~outer_process_for:process_for ~replay_stack ~enclosing body
         in
         if Hash_set.mem inherited_tns traced.tn then record_spliced_reads body;
         body)
   in
   let inline_get ~opaque ~process_for (traced : traced_array) indices ~enclosing =
-    let id = fresh_scope traced.tn in
-    match instantiate_at_read ~opaque ~process_for ~traced indices ~enclosing ~id with
-    | Some body -> replay_scope id indices body
-    | None -> Get (traced.tn, indices)
+    if refuse_mid_write traced.tn then Get (traced.tn, indices)
+    else
+      let id = fresh_scope traced.tn in
+      match instantiate_at_read ~opaque ~process_for ~traced indices ~enclosing ~id with
+      | Some body -> replay_scope id indices body
+      | None -> Get (traced.tn, indices)
   in
   (* gh-ocannl-616: footprint-scoped materialization of a read. The prologues minted while a
      top-level statement is walked are spliced ahead of it by the driver at the bottom; the
@@ -5047,6 +5127,11 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                 }
           | _ ->
               let owned' = List.fold candidates ~init:owned ~f:Set.add in
+              let stored_candidates = List.filter candidates ~f:stores in
+              let prior_comps =
+                List.map stored_candidates ~f:(fun tn ->
+                    (tn, Hashtbl.find optim_ctx.computations tn))
+              in
               (* Phase 1 -- store, sequentially in source order. For candidate [k], its stored loop
                  is processed with [process_for] containing [k] AND every later (not-yet-stored)
                  candidate. Keeping the not-yet-stored candidates in [process_for] leaves their
@@ -5058,7 +5143,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                  shared-loop candidate; [in_storage_pass] stops nested re-storage.
                  [check_and_store]/[inline_computation] filter the stored body to [k]'s own setters,
                  so the irrelevant sibling setters left un-rewritten here are dropped. A raw read of
-                 a later candidate in [k]'s own setter is served when the template is inherited. *)
+                 a later candidate in [k]'s own setter is served at consumption time. *)
               List.iteri candidates ~f:(fun k tn ->
                   if stores tn then (
                     let node : traced_array = get_node traced_store tn in
@@ -5101,18 +5186,38 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                     check_and_store_virtual optim_ctx ~elide_stored
                       ~capture_hit:(Hashtbl.find hits tn) ~guarded ~in_scan ~enclosing node
                       static_indices stored));
-              (* Phase 2 -- emit. Candidates are NOT in [process_for], so surviving readers
-                 (materialized siblings, and later virtual siblings, all now stored) inline the
-                 provider; [owned'] still suppresses candidate auto-store; each candidate setter
-                 keeps its own self-references via the per-Set [next]. Candidate setters are emitted
-                 intact and removed later by [cleanup_virtual_llc]. *)
-              For_loop
-                {
-                  for_config with
-                  body =
+              (* Phase 2 -- emit. Restore pre-loop computations for candidates still virtual and
+                 make each candidate's new computation visible only once its writes in [body] finish
+                 (gh-ocannl-2510), so a reader positioned before a sibling write cannot load inputs
+                 that are only initialized later in the loop body. *)
+              let after_comps =
+                List.map stored_candidates ~f:(fun tn ->
+                    (tn, Hashtbl.find optim_ctx.computations tn))
+              in
+              let live_candidates =
+                List.filter stored_candidates ~f:(fun tn ->
+                    not (Tn.Placements.known_non_virtual plc tn))
+                |> Set.of_list (module Tnode)
+              in
+              let setter_counts = count_live_setters live_candidates body in
+              List.iter2_exn prior_comps after_comps ~f:(fun (tn, prior) (_, after) ->
+                  if Set.mem live_candidates tn then
+                    match Hashtbl.find setter_counts tn with
+                    | Some count when count > 0 ->
+                        set_computations_opt tn prior;
+                        Hashtbl.set phase2_pending ~key:tn ~data:(count, false, after)
+                    | _ -> ());
+              let emitted_body =
+                Exn.protect
+                  ~f:(fun () ->
                     loop_proc ~opaque ~process_for ~owned:owned' ~in_storage_pass:false ~guarded
-                      ~in_scan ~enclosing:enclosing' body;
-                })
+                      ~in_scan ~enclosing:enclosing' body)
+                  ~finally:(fun () ->
+                    List.iter after_comps ~f:(fun (tn, after) ->
+                        Hashtbl.remove phase2_pending tn;
+                        set_computations_opt tn after))
+              in
+              For_loop { for_config with body = emitted_body })
     | Zero_out tn ->
         let traced : traced_array = get_node traced_store tn in
         if
@@ -5121,6 +5226,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           && (not @@ Tn.Placements.known_non_virtual plc traced.tn)
           && stores tn
         then store_statement ~capture_hit:None ~guarded ~in_scan ~enclosing traced llc;
+        finish_phase2_setter ~in_storage_pass tn;
         llc
     | Set { tn; idcs; llsc; debug } ->
         let traced : traced_array = get_node traced_store tn in
@@ -5162,6 +5268,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
              node's own code refuses it like the capture's; gh-ocannl-1620: so does a covered
              scratch read met outside one. *)
           store_statement ~capture_hit:(statement_hit tn) ~guarded ~in_scan ~enclosing traced result;
+        finish_phase2_setter ~in_storage_pass tn;
         result
     | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
         let traced : traced_array = get_node traced_store tn in
@@ -5207,6 +5314,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
               | Some (Capture_reads_local _ as hit) -> Some hit
               | _ -> None)
             ~guarded ~in_scan ~enclosing traced llc;
+        finish_phase2_setter ~in_storage_pass tn;
         result
     | Set_local (id, llsc) ->
         Set_local
