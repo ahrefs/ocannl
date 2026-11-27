@@ -334,6 +334,7 @@ let rec map_sets ~f (llc : LL.t) : LL.t =
    head width, so that the masked scores have the values' shape. *)
 module Value_alias = struct
   let check ~rewrite =
+    let module B = Ll_test in
     Tensor.unsafe_reinitialize ();
     let raw =
       with_gates ~on:true ~block:4 (fun () ->
@@ -353,12 +354,11 @@ module Value_alias = struct
     in
     p "a value operand aliasing the masked scores: no fold"
       (Set.is_empty (tiles (rewrite ~block:4 aliased)));
-    let probe = Ll_test.node_factory ~first_id:100450 ~dims:[| 1 |] () "later_reader" in
-    let with_later_reader llc (tn : Tn.t) =
-      let zero = Ll_test.fixed 0 in
-      let cell = Array.map (Lazy.force tn.dims) ~f:(fun _ -> zero) in
-      LL.Seq (llc, Ll_test.set_at probe zero (Ll_test.get tn cell))
-    in
+    let scratch = B.node_factory ~first_id:100450 ~dims:[| 1 |] () in
+    let probe = scratch "later_reader" in
+    let zero = B.fixed 0 in
+    let read_first (tn : Tn.t) = B.get tn (Array.map (Lazy.force tn.dims) ~f:(fun _ -> zero)) in
+    let with_later_reader llc tn = B.seq llc (B.set_at probe zero (read_first tn)) in
     (* The later reader keeps the exponential live, so the fold would move it past its own read. *)
     let e = Option.value_exn (Set.find (written raw) ~f:(label_is "exp_exp_vals")) in
     let aliased_live =
@@ -371,35 +371,20 @@ module Value_alias = struct
     in
     p "a value operand aliasing a live row-state definition (the exponentials): no fold"
       (Set.is_empty (tiles (rewrite ~block:4 (with_later_reader aliased_live e))));
-    (* A live definition reading a scope local: the census does not see local writes, so the fold
-       will not move it. *)
-    let probs = Option.value_exn (Set.find (written raw) ~f:(label_is "softmax")) in
+    (* A scope-valued definition can go if dead. A later reader would require moving its local
+       accesses, which the fold's code-motion check cannot justify. *)
+    let scoped_value = scratch "scoped_state" in
     let scoped =
-      LL.unflat_lines
-        (List.map (LL.flat_lines [ raw ]) ~f:(fun stmt ->
-             let rec wrap (llc : LL.t) : LL.t =
-               match llc with
-               | LL.For_loop fl -> LL.For_loop { fl with body = wrap fl.body }
-               | LL.Set ({ tn; llsc; _ } as st) when Tn.equal tn probs ->
-                   let id = LL.get_scope probs in
-                   LL.Set
-                     {
-                       st with
-                       llsc =
-                         LL.Local_scope
-                           {
-                             id;
-                             orig_indices = st.idcs;
-                             mint = LL.Inlined_computation;
-                             body = LL.Set_local (id, llsc);
-                           };
-                     }
-               | other -> other
-             in
-             wrap stmt))
+      insert_before raw ~before:(reads_node "softmax")
+        [
+          B.set_at scoped_value zero (B.scope ~orig_indices:[| zero |] scoped_value (read_first e));
+        ]
     in
+    let without_reader = rewrite ~block:4 scoped in
+    p "a dead definition reading a scope local is removed by the fold"
+      (Set.length (tiles without_reader) = 2 && not (Set.mem (written without_reader) scoped_value));
     p "a live definition reading a scope local: no fold"
-      (Set.is_empty (tiles (rewrite ~block:4 (with_later_reader scoped probs))))
+      (Set.is_empty (tiles (rewrite ~block:4 (with_later_reader scoped scoped_value))))
 end
 
 let () =
@@ -912,10 +897,21 @@ let observed_values ?(check_placement = false) ~name ~backward target =
   if check_placement then (
     let composed =
       with_rewrite ~on:false (fun () ->
-          Context.lowered_for_decisions ~name:"osb_placement_composed" ctx comp Ir.Indexing.Empty)
+          let settings = LL.virtualize_settings in
+          let max_reduction = settings.max_inline_reduction and max_visits = settings.max_visits in
+          settings.max_inline_reduction <- -1;
+          settings.max_visits <- 1;
+          Exn.protect
+            ~f:(fun () ->
+              Context.lowered_for_decisions ~name:"osb_placement_composed" ctx comp
+                Ir.Indexing.Empty)
+            ~finally:(fun () ->
+              settings.max_inline_reduction <- max_reduction;
+              settings.max_visits <- max_visits))
     in
     p "the optimizer's visit cap materializes the probabilities in its fork"
       (Ll_test.known_non_virtual composed tn
+      && Set.mem (written composed.LL.llc) tn
       && Option.equal Tn.equal_provenance (Ll_test.rejection_code composed tn) (Some Tn.Visit_cap)
       && Option.is_none tn.Tn.memory_mode_intent
       && not (Tn.is_observable tn));

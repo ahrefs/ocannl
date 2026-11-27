@@ -31,7 +31,8 @@ let report_refusal ~rewrite (tn, root) =
       | Observable -> "observable flag"
       | Reader pos -> Printf.sprintf "raw reader at statement %d" pos
     in
-    Stdio.eprintf "online_softmax: %s declined for %s (%s)\n%!" rewrite (Tn.debug_name tn) why
+    Stdio.eprintf "online_softmax: %s declined for %s [%s] (%s)\n%!" rewrite (Tn.debug_name tn)
+      (Tn.id tn) why
 
 let allow_unobserved ~rewrite nodes =
   match List.find_map nodes ~f:intent_root with
@@ -925,8 +926,6 @@ let find_backward r (nz : normalizer) : backward option =
     let* sig_w = sign env wi in
     Some (pos, n, (voc1, env), sg, w, sig_w)
   in
-  let* k1 = contraction p1 in
-  let* k2 = contraction p2 in
   let is_dq (_, _, _, sg, _, sig_w) =
     all_rows sg && has_role sg (Chan 1) && (not (has_role sg Reduced)) && has_role sig_w Reduced
   in
@@ -936,10 +935,21 @@ let find_backward r (nz : normalizer) : backward option =
     && all_rows sig_w
     && not (has_role sig_w Reduced)
   in
-  let* kq, kk =
+  let terminal_contractions =
+    let* k1 = contraction p1 in
+    let* k2 = contraction p2 in
     if is_dq k1 && is_dk k2 then Some (k1, k2)
     else if is_dq k2 && is_dk k1 then Some (k2, k1)
     else None
+  in
+  let* kq, kk =
+    match terminal_contractions with
+    | Some _ as matched -> matched
+    | None ->
+        List.iter [ p1; p2 ] ~f:(fun pos ->
+            report_refusal ~rewrite:"backward fusion without a terminal contraction pair"
+              (ds_tn, Reader pos));
+        None
   in
   let kq_pos, kq_nest, (kq_voc, kq_env), _, k_op, _ = kq in
   let kk_pos, kk_nest, (kk_voc, kk_env), sig_kg, q_op, _ = kk in
@@ -1556,9 +1566,17 @@ let find_fold r (nz : normalizer) ~block : (fold, Tn.t * root) Result.t option =
     && not (List.exists (List.range span_lo (f_at + 1)) ~f:(fun pos -> r.opaque.(pos)))
   in
   let* () = Option.some_if contract () in
-  let can_move = List.for_all live_defs ~f:movable in
-  if not can_move then List.iter later_roots ~f:(report_refusal ~rewrite:"block fold");
-  let* () = Option.some_if can_move () in
+  let* () =
+    match List.find live_defs ~f:(fun p -> not (movable p)) with
+    | None -> Some ()
+    | Some p ->
+        (if Utils.settings.log_level > 1 then
+           let blocked = Option.value_exn (target_of r p) in
+           List.iter later_roots ~f:(fun ((tn, _) as root) ->
+               if List.mem (liveness [ tn ]) blocked ~equal:Tn.equal then
+                 report_refusal ~rewrite:"block fold" root));
+        None
+  in
   (* {2 Emission} *)
   let open LL in
   let extent (voc : vocabulary) role = List.Assoc.find_exn voc.extents ~equal:equal_role role + 1 in

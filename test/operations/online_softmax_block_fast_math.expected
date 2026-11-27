@@ -110,6 +110,7 @@ a value pass into a slice of its output: no fold, the two-pass form keeps the ze
 a value pass ahead of the probabilities it would consume: no fold: true
 a value operand aliasing the masked scores: no fold: true
 a value operand aliasing a live row-state definition (the exponentials): no fold: true
+a dead definition reading a scope local is removed by the fold: true
 a live definition reading a scope local: no fold: true
 tiles past the stack threshold: no fold: true
 tiles past the stack threshold: the output matches the composed within 1e-5 relative: true
