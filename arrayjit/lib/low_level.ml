@@ -316,6 +316,16 @@ module Access_fold = struct
     scan_implicit : visit;
   }
 
+  let structural =
+    {
+      discarded_operands = Visit;
+      gated_operands = Visit;
+      dead_loops = Visit;
+      local_scopes = Visit;
+      guards = Ignore;
+      scan_implicit = Skip;
+    }
+
   type binder = {
     index : Indexing.symbol;
     from_ : int;
@@ -2049,6 +2059,13 @@ let write_overlap_groups (items : ('w * read_charge) list) ~(touch : 'w -> 'w ->
   |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
   |> List.map ~f:(fun (_, g) -> List.map g ~f:snd)
 
+(* Each enclosing loop binder mapped to its full trip count, an inner binder shadowing an outer one.
+   Shared by {!trace_node_facts} and {!check_and_store_virtual}. *)
+let binder_widths (ctx : Access_fold.context) =
+  List.fold_right ctx.loops
+    ~init:(Map.empty (module Indexing.Symbol))
+    ~f:(fun (b : Access_fold.binder) m -> Map.set m ~key:b.index ~data:(b.to_ - b.from_ + 1))
+
 (* Structural facts pass (gh-554): a single non-enumerating program-order traversal computing the
    per-node facts of {!traced_array} that are not affine questions — setter/reader structure,
    scalar-constexpr and one-hot classifications, reduction extents, loop-symbol ownership and the
@@ -2081,16 +2098,10 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
              during lowering"
       | _ -> ())
   in
-  (* Each enclosing loop's index symbol mapped to its full trip count, an inner binder shadowing an
-     outer one. At a setter, the fiber cardinality of the LHS map over that box — the product over
-     symbols absent from the LHS indices — is the recompute cost (per read site) of inlining that
-     setter's computation (gh-494: {!Affine.fiber_cardinality}; the exact-vs-lower-bound distinction
-     is not needed here, the absent-symbol product is the cost either way). *)
-  let loop_ranges (ctx : Access_fold.context) =
-    List.fold_right ctx.loops
-      ~init:(Map.empty (module Indexing.Symbol))
-      ~f:(fun (b : Access_fold.binder) m -> Map.set m ~key:b.index ~data:(b.to_ - b.from_ + 1))
-  in
+  (* At a setter, the fiber cardinality of the LHS map over the enclosing binder box — the product
+     over symbols absent from the LHS indices — is the recompute cost (per read site) of inlining
+     that setter's computation (gh-494: {!Affine.fiber_cardinality}; the exact-vs-lower-bound
+     distinction is not needed here, the absent-symbol product is the cost either way). *)
   let reduction_extent loop_ranges idcs =
     match Affine.fiber_cardinality ~domain:(Map.to_alist loop_ranges) idcs with
     | `Exact n | `At_least n -> n
@@ -2107,7 +2118,7 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
   in
   let setter_facts ?(vec_len = 0) (ctx : Access_fold.context) ~tn ~idcs ~(rhs : scalar_t) =
     let traced : traced_array = get_node traced_store tn in
-    let loop_ranges = loop_ranges ctx in
+    let loop_ranges = binder_widths ctx in
     (* gh-ocannl-2196: the enclosing loops absent from the written indices are a reduction one read
        of a cell replays, so a site mentioning one reads a cell per trip. *)
     let iterated =
@@ -2687,135 +2698,104 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
      computation; only an escaping (unbound) non-static symbol disqualifies (see #134). gh-133 Stage
      B: inspect symbols hidden inside [Affine]/[Concat] too, not just bare [Iterator], so the
      relaxed affine path cannot admit an escaping symbol concealed in an affine index. *)
-  let check_sibling_escaping ~env_dom ~code idcs =
+  let in_env_dom (ctx : Access_fold.context) s =
+    Set.mem static_indices s
+    || List.exists ctx.loops ~f:(fun (b : Access_fold.binder) -> Indexing.equal_symbol b.index s)
+  in
+  let check_sibling_escaping ~ctx ~code idcs =
     Array.iter idcs ~f:(fun idx ->
-        let syms =
-          match idx with
-          | Indexing.Iterator s -> [ s ]
-          | Indexing.Affine { symbols; _ } -> List.map symbols ~f:snd
-          | Indexing.Concat syms -> syms
-          | Indexing.Fixed_idx _ | Indexing.Sub_axis -> []
-        in
-        List.iter syms ~f:(fun s ->
-            if (not (Set.mem static_indices s)) && not (Set.mem env_dom s) then (
+        List.iter (index_symbols [| idx |]) ~f:(fun s ->
+            if not (in_env_dom ctx s) then (
               [%log2
                 "INFO: Inlining candidate has an escaping variable",
                 (idx : Indexing.axis_index),
                 (top_llc : t)];
               raise @@ Non_virtual code)))
   in
-  (* Traverse the float code too, for completeness / future use-cases. *)
-  let rec loop_proc ~env_dom ~loop_ranges llc =
-    let loop = loop_proc ~env_dom ~loop_ranges in
-    match llc with
-    | Noop -> ()
-    | (Seq (c1, c2) : t) ->
-        loop c1;
-        loop c2
-    | For_loop { index; body; from_; to_; axis = _ } ->
-        loop_proc ~env_dom:(Set.add env_dom index)
-          ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
-          body
-    | Scan_loop { index; from_; to_; carried; body; _ } ->
-        (* gh-ocannl-696: a scan anywhere in the captured computation refuses the candidate. Writing
-           the candidate inside it is the obvious case -- cell [i]'s value depends on the whole
-           prefix through state the index does not parameterize, so replaying instance [i] cannot
-           reproduce it -- but a scan that feeds the candidate through a scope local is the same
-           recurrence one level down, and a sibling scan is dropped by the inline filter, which
-           cannot keep it without re-minting its carried locals per replay. One verdict for the
-           three, decided where the computation is captured. *)
-        ignore (index, from_, to_, carried, body);
-        raise @@ Non_virtual "148:scan-recurrence"
-    | Zero_out tn -> if Tn.equal tn top_tn then has_setter := true
-    | Set { tn; idcs; llsc; debug = _ } ->
-        if Tn.equal tn top_tn then (
-          check_idcs loop_ranges idcs;
-          has_setter := true)
-        else check_sibling_escaping ~env_dom ~code:"7:sibling-escaping-write-index" idcs;
-        loop_scalar ~env_dom ~loop_ranges llsc
-    | Set_from_vec { tn; idcs; length = _; vec_unop = _; arg = arg, _; debug = _ } ->
-        if Tn.equal tn top_tn then (
-          check_idcs loop_ranges idcs;
-          has_setter := true)
-        else check_sibling_escaping ~env_dom ~code:"7:sibling-escaping-write-index" idcs;
-        loop_scalar ~env_dom ~loop_ranges arg
-    | Set_local (_, llsc) -> loop_scalar ~env_dom ~loop_ranges llsc
-    (* #296, revised for gh-ocannl-483: this arm is LIVE, not defensive. Within [optimize_proc]
-       nothing reaches it -- [hoist_cross_statement_cse] is the only pass here that mints
-       [Declare_local] and it runs last, whereas capture happens during [virtual_llc] -- but the
-       algebraic rewrite tier runs BEFORE [Low_level.optimize] ([Assignments.lower] calls
-       [Rewrites.apply]), and [Online_softmax.hoist] declares its cached probability cell this way
-       beside the statement consuming it, so with [online_softmax] on (the [approximate] profile) a
-       candidate captured around one is refused here. The same pass's other [Declare_local], in
-       [emit_normalizer]'s scan body, does not reach this arm: an enclosing [Scan_loop] is refused
-       as 148 first. What is refused is the constructor, not that pass -- any hoisted local in the
-       captured nest does it ([row_hoisted_local] in test/operations/virtual_rejection_boundary.ml).
-       It also still guards a hoisted program re-entering virtualization. *)
-    | Declare_local _ -> raise @@ Non_virtual "19:declare-local"
-    | Comment _ -> ()
-    | Staged_compilation _ -> raise @@ Non_virtual "8:staged-compilation"
-    (* A barrier is an opaque effect: a computation containing one cannot be inlined/recomputed.
-       Defensive: schedule transforms run after virtualization, so this should be unreachable. *)
-    | Workgroup_barrier -> raise @@ Non_virtual "141:workgroup-barrier"
-    (* Cooperative statements are barrier-strength opaque effects; defensive like the barrier. *)
-    | Tile_mma _ -> raise @@ Non_virtual "143:tile-mma"
-    (* gh-466: a dynamically-indexed write is never a definite write of a virtual candidate.
-       Defensive: [rewrite_one_hot_reductions] runs after virtualization. *)
-    | Set_dynamic _ -> raise @@ Non_virtual "144:dynamic-write"
-    (* Conservative in v1: a guarded computation is not inlined (a conditional write is not a
-       definite write, so recomputing it at the read site could read an unset scope). This arm sees
-       guards INTERIOR to the captured subtree; a guard ENCLOSING it is reported by the caller via
-       [~guarded] (gh-651). Reachable pre-virtualization: [Assignments.to_low_level] emits interval
-       guards for clamped-window pooling (gh-504) and extent guards for symbolic extents (gh-490),
-       besides the launch-extent guards introduced at backend-compile time. *)
-    | If _ -> raise @@ Non_virtual "142:guarded-computation"
-  and loop_scalar ~env_dom ~loop_ranges llsc =
-    match llsc with
-    | Constant _ | Constant_bits _ -> ()
-    | Get (tn, idcs) ->
-        if Tn.equal tn top_tn then check_idcs loop_ranges idcs
-        else check_sibling_escaping ~env_dom ~code:"9:sibling-escaping-read-index" idcs
-    | Get_dynamic { dyn_value = v, _; _ } ->
-        (* gh-343: defensive -- [Get_dynamic] is produced after virtualization analysis. *)
-        loop_scalar ~env_dom ~loop_ranges v
-    | Local_scope { body; _ } -> loop_proc ~env_dom ~loop_ranges body
-    | Get_local _ -> ()
-    | Get_merge_buffer (tn, idcs) ->
-        if Tn.equal tn top_tn then check_idcs loop_ranges idcs
-        else check_sibling_escaping ~env_dom ~code:"9:sibling-escaping-read-index" idcs
-    | Embed_index (Fixed_idx _ | Sub_axis) -> ()
-    | Embed_index (Iterator s) ->
-        if not @@ Set.mem env_dom s then (
-          if not (Set.mem static_indices s) then
-            [%log2
-              "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
-          raise @@ Non_virtual "10:escaping-index-symbol")
-    | Embed_index (Affine { symbols; _ }) ->
-        List.iter symbols ~f:(fun (_, s) ->
-            if not @@ Set.mem env_dom s then (
-              if not (Set.mem static_indices s) then
+  (* gh-ocannl-1628: the legality walk runs on {!Access_fold} with {!Access_fold.structural} (every
+     operand, dead loops, scope bodies; pre-order hooks preserve first-refusal provenance order).
+     Unknown writes are caught via {!direct_write}, mirroring {!trace_node_facts}. *)
+  let check_legality llc =
+    let open Access_fold in
+    let statement ctx () stmt =
+      (match stmt with
+      | Scan_loop _ ->
+          (* gh-ocannl-696: a scan anywhere in the captured computation refuses the candidate.
+             Writing the candidate inside it is the obvious case -- cell [i]'s value depends on the
+             whole prefix through state the index does not parameterize, so replaying instance [i]
+             cannot reproduce it -- but a scan that feeds the candidate through a scope local is the
+             same recurrence one level down, and a sibling scan is dropped by the inline filter,
+             which cannot keep it without re-minting its carried locals per replay. One verdict for
+             the three, decided where the computation is captured. *)
+          raise @@ Non_virtual "148:scan-recurrence"
+      | Zero_out tn -> if Tn.equal tn top_tn then has_setter := true
+      | Set { tn; idcs; _ } | Set_from_vec { tn; idcs; _ } ->
+          if Tn.equal tn top_tn then (
+            check_idcs (binder_widths ctx) idcs;
+            has_setter := true)
+          else check_sibling_escaping ~ctx ~code:"7:sibling-escaping-write-index" idcs
+      (* #296, revised for gh-ocannl-483: this arm is LIVE, not defensive. Within [optimize_proc]
+         nothing reaches it -- [hoist_cross_statement_cse] is the only pass here that mints
+         [Declare_local] and it runs last, whereas capture happens during [virtual_llc] -- but the
+         algebraic rewrite tier runs BEFORE [Low_level.optimize] ([Assignments.lower] calls
+         [Rewrites.apply]), and [Online_softmax.hoist] declares its cached probability cell this way
+         beside the statement consuming it, so with [online_softmax] on (the [approximate] profile)
+         a candidate captured around one is refused here. The same pass's other [Declare_local], in
+         [emit_normalizer]'s scan body, does not reach this arm: an enclosing [Scan_loop] is refused
+         as 148 first. What is refused is the constructor, not that pass -- any hoisted local in the
+         captured nest does it ([row_hoisted_local] in
+         test/operations/virtual_rejection_boundary.ml). It also still guards a hoisted program
+         re-entering virtualization. *)
+      | Declare_local _ -> raise @@ Non_virtual "19:declare-local"
+      | Staged_compilation _ -> raise @@ Non_virtual "8:staged-compilation"
+      (* A barrier is an opaque effect: a computation containing one cannot be inlined/recomputed.
+         Defensive: schedule transforms run after virtualization, so this should be unreachable. *)
+      | Workgroup_barrier -> raise @@ Non_virtual "141:workgroup-barrier"
+      (* Cooperative statements are barrier-strength opaque effects; defensive like the barrier. *)
+      | Tile_mma _ -> raise @@ Non_virtual "143:tile-mma"
+      (* gh-466: a dynamically-indexed write is never a definite write of a virtual candidate.
+         Defensive: [rewrite_one_hot_reductions] runs after virtualization. *)
+      | Set_dynamic _ -> raise @@ Non_virtual "144:dynamic-write"
+      (* Conservative in v1: a guarded computation is not inlined (a conditional write is not a
+         definite write, so recomputing it at the read site could read an unset scope). This arm
+         sees guards INTERIOR to the captured subtree; a guard ENCLOSING it is reported by the
+         caller via [~guarded] (gh-651). Reachable pre-virtualization: [Assignments.to_low_level]
+         emits interval guards for clamped-window pooling (gh-504) and extent guards for symbolic
+         extents (gh-490), besides the launch-extent guards introduced at backend-compile time. *)
+      | If _ -> raise @@ Non_virtual "142:guarded-computation"
+      | stmt when Option.is_some (direct_write stmt) ->
+          invalid_arg
+            "Low_level.check_and_store_virtual: a write this pass does not handle reached it"
+      | _ -> ());
+      Continue ()
+    in
+    let scalar ctx () llsc =
+      (match llsc with
+      | Get (tn, idcs) | Get_merge_buffer (tn, idcs) ->
+          if Tn.equal tn top_tn then check_idcs (binder_widths ctx) idcs
+          else check_sibling_escaping ~ctx ~code:"9:sibling-escaping-read-index" idcs
+      | Get_dynamic { tn; idcs; dyn_axis; _ } ->
+          (* gh-ocannl-1628: a dynamic gather's static coordinates ([i <> dyn_axis]) are rendered at
+             the replay site like [Get], so an escaping loop symbol there would become unbound (e.g.
+             under a width-1 enclosing loop exempt from rule 147); [Access_fold] descends into
+             [dyn_value] next. A gather of the candidate itself never matches its static write
+             position ([4:lhs-idcs-differ]). *)
+          if Tn.equal tn top_tn then raise @@ Non_virtual "4:lhs-idcs-differ"
+          else
+            let static_idcs = Array.filteri idcs ~f:(fun i _ -> i <> dyn_axis) in
+            check_sibling_escaping ~ctx ~code:"9:sibling-escaping-read-index" static_idcs
+      | Embed_index idx ->
+          List.iter (index_symbols [| idx |]) ~f:(fun s ->
+              if not (in_env_dom ctx s) then (
                 [%log2
                   "Inlining candidate has an escaping variable",
                   (s : Indexing.symbol),
                   (top_llc : t)];
-              raise @@ Non_virtual "10:escaping-index-symbol"))
-    | Embed_index (Concat syms) ->
-        List.iter syms ~f:(fun s ->
-            if not @@ Set.mem env_dom s then (
-              if not (Set.mem static_indices s) then
-                [%log2
-                  "Inlining candidate has an escaping variable",
-                  (s : Indexing.symbol),
-                  (top_llc : t)];
-              raise @@ Non_virtual "10:escaping-index-symbol"))
-    | Ternop (_, (llv1, _), (llv2, _), (llv3, _)) ->
-        loop_scalar ~env_dom ~loop_ranges llv1;
-        loop_scalar ~env_dom ~loop_ranges llv2;
-        loop_scalar ~env_dom ~loop_ranges llv3
-    | Binop (_, (llv1, _), (llv2, _)) ->
-        loop_scalar ~env_dom ~loop_ranges llv1;
-        loop_scalar ~env_dom ~loop_ranges llv2
-    | Unop (_, (llsc, _)) -> loop_scalar ~env_dom ~loop_ranges llsc
+                raise @@ Non_virtual "10:escaping-index-symbol"))
+      | _ -> ());
+      Continue ()
+    in
+    fold ~policy:structural ~hooks:{ (hooks ()) with statement; scalar } ~init:() llc
   in
   try
     if Tn.Placements.known_non_virtual optim_ctx.placements traced.tn then
@@ -2847,7 +2827,7 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
        like an enclosing guard, so only the caller can report it. Same verdict as a scan met inside
        the nest by the walk above. *)
     if in_scan then raise @@ Non_virtual "148:scan-recurrence";
-    loop_proc ~env_dom:static_indices ~loop_ranges:(Map.empty (module Indexing.Symbol)) top_llc;
+    check_legality top_llc;
     if not !has_setter then raise @@ Non_virtual "12:no-setter";
     (* gh-651 (loop half): an enclosing [For_loop] whose symbol the candidate's index map does not
        mention replays the whole captured nest into the SAME cells — it is a reduction/repetition
@@ -9700,16 +9680,6 @@ let input_and_output_nodes optimized =
     queries over the routine's accesses. Sibling loops may rebind one symbol (gh-ocannl-1305). *)
 let loop_ranges (llc : t) : Affine.Loop_ranges.t =
   let open Access_fold in
-  let policy =
-    {
-      discarded_operands = Visit;
-      gated_operands = Visit;
-      dead_loops = Visit;
-      local_scopes = Visit;
-      guards = Ignore;
-      scan_implicit = Skip;
-    }
-  in
   let hooks =
     {
       (hooks ()) with
@@ -9722,7 +9692,7 @@ let loop_ranges (llc : t) : Affine.Loop_ranges.t =
             | _ -> acc));
     }
   in
-  fold ~policy ~hooks ~init:Affine.Loop_ranges.empty llc
+  fold ~policy:structural ~hooks ~init:Affine.Loop_ranges.empty llc
 
 (** Calls [touch] on every tnode whose context buffer the statement reads or writes, [on_opaque] on
     [Staged_compilation] (its accesses cannot be enumerated). Scope-local reads/writes

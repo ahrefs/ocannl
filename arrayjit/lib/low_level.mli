@@ -366,6 +366,10 @@ module Access_fold : sig
     scan_implicit : visit;
   }
 
+  val structural : policy
+  (** All-[Visit] structural policy ([discarded_operands = Visit], [gated_operands = Visit],
+      [dead_loops = Visit], [local_scopes = Visit], [guards = Ignore], [scan_implicit = Skip]). *)
+
   type context = {
     live : bool;
     guards : scalar_arg list;
