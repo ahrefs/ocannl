@@ -204,15 +204,12 @@ let () =
     | None -> Stdio.printf "rank-site: tune site=%s no report\n" site
     | Some r ->
         let timing_decisions =
-          match r.Autotune.timing_decisions with
+          match Bench_harness.timing_decisions_wire r.Autotune.timing_decisions with
           | [] -> "none"
           | ds ->
               String.concat ~sep:","
                 (List.map ds ~f:(fun (settle, admission, count) ->
-                     Printf.sprintf "%s:%s=%d"
-                       (Autotune.batch_settle_name settle)
-                       (Autotune.batch_admission_name admission)
-                       count))
+                     Printf.sprintf "%s:%s=%d" settle admission count))
         in
         Stdio.printf
           "rank-site: tune site=%s outcome=%s crowned=%S best_ms=%.6f timed=%d %s \

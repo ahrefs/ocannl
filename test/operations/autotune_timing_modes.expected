@@ -122,6 +122,7 @@ a mild superlinear crossing refit keeps the measured target-sized upper batch: t
 a persistent >2x confirmation stall still retries once and refuses unbatched: true
 a stalled upper batch (>2x per-launch) in crossing interpolation still falls back to crossing: true
 an over-2x-target base with Fit_negative_fixed confirmation stays Cap_unresolved: true
+an unresolved validation base with Fit_negative_fixed confirmation stays Cap_unresolved: true
 
 == autotune_timing spelling ==
 "queued" selects the queued objective: true

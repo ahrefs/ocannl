@@ -1580,6 +1580,20 @@ let () =
       | 3 -> 45.
       | d -> 19. *. Float.of_int d)
   in
+  (* Negative control 4: validation jumps across the target via an unresolved [Fit_negative_fixed]
+     pair ((8, 6.5) -> (13, 16.0), [base_resolved = false]), and confirmation at 16 reads 26.0 ms
+     (<= 2*16, [Fit_negative_fixed]). Every other guard in [confirm_or_scale] holds (16 < 20, 26 <=
+     32, Fit_negative_fixed), so only [base_resolved] keeps this [Cap_unresolved] and falls back to
+     the resolved depth-8 batch rather than settling at depth 13. *)
+  let unresolved_base_confirm =
+    device "unresolved validation base with bounded negative-fixed confirmation" ~launch_ms:1.25
+      (function
+      | 1 -> 1.25
+      | 8 -> 6.5
+      | 13 -> 16.0
+      | 16 -> 26.0
+      | d -> 1.25 *. Float.of_int d)
+  in
   p "a boost-clock settle during confirmation keeps the resolved target-sized base batch"
     (clock_settle.settled_depth = 20
     && Option.is_some (Autotune.admitted_timing_ms clock_settle.reading)
@@ -1602,8 +1616,13 @@ let () =
          [ Provisional_probe; Validation_probe; Confirmation_probe ]
     &&
     match decision clock_settle_after_val with
-    | Some d ->
-        Poly.equal d.settle Autotune.Measured_batch && Poly.equal d.admission Autotune.Admitted
+    | Some d -> (
+        Poly.equal d.settle Autotune.Measured_batch
+        && Poly.equal d.admission Autotune.Admitted
+        &&
+        match d.fit with
+        | Some f -> Poly.equal f.verdict Autotune.Fit_negative_fixed
+        | None -> false)
     | None -> false);
   p "a mild superlinear crossing refit keeps the measured target-sized upper batch"
     (crossing_clock_settle.settled_depth = 16
@@ -1642,6 +1661,19 @@ let () =
     &&
     match decision over_target_fixed_base with
     | Some d -> Poly.equal d.settle Autotune.Cap_unresolved
+    | None -> false);
+  p "an unresolved validation base with Fit_negative_fixed confirmation stays Cap_unresolved"
+    (unresolved_base_confirm.settled_depth = 8
+    && List.equal Poly.equal (roles unresolved_base_confirm)
+         [ Provisional_probe; Validation_probe; Confirmation_probe ]
+    &&
+    match decision unresolved_base_confirm with
+    | Some d -> (
+        Poly.equal d.settle Autotune.Cap_unresolved
+        &&
+        match d.fit with
+        | Some f -> Poly.equal f.verdict Autotune.Fit_negative_fixed
+        | None -> false)
     | None -> false)
 
 (* {1 The setting's spelling} *)
