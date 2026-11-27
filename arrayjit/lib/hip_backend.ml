@@ -67,18 +67,25 @@ module Slab = struct
      test/operations/buffer_aliasing report the planner INCREASING the training footprint here while
      decreasing it everywhere else (gh-ocannl-542). *)
   let pools : (int * int, buffer_ptr * int) Hashtbl.Poly.t = Hashtbl.Poly.create ()
+  let on_invalidate_merge_slab : (device -> unit) ref = ref (fun _ -> ())
 
   let alloc_pool ?mode:_ (device : device) ~pool_id ~size_in_bytes ~alignment:_ =
     set_ctx device.dev.primary_context;
     let key = (device.device_id, pool_id) in
     let size_in_bytes = max 1 size_in_bytes in
     (* Free-first replacement avoids requiring both merge slabs to fit. Invalidate the complete
-       ownership transaction before the fallible free/allocation sequence. *)
+       ownership transaction (including any cached graphs referencing the old merge slab) before the
+       fallible free/allocation sequence. *)
     Option.iter (Hashtbl.find pools key) ~f:(fun (old, _) ->
-        if Int.equal pool_id merge_buffer_pool_id then
-          invalidate_merge_slab device ~remove_slab_claim:(fun () -> Hashtbl.remove pools key)
+        if Int.equal pool_id merge_buffer_pool_id then (
+          !on_invalidate_merge_slab device;
+          invalidate_merge_slab device ~remove_slab_claim:(fun () -> Hashtbl.remove pools key))
         else Hashtbl.remove pools key;
         H.Deviceptr.mem_free old);
+    if Int.equal pool_id merge_buffer_pool_id then
+      Resource_fault_injection.hit
+        ~artifact:(Merge_slab { device_id = device.device_id; size_in_bytes })
+        Merge_slab_before_allocate;
     let ptr =
       try H.Deviceptr.mem_alloc ~size_in_bytes
       with
@@ -110,6 +117,8 @@ module Slab = struct
         let key = (device.device_id, pool_id) in
         Option.iter (Hashtbl.find pools key) ~f:(fun (ptr, _) -> H.Deviceptr.mem_free ptr);
         Hashtbl.remove pools key)
+
+  let has_pool (device : device) ~pool_id = Hashtbl.mem pools (device.device_id, pool_id)
 
   let resolve_pool (device : device) { pool_id; offset = _ } : buffer_ptr =
     (* Return the slab base. The byte offset is NOT folded into the handle here; callers apply it
@@ -263,8 +272,10 @@ end = struct
   let is_done event = H.Delimited_event.query event.raw
   let will_wait_for context event = H.Delimited_event.wait context.device.runner event.raw
   let sync event = H.Delimited_event.synchronize event.raw
+  let events_recorded = Atomic.make 0
 
   let all_work (device : device) =
+    Atomic.incr events_recorded;
     { device_id = device.device_id; raw = H.Delimited_event.record device.runner }
 
   (* The inline-test harness ([ppx_inline_test]'s runner, which hosts ppx_expect tests) is detected
@@ -345,7 +356,7 @@ end = struct
   (* The merge buffer is the device's reserved single-tenant pool (id [merge_buffer_pool_id]); grow
      it in place when a larger node arrives ([Slab.alloc_pool] overwrites the reserved entry). *)
   let opt_alloc_merge_buffer ~size_in_bytes (device : device) : unit =
-    if device.merge_buffer_capacity < size_in_bytes then
+    if device.merge_buffer_capacity < size_in_bytes || Option.is_none !(device.merge_buffer) then
       Slab.alloc_pool device ~pool_id:merge_buffer_pool_id ~size_in_bytes ~alignment:1
 
   let%track4_sexp finalize_device (device : device) =
@@ -486,6 +497,12 @@ end = struct
       H.Module.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
     else []
 
+  let load_module code =
+    let m = H.Module.load_data_ex code (run_options ()) in
+    Alloc_census.count_module_loaded ();
+    Stdlib.Gc.finalise (fun _ -> Alloc_census.count_module_unloaded ()) m;
+    m
+
   (* No runtime linking needed since Threefry is included directly in each kernel *)
   let set_builtins_for_device ~primary_context:_ _kernel_module = assert !initialized
 
@@ -496,6 +513,8 @@ end = struct
      [SharedSignalPool] leak report coming back with graph capture on (gh-ocannl-1370). *)
   type graph_cache = {
     graphs_device : device;
+    routine_name : string;
+    uses_merge_buffer : bool;
     cache : (string, H.Graph.exec) Hashtbl.t;
     order : string Queue.t;
     lock : Stdlib.Mutex.t;
@@ -504,6 +523,8 @@ end = struct
   }
 
   let graph_caches : graph_cache Backend_impl.Weak_registry.t = Backend_impl.Weak_registry.create ()
+  let graph_execs_created = Atomic.make 0
+  let graph_execs_destroyed = Atomic.make 0
 
   let live_graph_execs () =
     List.sum
@@ -527,7 +548,23 @@ end = struct
             Queue.clear g.order;
             execs))
     in
-    Backend_impl.attempt_each (List.map execs ~f:(fun exec () -> H.Graph.exec_destroy exec))
+    Backend_impl.attempt_each
+      (List.map execs ~f:(fun exec () ->
+           Resource_fault_injection.hit
+             ~artifact:
+               (Graph_capture
+                  { device_id = g.graphs_device.device_id; routine = g.routine_name; key = None })
+             Graph_exec_before_destroy;
+           H.Graph.exec_destroy exec;
+           Atomic.incr graph_execs_destroyed))
+
+  let () =
+    Slab.on_invalidate_merge_slab :=
+      fun device ->
+        Backend_impl.Weak_registry.live graph_caches
+        |> List.filter ~f:(fun g -> g.uses_merge_buffer && phys_equal g.graphs_device device)
+        |> List.map ~f:(fun g () -> destroy_graphs g)
+        |> Backend_impl.attempt_each
 
   (* gh-ocannl-1036: destroy each device's stream at process exit. A HIP stream that is never
      destroyed makes the ROCm runtime report its 77 signals as leaked on stderr when the process
@@ -1531,7 +1568,7 @@ end = struct
   let%track3_sexp link prior_context (code : code) ctx_buffers =
     let ctx = ctx_of prior_context in
     set_ctx ctx;
-    let run_module = H.Module.load_data_ex code.code.code (run_options ()) in
+    let run_module = load_module code.code.code in
     prior_context.device.dev.set_builtins_in run_module;
     let idx_params = Indexing.bound_symbols code.bindings in
     let lowered_bindings : Indexing.lowered_bindings =
@@ -1555,12 +1592,16 @@ end = struct
     let modules = Hashtbl.create (module Int) in
     let module_of (program : program) =
       Hashtbl.find_or_add modules program.program_id ~default:(fun () ->
-          let run_module = H.Module.load_data_ex program.code (run_options ()) in
+          let run_module = load_module program.code in
           prior_context.device.dev.set_builtins_in run_module;
           run_module)
     in
+    let count = Array.length code_batch.kparams_and_names in
     let procs =
       Array.mapi code_batch.kparams_and_names ~f:(fun i (kparams, name, launch) ->
+          Resource_fault_injection.hit
+            ~artifact:(Routine_segment { routine = name; index = i; count })
+            Link_batch_before_segment;
           let program, symbol = code_batch.programs.(i) in
           link_proc ~prior_context ~name ~symbol ~kparams ~launch ~ctx_buffers lowered_bindings
             (module_of program))
@@ -1593,6 +1634,8 @@ end = struct
       let graphs =
         {
           graphs_device = device;
+          routine_name = name;
+          uses_merge_buffer;
           cache = Hashtbl.create (module String);
           order = Queue.create ();
           lock = Stdlib.Mutex.create ();
@@ -1614,39 +1657,62 @@ end = struct
         in
         String.concat ~sep:";" (idx @ merge)
       in
+      let drop_exec_and_run_plain ~key ~message exec =
+        Atomic.incr graph_launch_memory_drops;
+        Stdio.eprintf
+          "hip: launching the graph of %s was refused device memory (%s): dropping its exec and \
+           running its segments plainly this time (gh-ocannl-1872)\n\
+           %!"
+          name message;
+        Hashtbl.remove cache key;
+        Queue.filter_inplace order ~f:(fun k -> not (String.equal k key));
+        H.Stream.synchronize device.runner;
+        H.Graph.exec_destroy exec;
+        Atomic.incr graph_execs_destroyed;
+        run_plain ()
+      in
       (* A graph launch refused device memory is never retried on its exec: on CUDA such a retry was
          accepted with the memory still held and the replay then faulted (gh-ocannl-1872), and HIP
          is held to the same shape. The exec is dropped and destroyed, the segments run plainly this
          time, where each kernel launch backs off, and the next run captures afresh. Called under
          [graphs.lock]. *)
       let launch_graph ~key exec =
-        match H.Graph.launch exec device.runner with
+        let artifact =
+          Resource_fault_injection.Graph_capture
+            { device_id = device.device_id; routine = name; key = Some key }
+        in
+        match
+          Resource_fault_injection.hit ~artifact Graph_capture_replay;
+          H.Graph.launch exec device.runner
+        with
         | () -> ()
         | exception (H.Hip_error { message; _ } as exn) when is_out_of_memory exn ->
-            Atomic.incr graph_launch_memory_drops;
-            Stdio.eprintf
-              "hip: launching the graph of %s was refused device memory (%s): dropping its exec \
-               and running its segments plainly this time (gh-ocannl-1872)\n\
-               %!"
-              name message;
-            Hashtbl.remove cache key;
-            Queue.filter_inplace order ~f:(fun k -> not (String.equal k key));
-            H.Stream.synchronize device.runner;
-            H.Graph.exec_destroy exec;
-            run_plain ()
+            drop_exec_and_run_plain ~key ~message exec
+        | exception Resource_fault_injection.Simulated_graph_replay_oom message ->
+            drop_exec_and_run_plain ~key ~message exec
       in
-      let capture () =
+      let capture ~key () =
+        let artifact =
+          Resource_fault_injection.Graph_capture
+            { device_id = device.device_id; routine = name; key = Some key }
+        in
         (* RELAXED, not THREAD_LOCAL: GC finalizers (module unloads, buffer frees of dead handles)
            can fire at any allocation point on the capturing thread, and stricter modes make the
            runtime reject such "potentially unsafe" calls mid-capture — with the exception then
            escaping [Gc.finalise] at an arbitrary program point. The finalizers only release dead
            handles, so they are genuinely safe to run concurrently with capture. *)
+        Resource_fault_injection.hit ~artifact Graph_capture_begin;
         H.Graph.begin_capture ~mode:H.Graph.RELAXED device.runner;
         let graph =
           try
             let prior = Stdlib.Domain.DLS.get capturing in
             Stdlib.Domain.DLS.set capturing true;
-            Exn.protect ~f:run_plain ~finally:(fun () -> Stdlib.Domain.DLS.set capturing prior);
+            Exn.protect
+              ~f:(fun () ->
+                Resource_fault_injection.hit ~artifact Graph_capture_launch;
+                run_plain ())
+              ~finally:(fun () -> Stdlib.Domain.DLS.set capturing prior);
+            Resource_fault_injection.hit ~artifact Graph_capture_end;
             H.Graph.end_capture device.runner
           with exn ->
             (* Terminate the capture before propagating, else the stream stays in capture mode. *)
@@ -1657,6 +1723,7 @@ end = struct
            first reserve their local memory (gh-ocannl-1872), and HIP is held to the same shape. *)
         Exn.protect
           ~f:(fun () ->
+            Resource_fault_injection.hit ~artifact Graph_capture_instantiate;
             launch_with_memory_backoff ~verb:"instantiating" ~name:("the graph of " ^ name)
               ~scratch:(lazy (Printf.sprintf "a graph of %d kernels" (List.length tasks)))
               (fun () -> H.Graph.instantiate graph))
@@ -1679,14 +1746,16 @@ end = struct
                         match Hashtbl.find cache key with
                         | Some exec -> launch_graph ~key exec
                         | None -> (
-                            match capture () with
+                            match capture ~key () with
                             | exec ->
+                                Atomic.incr graph_execs_created;
                                 if Queue.length order >= max_cached_graphs then (
                                   let victim = Queue.dequeue_exn order in
                                   (* The evicted exec may still have a pending launch on the
                                      stream. *)
                                   H.Stream.synchronize device.runner;
                                   H.Graph.exec_destroy (Hashtbl.find_exn cache victim);
+                                  Atomic.incr graph_execs_destroyed;
                                   Hashtbl.remove cache victim);
                                 Hashtbl.set cache ~key ~data:exec;
                                 Queue.enqueue order key;
@@ -1702,6 +1771,12 @@ end = struct
                                    (%s); running its segments plainly this time\n\
                                    %!"
                                   name message;
+                                run_plain ()
+                            | exception Resource_fault_injection.Simulated_capture_error message ->
+                                broken := true;
+                                Stdio.eprintf
+                                  "ocannl: disabling HIP graph capture for routine %s (%s)\n%!" name
+                                  message;
                                 run_plain ()
                             | exception H.Hip_error { status; message } ->
                                 (* E.g. capture unsupported on this runtime: fall back to
@@ -1722,6 +1797,9 @@ end = struct
       [
         ("live_streams", [%sexp_of: int] @@ H.Stream.get_total_live_streams ());
         ("live_graph_execs", [%sexp_of: int] @@ live_graph_execs ());
+        ("graph_execs_created", [%sexp_of: int] @@ Atomic.get graph_execs_created);
+        ("graph_execs_destroyed", [%sexp_of: int] @@ Atomic.get graph_execs_destroyed);
+        ("events_recorded", [%sexp_of: int] @@ Atomic.get events_recorded);
         (* gh-ocannl-1872: launches refused device memory, retried and given up on. *)
         ("launch_memory_retries", [%sexp_of: int] @@ Atomic.get launch_memory_retries);
         ("launch_memory_refusals", [%sexp_of: int] @@ Atomic.get launch_memory_refusals);

@@ -183,6 +183,12 @@ let raw_entries =
         "[scanner-refusal:acf79e9d5f580995dafd055521de641f] Context.run";
       ] );
     ("provenance_tag_inventory.ml", []);
+    ( "resource_fault_inventory_scan.ml",
+      [
+        "[scanner-refusal:c85bb67d5d4a65e371321bd39eff4686] derived fault-injection point";
+        "[scanner-refusal:32d44718d7ebdf4c4f7d6d2d289ff1cd] inventory table row";
+        "[scanner-refusal:6cd996e65b0a28170b37d4a74708cfee] every fault-injection point";
+      ] );
     ( "open_node_scan.ml",
       [
         "[scanner-refusal:d7ba33c928dde8cf6b59d769ad3a0b85] does not parse";

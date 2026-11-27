@@ -535,7 +535,10 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         (* No cross-stream writer synchronization needed: multi-streaming was removed
            (gh-ocannl-341). Only one stream exists per device, so there are no concurrent
            cross-stream writes to wait for before this device-to-host copy. *)
-        Resource_fault_injection.hit To_host_before_copy;
+        Resource_fault_injection.hit
+          ~artifact:
+            (Pool { device_id = ctx.device.device_id; pool_id = loc.pool_id; constant = None })
+          To_host_before_copy;
         Backend.to_host ~src:ctx ~src_loc:loc hosted;
         true
     | None -> false
@@ -573,7 +576,10 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
            (gh-ocannl-341). Only one stream exists per device, so there are no concurrent
            cross-stream readers to wait for before this host-to-device upload. *)
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend_intf.buffer_loc), "from host"];
-        Resource_fault_injection.hit From_host_before_copy;
+        Resource_fault_injection.hit
+          ~artifact:
+            (Pool { device_id = ctx.device.device_id; pool_id = dst.pool_id; constant = None })
+          From_host_before_copy;
         Backend.from_host ~dst:ctx ~dst_loc:dst hosted;
         update_writer_event ctx @@ Node tn;
         true
@@ -600,7 +606,9 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
            owner capable of releasing this unreachable fresh pool. Multidev keeps [dev_error] after
            reporting it, so retrying await can deterministically re-raise. *)
         (try
-           Resource_fault_injection.hit Transfer_cleanup_before_await;
+           Resource_fault_injection.hit
+             ~artifact:(Context_handle { device_id = device.device_id })
+             Transfer_cleanup_before_await;
            Backend.await device
          with
         | Backend_intf.Device_wedged _ as wedge ->
@@ -701,9 +709,20 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         (* No zero-init: we are immediately copying from host. *)
         let dst, release = upload_slot ctx tn in
         with_transfer_pool ctx.device ~release ~f:(fun () ->
-            Resource_fault_injection.hit Transfer_pool_allocated;
+            Resource_fault_injection.hit
+              ~artifact:
+                (Pool
+                   {
+                     device_id = ctx.device.device_id;
+                     pool_id = dst.pool_id;
+                     constant = Some false;
+                   })
+              Transfer_pool_allocated;
             [%log "copying", Tn.debug_name tn, "to", (dst : Backend_intf.buffer_loc), "from host"];
-            Resource_fault_injection.hit From_host_before_copy;
+            Resource_fault_injection.hit
+              ~artifact:
+                (Pool { device_id = ctx.device.device_id; pool_id = dst.pool_id; constant = None })
+              From_host_before_copy;
             Backend.from_host ~dst:ctx ~dst_loc:dst hosted;
             update_writer_event ctx @@ Node tn;
             (* The upload may be asynchronous. Keep the fresh allocation inside the unwind guard
@@ -711,7 +730,15 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                escapes [Context.from_host] before the updated context is returned, and no caller can
                ever release [dst]. The outer Context-level await remains necessary for the
                existing-buffer branch. *)
-            Resource_fault_injection.hit From_host_before_await;
+            Resource_fault_injection.hit
+              ~artifact:
+                (Pool
+                   {
+                     device_id = ctx.device.device_id;
+                     pool_id = dst.pool_id;
+                     constant = Some false;
+                   })
+              From_host_before_await;
             Backend.await ctx.device;
             Backend_intf.evolve_with_buffer ctx tn dst)
     | Some _ ->
@@ -829,7 +856,15 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
             (* No zero-init: we are immediately copying from another device. *)
             let d_loc, release = upload_slot dst tn in
             with_transfer_pool dst.device ~release ~f:(fun () ->
-                Resource_fault_injection.hit Transfer_pool_allocated;
+                Resource_fault_injection.hit
+                  ~artifact:
+                    (Pool
+                       {
+                         device_id = dst.device.device_id;
+                         pool_id = d_loc.pool_id;
+                         constant = Some false;
+                       })
+                  Transfer_pool_allocated;
                 Backend.(
                   device_to_device tn ~into_merge_buffer:No ~dst_loc:(Some d_loc) ~dst
                     ~src_loc:s_loc ~src);
@@ -843,7 +878,15 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                   Backend.get_name dst.device];
                 (* Keep the destination guarded until asynchronous copy errors have surfaced. A
                    failure must restore an arena bump before any owner is published. *)
-                Resource_fault_injection.hit Init_from_device_before_await;
+                Resource_fault_injection.hit
+                  ~artifact:
+                    (Pool
+                       {
+                         device_id = dst.device.device_id;
+                         pool_id = d_loc.pool_id;
+                         constant = Some false;
+                       })
+                  Init_from_device_before_await;
                 Backend.await dst.device;
                 Backend_intf.evolve_with_buffer dst tn d_loc))
 
@@ -920,7 +963,10 @@ let free_pools_continuing ?before_free device ~free_pool pool_ids =
   let first_failure =
     List.fold pool_ids ~init:None ~f:(fun failure pool_id ->
         match
-          Option.iter before_free ~f:Resource_fault_injection.hit;
+          Option.iter before_free ~f:(fun point ->
+              Resource_fault_injection.hit
+                ~artifact:(Pool { device_id = device.device_id; pool_id; constant = None })
+                point);
           free_and_forget_pool device ~free_pool pool_id
         with
         | () -> failure
@@ -955,6 +1001,7 @@ struct
   type code = { lowered : Low_level.optimized; proc : Backend.procedure } [@@deriving sexp_of]
 
   type code_batch = {
+    names : string array;
     procs : Backend.procedure array;
     bindings : Indexing.unit_bindings;
         (** Kept for {!link_batch}: the batch's procedures share one set of static-index refs. *)
@@ -967,7 +1014,7 @@ struct
 
   let compile_batch ~names bindings lowereds : code_batch =
     let procs = compile_batch ~names bindings lowereds in
-    { procs; bindings }
+    { names; procs; bindings }
 
   (* The static-index launch parameters the CALLER writes through, and the snapshot that carries a
      dispatch's values to the kernel's own refs.
@@ -1032,8 +1079,12 @@ struct
        fissioned routine are dispatched by a single [Context.run], so they all carry the same
        values. *)
     let bindings, snapshot = caller_bindings_and_snapshot kernel_bindings in
+    let count = Array.length code_batch.procs in
     let schedules =
-      Array.map code_batch.procs ~f:(fun proc ->
+      Array.mapi code_batch.procs ~f:(fun index proc ->
+          Resource_fault_injection.hit
+            ~artifact:(Routine_segment { routine = code_batch.names.(index); index; count })
+            Link_batch_before_segment;
           let bindings', to_schedule =
             link_compiled ~lowered_bindings:kernel_bindings ~merge_buffer ~resolve ~runner_label
               ctx_buffers proc
@@ -1615,7 +1666,9 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
     List.iteri pools ~f:(fun index (size_in_bytes, alignment) ->
         let pool_id = pool_ids.(index) in
         (try
-           Resource_fault_injection.hit Delta_pool_before_allocate;
+           Resource_fault_injection.hit
+             ~artifact:(Pool { device_id = device.device_id; pool_id; constant = Some constant })
+             Delta_pool_before_allocate;
            alloc_pool device ~pool_id ~size_in_bytes ~alignment
          with Schedule_outcome.Device_memory_exhausted r when count > 1 || !(tx.held) > 0 ->
            let backtrace = Stdlib.Printexc.get_raw_backtrace () in
@@ -1640,7 +1693,9 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
            differ: a working pool belongs to the context and dies with it, a constant pool is
            deduped per device and outlives it. *)
         Alloc_census.record_pool ~device_id:device.device_id ~pool_id ~constant ~size_in_bytes;
-        Resource_fault_injection.hit Delta_pool_allocated);
+        Resource_fault_injection.hit
+          ~artifact:(Pool { device_id = device.device_id; pool_id; constant = Some constant })
+          Delta_pool_allocated);
     pool_ids
 
   let allocate_group_pools tx device (gl : group_layout) : int array =
@@ -1990,9 +2045,9 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
   (* Runs [f] on a freshly allocated delta, freeing that delta if [f] raises. Everything after the
      allocation belongs inside: a failure past [make_child] discards the child too, so its pools are
      just as unreachable as if the child had never existed. *)
-  let with_delta context ctx_buffers ~f =
+  let with_delta ~name context ctx_buffers ~f =
     match
-      Resource_fault_injection.hit Link_after_delta;
+      Resource_fault_injection.hit ~artifact:(Routine { name }) Link_after_delta;
       f ()
     with
     | result -> result
@@ -2019,7 +2074,7 @@ module Raise_backend (Raw_device : Lowered_backend) : Backend = struct
           allocate_delta context ~floor:code.floor ~name:code.name ~alias_spans:code.alias_spans
             code.lowered)
     in
-    with_delta context ctx_buffers ~f:(fun () ->
+    with_delta ~name:code.name context ctx_buffers ~f:(fun () ->
         (* gh-ocannl-489: a routine reading a node whose buffer an earlier routine of this lineage
            aliased would read clobbered values -- fail at link time, before any schedule runs.
            Writes (outputs) are allowed: the aliasing routine rewrites everything it reads on each
@@ -2125,7 +2180,9 @@ let finalize ?(on_retire = fun (_ : retired_location) -> ()) (type dev runner ev
      idempotent too, but relying on that would still call a raw deallocator twice. *)
   let cleanup () =
     Option.iter Backend.free_pool ~f:(fun free_pool ->
-        Resource_fault_injection.hit Finalize_before_await;
+        Resource_fault_injection.hit
+          ~artifact:(Context_handle { device_id = ctx.device.device_id })
+          Finalize_before_await;
         Backend.await ctx.device;
         let owners = ctx.upload_arenas.pool_owners in
         let pools =
@@ -2162,7 +2219,10 @@ let finalize ?(on_retire = fun (_ : retired_location) -> ()) (type dev runner ev
                               then on_retire (Location { pool_id; offset = t.tenant_offset }));
                           a.tenants <- kept)))
                   else (
-                    Resource_fault_injection.hit Finalize_before_free;
+                    Resource_fault_injection.hit
+                      ~artifact:
+                        (Pool { device_id = ctx.device.device_id; pool_id; constant = Some false })
+                      Finalize_before_free;
                     free_and_forget_pool ctx.device ~free_pool pool_id;
                     on_retire (Pool pool_id);
                     Hashtbl.remove owners pool_id;

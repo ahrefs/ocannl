@@ -1008,6 +1008,13 @@ val global_debug_info : t -> Sexp.t
 (** The context's backend's process-wide debug information ([Sexp.message]-shaped, backend-specific:
     e.g. the CUDA and HIP backends' [live_streams] and [live_graph_execs]). *)
 
+type merge_slab_state = { has_slab : bool; has_location : bool; capacity : int; has_writer : bool }
+[@@deriving sexp_of, equal]
+
+val merge_slab_state : t -> merge_slab_state
+(** Inspects the four ownership claims of the context's device's reserved merge slab: private table
+    claim, published location, recorded byte capacity, and active writer marker. *)
+
 val release : t -> unit
 (** Eagerly frees the device buffers this context owns — the pools holding nodes it allocated that
     its parent does not have, and that are not per-device constants. Idempotent (a second call is a

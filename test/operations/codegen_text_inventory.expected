@@ -891,6 +891,7 @@ test/operations/gather_table_placement.ml [through Ll_test.execute; run by @test
 test/operations/gpu_lane_reduction.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-gpu_lane_reduction]
 test/operations/gpu_packed_prec.ml [through Ll_test.execute; run by @test/operations/runtest-gpu_packed_prec]
 test/operations/gpu_parallel_prefix.ml [through Ll_test.execute; run by @test/operations/runtest-gpu_parallel_prefix]
+test/operations/gpu_resource_fault_injection.ml [prelowered compile; run by @test/operations/runtest-gpu_resource_fault_injection]
 test/operations/gpu_serial_lanes.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-gpu_serial_lanes]
 test/operations/gpu_small_leading_axis.ml [through Ll_test.execute; run by @test/operations/runtest-gpu_small_leading_axis]
 test/operations/half_float_power.ml [through Ll_test.execute; run by @test/operations/runtest-half_float_power]
@@ -1050,6 +1051,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-gpu_lane_reduction
 @test/operations/runtest-gpu_packed_prec
 @test/operations/runtest-gpu_parallel_prefix
+@test/operations/runtest-gpu_resource_fault_injection
 @test/operations/runtest-gpu_serial_lanes
 @test/operations/runtest-gpu_small_leading_axis
 @test/operations/runtest-half_float_power

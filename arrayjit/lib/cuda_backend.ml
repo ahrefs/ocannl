@@ -77,18 +77,25 @@ module Slab = struct
      allocation granules (~2 MiB), which hides sub-granule effects such as the liveness planner's
      arena savings (gh-ocannl-489) and counts other processes' memory. *)
   let pools : (int * int, buffer_ptr * int) Hashtbl.Poly.t = Hashtbl.Poly.create ()
+  let on_invalidate_merge_slab : (device -> unit) ref = ref (fun _ -> ())
 
   let alloc_pool ?mode:_ (device : device) ~pool_id ~size_in_bytes ~alignment:_ =
     set_ctx device.dev.primary_context;
     let key = (device.device_id, pool_id) in
     let size_in_bytes = max 1 size_in_bytes in
     (* Free-first replacement avoids requiring both merge slabs to fit. Invalidate the complete
-       ownership transaction before the fallible free/allocation sequence. *)
+       ownership transaction (including any cached graphs referencing the old merge slab) before the
+       fallible free/allocation sequence. *)
     Option.iter (Hashtbl.find pools key) ~f:(fun (old, _) ->
-        if Int.equal pool_id merge_buffer_pool_id then
-          invalidate_merge_slab device ~remove_slab_claim:(fun () -> Hashtbl.remove pools key)
+        if Int.equal pool_id merge_buffer_pool_id then (
+          !on_invalidate_merge_slab device;
+          invalidate_merge_slab device ~remove_slab_claim:(fun () -> Hashtbl.remove pools key))
         else Hashtbl.remove pools key;
         Cu.Deviceptr.mem_free old);
+    if Int.equal pool_id merge_buffer_pool_id then
+      Resource_fault_injection.hit
+        ~artifact:(Merge_slab { device_id = device.device_id; size_in_bytes })
+        Merge_slab_before_allocate;
     let ptr =
       try Cu.Deviceptr.mem_alloc ~size_in_bytes
       with
@@ -120,6 +127,8 @@ module Slab = struct
         let key = (device.device_id, pool_id) in
         Option.iter (Hashtbl.find pools key) ~f:(fun (ptr, _) -> Cu.Deviceptr.mem_free ptr);
         Hashtbl.remove pools key)
+
+  let has_pool (device : device) ~pool_id = Hashtbl.mem pools (device.device_id, pool_id)
 
   let resolve_pool (device : device) { pool_id; offset = _ } : buffer_ptr =
     (* Return the slab base. The byte offset is NOT folded into the handle here; callers apply it
@@ -194,8 +203,10 @@ end = struct
   let is_done event = Cu.Delimited_event.query event.raw
   let will_wait_for context event = Cu.Delimited_event.wait context.device.runner event.raw
   let sync event = Cu.Delimited_event.synchronize event.raw
+  let events_recorded = Atomic.make 0
 
   let all_work (device : device) =
+    Atomic.incr events_recorded;
     { device_id = device.device_id; raw = Cu.Delimited_event.record device.runner }
 
   (* Driver initialization and device discovery are lazy: the singleton [Impl] module initializes at
@@ -251,7 +262,7 @@ end = struct
   (* The merge buffer is the device's reserved single-tenant pool (id [merge_buffer_pool_id]); grow
      it in place when a larger node arrives ([Slab.alloc_pool] overwrites the reserved entry). *)
   let opt_alloc_merge_buffer ~size_in_bytes (device : device) : unit =
-    if device.merge_buffer_capacity < size_in_bytes then
+    if device.merge_buffer_capacity < size_in_bytes || Option.is_none !(device.merge_buffer) then
       Slab.alloc_pool device ~pool_id:merge_buffer_pool_id ~size_in_bytes ~alignment:1
 
   let%track4_sexp finalize_device (device : device) =
@@ -1721,14 +1732,18 @@ end = struct
                   launch_with_memory_backoff ~verb:"allocating scratch for" ~device ~name
                     ~reservation:(Scratch size_in_bytes) allocate
             in
+            let scratch_artifact =
+              Resource_fault_injection.Scratch_frame
+                { device_id = device.device_id; bytes = size_in_bytes }
+            in
             let free () =
               S.mem_free device.runner ptr;
-              Resource_fault_injection.hit Cuda_scratch_freed
+              Resource_fault_injection.hit ~artifact:scratch_artifact Cuda_scratch_freed
             in
             (* CUDA submits on the caller's domain. The hooks count successful driver calls,
                including construction of graph nodes, before an injected failure can escape. *)
             match
-              Resource_fault_injection.hit Cuda_scratch_allocated;
+              Resource_fault_injection.hit ~artifact:scratch_artifact Cuda_scratch_allocated;
               launch (args @ [ S.Tensor ptr ])
             with
             | () -> free ()
@@ -1784,8 +1799,12 @@ end = struct
     let ctx = ctx_of prior_context in
     (* Each distinct program's module is loaded once per context ([module_of]); every task keeps its
        own kernel's module alive through its [context_lifetime], as before. *)
+    let count = Array.length code_batch.kparams_and_names in
     let procs =
       Array.mapi code_batch.kparams_and_names ~f:(fun i (kparams, name, launch) ->
+          Resource_fault_injection.hit
+            ~artifact:(Routine_segment { routine = name; index = i; count })
+            Link_batch_before_segment;
           let program, symbol = code_batch.programs.(i) in
           let run_module = module_of prior_context program in
           set_ctx ctx;
@@ -1802,6 +1821,8 @@ end = struct
      dropped. *)
   type graph_cache = {
     graphs_device : device;
+    routine_name : string;
+    uses_merge_buffer : bool;
     cache : (string, Cu.Graph.exec) Hashtbl.t;
     order : string Queue.t;
     lock : Stdlib.Mutex.t;
@@ -1810,6 +1831,8 @@ end = struct
   }
 
   let graph_caches : graph_cache Backend_impl.Weak_registry.t = Backend_impl.Weak_registry.create ()
+  let graph_execs_created = Atomic.make 0
+  let graph_execs_destroyed = Atomic.make 0
 
   let live_graph_execs () =
     List.sum
@@ -1833,7 +1856,23 @@ end = struct
             Queue.clear g.order;
             execs))
     in
-    Backend_impl.attempt_each (List.map execs ~f:(fun exec () -> Cu.Graph.exec_destroy exec))
+    Backend_impl.attempt_each
+      (List.map execs ~f:(fun exec () ->
+           Resource_fault_injection.hit
+             ~artifact:
+               (Graph_capture
+                  { device_id = g.graphs_device.device_id; routine = g.routine_name; key = None })
+             Graph_exec_before_destroy;
+           Cu.Graph.exec_destroy exec;
+           Atomic.incr graph_execs_destroyed))
+
+  let () =
+    Slab.on_invalidate_merge_slab :=
+      fun device ->
+        Backend_impl.Weak_registry.live graph_caches
+        |> List.filter ~f:(fun g -> g.uses_merge_buffer && phys_equal g.graphs_device device)
+        |> List.map ~f:(fun g () -> destroy_graphs g)
+        |> Backend_impl.attempt_each
 
   (* gh-ocannl-1445: destroy every cached exec still alive at process exit, per device once its
      stream is idle, under the one [exit_stream_teardown_timeout] bound HIP's stream teardown uses
@@ -1922,6 +1961,8 @@ end = struct
       let graphs =
         {
           graphs_device = device;
+          routine_name = name;
+          uses_merge_buffer;
           cache = Hashtbl.create (module String);
           order = Queue.create ();
           lock = Stdlib.Mutex.create ();
@@ -1935,6 +1976,21 @@ end = struct
          the same kernels, so one value serves the routine, for the instantiation's back-off and the
          reservation's reset after a graph launch. *)
       let graph_depot = ref 0 in
+      let drop_exec_and_run_plain ~key ~message exec =
+        Atomic.incr graph_launch_memory_drops;
+        Stdio.eprintf
+          "cuda: launching the graph of %s was refused device memory (%s): dropping its exec and \
+           running its segments plainly this time (gh-ocannl-1872)\n\
+           %!"
+          name message;
+        Cu.Context.set_limit Cu.Context.STACK_SIZE device.dev.stack_size_baseline;
+        Hashtbl.remove cache key;
+        Queue.filter_inplace order ~f:(fun k -> not (String.equal k key));
+        Cu.Stream.synchronize device.runner;
+        Cu.Graph.exec_destroy exec;
+        Atomic.incr graph_execs_destroyed;
+        run_plain ()
+      in
       (* A graph launch refused device memory is NEVER retried on its exec (gh-ocannl-1872).
          Measured on rog-nv under a neighbour's hold: after a refused [cuGraphLaunch] of a cached
          exec, the retry was accepted although the memory was still held, and the replay then
@@ -1945,21 +2001,19 @@ end = struct
          refusal surfaces as its own -- and the next run captures afresh. Called under
          [graphs.lock]. *)
       let launch_graph ~key exec =
-        match Cu.Graph.launch exec device.runner with
+        let artifact =
+          Resource_fault_injection.Graph_capture
+            { device_id = device.device_id; routine = name; key = Some key }
+        in
+        match
+          Resource_fault_injection.hit ~artifact Graph_capture_replay;
+          Cu.Graph.launch exec device.runner
+        with
         | () -> bound_local_memory ~device ~depot:!graph_depot
         | exception (Cu.Cuda_error { message; _ } as exn) when is_out_of_memory exn ->
-            Atomic.incr graph_launch_memory_drops;
-            Stdio.eprintf
-              "cuda: launching the graph of %s was refused device memory (%s): dropping its exec \
-               and running its segments plainly this time (gh-ocannl-1872)\n\
-               %!"
-              name message;
-            Cu.Context.set_limit Cu.Context.STACK_SIZE device.dev.stack_size_baseline;
-            Hashtbl.remove cache key;
-            Queue.filter_inplace order ~f:(fun k -> not (String.equal k key));
-            Cu.Stream.synchronize device.runner;
-            Cu.Graph.exec_destroy exec;
-            run_plain ()
+            drop_exec_and_run_plain ~key ~message exec
+        | exception Resource_fault_injection.Simulated_graph_replay_oom message ->
+            drop_exec_and_run_plain ~key ~message exec
       in
       let current_key () =
         let idx = List.map bindings ~f:(fun (_, r) -> Int.to_string !r) in
@@ -1973,20 +2027,30 @@ end = struct
         in
         String.concat ~sep:";" (idx @ merge)
       in
-      let capture () =
+      let capture ~key () =
+        let artifact =
+          Resource_fault_injection.Graph_capture
+            { device_id = device.device_id; routine = name; key = Some key }
+        in
         (* RELAXED, not THREAD_LOCAL: GC finalizers (module unloads, buffer frees of dead handles)
            can fire at any allocation point on the capturing thread, and stricter modes make the
            driver reject such "potentially unsafe" calls mid-capture — with the exception then
            escaping [Gc.finalise] at an arbitrary program point. The finalizers only release dead
            handles, so they are genuinely safe to run concurrently with capture. *)
+        Resource_fault_injection.hit ~artifact Graph_capture_begin;
         Cu.Graph.begin_capture ~mode:Cu.Graph.RELAXED device.runner;
         let graph =
           try
             let largest = ref 0 in
             let prior = Stdlib.Domain.DLS.get capture_depot in
             Stdlib.Domain.DLS.set capture_depot (Some largest);
-            Exn.protect ~f:run_plain ~finally:(fun () -> Stdlib.Domain.DLS.set capture_depot prior);
+            Exn.protect
+              ~f:(fun () ->
+                Resource_fault_injection.hit ~artifact Graph_capture_launch;
+                run_plain ())
+              ~finally:(fun () -> Stdlib.Domain.DLS.set capture_depot prior);
             graph_depot := max !graph_depot !largest;
+            Resource_fault_injection.hit ~artifact Graph_capture_end;
             Cu.Graph.end_capture device.runner
           with exn ->
             (* Terminate the capture before propagating, else the stream stays in capture mode. *)
@@ -1998,6 +2062,7 @@ end = struct
            launch), so it gets the launch's back-off too. *)
         Exn.protect
           ~f:(fun () ->
+            Resource_fault_injection.hit ~artifact Graph_capture_instantiate;
             launch_with_memory_backoff ~verb:"instantiating" ~device ~name:("the graph of " ^ name)
               ~reservation:(Depot (lazy !graph_depot))
               (fun () -> Cu.Graph.instantiate graph))
@@ -2020,14 +2085,16 @@ end = struct
                         match Hashtbl.find cache key with
                         | Some exec -> launch_graph ~key exec
                         | None -> (
-                            match capture () with
+                            match capture ~key () with
                             | exec ->
+                                Atomic.incr graph_execs_created;
                                 if Queue.length order >= max_cached_graphs then (
                                   let victim = Queue.dequeue_exn order in
                                   (* The evicted exec may still have a pending launch on the
                                      stream. *)
                                   Cu.Stream.synchronize device.runner;
                                   Cu.Graph.exec_destroy (Hashtbl.find_exn cache victim);
+                                  Atomic.incr graph_execs_destroyed;
                                   Hashtbl.remove cache victim);
                                 Hashtbl.set cache ~key ~data:exec;
                                 Queue.enqueue order key;
@@ -2042,6 +2109,12 @@ end = struct
                                   "ocannl: the CUDA graph of routine %s was refused device memory \
                                    (%s); running its segments plainly this time\n\
                                    %!"
+                                  name message;
+                                run_plain ()
+                            | exception Resource_fault_injection.Simulated_capture_error message ->
+                                broken := true;
+                                Stdio.eprintf
+                                  "ocannl: disabling CUDA graph capture for routine %s (%s)\n%!"
                                   name message;
                                 run_plain ()
                             | exception Cu.Cuda_error { status; message } ->
@@ -2123,6 +2196,9 @@ end = struct
       [
         ("live_streams", [%sexp_of: int] @@ Cu.Stream.get_total_live_streams ());
         ("live_graph_execs", [%sexp_of: int] @@ live_graph_execs ());
+        ("graph_execs_created", [%sexp_of: int] @@ Atomic.get graph_execs_created);
+        ("graph_execs_destroyed", [%sexp_of: int] @@ Atomic.get graph_execs_destroyed);
+        ("events_recorded", [%sexp_of: int] @@ Atomic.get events_recorded);
         (* gh-ocannl-1773: launches refused device memory, retried and given up on. *)
         ("launch_memory_retries", [%sexp_of: int] @@ Atomic.get launch_memory_retries);
         ("launch_memory_refusals", [%sexp_of: int] @@ Atomic.get launch_memory_refusals);

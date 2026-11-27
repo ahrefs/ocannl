@@ -43,12 +43,12 @@ type turn = Main | Spawned
    before the other domain's reads. *)
 let running : turn option Stdlib.Atomic.t = Stdlib.Atomic.make None
 
-type event = { turn : turn option; point : FI.point }
+type event = { turn : turn option; ev : FI.event }
 
-let recorder events point = events := { turn = Stdlib.Atomic.get running; point } :: !events
+let recorder events ev = events := { turn = Stdlib.Atomic.get running; ev } :: !events
 
 let points events =
-  List.map events ~f:(fun e -> e.point) |> List.dedup_and_sort ~compare:Poly.compare
+  List.map events ~f:(fun e -> e.ev.point) |> List.dedup_and_sort ~compare:Poly.compare
 
 let clean_dir dir =
   if Stdlib.Sys.file_exists dir && Stdlib.Sys.is_directory dir then (
@@ -133,7 +133,7 @@ let () =
         multidev_ok,
         multidev_events,
         multidev_backend ) =
-    FI.with_callback (recorder main_events) ~f:(fun () ->
+    FI.with_event_callback (recorder main_events) ~f:(fun () ->
         let first_ok = scenario ~who:Main ~root:cc ~name:"rfid_main" main_fixture in
         let spawned =
           Stdlib.Domain.spawn (fun () ->
@@ -141,7 +141,7 @@ let () =
               let uninstalled_ok =
                 scenario ~who:Spawned ~root:cc ~name:"rfid_spawned_bare" spawned_fixture
               in
-              FI.with_callback (recorder spawned_events) ~f:(fun () ->
+              FI.with_event_callback (recorder spawned_events) ~f:(fun () ->
                   raise_signal spawned_ready;
                   await_signal spawned_turn;
                   ( uninstalled_ok,
@@ -161,7 +161,7 @@ let () =
         let multidev_events = ref [] in
         let multidev_backend = ref "" in
         let multidev_ok =
-          FI.with_callback (recorder multidev_events) ~f:(fun () ->
+          FI.with_event_callback (recorder multidev_events) ~f:(fun () ->
               scenario ~who:Main
                 ~root:(fun () ->
                   let ctx = Context.cpu ~threads:2 () in
@@ -195,4 +195,7 @@ let () =
   p "spawned domain: its callback saw every point the main domain's did"
     (List.equal FI.equal_point (points spawned_events) (points main_events));
   p "multidev_cc: the calling domain's callback saw every point the cc scenario reaches"
-    (List.equal FI.equal_point (points multidev_events) (points main_events))
+    (List.equal FI.equal_point (points multidev_events) (points main_events));
+  p_all "every domain event carries its point's derived ownership phase"
+    (main_events @ spawned_events @ multidev_events)
+    ~f:(fun e -> FI.equal_ownership_phase e.ev.phase (FI.phase_of_point e.ev.point))

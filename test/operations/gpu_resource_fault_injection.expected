@@ -1,0 +1,21 @@
+merge slab: initial fill commits all four claims: true
+merge slab: failed grow invalidates all four claims: true
+merge slab: retry restores all four claims at grown capacity: true
+merge slab: consumer after retry computes exact values: true
+partial-batch link failure hits segment 1 of 2 and frees whole delta: true
+partial-batch control runs and computes exact values: true
+partial-batch control releases cleanly with zero live pool growth: true
+metal: over-limit buffer allocation raises typed Device_memory_exhausted with zero leak: true
+metal: exact pool, command-buffer, event, and module teardown counts under release failure and retry: true
+gpu graph capture: propagating failure at begin leaves stream ready and retry captures once: true
+gpu graph capture: driver capture error at begin falls back cleanly to plain execution: true
+gpu graph capture: propagating failure at launch leaves stream ready and retry captures once: true
+gpu graph capture: driver capture error at launch falls back cleanly to plain execution: true
+gpu graph capture: propagating failure at end leaves stream ready and retry captures once: true
+gpu graph capture: driver capture error at end falls back cleanly to plain execution: true
+gpu graph capture: propagating failure at instantiate leaves stream ready and retry captures once: true
+gpu graph capture: driver capture error at instantiate falls back cleanly to plain execution: true
+gpu graph capture: RELAXED capture survives GC finalizers firing mid-capture: true
+gpu graph capture: replay OOM drops and destroys exec once, falls back plainly, and recaptures: true
+gpu graph invalidation: merge-pool growth destroys old cached graph once and recapture works: true
+gpu teardown: partial Graph_exec_before_destroy still destroys remaining execs with no double-destroy and exact ownership counts: true

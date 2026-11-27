@@ -88,8 +88,11 @@ module Device_stream = Backend_impl.Device_types_ll (Device_config)
 (* Bring types into scope *)
 open Device_config
 
-(* Manual tracking for allocated memory *)
+(* Manual tracking for allocated memory and ownership/teardown counters. *)
 let allocated_memory = Atomic.make 0
+let command_buffers_committed = Atomic.make 0
+let command_buffers_reaped = Atomic.make 0
+let events_signaled = Atomic.make 0
 
 let track_allocation (buffer : Me.Buffer.t) =
   (* Relying on ARC + finalizer on the payload record *)
@@ -128,6 +131,7 @@ let track_allocation (buffer : Me.Buffer.t) =
    device's state, not the waited-for work's, and stays unclassified. *)
 let commit_tracked ?(runs_kernels = false) runner ~what buffer =
   Me.CommandBuffer.commit buffer;
+  Atomic.incr command_buffers_committed;
   let seq = runner.committed + 1 in
   runner.committed <- seq;
   runner.in_flight <- { seq; what; runs_kernels; buffer } :: runner.in_flight;
@@ -153,7 +157,9 @@ let rec reap ?deadline runner =
         in
         Me.CommandBuffer.Status.(
           match status with
-          | Completed -> false
+          | Completed ->
+              Atomic.incr command_buffers_reaped;
+              false
           | Error ->
               oldest_failed := Some (tracked, injected);
               true
@@ -269,6 +275,7 @@ let sync_until event ~clock ~deadline =
 let commit_signalling runner ~what buffer =
   let value = Unsigned.ULLong.succ runner.counter in
   runner.counter <- value;
+  Atomic.incr events_signaled;
   Me.CommandBuffer.encode_signal_event buffer (Me.SharedEvent.super runner.event) value;
   let seq = commit_tracked runner ~what buffer in
   { shared = runner.event; value; seq; owner = runner }
@@ -293,20 +300,62 @@ module Slab = struct
   type buffer_ptr = Me.Buffer.t
 
   let pools : (int * int, buffer_ptr) Hashtbl.Poly.t = Hashtbl.Poly.create ()
+  let pools_allocated = Atomic.make 0
+  let pools_freed = Atomic.make 0
 
   let alloc_pool ?mode:_ (device : device) ~pool_id ~size_in_bytes ~alignment:_ =
+    let key = (device.device_id, pool_id) in
+    let size_in_bytes = max 1 size_in_bytes in
+    (* Free-first replacement avoids holding old and new merge slabs simultaneously. Invalidate the
+       complete ownership transaction before the fallible allocation sequence, matching CUDA/HIP and
+       Make_slab. *)
+    if Hashtbl.mem pools key then (
+      if Int.equal pool_id merge_buffer_pool_id then
+        invalidate_merge_slab device ~remove_slab_claim:(fun () -> Hashtbl.remove pools key)
+      else Hashtbl.remove pools key;
+      Atomic.incr pools_freed);
+    if Int.equal pool_id merge_buffer_pool_id then
+      Resource_fault_injection.hit
+        ~artifact:(Merge_slab { device_id = device.device_id; size_in_bytes })
+        Merge_slab_before_allocate;
     let buffer =
-      Me.Buffer.on_device device.dev ~length:(max 1 size_in_bytes) shared_resource_options
+      try Me.Buffer.on_device device.dev ~length:size_in_bytes shared_resource_options
+      with Failure msg when String.is_substring msg ~substring:"newBufferWithLength:options:" ->
+        (* ocaml-metal raises Failure when newBufferWithLength:options: returns nil (e.g. length
+           past maxBufferLength or memory pressure). Translate to the backend-independent typed
+           refusal so probes and the tuner classify it like CUDA/HIP OOM. *)
+        let free =
+          try
+            let attrs = Me.Device.get_attributes device.dev in
+            let max_ws = Unsigned.ULLong.to_int attrs.recommended_max_working_set_size in
+            let used = Atomic.get allocated_memory in
+            if max_ws > 0 then Some (Int.max 0 (max_ws - used)) else None
+          with _ -> None
+        in
+        raise
+          (Schedule_outcome.Device_memory_exhausted
+             { backend = Device_config.name; requested = size_in_bytes; free; detail = msg })
     in
     track_allocation buffer;
-    Hashtbl.set pools ~key:(device.device_id, pool_id) ~data:buffer
+    Atomic.incr pools_allocated;
+    if Int.equal pool_id merge_buffer_pool_id then
+      commit_merge_slab device ~size_in_bytes ~install_slab_claim:(fun () ->
+          Hashtbl.set pools ~key ~data:buffer)
+    else Hashtbl.set pools ~key ~data:buffer
 
   (* Rely on ARC and the finalizer attached in track_allocation for the actual reclamation, but
      still drop the private table entry on finalization so the strong reference is released
      (otherwise ARC can never reclaim a context's tnode buffers). Re-allocating a pool also
      overwrites the entry. *)
   let free_pool =
-    Some (fun (device : device) ~pool_id -> Hashtbl.remove pools (device.device_id, pool_id))
+    Some
+      (fun (device : device) ~pool_id ->
+        let key = (device.device_id, pool_id) in
+        if Hashtbl.mem pools key then (
+          Hashtbl.remove pools key;
+          Atomic.incr pools_freed))
+
+  let has_pool (device : device) ~pool_id = Hashtbl.mem pools (device.device_id, pool_id)
 
   (* Every range filled by one blit pass in one command buffer, waited for once (gh-ocannl-1675): a
      command buffer per range waited for a GPU round trip each, about 0.5 ms on the M4 Max, which
@@ -744,7 +793,17 @@ module Impl = struct
     in
     fun () -> { (Lazy.force limits) with Backend_intf.codegen_tag = codegen_tag () }
 
-  let get_global_debug_info () = Sexp.Atom "Metal global debug info NYI"
+  let get_global_debug_info () =
+    Sexp.message "metal_global_debug"
+      [
+        ("live_pools", [%sexp_of: int] @@ Hashtbl.length Slab.pools);
+        ("pools_allocated", [%sexp_of: int] @@ Atomic.get Slab.pools_allocated);
+        ("pools_freed", [%sexp_of: int] @@ Atomic.get Slab.pools_freed);
+        ("live_stream_logs", [%sexp_of: int] @@ Hashtbl.length stream_logs);
+        ("command_buffers_committed", [%sexp_of: int] @@ Atomic.get command_buffers_committed);
+        ("command_buffers_reaped", [%sexp_of: int] @@ Atomic.get command_buffers_reaped);
+        ("events_signaled", [%sexp_of: int] @@ Atomic.get events_signaled);
+      ]
 
   let get_debug_info device =
     (* The captured shader logs wait C-side until [await] drains them; counting them would drain
@@ -785,10 +844,8 @@ module Impl = struct
      it in place when a larger node arrives ([Slab.alloc_pool] overwrites the reserved entry). The
      merge buffer holds a copy of [tn], so it inherits [tn]'s storage-mode classification. *)
   let opt_alloc_merge_buffer ?mode ~size_in_bytes (device : device) : unit =
-    if device.merge_buffer_capacity < size_in_bytes then (
-      Slab.alloc_pool ?mode device ~pool_id:merge_buffer_pool_id ~size_in_bytes ~alignment:1;
-      device.merge_buffer_capacity <- size_in_bytes);
-    device.merge_buffer := Some { pool_id = merge_buffer_pool_id; offset = 0 }
+    if device.merge_buffer_capacity < size_in_bytes || Option.is_none !(device.merge_buffer) then
+      Slab.alloc_pool ?mode device ~pool_id:merge_buffer_pool_id ~size_in_bytes ~alignment:1
 
   let device_to_device tn ~into_merge_buffer ~dst_loc ~dst ~src_loc ~src =
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
@@ -1955,7 +2012,11 @@ module Impl = struct
     (* The kernels this library compiles, counted where Metal's compiler runs (gh-ocannl-1314):
        [Compile_driver] counted them as rendered only. *)
     Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length routine_names);
-    try Me.Library.on_device device ~source options
+    try
+      let lib = Me.Library.on_device device ~source options in
+      Alloc_census.count_module_loaded ();
+      Stdlib.Gc.finalise (fun _ -> Alloc_census.count_module_unloaded ()) lib;
+      lib
     with Failure msg ->
       let options_rendered = Compiler_options.render_metal option_state in
       let exn =
@@ -2510,9 +2571,13 @@ module Impl = struct
       List.map (Indexing.bound_symbols code_batch.bindings) ~f:(fun s ->
           (s, Indexing.fresh_launch_param ()))
     in
+    let count = Array.length code_batch.funcs in
     let tasks =
-      Array.map2_exn code_batch.funcs resolved
-        ~f:(fun (func_name, kparams, launch) (program, symbol) ->
+      Array.mapi code_batch.funcs ~f:(fun index (func_name, kparams, launch) ->
+          Resource_fault_injection.hit
+            ~artifact:(Routine_segment { routine = func_name; index; count })
+            Link_batch_before_segment;
+          let program, symbol = resolved.(index) in
           link_proc ~prior_context ~program ~symbol ~func_name ~kparams ~launch ~lowered_bindings
             ~ctx_buffers)
     in

@@ -67,3 +67,21 @@ cache-store retry commits the replacement: true
 cache-replay injection becomes an honest miss: true
 cache-replay control reads the committed replacement: true
 corrupt cache replay is an honest miss: true
+every traced fault event carries its point's derived ownership phase: true
+traced events identify the same pool id from delta allocation to finalize free: true
+traced events identify routine and cache-file artifacts: true
+sticky from-host await latches and fails cleanup await persistently: true
+sticky from-host await still frees the unreachable fresh pool exactly once: true
+sticky init-from-device await latches through cleanup await and frees its fresh pool once: true
+sticky finalize await on cc: repeated retries raise and commit nothing while latched: true
+sticky finalize await on cc: clearing the latch lets retry release exactly once: true
+sticky finalize await on multidev_cc: repeated retries raise and commit nothing while latched: true
+sticky finalize await on multidev_cc: clearing the latch lets retry release exactly once: true
+partial-batch link failure fired on segment 1 of 2: true
+partial-batch link failure freed the whole delta with zero live growth: true
+partial-batch control links and computes exact values: true
+partial-batch control releases cleanly with zero live growth: true
+merge slab holds all four claims after initial fill on cc: true
+failed merge-slab grow invalidates all four claims on cc: true
+merge-slab retry restores all four claims with grown capacity on cc: true
+merge-slab retry consumer computes exact values on cc: true

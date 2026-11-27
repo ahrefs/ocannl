@@ -164,6 +164,10 @@ module Make_slab (Device_types : Device_types) (Raw : No_device_buffer_and_copyi
               invalidate_merge_slab device ~remove_slab_claim:(fun () -> Hashtbl.remove pools key)
             else Hashtbl.remove pools key;
             Option.iter Raw.free_pool_raw ~f:(fun memfree -> memfree old));
+        if Int.equal pool_id merge_buffer_pool_id then
+          Resource_fault_injection.hit
+            ~artifact:(Merge_slab { device_id = device.device_id; size_in_bytes })
+            Merge_slab_before_allocate;
         let ptr = Raw.alloc_pool_raw ~size_in_bytes in
         if Int.equal pool_id merge_buffer_pool_id then
           commit_merge_slab device ~size_in_bytes ~install_slab_claim:(fun () ->
@@ -183,6 +187,9 @@ module Make_slab (Device_types : Device_types) (Raw : No_device_buffer_and_copyi
             Option.iter (Hashtbl.find pools key) ~f:(fun ptr ->
                 Option.iter Raw.free_pool_raw ~f:(fun memfree -> memfree ptr));
             Hashtbl.remove pools key))
+
+  let has_pool device ~pool_id =
+    with_pools (fun () -> Hashtbl.mem pools (device.device_id, pool_id))
 
   let zero_ranges device ranges =
     List.iter ranges ~f:(fun ({ pool_id; offset }, size_in_bytes) ->

@@ -1,0 +1,9 @@
+valid inventory reports exact row count: true
+valid inventory passes with zero findings: true
+missing point constructor is refused: true
+retired or unknown Resource_fault_injection member is refused: true
+missing cited test file is refused: true
+Covered row without a cited test file is refused: true
+unknown Autotune hook is refused: true
+malformed pipe-table row is refused: true
+unclosed backtick in table row is refused: true
