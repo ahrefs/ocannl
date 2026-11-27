@@ -646,6 +646,18 @@ class CellGroupTest(unittest.TestCase):
         _, err = self.launcher_with_driver("thread")
         self.assertIn(b"test launcher: terminated by signal", err)
 
+    @unittest.skipUnless(sys.platform == "linux", "the shared launcher guard is Linux-specific")
+    def test_driver_can_exit_with_sigterm_blocked(self):
+        subprocess.run(
+            self.python(
+                "import signal, cells\n"
+                "signal.signal(signal.SIGHUP, signal.SIG_DFL)\n"
+                "signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})\n"
+                "cells.install_cancellation('masked signal fixture')\n"
+            ),
+            cwd=HERE, check=True, timeout=10,
+        )
+
     @unittest.skipUnless(os.name == "posix", "driver signal fixtures require POSIX")
     def test_shared_cells_reaps_a_resistant_descendant_on_cancel_or_timeout(self):
         for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, None):

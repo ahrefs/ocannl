@@ -95,7 +95,8 @@ def _start_launcher_guard(launcher_fd):
         os.close(driver_fd)
 
     def reap():
-        guard.terminate()
+        # The monitor owns only pidfds and can inherit a blocked SIGTERM.
+        guard.kill()
         guard.wait()
 
     atexit.register(reap)
