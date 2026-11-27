@@ -873,8 +873,9 @@ type entry = {
    26: gh-ocannl-2275 -- plain packed Grid with split k and over-cap conv Grid panels leave the menu
    27: gh-ocannl-2443 -- the GPU fission floor and candidates gain ordered row-owned scatter kernels
    28: gh-ocannl-2507 -- Metal's search gains the untuned plain-cell reduction sink as its floor
+   29: gh-ocannl-2324 -- plain packed Grid with split k returns to the menu
 *)
-let entry_version = 28
+let entry_version = 29
 
 let sanitize name =
   String.map name ~f:(fun c ->

@@ -307,6 +307,7 @@ let () =
    on the pool. *)
 
 type grid_judged = {
+  g_params : Autotune.sketch_params;
   g_proposed : bool;
   g_masked : bool;
   g_a_tile : int;
@@ -314,10 +315,15 @@ type grid_judged = {
   g_grid : Cs.grid_summary option;
 }
 
+let rect_inits ~m ~k ~n =
+  ( Ll_test.operand ~b:[] ~o:[ m; k ] ~i:[]
+      (Ll_test.cycle ~dims:[| m; k |] ~modulus:13 ~offset:0. ~stride:0.25),
+    Ll_test.operand ~b:[] ~o:[ k; n ] ~i:[]
+      (Ll_test.cycle ~dims:[| k; n |] ~modulus:17 ~offset:(-8.) ~stride:1.) )
+
 (* An [m x k] by [k x n] product of two host-init constants. *)
 let rect_matmul ~tag ~m ~k ~n =
-  let fa = Ll_test.cycle ~dims:[| m; k |] ~modulus:13 ~offset:0. ~stride:0.25
-  and fb = Ll_test.cycle ~dims:[| k; n |] ~modulus:17 ~offset:(-8.) ~stride:1. in
+  let fa, fb = rect_inits ~m ~k ~n in
   let a =
     TDSL.ndarray
       (Array.init (m * k) ~f:(fun t -> fa [| t / k; t % k |]))
@@ -395,6 +401,7 @@ let judge_plain_grid ?bk (m, k, n) =
         weighed
         (Option.value_map grid ~default:"no record" ~f:Cs.grid_summary_string);
       {
+        g_params = sp;
         g_proposed = proposed;
         g_masked = masked;
         g_a_tile = sp.sk_bm * sp.sk_bk * prec_bytes;
@@ -447,31 +454,679 @@ let () =
 
 let without_launch_floor f = Scripted_search.with_settings [ ("cc_grid_min_updates", "0") ] f
 
-(* Pool eligibility at 40^3 and 72^3 (gh-ocannl-2275), with the launch floor out of the way. A k
-   partition duplicates the row-block loop but leaves its A~ tile shared across segments. *)
+let pool_privatizing_entries (g : Cs.grid_summary) =
+  List.filter_map g.loops ~f:(fun e ->
+      match e.Cs.site with
+      | Cs.Grid_pool { private_bytes } when private_bytes > 0 -> Some (e.Cs.loop, private_bytes)
+      | _ -> None)
+
+(* Compile and execute a packed Grid schedule and its Serial twin on discriminating [rect_matmul]
+   operands, prefilling the Grid output off the reference so a dropped zeroing expansion fails. *)
+let run_grid_vs_serial ~tag ~m ~k ~n (sp : Autotune.sketch_params) =
+  let run suffix ~prefill p =
+    let name = tag ^ "_" ^ suffix in
+    let c = rect_matmul ~tag:name ~m ~k ~n in
+    let ctx, routine =
+      Context.compile ~name
+        ~lowered_transform:(fun opt ->
+          [
+            Ir.Schedule.apply
+              (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p opt)
+              opt;
+          ])
+        (Context.auto ()) (Train.forward c) Ir.Indexing.Empty
+    in
+    let ctx =
+      if prefill then
+        Context.set_values ctx c.Tensor.value
+          (Array.init (m * n) ~f:(fun idx -> Float.of_int (100_000 + idx)))
+      else ctx
+    in
+    let ctx = Context.run ctx routine in
+    let values = Context.get_values ctx c.Tensor.value in
+    Context.release ctx;
+    (values, routine)
+  in
+  let got_grid, grid_routine = run "grid" ~prefill:true sp in
+  let got_serial, _ = run "serial" ~prefill:false { sp with sk_grid = false } in
+  (got_grid, got_serial, grid_routine)
+
+(* Pool eligibility and executed parity for split-k plain packed CPU Grid (gh-ocannl-2324), with the
+   launch floor out of the way. Both full and edge k segments share the row-block Grid symbol and
+   privatize their A~ tile (plus any statement-site masked fragment) in separate per-chunk
+   storage. *)
 let () =
+  let has_nonzero_tail ~m ~k ~n ~bk =
+    let fa, fb = rect_inits ~m ~k ~n in
+    let k_start = k / bk * bk in
+    let found = ref false in
+    for i = 0 to m - 1 do
+      for j = 0 to n - 1 do
+        let acc = ref 0. in
+        for kk = k_start to k - 1 do
+          acc := !acc +. (fa [| i; kk |] *. fb [| kk; j |])
+        done;
+        if Float.( <> ) !acc 0. then found := true
+      done
+    done;
+    !found
+  in
+  let has_nonzero_masked_rows ~m ~k ~n ~bm =
+    let fa, fb = rect_inits ~m ~k ~n in
+    let i_start = m / bm * bm in
+    let found = ref false in
+    for i = i_start to m - 1 do
+      for j = 0 to n - 1 do
+        let acc = ref 0. in
+        for kk = 0 to k - 1 do
+          acc := !acc +. (fa [| i; kk |] *. fb [| kk; j |])
+        done;
+        if Float.( <> ) !acc 0. then found := true
+      done
+    done;
+    !found
+  in
   List.iter [ 40; 72 ] ~f:(fun n ->
       let judged = lazy (without_launch_floor (fun () -> judge_plain_grid ~bk:16 (n, n, n))) in
-      let claim = Printf.sprintf "agr-grid: no %d^3 bk=16 plain-Grid seed is proposed" n in
-      in_leg ~leg claim (fun label -> p_none label (Lazy.force judged) ~f:(fun j -> j.g_proposed));
-      let witness =
-        Printf.sprintf "agr-grid: at %d^3 both k segments share scratch within the cap" n
+      let proposed_claim =
+        Printf.sprintf "agr-grid: every within-cap %d^3 bk=16 plain-Grid seed is proposed" n
       in
-      in_leg ~leg witness (fun label ->
-          p_exists label (Lazy.force judged) ~f:(fun j ->
-              j.g_weighed <= forced_cap
-              && g_grid_of j ~f:(fun g ->
-                  match
-                    List.filter_map g.Cs.loops ~f:(fun e ->
-                        match e.Cs.site with
-                        | Cs.Grid_serial (Grid_local_accessed_outside tile) -> Some tile
-                        | _ -> None)
-                  with
-                  | [ full; edge ] -> String.equal full edge
-                  | _ -> false))));
+      in_leg ~leg proposed_claim (fun label ->
+          p_all label
+            (List.filter (Lazy.force judged) ~f:(fun j -> j.g_weighed <= forced_cap))
+            ~f:(fun j -> j.g_proposed));
+      let pool_claim =
+        Printf.sprintf
+          "agr-grid: at %d^3 both k segments privatize on the pool at the weighed bytes" n
+      in
+      in_leg ~leg pool_claim (fun label ->
+          p_all label
+            (List.filter (Lazy.force judged) ~f:(fun j -> j.g_proposed))
+            ~f:(fun j ->
+              g_grid_of j ~f:(fun g ->
+                  match pool_privatizing_entries g with
+                  | [ (l1, b1); (l2, b2) ] ->
+                      String.equal l1 l2 && b1 = j.g_weighed && b2 = j.g_weighed
+                  | _ -> false)));
+      let fa, fb = rect_inits ~m:n ~k:n ~n in
+      let products = Ll_test.matmul_products ~m:n ~n ~k:n fa fb in
+      let sums = Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)) in
+      let executed_grid =
+        lazy
+          (without_launch_floor (fun () ->
+               let j = List.find_exn (Lazy.force judged) ~f:(fun j -> j.g_proposed) in
+               let tag = Printf.sprintf "agr_exec_%d" n in
+               let cg = rect_matmul ~tag:(tag ^ "_grid") ~m:n ~k:n ~n in
+               let ctx_g, routine_g =
+                 Context.compile ~name:(tag ^ "_grid")
+                   ~lowered_transform:(fun opt ->
+                     [
+                       Ir.Schedule.apply
+                         (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec
+                            ~p:j.g_params opt)
+                         opt;
+                     ])
+                   (Context.auto ()) (Train.forward cg) Ir.Indexing.Empty
+               in
+               let ctx_g =
+                 Context.set_values ctx_g cg.Tensor.value
+                   (Array.init (n * n) ~f:(fun idx -> Float.of_int (100_000 + idx)))
+               in
+               let ctx_g = Context.run ctx_g routine_g in
+               let got_grid = Context.get_values ctx_g cg.Tensor.value in
+               Context.release ctx_g;
+               (j.g_weighed, j.g_params, got_grid, routine_g)))
+      in
+      let executed_serial =
+        lazy
+          (let _, sp_g, _, _ = Lazy.force executed_grid in
+           let tag = Printf.sprintf "agr_exec_%d_serial" n in
+           let cs = rect_matmul ~tag ~m:n ~k:n ~n in
+           let sp_s = { sp_g with sk_grid = false } in
+           let ctx_s, routine_s =
+             Context.compile ~name:tag
+               ~lowered_transform:(fun opt ->
+                 [
+                   Ir.Schedule.apply
+                     (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p:sp_s opt)
+                     opt;
+                 ])
+               (Context.auto ()) (Train.forward cs) Ir.Indexing.Empty
+           in
+           let ctx_s = Context.run ctx_s routine_s in
+           let got_serial = Context.get_values ctx_s cs.Tensor.value in
+           Context.release ctx_s;
+           got_serial)
+      in
+      in_leg ~leg
+        (Printf.sprintf "agr-grid: %d^3 bk=16 executed plain-Grid routine tensorizes on the pool" n)
+        (fun label ->
+          let weighed, _, _, routine = Lazy.force executed_grid in
+          let pool_ok =
+            match pool_privatizing_entries routine.Context.grid with
+            | [ (l1, b1); (l2, b2) ] -> String.equal l1 l2 && b1 = weighed && b2 = weighed
+            | _ -> false
+          in
+          p label
+            (pool_ok
+            && Ll_test.all_tensorized
+                 ~what:(Printf.sprintf "agr-grid %d^3" n)
+                 (Ll_test.renderings routine.Context.mma)));
+      in_leg ~leg (Printf.sprintf "agr-grid: %d^3 bk=16 plain-Grid matches Serial packed bitwise" n)
+        (fun label ->
+          let _, _, got_grid, _ = Lazy.force executed_grid in
+          p_all2 label got_grid (Lazy.force executed_serial) ~f:Float.equal);
+      in_leg ~leg
+        (Printf.sprintf "agr-grid: %d^3 bk=16 Serial packed matches host reference bitwise" n)
+        (fun label -> p_all2 label (Lazy.force executed_serial) sums ~f:Float.equal);
+      p_all
+        (Printf.sprintf "agr-grid: %d^3 operands keep every partial sum f32-exact" n)
+        products
+        ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
+      p
+        (Printf.sprintf "agr-grid: %d^3 k tail and masked rows are nonzero in the oracle" n)
+        (has_nonzero_tail ~m:n ~k:n ~n ~bk:16 && has_nonzero_masked_rows ~m:n ~k:n ~n ~bm:16));
+  (* Dividing rows/cols with split k (32x40x32, bk=16): no masked fragment, only A~ (1024 B) is
+     privatized across both k segments. *)
+  let div_split_k =
+    lazy
+      (without_launch_floor (fun () ->
+           let judged = judge_plain_grid ~bk:16 (32, 40, 32) in
+           let j = List.find_exn judged ~f:(fun j -> j.g_proposed) in
+           let got_grid, got_serial, routine =
+             run_grid_vs_serial ~tag:"agr_div_k" ~m:32 ~k:40 ~n:32 j.g_params
+           in
+           (judged, j.g_weighed, got_grid, got_serial, routine)))
+  in
+  in_leg ~leg "agr-grid: every dividing-row split-k (32x40x32) bk=16 plain-Grid seed is proposed"
+    (fun label ->
+      let judged, _, _, _, _ = Lazy.force div_split_k in
+      p_all label judged ~f:(fun j -> j.g_proposed));
+  in_leg ~leg
+    "agr-grid: dividing-row split-k (32x40x32) privatizes A~ alone on both loops and matches \
+     Serial bitwise" (fun label ->
+      let _, weighed, got_grid, got_serial, routine = Lazy.force div_split_k in
+      let pool_ok =
+        match pool_privatizing_entries routine.Context.grid with
+        | [ (l1, b1); (l2, b2) ] -> String.equal l1 l2 && b1 = 1024 && b2 = 1024 && weighed = 1024
+        | _ -> false
+      in
+      p label
+        (pool_ok
+        && Ll_test.all_tensorized ~what:"agr-grid 32x40x32" (Ll_test.renderings routine.Context.mma)
+        && Array.equal Float.equal got_grid got_serial));
+  (* Over-cap split-k (72x72x96, bk=16): A~ (1024 B) + fragment (6144 B) = 7168 B > forced_cap.
+     Refused for the cap rather than shared scratch, and both segments record over-cap. *)
+  in_leg ~leg
+    "agr-grid: over-cap split-k (72x72x96) is refused and both k segments decline for the cap"
+    (fun label ->
+      let judged = without_launch_floor (fun () -> judge_plain_grid ~bk:16 (72, 72, 96)) in
+      p_all label judged ~f:(fun j ->
+          (not j.g_proposed) && j.g_weighed = 7168
+          && g_grid_of j ~f:(fun g ->
+              match
+                List.filter_map g.Cs.loops ~f:(fun e ->
+                    match e.Cs.site with
+                    | Cs.Grid_serial (Grid_private_over_cap { private_bytes; cap }) ->
+                        Some (e.Cs.loop, private_bytes, cap)
+                    | _ -> None)
+              with
+              | [ (l1, b1, c1); (l2, b2, c2) ] ->
+                  String.equal l1 l2 && b1 = 7168 && b2 = 7168 && c1 = forced_cap && c2 = forced_cap
+              | _ -> false)));
+  (* Fused split-k plain-Grid parity control (40^3, bk=16, relu (prod + bias), floor disabled).
+     Compared against the unscheduled reference: the fused Serial twin is legitimately refused by
+     [Fuse_epilogue] under [full_block_split] ([cpu_pack_fused_partial_witness]). *)
+  let fused_split_k =
+    lazy
+      (without_launch_floor (fun () ->
+           let mk name =
+             let prod = rect_matmul ~tag:name ~m:40 ~k:40 ~n:40 in
+             Train.set_materialized prod.Tensor.value;
+             let bias =
+               TDSL.ndarray
+                 (Array.init 40 ~f:(fun j -> Float.of_int (j % 5) -. 2.))
+                 ~label:[ name ^ "_bias" ]
+                 ~output_dims:[ 40 ] ()
+             in
+             let%op out = relu (prod + bias) in
+             (out, Train.forward out)
+           in
+           let _, probe_comp = mk "agr_fsk_probe" in
+           let lowering = Ll_test.captured_lowering ~name:"agr_fsk_probe" probe_comp in
+           let limits = Context.hardware_limits (Context.auto ()) in
+           let seeds = Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits lowering in
+           let fused_grid =
+             List.find seeds ~f:(fun sp ->
+                 sp.Autotune.sk_mma && sp.sk_epilogue && sp.sk_bk = 16 && sp.sk_grid
+                 && (not sp.sk_hoist) && not sp.sk_pack_rest)
+           in
+           Option.map fused_grid ~f:(fun sp ->
+               let run suffix ~prefill transform =
+                 let name = "agr_fsk_" ^ suffix in
+                 let out, comp = mk name in
+                 let ctx, routine =
+                   Context.compile ~name ~lowered_transform:transform (Context.auto ()) comp
+                     Ir.Indexing.Empty
+                 in
+                 let ctx =
+                   if prefill then
+                     Context.set_values ctx out.Tensor.value
+                       (Array.init (40 * 40) ~f:(fun idx -> Float.of_int (100_000 + idx)))
+                   else ctx
+                 in
+                 let ctx = Context.run ctx routine in
+                 let values = Context.get_values ctx out.Tensor.value in
+                 Context.release ctx;
+                 (values, routine)
+               in
+               let got_grid, routine =
+                 run "grid" ~prefill:true (fun opt ->
+                     [
+                       Ir.Schedule.apply
+                         (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p:sp opt)
+                         opt;
+                     ])
+               in
+               let got_ref, _ = run "ref" ~prefill:false (fun opt -> [ opt ]) in
+               (got_grid, got_ref, routine))))
+  in
+  in_leg ~leg
+    "agr-grid: fused 40^3 bk=16 plain-Grid is proposed, renders both k segments on the pool, and \
+     matches the unscheduled reference bitwise" (fun label ->
+      match Lazy.force fused_split_k with
+      | None -> p label false
+      | Some (got_grid, got_ref, routine) ->
+          let pool_ok =
+            match pool_privatizing_entries routine.Context.grid with
+            | [ (l1, b1); (l2, b2) ] -> String.equal l1 l2 && b1 = 3584 && b2 = 3584
+            | _ -> false
+          in
+          p label
+            (pool_ok
+            && Ll_test.all_tensorized ~what:"agr-grid fused 40^3"
+                 (Ll_test.renderings routine.Context.mma)
+            && Array.equal Float.equal got_grid got_ref));
+  (* Column-edge [full_block_split] control (64x64x40, bm=16, bn=16, bk=16): full column blocks
+     privatize A~ alone (1024 B), while the edge column block privatizes A~ + fragment (2048 B). *)
+  let col_edge_split =
+    lazy
+      (without_launch_floor (fun () ->
+           let probe = rect_matmul ~tag:"agr_col_edge_probe" ~m:64 ~k:64 ~n:40 in
+           let lowering =
+             Ll_test.captured_lowering ~name:"agr_col_edge_probe" (Train.forward probe)
+           in
+           let limits = Context.hardware_limits (Context.auto ()) in
+           let seeds = Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits lowering in
+           let base_sp =
+             List.find_exn seeds ~f:(fun sp ->
+                 sp.Autotune.sk_mma && sp.sk_bk = 16 && (not sp.sk_hoist) && (not sp.sk_grid)
+                 && (not sp.sk_pack_rest) && not sp.sk_epilogue)
+           in
+           let sp = { base_sp with sk_bm = 16; sk_bn = 16; sk_bk = 16; sk_grid = true } in
+           run_grid_vs_serial ~tag:"agr_col_edge" ~m:64 ~k:64 ~n:40 sp))
+  in
+  in_leg ~leg
+    "agr-grid: full_block_split column-edge plain-Grid privatizes differing per-loop tiles and \
+     matches Serial bitwise" (fun label ->
+      let got_grid, got_serial, routine = Lazy.force col_edge_split in
+      let pool_ok =
+        match pool_privatizing_entries routine.Context.grid with
+        | [ (l1, b1); (l2, b2) ] -> String.equal l1 l2 && b1 = 1024 && b2 = 2048
+        | _ -> false
+      in
+      p label
+        (pool_ok
+        && Ll_test.all_tensorized ~what:"agr-grid col-edge 64x64x40"
+             (Ll_test.renderings routine.Context.mma)
+        && Array.equal Float.equal got_grid got_serial));
+  (* Default-floor straddling fused split-k control (128x20x64 relu (prod + bias), bk=16): k_full
+     (10240 updates, no epilogue) falls below [default_grid_min_updates] (16384), while k_edge (with
+     the fused epilogue) clears it. Deciding the launch floor per symbol group keeps both segments
+     on the pool, matching the menu's proposal. *)
+  let default_floor_straddle =
+    lazy
+      (let floor = Cs.default_grid_min_updates in
+       Utils.with_stated_config
+         [ ("cc_grid_min_updates", Int.to_string floor) ]
+         (fun () ->
+           let mk name =
+             let prod = rect_matmul ~tag:name ~m:128 ~k:20 ~n:64 in
+             Train.set_materialized prod.Tensor.value;
+             let bias =
+               TDSL.ndarray
+                 (Array.init 64 ~f:(fun j -> Float.of_int (j % 5) -. 2.))
+                 ~label:[ name ^ "_bias" ]
+                 ~output_dims:[ 64 ] ()
+             in
+             let%op out = relu (prod + bias) in
+             (out, Train.forward out)
+           in
+           let _, probe_comp = mk "agr_straddle_probe" in
+           let lowering = Ll_test.captured_lowering ~name:"agr_straddle_probe" probe_comp in
+           let limits = Context.hardware_limits (Context.auto ()) in
+           let seeds = Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits lowering in
+           let fused_grid =
+             List.find seeds ~f:(fun sp ->
+                 sp.Autotune.sk_mma && sp.sk_epilogue && sp.sk_bk = 16 && sp.sk_grid
+                 && (not sp.sk_hoist) && not sp.sk_pack_rest)
+           in
+           Option.map fused_grid ~f:(fun sp ->
+               let scheduled =
+                 Ir.Schedule.apply
+                   (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p:sp lowering)
+                   lowering
+               in
+               let is_grid (site : Ll_test.loop_site) =
+                 match site.ls_stmt with
+                 | Ir.Low_level.For_loop { axis = Grid; _ } -> true
+                 | _ -> false
+               in
+               let outer_grids =
+                 List.filter_map (Ll_test.loop_sites scheduled.llc) ~f:(fun site ->
+                     match site.ls_stmt with
+                     | Ir.Low_level.For_loop { axis = Grid; index; from_; to_; _ }
+                       when to_ > from_ && not (List.exists site.ls_ancestors ~f:is_grid) ->
+                         Some (index, site.ls_stmt)
+                     | _ -> None)
+               in
+               let straddles =
+                 let by_sym = Hashtbl.create (module Ir.Indexing.Symbol) in
+                 List.iter outer_grids ~f:(fun (sym, stmt) ->
+                     Hashtbl.add_multi by_sym ~key:sym ~data:stmt);
+                 Hashtbl.data by_sym
+                 |> List.exists ~f:(fun stmts ->
+                     match List.rev stmts with
+                     | [ s_full; s_edge ] ->
+                         Cs.grid_update_count ~cap:floor s_full < floor
+                         && Cs.grid_update_count ~cap:floor s_edge >= floor
+                     | _ -> false)
+               in
+               let run suffix ~prefill transform =
+                 let name = "agr_straddle_" ^ suffix in
+                 let out, comp = mk name in
+                 let ctx, routine =
+                   Context.compile ~name ~lowered_transform:transform (Context.auto ()) comp
+                     Ir.Indexing.Empty
+                 in
+                 let ctx =
+                   if prefill then
+                     Context.set_values ctx out.Tensor.value
+                       (Array.init (128 * 64) ~f:(fun idx -> Float.of_int (100_000 + idx)))
+                   else ctx
+                 in
+                 let ctx = Context.run ctx routine in
+                 let values = Context.get_values ctx out.Tensor.value in
+                 Context.release ctx;
+                 (values, routine)
+               in
+               let got_grid, routine =
+                 run "grid" ~prefill:true (fun opt ->
+                     [
+                       Ir.Schedule.apply
+                         (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p:sp opt)
+                         opt;
+                     ])
+               in
+               let got_ref, _ = run "ref" ~prefill:false (fun opt -> [ opt ]) in
+               (straddles, got_grid, got_ref, routine))))
+  in
+  in_leg ~leg
+    "agr-grid: default-floor straddling fused 128x20x64 bk=16 plain-Grid is proposed, renders both \
+     k segments on the pool, and matches the unscheduled reference bitwise" (fun label ->
+      match Lazy.force default_floor_straddle with
+      | None -> p label false
+      | Some (straddles, got_grid, got_ref, routine) ->
+          let pool_ok =
+            match pool_privatizing_entries routine.Context.grid with
+            | [ (l1, b1); (l2, b2) ] -> String.equal l1 l2 && b1 = 1024 && b2 = 1024
+            | _ -> false
+          in
+          p label
+            (straddles && pool_ok
+            && Ll_test.all_tensorized ~what:"agr-grid straddle 128x20x64"
+                 (Ll_test.renderings routine.Context.mma)
+            && Array.equal Float.equal got_grid got_ref));
   in_leg ~leg "agr-grid: a single partial k block is proposed and renders on the pool" (fun label ->
       let judged = without_launch_floor (fun () -> judge_plain_grid ~bk:16 (40, 12, 40)) in
-      p_exists label judged ~f:(fun j -> j.g_proposed && g_grid_of j ~f:pool_privatizing))
+      p_exists label judged ~f:(fun j -> j.g_proposed && g_grid_of j ~f:pool_privatizing));
+  (* Hand-built IR controls for multi-occurrence same-symbol Grid privatization (gh-ocannl-2324).
+     Build a unique-symbol raw program so [optimize] settles placements and traced-store entries,
+     then swap in the post-partition shared-symbol [llc] and compile via [Ll_test.link]. *)
+  let compile_multi_grid ~name ~locals ~materialized ~raw ~scoped =
+    let opt = Ll_test.optimize ~materialized ~name raw in
+    List.iter locals ~f:(fun tn ->
+        Ir.Tnode.Placements.update opt.Ir.Low_level.optimize_ctx.placements tn Ir.Tnode.Local
+          (Site "99:test-setup"));
+    let opt = { opt with Ir.Low_level.llc = scoped } in
+    without_launch_floor (fun () -> Ll_test.link ~name opt)
+  in
+  let nf = Ll_test.node_factory ~first_id:232400 ~dims:[| 4 |] () in
+  let open Ll_test in
+  (* 1. Two outermost Grid loops binding [g], both covering [tmp]: both render on the pool. *)
+  in_leg ~leg "agr-rule: two same-symbol Grid loops both covering a local render on the pool"
+    (fun label ->
+      let tmp = nf ~dims:[| 1 |] "r1_tmp" in
+      let out1 = nf "r1_out1" and out2 = nf "r1_out2" in
+      materialize out1;
+      materialize out2;
+      Ir.Tnode.update_memory_mode tmp Ir.Tnode.Never_virtual (Site "99:test-setup");
+      let g = sym () and g2 = sym () in
+      let body1 s =
+        seq (set_at tmp (fixed 0) (tick s)) (set_at out1 (iter s) (get tmp [| fixed 0 |]))
+      in
+      let body2 s =
+        seq (set_at tmp (fixed 0) (ramp 100. s)) (set_at out2 (iter s) (get tmp [| fixed 0 |]))
+      in
+      let raw = seq (loop_n ~axis:Grid g 4 (body1 g)) (loop_n ~axis:Grid g2 4 (body2 g2)) in
+      let scoped = seq (loop_n ~axis:Grid g 4 (body1 g)) (loop_n ~axis:Grid g 4 (body2 g)) in
+      let linked =
+        compile_multi_grid ~name:"agr_rule_cover" ~locals:[ tmp ] ~materialized:[ out1; out2 ] ~raw
+          ~scoped
+      in
+      let _, routine = linked in
+      let ctx = run_linked linked ~seed:[] in
+      let got1 = Context.get_values ctx out1 and got2 = Context.get_values ctx out2 in
+      let pool_ok =
+        match pool_privatizing_entries routine.Context.grid with
+        | [ (l1, 4); (l2, 4) ] -> String.equal l1 l2
+        | _ -> false
+      in
+      p label
+        (pool_ok
+        && Array.equal Float.equal got1 [| 1.; 2.; 3.; 4. |]
+        && Array.equal Float.equal got2 [| 100.; 101.; 102.; 103. |]));
+  (* 2. One sibling reads before writing (RMW): both decline with [Grid_local_not_covering]. *)
+  in_leg ~leg "agr-rule: a non-covering sibling declines both loops with Grid_local_not_covering"
+    (fun label ->
+      let tmp = nf ~dims:[| 1 |] "r2_tmp" in
+      let out1 = nf "r2_out1" and out2 = nf "r2_out2" in
+      materialize out1;
+      materialize out2;
+      Ir.Tnode.update_memory_mode tmp Ir.Tnode.Never_virtual (Site "99:test-setup");
+      let g = sym () and g2 = sym () in
+      let body1 s =
+        seq (set_at tmp (fixed 0) (tick s)) (set_at out1 (iter s) (get tmp [| fixed 0 |]))
+      in
+      let body2 s =
+        seq
+          (set_at tmp (fixed 0) (add (get tmp [| fixed 0 |]) (ramp 10. s)))
+          (set_at out2 (iter s) (get tmp [| fixed 0 |]))
+      in
+      let raw = seq (loop_n ~axis:Grid g 4 (body1 g)) (loop_n ~axis:Grid g2 4 (body2 g2)) in
+      let scoped = seq (loop_n ~axis:Grid g 4 (body1 g)) (loop_n ~axis:Grid g 4 (body2 g)) in
+      let _, routine =
+        compile_multi_grid ~name:"agr_rule_rmw" ~locals:[ tmp ] ~materialized:[ out1; out2 ] ~raw
+          ~scoped
+      in
+      p label
+        (match routine.Context.grid.Cs.loops with
+        | [
+         { Cs.site = Grid_serial (Grid_local_not_covering t1); loop = l1; _ };
+         { Cs.site = Grid_serial (Grid_local_not_covering t2); loop = l2; _ };
+        ] ->
+            String.equal l1 l2 && String.equal t1 t2
+        | _ -> false));
+  (* 3. Cross-occurrence consistency: first covers [tmp], second is read-only on [tmp]. Both must
+     stay serial with [Grid_local_not_covering] and preserve cross-loop serial values. *)
+  in_leg ~leg
+    "agr-rule: a read-only sibling of a privatized writer declines with Grid_local_not_covering \
+     and preserves serial values" (fun label ->
+      let tmp = nf ~dims:[| 1 |] "r3_tmp" in
+      let out1 = nf "r3_out1" and out2 = nf "r3_out2" in
+      materialize out1;
+      materialize out2;
+      Ir.Tnode.update_memory_mode tmp Ir.Tnode.Never_virtual (Site "99:test-setup");
+      let g = sym () and g2 = sym () in
+      let body1 s =
+        seq (set_at tmp (fixed 0) (tick s)) (set_at out1 (iter s) (get tmp [| fixed 0 |]))
+      in
+      let body2 s = set_at out2 (iter s) (add (get tmp [| fixed 0 |]) (ramp 10. s)) in
+      let raw = seq (loop_n ~axis:Grid g 4 (body1 g)) (loop_n ~axis:Grid g2 4 (body2 g2)) in
+      let scoped = seq (loop_n ~axis:Grid g 4 (body1 g)) (loop_n ~axis:Grid g 4 (body2 g)) in
+      let linked =
+        compile_multi_grid ~name:"agr_rule_ro" ~locals:[ tmp ] ~materialized:[ out1; out2 ] ~raw
+          ~scoped
+      in
+      let _, routine = linked in
+      let ctx = run_linked linked ~seed:[] in
+      let got1 = Context.get_values ctx out1 and got2 = Context.get_values ctx out2 in
+      let declined =
+        match routine.Context.grid.Cs.loops with
+        | [
+         { Cs.site = Grid_serial (Grid_local_not_covering t1); loop = l1; _ };
+         { Cs.site = Grid_serial (Grid_local_not_covering t2); loop = l2; _ };
+        ] ->
+            String.equal l1 l2 && String.equal t1 t2
+        | _ -> false
+      in
+      p label
+        (declined
+        && Array.equal Float.equal got1 [| 1.; 2.; 3.; 4. |]
+        && Array.equal Float.equal got2 [| 14.; 15.; 16.; 17. |]));
+  (* 4. Outside access (in a Grid loop of another symbol): declines with
+     [Grid_local_accessed_outside]. *)
+  in_leg ~leg "agr-rule: a local also accessed outside the symbol group declines accessed-outside"
+    (fun label ->
+      let tmp = nf ~dims:[| 1 |] "r4_tmp" in
+      let out1 = nf "r4_out1" and out2 = nf "r4_out2" and out3 = nf "r4_out3" in
+      materialize out1;
+      materialize out2;
+      materialize out3;
+      Ir.Tnode.update_memory_mode tmp Ir.Tnode.Never_virtual (Site "99:test-setup");
+      let g = sym () and g2 = sym () and g_other = sym () in
+      let body1 s =
+        seq (set_at tmp (fixed 0) (tick s)) (set_at out1 (iter s) (get tmp [| fixed 0 |]))
+      in
+      let body2 s =
+        seq (set_at tmp (fixed 0) (ramp 100. s)) (set_at out2 (iter s) (get tmp [| fixed 0 |]))
+      in
+      let body3 s =
+        seq (set_at tmp (fixed 0) (ramp 200. s)) (set_at out3 (iter s) (get tmp [| fixed 0 |]))
+      in
+      let raw =
+        seq
+          (seq (loop_n ~axis:Grid g 4 (body1 g)) (loop_n ~axis:Grid g2 4 (body2 g2)))
+          (loop_n ~axis:Grid g_other 4 (body3 g_other))
+      in
+      let scoped =
+        seq
+          (seq (loop_n ~axis:Grid g 4 (body1 g)) (loop_n ~axis:Grid g 4 (body2 g)))
+          (loop_n ~axis:Grid g_other 4 (body3 g_other))
+      in
+      let _, routine =
+        compile_multi_grid ~name:"agr_rule_outside" ~locals:[ tmp ]
+          ~materialized:[ out1; out2; out3 ] ~raw ~scoped
+      in
+      p label
+        (match routine.Context.grid.Cs.loops with
+        | [
+         { Cs.site = Grid_serial (Grid_local_accessed_outside t1); _ };
+         { Cs.site = Grid_serial (Grid_local_accessed_outside t2); _ };
+         { Cs.site = Grid_serial (Grid_local_accessed_outside t3); _ };
+        ] ->
+            String.equal t1 t2 && String.equal t2 t3
+        | _ -> false));
+  (* 5. Differing local sets across siblings: first covers [t1] (16 B), second covers [t1] (16 B)
+     and [t2] (32 B). Both render on the pool at their own chunk footprints. *)
+  in_leg ~leg "agr-rule: siblings with differing local sets render on the pool at their own sizes"
+    (fun label ->
+      let t1 = nf ~dims:[| 4 |] "r5_t1" and t2 = nf ~dims:[| 8 |] "r5_t2" in
+      let out1 = nf "r5_out1" and out2 = nf "r5_out2" in
+      materialize out1;
+      materialize out2;
+      Ir.Tnode.update_memory_mode t1 Ir.Tnode.Never_virtual (Site "99:test-setup");
+      Ir.Tnode.update_memory_mode t2 Ir.Tnode.Never_virtual (Site "99:test-setup");
+      let g = sym () and g2 = sym () and u1 = sym () and u2 = sym () and u3 = sym () in
+      let fill tn n s u base = loop_n u n (set_at tn (iter u) (add (ramp base s) (embed u))) in
+      let body1 s u = seq (fill t1 4 s u 1.) (set_at out1 (iter s) (get t1 [| fixed 3 |])) in
+      let body2 s ua ub =
+        seq
+          (seq (fill t1 4 s ua 10.) (fill t2 8 s ub 100.))
+          (set_at out2 (iter s) (add (get t1 [| fixed 2 |]) (get t2 [| fixed 5 |])))
+      in
+      let raw =
+        seq (loop_n ~axis:Grid g 4 (body1 g u1)) (loop_n ~axis:Grid g2 4 (body2 g2 u2 u3))
+      in
+      let scoped =
+        seq (loop_n ~axis:Grid g 4 (body1 g u1)) (loop_n ~axis:Grid g 4 (body2 g u2 u3))
+      in
+      let linked =
+        compile_multi_grid ~name:"agr_rule_diff" ~locals:[ t1; t2 ] ~materialized:[ out1; out2 ]
+          ~raw ~scoped
+      in
+      let _, routine = linked in
+      let ctx = run_linked linked ~seed:[] in
+      let got1 = Context.get_values ctx out1 and got2 = Context.get_values ctx out2 in
+      let pool_ok =
+        match pool_privatizing_entries routine.Context.grid with
+        | [ (l1, 16); (l2, 48) ] -> String.equal l1 l2
+        | _ -> false
+      in
+      p label
+        (pool_ok
+        && Array.equal Float.equal got1 [| 4.; 5.; 6.; 7. |]
+        && Array.equal Float.equal got2 [| 117.; 119.; 121.; 123. |]));
+  (* 6. A 1-trip [from_ = 0, to_ = 0] sibling sharing [g] that reads [tmp] without writing it:
+     [pp_ll] dispatches every [Grid] loop binding [g] to [parallel_grid_loop] once [g] enters
+     [current_parallel_grid], so the 1-trip sibling must participate in the group check, decline the
+     multi-trip loop with [Grid_local_not_covering], and observe the serial value [4] written by the
+     last iteration of the first loop. *)
+  in_leg ~leg
+    "agr-rule: a 1-trip read-only sibling keeps the symbol serial and preserves cross-loop values"
+    (fun label ->
+      let tmp = nf ~dims:[| 1 |] "r6_tmp" in
+      let out1 = nf "r6_out1" and out2 = nf "r6_out2" in
+      materialize out1;
+      materialize out2;
+      Ir.Tnode.update_memory_mode tmp Ir.Tnode.Never_virtual (Site "99:test-setup");
+      let g = sym () and g2 = sym () in
+      let body1 s =
+        seq (set_at tmp (fixed 0) (tick s)) (set_at out1 (iter s) (get tmp [| fixed 0 |]))
+      in
+      let body2 s = set_at out2 (iter s) (add (get tmp [| fixed 0 |]) (ramp 50. s)) in
+      let raw =
+        seq (loop_n ~axis:Grid g 4 (body1 g)) (loop ~from_:0 ~axis:Grid ~upto:0 g2 (body2 g2))
+      in
+      let scoped =
+        seq (loop_n ~axis:Grid g 4 (body1 g)) (loop ~from_:0 ~axis:Grid ~upto:0 g (body2 g))
+      in
+      let linked =
+        compile_multi_grid ~name:"agr_rule_one_trip" ~locals:[ tmp ] ~materialized:[ out1; out2 ]
+          ~raw ~scoped
+      in
+      let _, routine = linked in
+      let ctx = run_linked linked ~seed:[ (out2, [| 7.; 8.; 9.; 10. |]) ] in
+      let got1 = Context.get_values ctx out1 and got2 = Context.get_values ctx out2 in
+      let declined =
+        match routine.Context.grid.Cs.loops with
+        | [ { Cs.site = Grid_serial (Grid_local_not_covering _); _ } ] -> true
+        | _ -> false
+      in
+      p label
+        (declined
+        && Array.equal Float.equal got1 [| 1.; 2.; 3.; 4. |]
+        && Array.equal Float.equal got2 [| 54.; 8.; 9.; 10. |]))
 
 (* The 41-row output pads at both tested block sizes. Fission exposes an actual panel Grid. At 32
    rows the staged tiles and masked fragment reach the cap with 8 input channels and exceed it with

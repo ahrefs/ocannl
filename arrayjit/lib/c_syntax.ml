@@ -752,7 +752,8 @@ type grid_serial_reason =
           would race across chunks. *)
   | Grid_local_accessed_outside of string
       (** This local is written grid-variantly (it fails the shared rule) and is also accessed
-          outside the loop body (it fails the privatization rule). *)
+          outside the outermost [Grid] loops binding this symbol (it fails the privatization rule).
+      *)
   | Grid_local_not_covering of string
       (** This local fails the shared rule, and its first access per iteration is not a standalone
           covering write (it fails the privatization rule). *)
@@ -762,7 +763,8 @@ type grid_serial_reason =
           ({!per_chunk_private_bytes_cap}). *)
   | Grid_below_min_updates of { updates : int; floor : int }
       (** The launch's estimated scalar updates ({!grid_update_count}, saturating at [floor]) fall
-          below [floor], the resolved [cc_grid_min_updates]. *)
+          below [floor], the resolved [cc_grid_min_updates] (for a multi-occurrence symbol group,
+          every multi-trip occurrence in the group fell below [floor]). *)
   | Grid_offset_range of { from_ : int; to_ : int }
       (** The loop does not start at 0, which the chunked rendering assumes. *)
 [@@deriving sexp_of, equal]
@@ -4690,10 +4692,13 @@ module C_syntax (B : C_syntax_config) = struct
             rendering (docs/design/gh-ocannl-164.md), identified by index symbol. Empty unless
             [B.parallel_grid_syntax] renders in parallel. *)
     current_grid_private : Tn.t list Map.M(Indexing.Symbol).t ref;
-        (** Set by [compile_proc] alongside [current_parallel_grid]: per eligible [Grid] loop, the
-            [Local]-placement tnodes privatized to per-chunk block-scope declarations inside that
-            loop's chunk body (gh-ocannl-469: in-kernel packed operand tiles under a pool-parallel
-            Grid). These are excluded from [compile_proc]'s function-scope [local_decls]. *)
+        (** Set by [compile_proc] alongside [current_parallel_grid]: per eligible [Grid] symbol, the
+            [Local]-placement tnodes privatized to per-chunk block-scope declarations inside the
+            outermost [Grid] loops binding that symbol (gh-ocannl-469, gh-ocannl-2324: in-kernel
+            packed operand tiles and masked fragments, including across sibling segments of a
+            [Schedule.Partition] or [full_block_split]). Each loop declares only the subset its own
+            body accesses; all of them are excluded from [compile_proc]'s function-scope
+            [local_decls]. *)
     current_local_ptr_alias : Set.M(Tn).t ref;
         (** Set by [compile_proc] alongside [current_parallel_grid]: [Local]-placement tnodes kept
             at function scope but accessed inside a pool-parallel Grid loop rendered as a
@@ -6308,14 +6313,18 @@ module C_syntax (B : C_syntax_config) = struct
      hazard analysis (mere mention is not enough, e.g. a stencil write [tmp[i]] + read [tmp[i-1]]
      both mention [sym] but reach across iterations). Distinct iterations then touch disjoint cells
      of one function-scope array. - Privatization rule: ALL of the node's accesses in the kernel sit
-     inside this loop's body, and its first access per iteration is a standalone covering write -- a
+     inside the outermost [Grid] loops binding [sym] (gh-ocannl-2324: [Schedule.Partition] and
+     [full_block_split] copy a [Grid] loop body without renaming its symbol), and in each such loop
+     body accessing the node, its first access per iteration is a standalone covering write -- a
      whole-array rewrite that completes before any other access to it executes (the write-dominance
-     check of [first_access_standalone_covering]) -- so no value flows between iterations and each
-     chunk can own a block-scope copy. This is what in-kernel packing [Stage] tiles satisfy
-     (gh-ocannl-469): the pack nest fully rewrites the tile before the micro-kernel reads it. The
-     combined per-chunk footprint of every privatized local is capped by
-     [per_chunk_private_bytes_cap], checked once the whole footprint is known, so a decline states
-     it (gh-ocannl-1668).
+     check of [first_access_standalone_covering]) -- so no value flows between iterations or across
+     sibling loops and each chunk can own a block-scope copy. This is what in-kernel packing [Stage]
+     tiles and statement-site masked fragments satisfy (gh-ocannl-469, gh-ocannl-2324). Locals in
+     [force_privatize] were privatized by a sibling loop binding [sym] and therefore have no
+     function-scope declaration: they must pass the privatization rule here too instead of taking
+     the shared rule. The combined per-chunk footprint of every privatized local in this loop is
+     capped by [per_chunk_private_bytes_cap], checked once the whole footprint is known, so a
+     decline states it (gh-ocannl-1668).
 
      Under [`Dispatch] (the blocks extension), a block cannot refer to a declaration with an array
      type at all -- even read-only -- but it captures pointers by value, so every non-privatized
@@ -6323,10 +6332,11 @@ module C_syntax (B : C_syntax_config) = struct
      ([current_local_ptr_alias]). [Set_local] scope locals must have their declaration within the
      loop body (block scope = per-chunk storage). Opaque statements and barriers disqualify.
 
-     Returns [Ok (privatized, ptr_aliased, private_bytes)] when the loop can render in parallel, and
-     otherwise the first rule that failed. *)
+     Returns [Ok (privatized, ptr_aliased, shared, private_bytes)] when the loop can render in
+     parallel, and otherwise the first rule that failed. *)
   let parallel_grid_safe ctx ~sym ~grid_range ~(global_counts : int Hashtbl.M(Int).t)
-      (body : Low_level.t) : (Tn.t list * Tn.t list * int, grid_serial_reason) Result.t =
+      ~(group_counts : int Hashtbl.M(Int).t) ~(force_privatize : Set.M(Tn).t) (body : Low_level.t) :
+      (Tn.t list * Tn.t list * Set.M(Tn).t * int, grid_serial_reason) Result.t =
     let mentions_comp = Indexing.axis_index_mentions_symbol sym in
     let loop_ident = Indexing.symbol_ident sym in
     let locals : grid_local_info Hashtbl.M(Int).t = Hashtbl.create (module Int) in
@@ -6364,7 +6374,7 @@ module C_syntax (B : C_syntax_config) = struct
             escaped_scope := true));
     if not !ok then Error (if !opaque then Grid_opaque_body else Grid_scope_local_escapes)
     else
-      let privatized = ref [] and ptr_aliased = ref [] in
+      let privatized = ref [] and ptr_aliased = ref [] and shared = ref (Set.empty (module Tn)) in
       let failed = ref None in
       let private_bytes = ref 0 in
       (* The box environment for the affine conflict query: the Grid loop itself plus every loop
@@ -6406,56 +6416,61 @@ module C_syntax (B : C_syntax_config) = struct
                ([Same_thread]) or be disjoint outright — which also admits patterns the agreement
                rule could only decline (constant-offset or strided-disjoint cells). *)
             let shared_ok =
-              (not info.gl_written)
-              ||
-              (* The coordinate view (gh-ocannl-1162): a vector store's run is stated to the view,
-                 never written into the map as a placeholder. *)
-              let dims = Lazy.force info.gl_tn.Tn.dims in
-              let interp (kind, idcs) =
-                match kind with
-                | `Whole -> None
-                | `Exact -> Some (Affine.view ~dims idcs)
-                | `Vec length ->
-                    if Array.is_empty idcs then None
-                    else Some (Affine.view ~range ~vec:(Affine.Run length) ~dims idcs)
-              in
-              let witness = ref "" in
-              let q =
-                List.for_all info.gl_accs ~f:(fun (wx, kx, mx) ->
-                    List.for_all info.gl_accs ~f:(fun (wy, ky, my) ->
-                        (not (wx || wy))
-                        ||
-                        match (interp (kx, mx), interp (ky, my)) with
-                        | Some l, Some r -> (
-                            match
-                              Affine.pair_conflict ~left_range:range ~right_range:range
-                                ~dup_left:dup ~dup_right:dup
-                                ~pairs:[ (sym, sym) ]
-                                ~left:l ~right:r
-                            with
-                            | Affine.Disjoint | Affine.Same_thread -> true
-                            | Affine.Cross_thread wit ->
-                                witness := wit;
-                                false)
-                        | _ ->
-                            witness := "statically unknown cells (whole-node or dynamic access)";
-                            false))
-              in
-              Affine.crosscheck ~site:"cc pool-parallel shared rule"
-                ~context:(Tn.debug_name info.gl_tn ^ " under Grid loop " ^ loop_ident)
-                ~procedural_safe:procedural_shared_ok ~query_safe:q ~witness:!witness;
-              q
+              (not (Set.mem force_privatize info.gl_tn))
+              && ((not info.gl_written)
+                 ||
+                 (* The coordinate view (gh-ocannl-1162): a vector store's run is stated to the
+                    view, never written into the map as a placeholder. *)
+                 let dims = Lazy.force info.gl_tn.Tn.dims in
+                 let interp (kind, idcs) =
+                   match kind with
+                   | `Whole -> None
+                   | `Exact -> Some (Affine.view ~dims idcs)
+                   | `Vec length ->
+                       if Array.is_empty idcs then None
+                       else Some (Affine.view ~range ~vec:(Affine.Run length) ~dims idcs)
+                 in
+                 let witness = ref "" in
+                 let q =
+                   List.for_all info.gl_accs ~f:(fun (wx, kx, mx) ->
+                       List.for_all info.gl_accs ~f:(fun (wy, ky, my) ->
+                           (not (wx || wy))
+                           ||
+                           match (interp (kx, mx), interp (ky, my)) with
+                           | Some l, Some r -> (
+                               match
+                                 Affine.pair_conflict ~left_range:range ~right_range:range
+                                   ~dup_left:dup ~dup_right:dup
+                                   ~pairs:[ (sym, sym) ]
+                                   ~left:l ~right:r
+                               with
+                               | Affine.Disjoint | Affine.Same_thread -> true
+                               | Affine.Cross_thread wit ->
+                                   witness := wit;
+                                   false)
+                           | _ ->
+                               witness := "statically unknown cells (whole-node or dynamic access)";
+                               false))
+                 in
+                 Affine.crosscheck ~site:"cc pool-parallel shared rule"
+                   ~context:(Tn.debug_name info.gl_tn ^ " under Grid loop " ^ loop_ident)
+                   ~procedural_safe:procedural_shared_ok ~query_safe:q ~witness:!witness;
+                 q)
             in
             if shared_ok then (
+              shared := Set.add !shared info.gl_tn;
               (match B.parallel_grid_syntax with
               | `Dispatch -> ptr_aliased := info.gl_tn :: !ptr_aliased
               | `Openmp | `None -> ());
               true)
             else
               let all_inside =
-                match Hashtbl.find global_counts info.gl_tn.Tn.uid with
-                | Some total -> total = info.gl_count
-                | None -> false
+                match
+                  ( Hashtbl.find global_counts info.gl_tn.Tn.uid,
+                    Hashtbl.find group_counts info.gl_tn.Tn.uid )
+                with
+                | Some total, Some in_group -> total = in_group
+                | _ -> false
               in
               if not all_inside then (
                 failed :=
@@ -6482,15 +6497,24 @@ module C_syntax (B : C_syntax_config) = struct
       | Some why -> Error why
       | None when !private_bytes > cap ->
           Error (Grid_private_over_cap { private_bytes = !private_bytes; cap })
-      | None -> Ok (List.rev !privatized, !ptr_aliased, !private_bytes)
+      | None -> Ok (List.rev !privatized, !ptr_aliased, !shared, !private_bytes)
 
-  (* The outermost [Grid] loops safe to render in parallel, with each loop's privatized locals and
+  (* The outermost [Grid] loops safe to render in parallel, with each symbol's privatized locals and
      (under [`Dispatch]) the pointer-aliased function-scope locals. Nested [Grid] loops render
      serially inside a chunk (still correct: write coverage holds per grid index). Runtime kernel
      logging writes to a shared FILE, so parallel rendering is skipped under
      [debug_log_from_routines]. Every outermost [Grid] loop of two or more iterations the pool gate
      reaches is recorded in the Grid census, with the rule that kept it serial if one did
-     (gh-ocannl-1668). *)
+     (gh-ocannl-1668).
+
+     All outermost [Grid] loops binding one index symbol are judged as one unit (gh-ocannl-2324):
+     [Schedule.Partition] and [full_block_split] duplicate a [Grid] loop body without renaming its
+     symbol, and a privatized local is omitted from function-scope declarations, so either every
+     occurrence binding the symbol renders on the pool (each declaring its own chunk-private copy)
+     or none does. Soundness and per-chunk footprint checks hold per occurrence; the launch floor
+     holds for the group when at least one multi-trip occurrence reaches [cc_grid_min_updates], so a
+     smaller sibling (e.g. a non-epilogue [k_full] segment or an asymmetric [full_block_split] copy)
+     cannot serialize a sibling that clears the floor. *)
   let collect_parallel_grid ctx (llc : Low_level.t) :
       Set.M(Indexing.Symbol).t * Tn.t list Map.M(Indexing.Symbol).t * Set.M(Tn).t =
     let empty =
@@ -6515,8 +6539,8 @@ module C_syntax (B : C_syntax_config) = struct
             :: !(ctx.grid_census)
       in
       (* Whole-kernel access counts per local, so [parallel_grid_safe] can tell when a local's
-         accesses all sit inside one loop's body (the privatization rule). Same traversal, so the
-         counts are comparable by construction. *)
+         accesses all sit inside the outermost [Grid] loops binding one symbol (the privatization
+         rule). Same traversal, so the counts are comparable by construction. *)
       let global_counts : int Hashtbl.M(Int).t = Hashtbl.create (module Int) in
       iter_local_accesses llc
         ~access:(fun ~write:_ ~kind:_ tn _ ->
@@ -6526,34 +6550,112 @@ module C_syntax (B : C_syntax_config) = struct
       let privs = ref (Map.empty (module Indexing.Symbol)) in
       let aliases = ref (Set.empty (module Tn)) in
       let floor = grid_min_updates () in
-      let rec go ~repeated (llc : Low_level.t) =
+      let occs_rev = ref [] in
+      let next_id = ref 0 in
+      let rec collect_occs ~repeated (llc : Low_level.t) =
         match llc with
-        | Low_level.For_loop { axis = Grid; index; from_; to_; body; _ } -> (
-            if from_ <> 0 && to_ > from_ then
-              record ~repeated index (Grid_serial (Grid_offset_range { from_; to_ }))
-            else if from_ = 0 && to_ >= 1 then
-              match
-                (parallel_grid_safe ctx) ~sym:index ~grid_range:(from_, to_) ~global_counts body
-              with
-              | Ok _ when floor > 0 && grid_update_count ~cap:floor llc < floor ->
-                  record ~repeated index
-                    (Grid_serial
-                       (Grid_below_min_updates { updates = grid_update_count ~cap:floor llc; floor }))
-              | Ok (privatized, ptr_aliased, private_bytes) ->
-                  record ~repeated index (Grid_pool { private_bytes });
-                  syms := Set.add !syms index;
-                  if not (List.is_empty privatized) then
-                    privs := Map.set !privs ~key:index ~data:privatized;
-                  aliases := List.fold ptr_aliased ~init:!aliases ~f:Set.add
-              | Error why -> record ~repeated index (Grid_serial why))
-        | For_loop { from_; to_; body; _ } -> go ~repeated:(repeated || to_ > from_) body
-        | If { body; _ } -> go ~repeated body
+        | Low_level.For_loop { axis = Grid; index; from_; to_; body; _ } ->
+            let id = !next_id in
+            Int.incr next_id;
+            occs_rev := (id, llc, index, from_, to_, body, repeated) :: !occs_rev
+        | For_loop { from_; to_; body; _ } -> collect_occs ~repeated:(repeated || to_ > from_) body
+        | If { body; _ } -> collect_occs ~repeated body
         | Seq (a, b) ->
-            go ~repeated a;
-            go ~repeated b
+            collect_occs ~repeated a;
+            collect_occs ~repeated b
         | _ -> ()
       in
-      go ~repeated:false llc;
+      collect_occs ~repeated:false llc;
+      let occs = List.rev !occs_rev in
+      let site_by_occ = Array.create ~len:!next_id None in
+      let group_order_rev = ref [] in
+      let groups = Hashtbl.create (module Indexing.Symbol) in
+      List.iter occs ~f:(fun ((_, _, index, _, _, _, _) as occ) ->
+          if not (Hashtbl.mem groups index) then group_order_rev := index :: !group_order_rev;
+          Hashtbl.add_multi groups ~key:index ~data:occ);
+      List.iter (List.rev !group_order_rev) ~f:(fun sym ->
+          let group_occs = List.rev (Hashtbl.find_exn groups sym) in
+          if List.exists group_occs ~f:(fun (_, _, _, from_, to_, _, _) -> to_ > from_) then (
+            let group_counts : int Hashtbl.M(Int).t = Hashtbl.create (module Int) in
+            List.iter group_occs ~f:(fun (_, _, _, _, _, body, _) ->
+                iter_local_accesses body
+                  ~access:(fun ~write:_ ~kind:_ tn _ ->
+                    if (is_local ctx) tn then Hashtbl.incr group_counts tn.Tn.uid)
+                  ~on_stmt:(fun _ -> ()));
+            let eval_occ ~force_privatize (_, _, _, from_, to_, body, _) =
+              if from_ <> 0 || to_ < from_ then Error (Grid_offset_range { from_; to_ })
+              else
+                (parallel_grid_safe ctx) ~sym ~grid_range:(from_, to_) ~global_counts ~group_counts
+                  ~force_privatize body
+            in
+            let results =
+              List.map group_occs ~f:(fun occ ->
+                  (occ, eval_occ ~force_privatize:(Set.empty (module Tn)) occ))
+            in
+            (* Cross-occurrence consistency: any local privatized by one occurrence leaves
+               function-scope declarations, so every sibling occurrence accessing it must also
+               privatize it (standalone covering write, counted in its chunk footprint). *)
+            let results =
+              if List.for_all results ~f:(fun (_, r) -> Result.is_ok r) then
+                let group_priv =
+                  List.fold results
+                    ~init:(Set.empty (module Tn))
+                    ~f:(fun acc (_, r) ->
+                      match r with
+                      | Ok (priv, _, _, _) -> List.fold priv ~init:acc ~f:Set.add
+                      | Error _ -> acc)
+                in
+                if Set.is_empty group_priv then results
+                else
+                  List.map results ~f:(fun (occ, r) ->
+                      match r with
+                      | Ok (_, _, shared, _) when not (Set.is_empty (Set.inter shared group_priv))
+                        ->
+                          (occ, eval_occ ~force_privatize:group_priv occ)
+                      | _ -> (occ, r))
+              else results
+            in
+            match
+              List.find_map results ~f:(fun (_, r) ->
+                  match r with Error why -> Some why | Ok _ -> None)
+            with
+            | None ->
+                let max_updates =
+                  if floor <= 0 then 0
+                  else
+                    List.fold group_occs ~init:0 ~f:(fun acc (_, stmt, _, from_, to_, _, _) ->
+                        if to_ > from_ then Int.max acc (grid_update_count ~cap:floor stmt) else acc)
+                in
+                if floor > 0 && max_updates < floor then
+                  List.iter results ~f:(fun ((id, stmt, _, from_, to_, _, _), _) ->
+                      if to_ > from_ then
+                        let updates = grid_update_count ~cap:floor stmt in
+                        site_by_occ.(id) <-
+                          Some (Grid_serial (Grid_below_min_updates { updates; floor })))
+                else (
+                  syms := Set.add !syms sym;
+                  let seen_priv = Hash_set.create (module Int) in
+                  let merged_priv_rev = ref [] in
+                  List.iter results ~f:(fun ((id, _, _, from_, to_, _, _), r) ->
+                      match r with
+                      | Ok (priv, ptr_aliased, _, private_bytes) ->
+                          List.iter priv ~f:(fun tn ->
+                              if not (Hash_set.mem seen_priv tn.Tn.uid) then (
+                                Hash_set.add seen_priv tn.Tn.uid;
+                                merged_priv_rev := tn :: !merged_priv_rev));
+                          aliases := List.fold ptr_aliased ~init:!aliases ~f:Set.add;
+                          if to_ > from_ then site_by_occ.(id) <- Some (Grid_pool { private_bytes })
+                      | Error _ -> assert false);
+                  let merged_priv = List.rev !merged_priv_rev in
+                  if not (List.is_empty merged_priv) then
+                    privs := Map.set !privs ~key:sym ~data:merged_priv)
+            | Some first_why ->
+                List.iter results ~f:(fun ((id, _, _, from_, to_, _, _), r) ->
+                    if to_ > from_ then
+                      let why = match r with Error why -> why | Ok _ -> first_why in
+                      site_by_occ.(id) <- Some (Grid_serial why))));
+      List.iter occs ~f:(fun (id, _, index, _, _, _, repeated) ->
+          Option.iter site_by_occ.(id) ~f:(record ~repeated index));
       (!syms, !privs, !aliases))
 
   (* gh-ocannl-1669: which of the [Local] arrays one scope declares go on the heap, given the bytes
@@ -8610,11 +8712,22 @@ module C_syntax (B : C_syntax_config) = struct
                (Printf.sprintf "const %s%s = %s + %d <= %d ? %s + %d : %d;" it hi lo grain extent lo
                   grain extent)
         in
-        (* Locals privatized to this loop (see [parallel_grid_safe]): block-scope arrays inside the
-           chunk body, one copy per chunk -- iterations rewrite them wholly before reading, so
-           per-chunk storage matches the serial semantics. Past the chunk's stack budget they are
-           heap arrays, one allocation per chunk, freed when the chunk ends (gh-ocannl-1669). *)
-        let privatized = Option.value ~default:[] (Map.find !(ctx.current_grid_private) i) in
+        (* Locals privatized to this loop's symbol (see [parallel_grid_safe]): block-scope arrays
+           inside the chunk body, one copy per chunk -- iterations rewrite them wholly before
+           reading, so per-chunk storage matches the serial semantics. Filtered to the locals this
+           occurrence's body actually accesses (exact when sibling copies of a symbol differ, e.g.
+           [full_block_split]). Past the chunk's stack budget they are heap arrays, one allocation
+           per chunk, freed when the chunk ends (gh-ocannl-1669). *)
+        let privatized =
+          match Map.find !(ctx.current_grid_private) i with
+          | None -> []
+          | Some all_priv ->
+              let body_locals = Hash_set.create (module Int) in
+              iter_local_accesses loop.body
+                ~access:(fun ~write:_ ~kind:_ tn _ -> Hash_set.add body_locals tn.Tn.uid)
+                ~on_stmt:(fun _ -> ());
+              List.filter all_priv ~f:(fun tn -> Hash_set.mem body_locals tn.Tn.uid)
+        in
         let heap = heap_locals ~budget:chunk_stack_locals_bytes privatized in
         let decls =
           let zero_init tn =

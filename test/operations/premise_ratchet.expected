@@ -3,7 +3,7 @@ test/einsum/padded_operand_offset_windows.ml: 0 uncovered, 4 covered
 test/einsum/result_side_affine_forms.ml: 0 uncovered, 3 covered
 test/einsum/result_side_padded_window.ml: 0 uncovered, 2 covered
 test/operations/accum_width.ml: 1 uncovered, 0 covered
-test/operations/autotune_grid_record.ml: 1 uncovered, 0 covered
+test/operations/autotune_grid_record.ml: 1 uncovered, 1 covered
 test/operations/autotune_report_drops.ml: 0 uncovered, 1 covered
 test/operations/autotune_staffed_singles.ml: 0 uncovered, 1 covered
 test/operations/back_to_back_runs.ml: 1 uncovered, 0 covered
