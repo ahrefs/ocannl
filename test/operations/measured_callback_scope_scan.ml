@@ -2,10 +2,10 @@
    uncontended-run witness or a read of one of the timing refusal records. Read the OCaml syntax
    tree of test and arrayjit/test modules. Recognize direct set/with_value applications to
    Autotune.on_candidate_measured, including locally opened Seam and partial applications; the
-   approved witnesses are the uncontended scope, Scripted_search.search, and the refusal
-   fields/accessors below. Comments, strings, simply mentioning a record label in a pattern,
-   getters, callback aliases, inter-module control flow, and reachability of the witness from each
-   application are outside this file-level check. *)
+   approved witnesses are direct applications (including [@@]) of the uncontended scope or
+   Scripted_search.search, and the refusal fields/accessors below. Comments, strings, simply
+   mentioning a record label in a pattern, getters, callback aliases, inter-module control flow, and
+   reachability of the witness from each application are outside this file-level check. *)
 
 open Base
 open Ppxlib
@@ -37,7 +37,12 @@ let scan source =
         (match e.pexp_desc with
         | Pexp_apply (f, args) -> (
             let path = identifier f in
-            if scope_witness path then witness := true;
+            let witness_path =
+              match (path, args) with
+              | [ "@@" ], [ (Nolabel, callee); (Nolabel, _) ] -> identifier callee
+              | _ -> path
+            in
+            if scope_witness witness_path then witness := true;
             match (path, args) with
             | ( ( [ ("set" | "with_value") ]
                 | [ "Seam"; ("set" | "with_value") ]
@@ -68,6 +73,8 @@ let () =
     (check (setter ^ " (* Autotune.with_uncontended_test_windows run *)"));
   Verdict.p "a measured callback may use the uncontended scope or inspect the refusal record"
     ((not (check (setter ^ "\nlet () = Autotune.with_uncontended_test_windows run")))
+    && (not
+          (check (setter ^ "\nlet () = Autotune.with_uncontended_test_windows @@ fun () -> run ()")))
     && (not (check (setter ^ "\nlet rejected r = r.Autotune.timings_contended > 0")))
     && not (check (setter ^ "\nlet () = Scripted_search.search ~tag comp")));
   Verdict.p "a getter does not require a timing witness"
