@@ -5186,9 +5186,9 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   normal. Each MODULE of a package stand-in is held to its own library as well, since under
   `implicit_transitive_deps false` `cudajit.cuda` does not make `Nvrtc` visible: the scan reads the
   copied sources' parse trees for the stand-in modules they name, and maps each module to the one
-  library its `runtest-<module>` agreement rules gate on (`%{lib-available:…}`), so a new stub
-  module gets its library from its agreement rule (a module with none would stand for the whole
-  package; the census golden lists the map). A hand-written stub interface, which has no installed
+  library its `runtest-<module>` agreement rules gate on (`%{lib-available:…}`). The scan refuses
+  a module with no agreement alias, as pinned by the synthetic `Extra` control (gh-ocannl-2357).
+  The census golden lists the map. A hand-written stub interface, which has no installed
   copy to diff, gets a signature check on its agreement alias instead (`runtest-runtime` for metal's
   `Runtime`, `runtest-hip_ffi` for hipjit's `Hip_ffi`), so it is mapped like the rest. Two
   consequences for whoever edits the tree. Keep ONE stand-in library per genuine stanza: a library

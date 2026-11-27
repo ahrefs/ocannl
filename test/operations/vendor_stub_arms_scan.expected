@@ -4,7 +4,7 @@ every select arm matches Config_key_scan.select_target_of_arm for its target: tr
 no checked-in .ml source collides with a select arm's target path: true
 
 Vendor packages with a stand-in: cudajit, hipjit, metal
-Package stand-in modules, each with the library its agreement alias is gated on (any: no alias, held to any library of the package):
+Package stand-in modules, each with the library its agreement alias is gated on:
   cudajit_stub: Cuda -> cudajit.cuda, Nvrtc -> cudajit.nvrtc
   hipjit_stub: Hip -> hipjit.hip, Hip_ffi -> hipjit.hip_ffi, Hiprtc -> hipjit.hiprtc
   metal_stub: Metal -> metal, Runtime -> metal.runtime
