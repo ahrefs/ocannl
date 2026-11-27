@@ -941,12 +941,17 @@ files.
   statement by statement, each chain `Op_legal` after the ones kept before it, and the preset then
   runs on the interchanged code. Bitwise identical because only accumulators whose write loops each
   own an axis as a plain `Iterator` qualify (one cell, one tuple of write-loop values), and a
-  narrow-storage cell the backend widens is skipped, as for seeding. Its machine-level effect is
-  HIP's alone (see the backend-precision note on reading the PTX/ISA first): the layer-norm
+  narrow-storage cell the backend widens is skipped by default. In gh-ocannl-1348 the machine-level
+  effect was on HIP (see the backend-precision note on reading the PTX/ISA first): the layer-norm
   gamma/beta nests stop round-tripping their cells, while NVRTC had already promoted every one.
   Not in `maybe_default_schedules`: the tuner's presets and the fission probes are unchanged; the
   search meets the sink only through the seeded plan's seed (next bullet;
   `gpu_default_reduction_sink`, `Search_shaping` since then).
+- Metal admits the plain-cell sink independently of sketch seeding (gh-ocannl-2507).
+  Each cell retains its contribution order, and affine-window writes stay with
+  the preset. Its sunk untuned plan provides the first search candidate without replacing
+  the ordinary coarse and fine singles. The analytic model uses the sunk plan as its
+  incumbent and retains its existing sketch admission policy.
 - **The search seeds the seeded untuned plan FIRST** (gh-ocannl-1388, `Autotune.seeded_plan`,
   flavor `F_seeded`). Before it, a GPU search's pool started from the plain default pipeline, so a
   search that timed only its first candidate, or refused every later window, crowned a step the

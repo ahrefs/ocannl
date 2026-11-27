@@ -11,6 +11,7 @@ unavailable identity produces no key for either store: true
 concrete identities reach both stores' lock boundary: true
 concrete identity round-trips a schedule entry: true
 concrete identity round-trips a placement entry: true
+placement decisions from before the Metal sink floor miss: true
 absent toolchain metadata preserves schedule persistence: true
 absent toolchain metadata preserves placement persistence: true
 unavailable identity never reads a schedule, even from a populated store: true

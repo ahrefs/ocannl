@@ -88,6 +88,7 @@ let () =
     [
       { BI.cc_facts with workgroup_shared_placement = true };
       { BI.cc_facts with seeds_untuned_default = true };
+      { BI.cc_facts with sinks_untuned_reductions = true };
       { BI.cc_facts with queued_timing = Queued_deep };
       { BI.cc_facts with retries_contended_window = true };
       { BI.cc_facts with node_ident_prefix = "t_" };

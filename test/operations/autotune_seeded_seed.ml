@@ -27,8 +27,8 @@
    and which tell the plans apart: the split reassociates the bias gradient, so the plain default
    pipeline computes it differently in some cell, which is claimed as the control where the plan
    splits (elsewhere the plan is bitwise the default by construction, and only the digest claim
-   tells them apart). Off CUDA/HIP the untuned compile is the plain default and the search seeds no
-   plan, which is claimed instead.
+   tells them apart). Metal starts from the plain-cell sink (gh-ocannl-2507), with the ordinary
+   per-segment sketch candidates still available. The host-pool backend derives no GPU plan.
 
    A window the host refuses anyway (queued calibration that measured no batch, routine on a shared
    box) never reaches the seam, so the claims that read the scripted windows are gated on every
@@ -40,10 +40,9 @@
    an equivalent later seed, but no later seed reproduces the plan, so only the one retry the seed
    pass ends with can measure and crown it. That retry is claimed, with the crown it wins.
 
-   The CUDA/HIP legs need a device that seeds; elsewhere they are skipped. *)
+   The retry and cache legs use the CUDA/HIP plan with sketch seeding. *)
 
-(* cc-fp-contract: not-cc -- the value claims hold only where CUDA or HIP seeds or splits; cc skips
-   them *)
+(* cc-fp-contract: not-cc -- the value claims compare real untuned-plan candidates on GPU *)
 
 open Base
 open Ocannl
@@ -60,12 +59,17 @@ let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~d
    while what this test checks -- the search seeds the plan the untuned compile ships, whatever the
    gate resolved it to -- is the gate's to feed, not to decide. The untuned compile and the search
    read the same setting, set before the first compile reads it. *)
-let () = Unix.putenv "OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION" "32"
+let () =
+  Unix.putenv "OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION" "32";
+  Unix.putenv "OCANNL_GPU_DEFAULT_REDUCTION_SINK" "true"
 
 (* What the untuned compile promises here, read off the predicates it consults: seeding on CUDA and
    HIP, the split likewise ([Autotune.seeded_split_backend], gh-ocannl-1325, gh-ocannl-1412). *)
-let seeds_here = Autotune.seeded_default_backend (Context.backend_facts_of_name backend_name)
-let splits_here = Autotune.seeded_split_backend (Context.backend_facts_of_name backend_name)
+let facts = Context.backend_facts_of_name backend_name
+let seeds_here = facts.Ir.Backend_intf.seeds_untuned_default
+let splits_here = Autotune.seeded_split_backend facts
+let sinks_here = facts.Ir.Backend_intf.sinks_untuned_reductions
+let has_plan = seeds_here || sinks_here
 
 (* The batch axis outermost and long: the split detector splits a reduction over its outermost loop,
    which at [nb = 4] would be too short to propose (the gpt2_mini_train b8 case). *)
@@ -232,6 +236,7 @@ let () =
 let () =
   let (w_untuned, b_untuned), untuned_digest, choice = untuned () in
   let claim label evaluate = Verdict.gate ~when_:seeds_here ~on:backend_name label evaluate in
+  let plan_claim label evaluate = Verdict.gate ~when_:has_plan ~on:backend_name label evaluate in
   claim "on CUDA/HIP the untuned plan seeds a contraction" (fun () ->
       p "on CUDA/HIP the untuned plan seeds a contraction"
         (match choice with Some c -> not (List.is_empty c.Autotune.sd_seeded) | None -> false));
@@ -239,10 +244,10 @@ let () =
     "where the untuned compile splits (CUDA and HIP), the plan splits a reduction" (fun () ->
       p "where the untuned compile splits (CUDA and HIP), the plan splits a reduction"
         (match choice with Some c -> not (List.is_empty c.Autotune.sd_split) | None -> false));
-  Verdict.gated ~when_:(not seeds_here) ~on:backend_name
-    "off CUDA/HIP the untuned compile is the plain default" (Option.is_none untuned_digest);
-  Verdict.gate ~when_:(not seeds_here) ~on:backend_name
-    "off CUDA/HIP the search derives no seeded plan" (fun () ->
+  Verdict.gated ~when_:(not has_plan) ~on:backend_name
+    "on the host pool the untuned compile is the plain default" (Option.is_none untuned_digest);
+  Verdict.gate ~when_:(not has_plan) ~on:backend_name
+    "on the host pool the search derives no seeded plan" (fun () ->
       (* The search's own derivation, on the lowering the plain default compiles: no plan. *)
       let plan = ref None in
       let ctx = Context.auto () in
@@ -259,17 +264,17 @@ let () =
              [ opt ])
            ctx comp Ir.Indexing.Empty
           : Context.t * Context.routine);
-      p "off CUDA/HIP the search derives no seeded plan"
+      p "on the host pool the search derives no seeded plan"
         (match !plan with Some None -> true | Some (Some _) | None -> false));
   let quiet_host = "a host that refused a window of the seeded plan"
   and quiet_note label quiet =
     if not quiet then
       Stdio.eprintf "%s: the host refused a seeded window, so the scripted claims skip\n%!" label
   in
-  let tuned = if seeds_here then Some (cut_search ()) else None in
+  let tuned = if has_plan then Some (cut_search ()) else None in
   (* [f] gets the search; [quiet] gates the claims that read its windows. *)
   let with_tuned ?(scripted = true) label f =
-    claim label (fun () ->
+    plan_claim label (fun () ->
         match tuned with
         | None -> p (label ^ " (no search ran)") false
         | Some ((_, _, _, _, quiet, _) as t) ->
@@ -285,6 +290,12 @@ let () =
       Option.iter (List.hd attempts) ~f:(fun label ->
           Stdio.eprintf "first candidate: %s (not part of the golden)\n%!" label);
       match attempts with label :: _ :: _ -> is_seeded label | _ -> false);
+  let sink_only_leg = Verdict.leg ~when_:(sinks_here && not seeds_here) ~on:backend_name () in
+  Verdict.in_leg ~leg:sink_only_leg "a sink-only floor keeps the ordinary per-segment candidates"
+    (fun label ->
+      p label
+        (Option.exists tuned ~f:(fun (_, _, _, r, _, _) ->
+             r.Autotune.fiss_sketch_candidates > 0 && r.seeded_single_candidates = 0)));
   with_tuned ~scripted:false "every attempt of the seeded plan compiled and reached a timing window"
     (fun (_, _, _, _, _, reached) -> reached);
   with_tuned "its timed code is the untuned compile's, segment for segment"
@@ -305,7 +316,7 @@ let () =
           && Float.equal r.best_ms ms
       | _ -> false);
   (let label = "the crowned gradients are bitwise the untuned compile's" in
-   claim label (fun () ->
+   plan_claim label (fun () ->
        match tuned with
        | None -> p (label ^ " (no search ran)") false
        | Some ((w_tuned, b_tuned), _, _, _, quiet, _) ->

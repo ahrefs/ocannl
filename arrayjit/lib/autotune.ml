@@ -5587,13 +5587,15 @@ type seeded_choice = {
   sd_fell_back : bool;
 }
 
+let seeded_choice_changed c =
+  not (List.is_empty c.sd_seeded && List.is_empty c.sd_split && List.is_empty c.sd_sunk)
+
 let site_reduction_extent (site : matmul_site) =
   List.fold site.m_ko ~init:site.m_nk ~f:(fun acc (_, n) -> acc * n)
 
-(* CUDA and HIP only: the backends the untiled-contraction gap was measured on (gh-ocannl-1183) and
-   the seeded plan's before/after was measured on. Metal keeps the plain default until a Metal
-   measurement says otherwise. *)
+(* CUDA and HIP only: the backends where the contraction sketches were measured (gh-ocannl-1183). *)
 let seeded_default_backend (facts : Ir.Backend_intf.backend_facts) = facts.seeds_untuned_default
+let reduction_sink_backend (facts : Ir.Backend_intf.backend_facts) = facts.sinks_untuned_reductions
 
 type seed_gate =
   | Min_reduction of int
@@ -5821,15 +5823,14 @@ let seeded_split_backend facts = seeded_default_backend facts
 
 (* gh-ocannl-1331: whether a search on [backend] can read the [Search_shaping] key [key]: the seeded
    plan's keys where {!seeded_settings} resolves them (its backend tests come first, so another
-   backend never reads them), the register-tile twin gate where the matmul family's CPU branch reads
-   it ([matmul_flavor_tree]'s [is_cpu] arm, the register-tiled rendering), the default pipeline's
-   per {!Sched.search_shaping_key_read}. The other [autotune_*] keys are read on every backend: the
-   search's own knobs, and [autotune_pad_waste_max] in the GPU and CPU menus alike. *)
+   backend never reads them), the seeded-singles setting where the backend seeds sketches, the
+   register-tile twin gate where the matmul family's CPU branch reads it ([matmul_flavor_tree]'s
+   [is_cpu] arm), and the default pipeline's keys per {!Sched.search_shaping_key_read}. *)
 let search_shaping_key_read ~facts key =
   match key with
   | "autotune_register_tile_rm_twin" -> Ir.Backend_intf.renders_on_host_pool facts
-  | "gpu_default_sketch_min_reduction" | "gpu_default_reduction_sink" ->
-      seeded_default_backend facts
+  | "gpu_default_sketch_min_reduction" | "autotune_seeded_singles" -> seeded_default_backend facts
+  | "gpu_default_reduction_sink" -> reduction_sink_backend facts
   | "gpu_default_split_reduce_min_serial" ->
       seeded_default_backend facts && seeded_split_backend facts
   | _ -> Sched.search_shaping_key_read ~facts key
@@ -5938,18 +5939,19 @@ let refine_segments ~coarse ~(fine : _ list option Lazy.t) ~seed =
 let no_seeded_choice =
   { sd_seeded = []; sd_sunk = []; sd_refined = 0; sd_split = []; sd_fell_back = false }
 
-(* The resolved thresholds, or [None] where the untuned compile is the plain default. The backend
-   first: the thresholds are CUDA/HIP settings, so a malformed value must not break a compile on a
-   backend that ignores them. *)
+(* Resolve each component only on backends that use it, so a malformed CUDA/HIP threshold cannot
+   break the sink-only Metal compile. *)
 let seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink:sink_override ?seed_narrow
     ~facts ~configured_gate () =
   let gate () =
-    match (seed_gate, min_reduction) with
-    | Some _, Some _ ->
-        invalid_arg "Autotune.seeded_transform: pass ~min_reduction or ~seed_gate, not both"
-    | Some g, None -> g
-    | None, Some n -> Min_reduction n
-    | None, None -> configured_gate ()
+    if not (seeded_default_backend facts) then Min_reduction 0
+    else
+      match (seed_gate, min_reduction) with
+      | Some _, Some _ ->
+          invalid_arg "Autotune.seeded_transform: pass ~min_reduction or ~seed_gate, not both"
+      | Some g, None -> g
+      | None, Some n -> Min_reduction n
+      | None, None -> configured_gate ()
   in
   let gate_off () = match gate () with Min_reduction n -> n <= 0 | Ranked _ -> false in
   (* Resolved only where the split runs, so a malformed value breaks no compile that ignores it. *)
@@ -5958,16 +5960,18 @@ let seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink:sink_o
     else match min_serial with Some n -> n | None -> seeded_split_min_serial ()
   in
   let sink_enabled () =
-    match sink_override with Some b -> b | None -> reduction_sink_enabled ()
+    reduction_sink_backend facts
+    && Option.value_or_thunk sink_override ~default:reduction_sink_enabled
   in
   let admit_narrow () =
-    match seed_narrow with Some b -> b | None -> seed_narrow_storage_enabled ()
+    seeded_default_backend facts
+    && Option.value_or_thunk seed_narrow ~default:seed_narrow_storage_enabled
   in
   if
-    (not (seeded_default_backend facts))
-    || (gate_off () && min_serial () <= 0 && not (sink_enabled ()))
+    (not (seeded_default_backend facts || reduction_sink_backend facts))
     || (not (Sched.automatic_schedule_active ~facts))
-    || not (Sched.default_pipeline_fissions ())
+    || (not (Sched.default_pipeline_fissions ()))
+    || (gate_off () && min_serial () <= 0 && not (sink_enabled ()))
   then None
   else Some (gate (), min_serial (), sink_enabled (), admit_narrow ())
 
@@ -6204,10 +6208,11 @@ let seeded_decisions ?memo ?(census = true) ~scatter_packets ~capabilities ~limi
          first product is tiled. The finer [arity_cuts] segmentation (gh-ocannl-574) cuts those
          apart; {!refine_segments} takes its pieces where more of them seed (gh-ocannl-1413), and
          elsewhere the default segmentation stands, so no launch is added that buys no seed. *)
+      let fine =
+        lazy (match gate with Min_reduction n when n <= 0 -> None | _ -> derive ~arity_cuts:true)
+      in
       let hybrid, refined =
-        refine_segments ~coarse
-          ~fine:(lazy (derive ~arity_cuts:true))
-          ~seed:(fun k pre ->
+        refine_segments ~coarse ~fine ~seed:(fun k pre ->
             Option.map
               (seed_of (Sched.segment_class k) pre)
               ~f:(fun p -> (p, digest ~with_placements:false pre)))
@@ -6310,6 +6315,9 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narr
              baseline is a different program, and GPUs never dispatch it. *)
           report_plan (fun () -> Option.value_exn (default_seed_label ~facts));
           None
+      | plan when not (seeded_default_backend facts) ->
+          report_plan (fun () -> seeded_plan_label plan);
+          Some plan
       | plan ->
           report_plan (fun () -> seeded_plan_label plan);
           (* Every reading the per-segment decisions rest on (gh-ocannl-1442, gh-ocannl-1479): the
@@ -6412,9 +6420,11 @@ let ranking_multiprocessors ~limits =
    program, against its own sketch there ({!model_seeded_anchors}, gh-ocannl-1477). [None] where the
    untuned compile is the plain default (another backend, seeding off). Shared by [model_default]
    and [model_explain]. *)
+let model_untuned_plan ~facts ~limits =
+  seeded_settings ~facts ~configured_gate:(fun () -> seeded_default_gate ~limits) ()
+
 let model_seeding ~facts ~limits =
-  if not (Ir.Backend_intf.binds_hardware_grid facts) then None
-  else seeded_settings ~facts ~configured_gate:(fun () -> seeded_default_gate ~limits) ()
+  if seeded_default_backend facts then model_untuned_plan ~facts ~limits else None
 
 (* gh-ocannl-1600: whether [model_default] ranks the coalesced layouts: only where the terms that
    tell them apart are priced -- the memory-transaction rate (with the lane group's width stated),
@@ -7514,10 +7524,7 @@ module Make (D : Driver) = struct
           choice := { no_seeded_choice with sd_fell_back = true }
         in
         compile_advisory ?name ~on_fallback
-          ~fallback_if:(fun () ->
-            not
-              (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_split
-             && List.is_empty !choice.sd_sunk))
+          ~fallback_if:(fun () -> seeded_choice_changed !choice)
           transform ctx comp bindings
         |> report_or_release ~report:emit
 
@@ -7584,14 +7591,12 @@ module Make (D : Driver) = struct
             Int.incr n_rejected;
             None
       in
-      (* gh-ocannl-1253: on CUDA and HIP the model starts from the seeded untuned plan
-         ({!seeded_default}'s, [auto] gate included) rather than the plain default pipeline: it is
-         the incumbent, and the action taken when no candidate strictly beats it (and its own
-         sketch, [anchored] below). [None] where the untuned compile is the plain default (another
-         backend, seeding off). *)
       let seeding_here = lazy (model_seeding ~facts ~limits) in
-      (* With a seeded incumbent, [model_admits] applies the numerics gate before scoring. Metal,
-         the CPU backends and an unseeded CUDA/HIP compile keep the whole family. *)
+      (* gh-ocannl-1253: the model keeps the untuned plan as the incumbent unless a candidate
+         strictly beats it. CUDA and HIP can add sketch seeding; Metal can sink plain reductions. *)
+      let untuned_here = lazy (model_untuned_plan ~facts ~limits) in
+      (* [model_admits] applies the numerics gate only where the untuned compiler seeds sketches.
+         A sink-only Metal incumbent keeps the same candidate family as the plain preset. *)
       let coalesced = model_ranks_coalesced ~limits in
       let admits p = model_admits ~coalesced ~seeding:(Lazy.force seeding_here) p in
       (* gh-ocannl-1477: under seeding, a walk's threshold is the seeded plan's own sketch on the
@@ -7697,18 +7702,19 @@ module Make (D : Driver) = struct
         | None -> opt
       in
       let select (opt : LL.optimized) =
-        let seeded_record = ref [] in
+        let incumbent_choice = ref no_seeded_choice in
         try
           (* The incumbent -- the seeded plan where there is one, else the untuned default pipeline
              -- scored on a hermetic copy: both the anchor candidate and the fallback. *)
           let incumbent_label, incumbent_action, incumbent_scratch =
-            match Lazy.force seeding_here with
+            match Lazy.force untuned_here with
             | Some seeding ->
-                ( "seeded",
-                  `Seeded seeding,
-                  seeded_segs
-                    ~on_choice:(fun c -> seeded_record := c.sd_seeded)
-                    seeding (scratch_of opt) )
+                let segs =
+                  seeded_segs ~on_choice:(fun c -> incumbent_choice := c) seeding (scratch_of opt)
+                in
+                if seeded_default_backend facts || seeded_choice_changed !incumbent_choice then
+                  ("seeded", `Seeded seeding, segs)
+                else ("default", `Default, segs)
             | None ->
                 ( "default",
                   `Default,
@@ -7716,7 +7722,7 @@ module Make (D : Driver) = struct
           in
           (* gh-ocannl-1477: what the incumbent plan seeded, by first unit -- the anchors'
              source. *)
-          let seeded_record = !seeded_record in
+          let seeded_record = !incumbent_choice.sd_seeded in
           let default_score = score incumbent_scratch in
           (* The candidates compete on the program the seeded plan starts from, its split prelude
              included, so a winner keeps the reductions the untuned compile splits. *)
@@ -7872,11 +7878,7 @@ module Make (D : Driver) = struct
               seeded_changed := false;
               validate_segments_for_model ~fork_join:is_cpu ~limits
                 (seeded_segs
-                   ~on_choice:(fun c ->
-                     seeded_changed :=
-                       not
-                         (List.is_empty c.sd_seeded && List.is_empty c.sd_split
-                        && List.is_empty c.sd_sunk))
+                   ~on_choice:(fun c -> seeded_changed := seeded_choice_changed c)
                    seeding opt)
           | `Whole p ->
               let opt = prelude ~hermetic:false opt in
@@ -8245,15 +8247,21 @@ module Make (D : Driver) = struct
     else
       (* [model_default]'s incumbent and searched program, as it derives them. *)
       let seeding = model_seeding ~facts ~limits in
-      let record = ref [] in
+      let record = ref no_seeded_choice in
       let incumbent_label, incumbent =
-        match seeding with
+        match model_untuned_plan ~facts ~limits with
         | Some (gate, min_serial, sink_enabled, admit_narrow) ->
-            ( "seeded",
+            let segs =
               seeded_apply
-                ~on_choice:(fun c -> record := c.sd_seeded)
+                ~on_choice:(fun c -> record := c)
                 ~capabilities:caps ~facts ~limits ~accum_prec ~static_indices ~gate ~min_serial
-                ~sink_enabled ~admit_narrow (scratch_of opt) )
+                ~sink_enabled ~admit_narrow (scratch_of opt)
+            in
+            let label =
+              if seeded_default_backend facts || seeded_choice_changed !record then "seeded"
+              else "default"
+            in
+            (label, segs)
         | None ->
             ( "default",
               Sched.maybe_default_schedules ~facts ~limits ~static_indices (scratch_of opt) )
@@ -8280,7 +8288,7 @@ module Make (D : Driver) = struct
             | exception Outcome.Cause_at _ -> None
             | segs -> Some (label p, explain ~ex_admitted:(admits p) segs))
       in
-      let record = !record in
+      let record = !record.sd_seeded in
       (* gh-ocannl-1477: the leaf [model_default] anchors the walk on [prog] at -- the best-ranked
          of the seeded plan's own sketches there ({!model_seeded_anchors}, from [seeded], the plan's
          record for the units [prog] covers) -- marked [ex_anchor]; listed after the leaves when the
@@ -8495,7 +8503,6 @@ module Make (D : Driver) = struct
              Utils.registered_int ~arg_name:"autotune_split_reduce_max_sites"))
     in
     let staffed_singles = staffed_singles_setting () in
-    let seeded_singles = seeded_singles_setting () in
     let playoff_width = max 0 (Utils.registered_int ~arg_name:"autotune_composite_playoff_width") in
     (* A negative margin admits no single and so means what width 0 says; it is floored at 0 (exact
        ties only) rather than given a second spelling of off. A malformed value, NaN included, is
@@ -8529,6 +8536,9 @@ module Make (D : Driver) = struct
           context's; backend capabilities come from the facts below"])
     in
     let facts = D.backend_facts ctx in
+    (* A sink-only plan did not refine its segmentation through sketch seeding, so its floor must
+       not replace the ordinary coarse and fine singles. *)
+    let seeded_singles = seeded_default_backend facts && seeded_singles_setting () in
     let device = D.ordinal ctx in
     (* The tuned computation's name, for the calibration rows and log lines of every candidate
        (gh-ocannl-635). READ from [name] rather than re-derived (gh-ocannl-669): every compile below
@@ -8834,15 +8844,15 @@ module Make (D : Driver) = struct
     (* The untuned fallback of a call that does not search (search off, a lineage refusal, a
        deferred cache replay that failed), through the containment-aware form so a failure reports
        the phase it carries. It is {!seeded_default}'s compile, the recipes' untuned step, wherever
-       {!seeded_settings} admits the seeded plan (CUDA and HIP; gh-ocannl-1441) -- the plan derived
-       inside this compile's own transform, on [ctx]'s lowering -- and the plain default pipeline
-       elsewhere. As in {!seeded_default}, a classified failure of a compile that seeded, split or
-       sank something recompiles the plain default; any other failure goes to [raise_pre_search].
-       [Context.compile] is the plain form plus [raise_failure], which is what [raise_pre_search]
-       ends with, so the caller sees the same exception either way. Every call lies in a [not
-       search] branch or, on a path that tests no flag, carries [[@searchless "<why it does not
-       search>"]]: [test/operations/limits_field_classes] refuses any other caller, since this
-       compile reads [Untimed] fields the cache key cannot see (gh-ocannl-1570). *)
+       {!seeded_settings} admits the plan (gh-ocannl-1441) -- the plan derived inside this compile's
+       own transform, on [ctx]'s lowering -- and the plain default pipeline elsewhere. As in
+       {!seeded_default}, a classified failure of a compile that seeded, split or sank something
+       recompiles the plain default; any other failure goes to [raise_pre_search]. [Context.compile]
+       is the plain form plus [raise_failure], which is what [raise_pre_search] ends with, so the
+       caller sees the same exception either way. Every call lies in a [not search] branch or, on a
+       path that tests no flag, carries [[@searchless "<why it does not search>"]]:
+       [test/operations/limits_field_classes] refuses any other caller, since this compile reads
+       [Untimed] fields the cache key cannot see (gh-ocannl-1570). *)
     let compile_untuned_default ?base () =
       progress_stage "untuned_default_compile";
       let plain () =
@@ -8881,10 +8891,7 @@ module Make (D : Driver) = struct
                   bindings)
           with
           | Ok result -> result
-          | Error (Outcome.Classified classified)
-            when not
-                   (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_split
-                  && List.is_empty !choice.sd_sunk) ->
+          | Error (Outcome.Classified classified) when seeded_choice_changed !choice ->
               logf "the seeded untuned default FAILED (%s); compiling the plain default"
                 (Outcome.detail_of_cause classified.cause);
               plain ()
@@ -11303,12 +11310,12 @@ module Make (D : Driver) = struct
                         else None))
             in
             n_split_reduce_candidates := List.length sr_specs;
-            (* gh-ocannl-1388: the seeded untuned plan, the step the recipes' untuned compile ships
-               on CUDA and HIP ({!seeded_default}), seeded FIRST: wherever the search stops after
-               its first timing, or refuses every later window, it crowns that step, so tuned is
-               never worse than untuned by construction. Absent where the plan is the default
-               pipeline (no seed, split or sink; another backend), which the [config_thresholds]
-               preset seed reproduces, so those searches keep their candidate order. *)
+            (* gh-ocannl-1388: the untuned plan the recipes ship ({!seeded_default}), seeded FIRST:
+               wherever the search stops after its first timing, or refuses every later window, it
+               crowns that step, so tuned is never worse than untuned by construction. Absent where
+               the plan is the default pipeline (no seed, split or sink; another backend), which the
+               [config_thresholds] preset seed reproduces, so those searches keep their candidate
+               order. *)
             let seeded_specs =
               match Lazy.force seeded_plan_value with
               | None -> []
