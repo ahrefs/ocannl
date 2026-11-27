@@ -427,7 +427,8 @@ type grid_serial_reason =
           ({!per_chunk_private_bytes_cap}). *)
   | Grid_below_min_updates of { updates : int; floor : int }
       (** The launch's estimated scalar updates ({!grid_update_count}, saturating at [floor]) fall
-          below [floor], the resolved [cc_grid_min_updates]. *)
+          below [floor], the resolved [cc_grid_min_updates] (for a multi-occurrence symbol group,
+          every multi-trip occurrence in the group fell below [floor]). *)
   | Grid_offset_range of { from_ : int; to_ : int }
       (** The loop does not start at 0, which the chunked rendering assumes. *)
 [@@deriving sexp_of, equal]

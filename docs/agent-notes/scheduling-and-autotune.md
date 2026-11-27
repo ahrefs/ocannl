@@ -1651,8 +1651,11 @@ files.
   inside that symbol's outermost `Grid` loops and every occurrence accessing it passes
   `first_access_standalone_covering` within the per-chunk cap, and every occurrence of the symbol
   renders on the pool or none does, each chunk declaring only the privatized locals its own body
-  accesses. Plain `grid` with split k therefore stays in the menu under the normal cap and launch
-  floor. A direct CPU conv `Row_block` panel
+  accesses. Soundness and per-chunk footprint checks hold per occurrence, while the launch floor
+  holds for the group as long as at least one multi-trip occurrence meets `cc_grid_min_updates`, so
+  a smaller sibling (such as `k_full` without the epilogue in fused split-k, or an asymmetric
+  `full_block_split` copy) does not serialize a sibling that cleared the floor. Plain `grid` with
+  split k therefore stays in the menu under the normal cap and launch floor. A direct CPU conv `Row_block` panel
   privatizes both staged tiles and any accumulator fragment. Its tree charges their combined
   footprint against the same cap. `autotune_grid_record` compiles and executes the 40^3 and 72^3
   bk=16 matmul controls (both row-block loops on the pool with floor disabled, bitwise parity

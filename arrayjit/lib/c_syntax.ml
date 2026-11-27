@@ -763,7 +763,8 @@ type grid_serial_reason =
           ({!per_chunk_private_bytes_cap}). *)
   | Grid_below_min_updates of { updates : int; floor : int }
       (** The launch's estimated scalar updates ({!grid_update_count}, saturating at [floor]) fall
-          below [floor], the resolved [cc_grid_min_updates]. *)
+          below [floor], the resolved [cc_grid_min_updates] (for a multi-occurrence symbol group,
+          every multi-trip occurrence in the group fell below [floor]). *)
   | Grid_offset_range of { from_ : int; to_ : int }
       (** The loop does not start at 0, which the chunked rendering assumes. *)
 [@@deriving sexp_of, equal]
@@ -6510,7 +6511,10 @@ module C_syntax (B : C_syntax_config) = struct
      [Schedule.Partition] and [full_block_split] duplicate a [Grid] loop body without renaming its
      symbol, and a privatized local is omitted from function-scope declarations, so either every
      occurrence binding the symbol renders on the pool (each declaring its own chunk-private copy)
-     or none does. *)
+     or none does. Soundness and per-chunk footprint checks hold per occurrence; the launch floor
+     holds for the group when at least one multi-trip occurrence reaches [cc_grid_min_updates], so a
+     smaller sibling (e.g. a non-epilogue [k_full] segment or an asymmetric [full_block_split] copy)
+     cannot serialize a sibling that clears the floor. *)
   let collect_parallel_grid ctx (llc : Low_level.t) :
       Set.M(Indexing.Symbol).t * Tn.t list Map.M(Indexing.Symbol).t * Set.M(Tn).t =
     let empty =
@@ -6578,18 +6582,11 @@ module C_syntax (B : C_syntax_config) = struct
                   ~access:(fun ~write:_ ~kind:_ tn _ ->
                     if (is_local ctx) tn then Hashtbl.incr group_counts tn.Tn.uid)
                   ~on_stmt:(fun _ -> ()));
-            let eval_occ ~force_privatize (_, stmt, _, from_, to_, body, _) =
+            let eval_occ ~force_privatize (_, _, _, from_, to_, body, _) =
               if from_ <> 0 || to_ < from_ then Error (Grid_offset_range { from_; to_ })
               else
-                match
-                  (parallel_grid_safe ctx) ~sym ~grid_range:(from_, to_) ~global_counts
-                    ~group_counts ~force_privatize body
-                with
-                | Error why -> Error why
-                | Ok _ when floor > 0 && grid_update_count ~cap:floor stmt < floor ->
-                    Error
-                      (Grid_below_min_updates { updates = grid_update_count ~cap:floor stmt; floor })
-                | Ok res -> Ok res
+                (parallel_grid_safe ctx) ~sym ~grid_range:(from_, to_) ~global_counts ~group_counts
+                  ~force_privatize body
             in
             let results =
               List.map group_occs ~f:(fun occ ->
@@ -6623,22 +6620,35 @@ module C_syntax (B : C_syntax_config) = struct
                   match r with Error why -> Some why | Ok _ -> None)
             with
             | None ->
-                syms := Set.add !syms sym;
-                let seen_priv = Hash_set.create (module Int) in
-                let merged_priv_rev = ref [] in
-                List.iter results ~f:(fun ((id, _, _, from_, to_, _, _), r) ->
-                    match r with
-                    | Ok (priv, ptr_aliased, _, private_bytes) ->
-                        List.iter priv ~f:(fun tn ->
-                            if not (Hash_set.mem seen_priv tn.Tn.uid) then (
-                              Hash_set.add seen_priv tn.Tn.uid;
-                              merged_priv_rev := tn :: !merged_priv_rev));
-                        aliases := List.fold ptr_aliased ~init:!aliases ~f:Set.add;
-                        if to_ > from_ then site_by_occ.(id) <- Some (Grid_pool { private_bytes })
-                    | Error _ -> assert false);
-                let merged_priv = List.rev !merged_priv_rev in
-                if not (List.is_empty merged_priv) then
-                  privs := Map.set !privs ~key:sym ~data:merged_priv
+                let max_updates =
+                  if floor <= 0 then 0
+                  else
+                    List.fold group_occs ~init:0 ~f:(fun acc (_, stmt, _, from_, to_, _, _) ->
+                        if to_ > from_ then Int.max acc (grid_update_count ~cap:floor stmt) else acc)
+                in
+                if floor > 0 && max_updates < floor then
+                  List.iter results ~f:(fun ((id, stmt, _, from_, to_, _, _), _) ->
+                      if to_ > from_ then
+                        let updates = grid_update_count ~cap:floor stmt in
+                        site_by_occ.(id) <-
+                          Some (Grid_serial (Grid_below_min_updates { updates; floor })))
+                else (
+                  syms := Set.add !syms sym;
+                  let seen_priv = Hash_set.create (module Int) in
+                  let merged_priv_rev = ref [] in
+                  List.iter results ~f:(fun ((id, _, _, from_, to_, _, _), r) ->
+                      match r with
+                      | Ok (priv, ptr_aliased, _, private_bytes) ->
+                          List.iter priv ~f:(fun tn ->
+                              if not (Hash_set.mem seen_priv tn.Tn.uid) then (
+                                Hash_set.add seen_priv tn.Tn.uid;
+                                merged_priv_rev := tn :: !merged_priv_rev));
+                          aliases := List.fold ptr_aliased ~init:!aliases ~f:Set.add;
+                          if to_ > from_ then site_by_occ.(id) <- Some (Grid_pool { private_bytes })
+                      | Error _ -> assert false);
+                  let merged_priv = List.rev !merged_priv_rev in
+                  if not (List.is_empty merged_priv) then
+                    privs := Map.set !privs ~key:sym ~data:merged_priv)
             | Some first_why ->
                 List.iter results ~f:(fun ((id, _, _, from_, to_, _, _), r) ->
                     if to_ > from_ then

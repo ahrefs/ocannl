@@ -780,6 +780,113 @@ let () =
         && Ll_test.all_tensorized ~what:"agr-grid col-edge 64x64x40"
              (Ll_test.renderings routine.Context.mma)
         && Array.equal Float.equal got_grid got_serial));
+  (* Default-floor straddling fused split-k control (128x20x64 relu (prod + bias), bk=16): k_full
+     (10240 updates, no epilogue) falls below [default_grid_min_updates] (16384), while k_edge (with
+     the fused epilogue) clears it. Deciding the launch floor per symbol group keeps both segments
+     on the pool, matching the menu's proposal. *)
+  let default_floor_straddle =
+    lazy
+      (let floor = Cs.default_grid_min_updates in
+       Utils.with_stated_config
+         [ ("cc_grid_min_updates", Int.to_string floor) ]
+         (fun () ->
+           let mk name =
+             let prod = rect_matmul ~tag:name ~m:128 ~k:20 ~n:64 in
+             Train.set_materialized prod.Tensor.value;
+             let bias =
+               TDSL.ndarray
+                 (Array.init 64 ~f:(fun j -> Float.of_int (j % 5) -. 2.))
+                 ~label:[ name ^ "_bias" ]
+                 ~output_dims:[ 64 ] ()
+             in
+             let%op out = relu (prod + bias) in
+             (out, Train.forward out)
+           in
+           let _, probe_comp = mk "agr_straddle_probe" in
+           let lowering = Ll_test.captured_lowering ~name:"agr_straddle_probe" probe_comp in
+           let limits = Context.hardware_limits (Context.auto ()) in
+           let seeds = Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits lowering in
+           let fused_grid =
+             List.find seeds ~f:(fun sp ->
+                 sp.Autotune.sk_mma && sp.sk_epilogue && sp.sk_bk = 16 && sp.sk_grid
+                 && (not sp.sk_hoist) && not sp.sk_pack_rest)
+           in
+           Option.map fused_grid ~f:(fun sp ->
+               let scheduled =
+                 Ir.Schedule.apply
+                   (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p:sp lowering)
+                   lowering
+               in
+               let is_grid (site : Ll_test.loop_site) =
+                 match site.ls_stmt with
+                 | Ir.Low_level.For_loop { axis = Grid; _ } -> true
+                 | _ -> false
+               in
+               let outer_grids =
+                 List.filter_map (Ll_test.loop_sites scheduled.llc) ~f:(fun site ->
+                     match site.ls_stmt with
+                     | Ir.Low_level.For_loop { axis = Grid; index; from_; to_; _ }
+                       when to_ > from_ && not (List.exists site.ls_ancestors ~f:is_grid) ->
+                         Some (index, site.ls_stmt)
+                     | _ -> None)
+               in
+               let straddles =
+                 let by_sym = Hashtbl.create (module Ir.Indexing.Symbol) in
+                 List.iter outer_grids ~f:(fun (sym, stmt) ->
+                     Hashtbl.add_multi by_sym ~key:sym ~data:stmt);
+                 Hashtbl.data by_sym
+                 |> List.exists ~f:(fun stmts ->
+                     match List.rev stmts with
+                     | [ s_full; s_edge ] ->
+                         Cs.grid_update_count ~cap:floor s_full < floor
+                         && Cs.grid_update_count ~cap:floor s_edge >= floor
+                     | _ -> false)
+               in
+               let run suffix ~prefill transform =
+                 let name = "agr_straddle_" ^ suffix in
+                 let out, comp = mk name in
+                 let ctx, routine =
+                   Context.compile ~name ~lowered_transform:transform (Context.auto ()) comp
+                     Ir.Indexing.Empty
+                 in
+                 let ctx =
+                   if prefill then
+                     Context.set_values ctx out.Tensor.value
+                       (Array.init (128 * 64) ~f:(fun idx -> Float.of_int (100_000 + idx)))
+                   else ctx
+                 in
+                 let ctx = Context.run ctx routine in
+                 let values = Context.get_values ctx out.Tensor.value in
+                 Context.release ctx;
+                 (values, routine)
+               in
+               let got_grid, routine =
+                 run "grid" ~prefill:true (fun opt ->
+                     [
+                       Ir.Schedule.apply
+                         (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p:sp opt)
+                         opt;
+                     ])
+               in
+               let got_ref, _ = run "ref" ~prefill:false (fun opt -> [ opt ]) in
+               (straddles, got_grid, got_ref, routine))))
+  in
+  in_leg ~leg
+    "agr-grid: default-floor straddling fused 128x20x64 bk=16 plain-Grid is proposed, renders both \
+     k segments on the pool, and matches the unscheduled reference bitwise" (fun label ->
+      match Lazy.force default_floor_straddle with
+      | None -> p label false
+      | Some (straddles, got_grid, got_ref, routine) ->
+          let pool_ok =
+            match pool_privatizing_entries routine.Context.grid with
+            | [ (l1, b1); (l2, b2) ] -> String.equal l1 l2 && b1 = 1024 && b2 = 1024
+            | _ -> false
+          in
+          p label
+            (straddles && pool_ok
+            && Ll_test.all_tensorized ~what:"agr-grid straddle 128x20x64"
+                 (Ll_test.renderings routine.Context.mma)
+            && Array.equal Float.equal got_grid got_ref));
   in_leg ~leg "agr-grid: a single partial k block is proposed and renders on the pool" (fun label ->
       let judged = without_launch_floor (fun () -> judge_plain_grid ~bk:16 (40, 12, 40)) in
       p_exists label judged ~f:(fun j -> j.g_proposed && g_grid_of j ~f:pool_privatizing));

@@ -29,6 +29,7 @@ agr-grid: dividing-row split-k (32x40x32) privatizes A~ alone on both loops and 
 agr-grid: over-cap split-k (72x72x96) is refused and both k segments decline for the cap: true
 agr-grid: fused 40^3 bk=16 plain-Grid is proposed, renders both k segments on the pool, and matches the unscheduled reference bitwise: true
 agr-grid: full_block_split column-edge plain-Grid privatizes differing per-loop tiles and matches Serial bitwise: true
+agr-grid: default-floor straddling fused 128x20x64 bk=16 plain-Grid is proposed, renders both k segments on the pool, and matches the unscheduled reference bitwise: true
 agr-grid: a single partial k block is proposed and renders on the pool: true
 agr-rule: two same-symbol Grid loops both covering a local render on the pool: true
 agr-rule: a non-covering sibling declines both loops with Grid_local_not_covering: true
