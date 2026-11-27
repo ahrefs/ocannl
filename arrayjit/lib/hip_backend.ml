@@ -534,8 +534,9 @@ end = struct
 
   (* Idempotent, and the routine stays runnable: its next run captures afresh. The stream is
      synchronized first, since a cached exec may still have a launch pending on it; the cache is
-     emptied under its lock, and every exec taken out of it is attempted, the first failure
-     re-raised. *)
+     emptied under its lock, and every exec taken out of it is attempted, with any exec whose
+     destruction raised returned to [g.cache]/[g.order] so a retry release destroys it without
+     double-destroying already-freed handles, and the first failure re-raised. *)
   let destroy_graphs g =
     let execs =
       Stdlib.Mutex.protect g.lock (fun () ->
@@ -548,19 +549,30 @@ end = struct
             Queue.clear g.order;
             execs))
     in
-    Backend_impl.attempt_each
-      (List.map execs ~f:(fun (key, exec) () ->
-           Resource_fault_injection.hit
-             ~artifact:
-               (Graph_capture
-                  {
-                    device_id = g.graphs_device.device_id;
-                    routine = g.routine_name;
-                    key = Some key;
-                  })
-             Graph_exec_before_destroy;
-           H.Graph.exec_destroy exec;
-           Atomic.incr graph_execs_destroyed))
+    let failed = ref [] in
+    let destroy_one (key, exec) () =
+      try
+        Resource_fault_injection.hit
+          ~artifact:
+            (Graph_capture
+               { device_id = g.graphs_device.device_id; routine = g.routine_name; key = Some key })
+          Graph_exec_before_destroy;
+        H.Graph.exec_destroy exec;
+        Atomic.incr graph_execs_destroyed
+      with exn ->
+        let bt = Stdlib.Printexc.get_raw_backtrace () in
+        failed := (key, exec) :: !failed;
+        Stdlib.Printexc.raise_with_backtrace exn bt
+    in
+    Exn.protect
+      ~f:(fun () -> Backend_impl.attempt_each (List.map execs ~f:destroy_one))
+      ~finally:(fun () ->
+        if not (List.is_empty !failed) then
+          Stdlib.Mutex.protect g.lock (fun () ->
+              List.iter (List.rev !failed) ~f:(fun (key, exec) ->
+                  if not (Hashtbl.mem g.cache key) then (
+                    Hashtbl.set g.cache ~key ~data:exec;
+                    Queue.enqueue g.order key))))
 
   let () =
     Slab.on_invalidate_merge_slab :=
@@ -1776,22 +1788,27 @@ end = struct
                                    %!"
                                   name message;
                                 run_plain ()
-                            | exception Resource_fault_injection.Simulated_capture_error message ->
-                                broken := true;
-                                Stdio.eprintf
-                                  "ocannl: disabling HIP graph capture for routine %s (%s)\n%!" name
-                                  message;
-                                run_plain ()
-                            | exception H.Hip_error { status; message } ->
+                            | exception
+                                ((Resource_fault_injection.Simulated_capture_error _ | H.Hip_error _)
+                                 as exn) ->
                                 (* E.g. capture unsupported on this runtime: fall back to
                                    per-segment launches for this routine (same-stream FIFO supplies
                                    the segment ordering), and re-run outside capture so a genuine
-                                   launch failure surfaces on the plain path. *)
+                                   launch failure surfaces on the plain path. Both real driver
+                                   errors and simulated fault-injection errors flow through this
+                                   single handler. *)
+                                let reason =
+                                  match exn with
+                                  | Resource_fault_injection.Simulated_capture_error msg -> msg
+                                  | H.Hip_error { status; message } ->
+                                      Printf.sprintf "%s: %s" message
+                                        (Sexp.to_string_hum @@ H.sexp_of_result status)
+                                  | _ -> assert false
+                                in
                                 broken := true;
                                 Stdio.eprintf
-                                  "ocannl: disabling HIP graph capture for routine %s (%s: %s)\n%!"
-                                  name message
-                                  (Sexp.to_string_hum @@ H.sexp_of_result status);
+                                  "ocannl: disabling HIP graph capture for routine %s (%s)\n%!" name
+                                  reason;
                                 run_plain ())));
             },
           fun () -> destroy_graphs graphs )

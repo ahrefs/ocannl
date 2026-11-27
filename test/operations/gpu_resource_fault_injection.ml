@@ -715,9 +715,10 @@ let () =
       let ev_after_pool_fail = count ctx0 "events_recorded" in
       let ac_after_pool_fail = AC.snapshot () in
       (* Next, retry release while failing the first [Graph_exec_before_destroy] by key: pools free
-         once, both distinct keys are attempted, the second exec is still destroyed, and streams and
-         events stay unchanged. *)
+         once, both distinct keys are attempted, the second exec is destroyed while the failed key
+         stays cached in [live_graph_execs], and streams/events stay unchanged. *)
       let destroy_keys = ref [] in
+      let failed_key = ref None in
       let hook_failed =
         match
           FI.with_event_callback
@@ -725,8 +726,9 @@ let () =
               match (ev.point, ev.artifact) with
               | FI.Graph_exec_before_destroy, FI.Graph_capture { key = Some k; _ } ->
                   destroy_keys := k :: !destroy_keys;
-                  if List.length !destroy_keys = 1 then
-                    failwith "gh778 injected graph exec destroy failure"
+                  if List.length !destroy_keys = 1 then (
+                    failed_key := Some k;
+                    failwith "gh778 injected graph exec destroy failure")
               | _ -> ())
             ~f:(fun () -> Context.release td_ctx)
         with
@@ -738,16 +740,28 @@ let () =
       let destroyed_after_exec_fail = count ctx0 "graph_execs_destroyed" in
       let ev_after_exec_fail = count ctx0 "events_recorded" in
       let ac_after_exec_fail = AC.snapshot () in
-      (* Second release must be a complete no-op: zero additional pool frees or destroy hits. *)
-      let retry_destroy_hits = ref 0 in
-      FI.with_callback
-        (function FI.Graph_exec_before_destroy -> Int.incr retry_destroy_hits | _ -> ())
+      (* Retry release without injection: must destroy ONLY the failed key without re-freeing pools
+         or double-destroying the already-destroyed exec, bringing created == destroyed. *)
+      let retry_destroy_keys = ref [] in
+      FI.with_event_callback
+        (fun ev ->
+          match (ev.point, ev.artifact) with
+          | FI.Graph_exec_before_destroy, FI.Graph_capture { key = Some k; _ } ->
+              retry_destroy_keys := k :: !retry_destroy_keys
+          | _ -> ())
         ~f:(fun () -> Context.release td_ctx);
       let streams_after_retry = count ctx0 "live_streams" in
       let live_after_retry = count ctx0 "live_graph_execs" in
       let destroyed_after_retry = count ctx0 "graph_execs_destroyed" in
       let ev_after_retry = count ctx0 "events_recorded" in
       let ac_after_retry = AC.snapshot () in
+      (* Third release after full cleanup must be a complete no-op. *)
+      let third_destroy_hits = ref 0 in
+      FI.with_callback
+        (function FI.Graph_exec_before_destroy -> Int.incr third_destroy_hits | _ -> ())
+        ~f:(fun () -> Context.release td_ctx);
+      let destroyed_after_third = count ctx0 "graph_execs_destroyed" in
+      let ac_after_third = AC.snapshot () in
       td_routine_slot := None;
       Gc_witness.settle ();
       let ac_after_gc = AC.snapshot () in
@@ -755,13 +769,20 @@ let () =
       let distinct_keys =
         match !destroy_keys with [ k2; k1 ] -> not (String.equal k1 k2) | _ -> false
       in
+      let retried_exact_failed_key =
+        match (!failed_key, !retry_destroy_keys) with
+        | Some fk, [ rk ] -> String.equal fk rk
+        | _ -> false
+      in
       Stdio.eprintf
         "gpu teardown (%s): streams=%d->%d events_delta=%d execs_created=%d execs_destroyed=%d \
-         keys=%d minted_working=%d mods_loaded=%d mods_unloaded=%d (not part of the golden)\n\
+         keys=%d retry_keys=%d third_hits=%d minted_working=%d mods_loaded=%d mods_unloaded=%d \
+         (not part of the golden)\n\
          %!"
         backend streams0 streams_after_retry (ev_cached - ev0) (created_cached - created0)
         (destroyed_after_retry - destroyed0)
-        (List.length !destroy_keys) minted_working mods_loaded_delta mods_unloaded_delta;
+        (List.length !destroy_keys) (List.length !retry_destroy_keys) !third_destroy_hits
+        minted_working mods_loaded_delta mods_unloaded_delta;
       p label
         (minted_working >= 1 && mods_loaded_delta >= 1
         && live_cached = live0 + 2
@@ -775,13 +796,16 @@ let () =
         && ac_after_pool_fail.AC.pools_freed = ac0.AC.pools_freed
         && hook_failed && distinct_keys
         && streams_after_exec_fail = streams0
-        && live_after_exec_fail = live0
+        && live_after_exec_fail = live0 + 1
         && destroyed_after_exec_fail = destroyed0 + 1
         && ev_after_exec_fail = ev_cached
         && ac_after_exec_fail.AC.live_working_pools = ac0.AC.live_working_pools
         && ac_after_exec_fail.AC.pools_freed - ac0.AC.pools_freed = minted_working
-        && !retry_destroy_hits = 0 && streams_after_retry = streams0 && live_after_retry = live0
-        && destroyed_after_retry = destroyed0 + 1
+        && retried_exact_failed_key && streams_after_retry = streams0 && live_after_retry = live0
+        && destroyed_after_retry = destroyed0 + 2
         && ev_after_retry = ev_cached
         && ac_after_retry.AC.pools_freed = ac_after_exec_fail.AC.pools_freed
+        && !third_destroy_hits = 0
+        && destroyed_after_third = destroyed0 + 2
+        && ac_after_third.AC.pools_freed = ac_after_exec_fail.AC.pools_freed
         && mods_unloaded_delta >= mods_loaded_delta))

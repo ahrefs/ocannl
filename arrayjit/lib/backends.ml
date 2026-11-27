@@ -2233,12 +2233,29 @@ let finalize ?(on_retire = fun (_ : retired_location) -> ()) (type dev runner ev
                       List.filter ctx.upload_arenas.arenas ~f:(fun a -> a.arena_pool_id <> pool_id));
                   ctx.released_pool_ids <- Set.add ctx.released_pool_ids pool_id))))
   in
-  (* gh-ocannl-1445: the routines' release hooks (cached graph execs), once the pools are freed. Not
-     part of [cleanup]: the flag stays committed when a hook fails, since the pools ARE freed and a
-     context that reads live again would run kernels over them. What a failed hook leaves is
-     destroyed with its routine, by the bindings' own finalizers, or at exit. Every hook is
-     attempted, and the first failure is re-raised. *)
-  let run_release_hooks () = Backend_impl.attempt_each !(ctx.release_hooks) in
+  (* gh-ocannl-1445, gh-ocannl-778: the routines' release hooks (cached graph execs), once the pools
+     are freed. Not part of [cleanup]: [ctx.finalized] stays committed when a hook fails, since the
+     pools ARE freed and a context that reads live again would run kernels over them. Every hook is
+     attempted; only hooks that raise stay queued in [ctx.release_hooks], so a retry
+     [Context.release] re-attempts them without re-freeing pools and succeeds as a no-op once every
+     hook has cleared. *)
+  let run_release_hooks () =
+    let hooks = !(ctx.release_hooks) in
+    ctx.release_hooks := [];
+    let failed = ref [] in
+    let run_one hook () =
+      try hook ()
+      with exn ->
+        let bt = Stdlib.Printexc.get_raw_backtrace () in
+        failed := hook :: !failed;
+        Stdlib.Printexc.raise_with_backtrace exn bt
+    in
+    Exn.protect
+      ~f:(fun () -> Backend_impl.attempt_each (List.map hooks ~f:run_one))
+      ~finally:(fun () ->
+        if not (List.is_empty !failed) then
+          ctx.release_hooks := List.rev !failed @ !(ctx.release_hooks))
+  in
   (* gh-ocannl-1462: the debug self-check of the lineage's arena ownership, after a successful
      cleanup -- a point of committed ownership -- and outside it: the pools ARE freed, so a failed
      check must not reset the flag, and the release hooks still run before it raises. *)
@@ -2248,7 +2265,7 @@ let finalize ?(on_retire = fun (_ : retired_location) -> ()) (type dev runner ev
           upload_arena_violations ctx.upload_arenas)
     else []
   in
-  if Atomic.compare_and_set ctx.finalized false true then
+  if Atomic.compare_and_set ctx.finalized false true then (
     match cleanup () with
     | () ->
         Alloc_census.count_context_released ();
@@ -2269,7 +2286,8 @@ let finalize ?(on_retire = fun (_ : retired_location) -> ()) (type dev runner ev
             ^ String.concat ~sep:"; " violations)
     | exception exn ->
         Atomic.set ctx.finalized false;
-        raise exn
+        raise exn)
+  else if not (List.is_empty !(ctx.release_hooks)) then run_release_hooks ()
 
 (* {2 The implemented backends, as singletons}
 
