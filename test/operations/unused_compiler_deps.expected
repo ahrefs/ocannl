@@ -6,6 +6,9 @@ a shared local library is refused: true
 a consumer-only interface import refuses the stanza that declares its possible owner: true
 a downstream importer could itself supply the shared interface: true
 an exact definition in another directory cannot settle a same-named interface: true
+a sole archive that never imports the interface leaves ownership unresolved: true
+the compiler's own Parsetree belongs to compiler-libs.common: true
+compiler-libs.common does not get Parsetree from a different directory: true
 a shared dependency's archive definition takes precedence over interface imports: true
 a co-located archive-less dependency leaves the sole importer as owner: true
 the csexp reader refuses an unclosed list, a bare length, a short atom, a stray byte and a stray ')': true
@@ -106,6 +109,9 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:afa29a41b9bcf5f2edb420167b2557b1] consumer-only interface import
   [scanner-refusal:af4e3d44d44af611e87c6c3fbba6db59] downstream importer could
   [scanner-refusal:238e4af10feb723d7bd9328dab4222b6] another directory cannot
+  [scanner-refusal:6d3939107d94def89d4eb5d59ebcff14] leaves ownership unresolved
+  [scanner-refusal:66109474577b0481b9b58c8b76e13d7f] compiler-libs.common
+  [scanner-refusal:b41831879e1d43e58af207034cdb4ecf] compiler-libs.common
   [scanner-refusal:e465b31053262fa064a9c23ff3892b2c] dependency's archive definition
   [scanner-refusal:52ed7f2b3e43e26453e5f6c31ebb5965] co-located archive-less dependency
   [scanner-refusal:ffa4bc91bdd9e0c6519d47ab6e078f3c] csexp reader refuses

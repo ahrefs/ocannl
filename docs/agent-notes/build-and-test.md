@@ -2963,10 +2963,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   without an import (gh-ocannl-2289), without an edge from the importer (gh-ocannl-2339), or
   while itself importing the interface downstream. A findlib control builds an independent
   definer and importer in a private prefix and checks Dune's graph, the archive imports and
-  refusal of the referencing stanza. Multiple directories carrying the same interface name
-  also refuse because the typed-tree reference supplies only a unit name. Within one directory,
-  exact archive definitions take precedence, including those from peers outside the reporting
-  scope. OCaml's Makefile puts `parsing/parsetree.mli` in `ocamlcommon_SOURCES`, so the scan
+  refusal of the referencing stanza. A second scanned directory carrying the same interface name
+  also causes refusal, even if it is private to one library. The typed tree supplies only a unit
+  name. Within one directory, exact archive definitions take precedence, including those from
+  peers outside the reporting scope. OCaml's Makefile puts `parsing/parsetree.mli` in `ocamlcommon_SOURCES`, so the scan
   attributes `Parsetree` in the Dune-resolved compiler's own `compiler-libs` directory to
   `compiler-libs.common`. Unresolved ownership refuses the referencing stanza before any unused
   finding.

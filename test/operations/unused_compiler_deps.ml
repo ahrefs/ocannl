@@ -466,7 +466,8 @@ let library_owners ~fail ?compiler_libs_dir ~cmi_units ~archive_of ~tracked by_u
   in
   let owners = Hashtbl.create (module String) in
   let interface_candidates = Hashtbl.create (module String) in
-  let shared_cmis = Hashtbl.create (module String) in
+  let cmi_dirs = Hashtbl.create (module String) in
+  let shared_cmis = Hash_set.create (module String) in
   let name uid = (Hashtbl.find_exn by_uid uid).lib_name in
   Hashtbl.iter by_uid ~f:(fun l ->
       if tracked l.uid then
@@ -478,8 +479,9 @@ let library_owners ~fail ?compiler_libs_dir ~cmi_units ~archive_of ~tracked by_u
         let cmis =
           List.map l.include_dirs ~f:(fun dir ->
               let units = cmis_in dir in
-              if shared then
-                Set.iter units ~f:(fun unit -> Hashtbl.add_multi shared_cmis ~key:unit ~data:dir);
+              Set.iter units ~f:(fun unit ->
+                  Hashtbl.add_multi cmi_dirs ~key:unit ~data:dir;
+                  if shared then Hash_set.add shared_cmis unit);
               units)
           |> Set.union_list (module String)
         in
@@ -518,19 +520,17 @@ let library_owners ~fail ?compiler_libs_dir ~cmi_units ~archive_of ~tracked by_u
   in
   let interface_cache = Hashtbl.create (module String) in
   fun unit ->
-    let definitions = Hashtbl.find_multi owners unit in
-    match Hashtbl.find_multi shared_cmis unit with
-    | [] -> Some definitions
-    | dirs ->
-        Hashtbl.find_or_add interface_cache unit ~default:(fun () ->
-            match List.dedup_and_sort dirs ~compare:String.compare with
-            | [ dir ] -> (
-                match definitions with
-                | [] -> known_owners unit dir
-                | definitions -> Some definitions)
-            | _ ->
-                let peers = List.concat_map dirs ~f:(Hashtbl.find_multi directories) in
-                refuse_interface_owner ~fail ~name unit peers)
+    if Hash_set.mem shared_cmis unit then
+      Hashtbl.find_or_add interface_cache unit ~default:(fun () ->
+          let dirs =
+            List.dedup_and_sort (Hashtbl.find_multi cmi_dirs unit) ~compare:String.compare
+          in
+          match dirs with
+          | [ dir ] -> known_owners unit dir
+          | _ ->
+              let peers = List.concat_map dirs ~f:(Hashtbl.find_multi directories) in
+              refuse_interface_owner ~fail ~name unit peers)
+    else Some (Hashtbl.find_multi owners unit)
 
 (* {1 Stanzas} *)
 
@@ -938,7 +938,7 @@ let controls ~dune ~objinfo ~tool_stderr =
      { lib_name = name; uid = name; local = false; requires; include_dirs = [ dir ] }
    in
    let unit = "Shared_types" in
-   let fixture ~fail cmi_units entries =
+   let fixture ~fail ?compiler_libs_dir cmi_units entries =
      let by_uid =
        List.map entries ~f:(fun (l, _) -> (l.uid, l)) |> Hashtbl.of_alist_exn (module String)
      in
@@ -953,7 +953,7 @@ let controls ~dune ~objinfo ~tool_stderr =
        resolve = Hashtbl.find by_uid;
        population_of;
        owners =
-         library_owners ~fail ~cmi_units ~archive_of
+         library_owners ~fail ?compiler_libs_dir ~cmi_units ~archive_of
            ~tracked:(fun uid -> Option.is_some (population_of uid))
            by_uid;
      }
@@ -1000,19 +1000,58 @@ let controls ~dune ~objinfo ~tool_stderr =
      (refuses_stanza
         (shared_fixture ~owner_requires:[ compiler_root ] ~owner_definitions:[ "Owner" ]
            ~downstream_owner:true));
-   p "an exact definition in another directory cannot settle a same-named interface"
+   let first =
+     [
+       (library "owner" [ compiler_root ] "/first", { definitions = [ "Owner" ]; interfaces = [] });
+       ( library "first_use" [ compiler_root ] "/first",
+         { definitions = [ "First_use" ]; interfaces = [ unit ] } );
+     ]
+   in
+   p_all "an exact definition in another directory cannot settle a same-named interface"
+     [
+       [
+         ( library "second_use" [ compiler_root ] "/second",
+           { definitions = [ "Second_use" ]; interfaces = [ unit ] } );
+         (library "other" [] "/second", { definitions = [ unit ]; interfaces = [] });
+       ];
+       [
+         ( library "standalone" [ compiler_root ] "/second",
+           { definitions = [ unit ]; interfaces = [] } );
+       ];
+     ]
+     ~f:(fun second ->
+       refuses_stanza (fun ~fail -> fixture ~fail (fun _ -> Some [ unit ]) (first @ second)));
+   p "a sole archive that never imports the interface leaves ownership unresolved"
      (refuses_stanza (fun ~fail ->
-          let cmi_units _ = Some [ unit ] in
-          fixture ~fail cmi_units
+          fixture ~fail
+            (fun _ -> Some [ unit ])
             [
-              ( library "owner" [ compiler_root ] "/first",
+              ( library "owner" [ compiler_root ] "/shared",
                 { definitions = [ "Owner" ]; interfaces = [] } );
-              ( library "first_use" [ compiler_root ] "/first",
-                { definitions = [ "First_use" ]; interfaces = [ unit ] } );
-              ( library "second_use" [ compiler_root ] "/second",
-                { definitions = [ "Second_use" ]; interfaces = [ unit ] } );
-              (library "other" [] "/second", { definitions = [ unit ]; interfaces = [] });
+              (library "archive_less" [] "/shared", empty_archive);
             ]));
+   let compiler_fixture ~fail dir =
+     let parsetree = "Parsetree" in
+     let w =
+       fixture ~fail ?compiler_libs_dir:(realpath empty_dir)
+         (fun _ -> Some [ parsetree ])
+         [
+           (library compiler_root [] dir, { definitions = [ "Common" ]; interfaces = [ parsetree ] });
+           ( library "toplevel" [ compiler_root ] dir,
+             { definitions = [ "Toplevel" ]; interfaces = [ parsetree ] } );
+         ]
+     in
+     w.owners parsetree
+   in
+   p "the compiler's own Parsetree belongs to compiler-libs.common"
+     (let owner, messages =
+        Refusals.collect_refusals (fun ~fail -> compiler_fixture ~fail empty_dir)
+      in
+      (match messages with [] -> true | _ :: _ -> false)
+      && Option.equal (List.equal String.equal) owner (Some [ compiler_root ]));
+   p "compiler-libs.common does not get Parsetree from a different directory"
+     (refused_with ~format:"interface-only unit %s: no unique archive owner among [%s]"
+        (fun ~fail -> ignore (compiler_fixture ~fail corrupt_dir : string list option)));
    let owner_is ~owner_requires ~owner_definitions expected =
      let known_owner, messages =
        Refusals.collect_refusals (fun ~fail ->

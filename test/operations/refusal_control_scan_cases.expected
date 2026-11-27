@@ -980,6 +980,9 @@ unused_compiler_deps.ml: [scanner-refusal:38b0123ae5353ab2b03e006a018d2bc6] shar
 unused_compiler_deps.ml: [scanner-refusal:afa29a41b9bcf5f2edb420167b2557b1] consumer-only interface import (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:af4e3d44d44af611e87c6c3fbba6db59] downstream importer could (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:238e4af10feb723d7bd9328dab4222b6] another directory cannot (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:6d3939107d94def89d4eb5d59ebcff14] leaves ownership unresolved (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:66109474577b0481b9b58c8b76e13d7f] compiler-libs.common (claim) is catalogued beside unused_compiler_deps.expected: true
+unused_compiler_deps.ml: [scanner-refusal:b41831879e1d43e58af207034cdb4ecf] compiler-libs.common (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:e465b31053262fa064a9c23ff3892b2c] dependency's archive definition (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:52ed7f2b3e43e26453e5f6c31ebb5965] co-located archive-less dependency (claim) is catalogued beside unused_compiler_deps.expected: true
 unused_compiler_deps.ml: [scanner-refusal:ffa4bc91bdd9e0c6519d47ab6e078f3c] csexp reader refuses (claim) is catalogued beside unused_compiler_deps.expected: true
