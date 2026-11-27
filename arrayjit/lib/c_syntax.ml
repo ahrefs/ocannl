@@ -4575,9 +4575,10 @@ module C_syntax (B : C_syntax_config) = struct
     render_stmt_reads : int list ref option ref;
     peel_scope_depth : int ref;
     peeled_scope_ids : int Hash_set.t;
-    touched_flags : (int, string * Low_level.t) Hashtbl.t;
+    touched_flags : (int, string * bool ref) Hashtbl.t;
         (** Guarded localized accumulators currently being rendered, keyed by [scope_id]: the C flag
-            name and the opening [Set_local] statement that must not set it (gh-ocannl-2500). *)
+            name and whether the opening [Set_local] to [id] has already been rendered
+            (gh-ocannl-2500). *)
     mma_census : (string * mma_rendering) list ref;
     mma_scope_census : string list ref;
     mma_emitted_census : emitted_mma list ref;
@@ -7016,8 +7017,8 @@ module C_syntax (B : C_syntax_config) = struct
      loading [tn[idcs]] and whose remaining updates are not guaranteed to run (e.g. under a peeled
      [If] guard) must not write back an untouched cell — narrowing a widened value back to storage
      can canonicalize NaN payloads (E5M2 [0x7d -> 0x7f] on cc) or saturate infinities (CUDA).
-     Returns [(id, flag_name, opening_stmt)] so the [Set] arm declares [int flag_name = 0;], every
-     non-opening update to [id] sets [flag_name = 1;], and the closing store runs only under [if
+     Returns [(id, flag_name)] so the [Set] arm declares [int flag_name = 0;], every update to [id]
+     after its opening [Set_local] sets [flag_name = 1;], and the closing store runs only under [if
      (flag_name)]. *)
   let guarded_accum_scope ~tn ~idcs (llsc : Low_level.scalar_t) =
     match llsc with
@@ -7027,14 +7028,11 @@ module C_syntax (B : C_syntax_config) = struct
             | Low_level.Noop | Comment _ -> false
             | _ -> true)
         with
-        | (Low_level.Set_local (id', Low_level.Get (tn', idcs')) as opening) :: rest
+        | Low_level.Set_local (id', Low_level.Get (tn', idcs')) :: rest
           when Low_level.Scope_id.equal id id' && Tn.equal tn tn'
                && Array.equal Indexing.equal_axis_index idcs idcs'
                && not (definitely_updates_local ~id (Low_level.unflat_lines rest)) ->
-            Some
-              ( id,
-                derived_name acc_touched_derivation (Int.to_string id.Low_level.scope_id),
-                opening )
+            Some (id, derived_name acc_touched_derivation (Int.to_string id.Low_level.scope_id))
         | _ -> None)
     | _ -> None
 
@@ -7330,9 +7328,9 @@ module C_syntax (B : C_syntax_config) = struct
               in
               match touched_flag with
               | None -> render ()
-              | Some (id, flag, opening) ->
+              | Some (id, flag) ->
                   let prev = Hashtbl.find ctx.touched_flags id.Low_level.scope_id in
-                  Hashtbl.set ctx.touched_flags ~key:id.Low_level.scope_id ~data:(flag, opening);
+                  Hashtbl.set ctx.touched_flags ~key:id.Low_level.scope_id ~data:(flag, ref false);
                   Exn.protect ~f:render ~finally:(fun () ->
                       match prev with
                       | Some prev ->
@@ -7360,7 +7358,7 @@ module C_syntax (B : C_syntax_config) = struct
             let guard_store doc =
               match touched_flag with
               | None -> doc
-              | Some (_, flag, _) ->
+              | Some (_, flag) ->
                   string ("if (" ^ flag ^ ") ")
                   ^^ lbrace
                   ^^ nest 2 (hardline ^^ doc)
@@ -7369,7 +7367,7 @@ module C_syntax (B : C_syntax_config) = struct
             let prepend_flag_decl doc =
               match touched_flag with
               | None -> doc
-              | Some (_, flag, _) -> string ("int " ^ flag ^ " = 0;") ^^ hardline ^^ doc
+              | Some (_, flag) -> string ("int " ^ flag ^ " = 0;") ^^ hardline ^^ doc
             in
             if Utils.debug_log_from_routines () then
               (* [val_doc] is already narrowed to the storage precision, so the temporary carrying
@@ -7692,9 +7690,12 @@ module C_syntax (B : C_syntax_config) = struct
         let assignment = pp_scope_id id ^^ string " = " ^^ value_doc ^^ semi in
         let with_touched doc =
           match Hashtbl.find ctx.touched_flags id.Low_level.scope_id with
-          | Some (flag, opening) when not (phys_equal c opening) ->
-              doc ^^ hardline ^^ string (flag ^ " = 1;")
-          | _ -> doc
+          | Some (flag, opening_seen) ->
+              if !opening_seen then doc ^^ hardline ^^ string (flag ^ " = 1;")
+              else (
+                opening_seen := true;
+                doc)
+          | None -> doc
         in
         if Utils.debug_log_from_routines () then
           let new_var = string log_set_local_temporary in

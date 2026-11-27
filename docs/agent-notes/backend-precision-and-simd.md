@@ -801,8 +801,9 @@ files.
   `sink_narrow_reduction_loops` path and direct guarded peels) as well as schedule-minted
   `Unroll ~materialize:true` / `Partition` scopes — write back conditionally through one
   `ocannl_acc_touched_<id>` flag whenever their scope body has no unconditional update path
-  (gh-ocannl-2500), so a cell no iteration touched keeps its raw bits (E5M2 NaN `0x7d`, CUDA
-  `+inf` `0x7c`) while updated cells still keep single-rounding residency.
+  (gh-ocannl-2500), so a cell no iteration touched keeps its raw bits (pinned on `cc` for E5M2 NaN
+  `0x7d` and `+inf` `0x7c`; expected on GPU backends through the shared `C_syntax` emitter) while
+  updated cells still keep single-rounding residency.
   A cell with independent supported positive affine pairs, one per axis (gh-ocannl-2423,
   gh-ocannl-2464), is reparametrized per overlapping axis by owner and residue while preserving
   each cell's original contribution order across windows and interleaved reductions (each
