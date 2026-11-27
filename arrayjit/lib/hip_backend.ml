@@ -562,8 +562,8 @@ end = struct
       H.Module.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
     else []
 
-  let load_module code =
-    let m = H.Module.load_data_ex code (run_options ()) in
+  let load_module ~options code =
+    let m = H.Module.load_data_ex code options in
     Alloc_census.count_module_loaded ();
     Stdlib.Gc.finalise (fun _ -> Alloc_census.count_module_unloaded ()) m;
     m
@@ -632,7 +632,7 @@ extern "C" __global__ void ocannl_timing_phase(unsigned int* ids) {
     let code =
       Hiprtc.compile_to_code ~hip_src ~name:"ocannl_timing_phase.hip" ~options ~with_debug:false
     in
-    let run_module = load_module code in
+    let run_module = load_module ~options:[] code in
     let kernel = H.Module.get_function run_module ~name:"ocannl_timing_phase" in
     let host_ids, device_address, release_host_ids = Mapped_phase_memory.allocate workgroups in
     {
@@ -1798,7 +1798,7 @@ extern "C" __global__ void ocannl_timing_phase(unsigned int* ids) {
   let%track3_sexp link prior_context (code : code) ctx_buffers =
     let ctx = ctx_of prior_context in
     set_ctx ctx;
-    let run_module = load_module code.code.code in
+    let run_module = load_module ~options:(run_options ()) code.code.code in
     prior_context.device.dev.set_builtins_in run_module;
     let idx_params = Indexing.bound_symbols code.bindings in
     let lowered_bindings : Indexing.lowered_bindings =
@@ -1822,7 +1822,7 @@ extern "C" __global__ void ocannl_timing_phase(unsigned int* ids) {
     let modules = Hashtbl.create (module Int) in
     let module_of (program : program) =
       Hashtbl.find_or_add modules program.program_id ~default:(fun () ->
-          let run_module = load_module program.code in
+          let run_module = load_module ~options:(run_options ()) program.code in
           prior_context.device.dev.set_builtins_in run_module;
           run_module)
     in
