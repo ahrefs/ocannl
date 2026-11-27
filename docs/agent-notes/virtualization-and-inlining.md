@@ -1244,11 +1244,16 @@ files.
   shared loop, each candidate keeps its pre-loop computations until its final setter in the loop
   body runs, so a read before a later sibling write never replays an uninitialized input; a read
   between two writes of the same candidate in one loop materializes an undecided local node
-  (`163:shared-loop-mid-write-read`) or refuses a committed-virtual or inherited node. Cycle
-  detection tracks active `Set` component indices per node, so disjoint cell replays (such as
-  `a[1,i] -> b[i] -> a[0,i]`) succeed while genuine re-entry materializes an undecided local node
-  (`162:cyclic-virtual-replay`) or refuses a committed-virtual or inherited node (deferred as a
-  capture hit during speculative phase-1 capture so dead `Where` arms do not fail). A retained read
+  (`163:shared-loop-mid-write-read`) or refuses a committed-virtual or inherited node (deferred as
+  `165:capture-mid-write-read` during speculative phase-1 capture). Cycle detection tracks active
+  `Set` component indices per node, so disjoint cell replays (such as `a[1,i] -> b[i] -> a[0,i]`)
+  succeed while genuine re-entry materializes an undecided local node (`162:cyclic-virtual-replay`)
+  or refuses a committed-virtual or inherited node (deferred as `164:capture-cyclic-replay` during
+  speculative phase-1 capture so dead `Where` arms do not fail). When
+  `materialize_observable_readers` commits a reader `On_device` (`Observed_reader_reads_local`) at
+  the end of `virtual_llc`, scopes minted for it after its final live write retract to `Get` so
+  same-routine readers agree with the stored buffer, while scopes captured before a later write of
+  that node stay lexical (preserving gh-ocannl-2415's pre-overwrite captures). A retained read
   observes the dependency's visible components at consumption; by contrast, split loops capture a
   `Local_scope` of the earlier write (matching producer-time while virtual, retracting to
   replay-time if materialized). The read site's bounds can eliminate a `Where` arm after

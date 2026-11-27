@@ -148,6 +148,9 @@ let case_local_shared_loop ~label ~tag ~in_loop_out ~observable_reader =
       (label ^ ": observable v_reader materializes On_device")
       (match Context.observability ctx v_reader with Context.Stored -> true | _ -> false);
     p
+      (label ^ ": same-routine out retracts to a buffer read of observable v_reader")
+      (L.count_get o v_reader = 1);
+    p
       (label ^ ": observable v_reader matches producer-time reference (captured before sibling W2)")
       (exact (Context.get_values ctx v_reader) mat_producer))
   else (
@@ -164,9 +167,13 @@ let case_local_shared_loop ~label ~tag ~in_loop_out ~observable_reader =
     p
       (label ^ ": seeding v_loc keeps the Unobservable_local path to loc")
       (Context.mem seeded v_loc && has_local_path seeded));
-  if in_loop_out then
+  if in_loop_out || observable_reader then
     p
-      (label ^ ": in-loop out before sibling W2 matches producer-time reference")
+      (label
+      ^
+      if observable_reader then
+        ": out agrees with observable v_reader buffer (producer-time reference)"
+      else ": in-loop out before sibling W2 matches producer-time reference")
       (exact (Context.get_values ctx out) mat_producer)
   else
     p
@@ -317,39 +324,54 @@ let case_shared_vs_split () =
 
 (* === Part 3: multi-hop retained chain in one shared loop === *)
 let case_retained_chain () =
-  let x = node "rc_x" and a = node "rc_a" and b = node "rc_b" and c = node "rc_c" in
-  let out = node "rc_out" in
-  L.materialize x;
-  L.materialize out;
   let x_vals = Array.init n ~f:(fun i -> Float.of_int (10 + (3 * i))) in
-  let i1 = L.sym () and i2 = L.sym () and i3 = L.sym () in
-  let at tn i = L.get tn [| L.iter i |] in
-  let llc =
-    LL.unflat_lines
-      [
-        L.loop_n i1 n
-          (L.seq
-             (L.set_at b (L.iter i1) (L.add (at x i1) (L.c 1.)))
-             (L.set_at c (L.iter i1) (L.add (at x i1) (L.c 2.))));
-        L.loop_n i2 n
-          (L.seq
-             (L.set_at a (L.iter i2) (L.add (at b i2) (L.c 10.)))
-             (L.seq
-                (L.set_at b (L.iter i2) (L.add (at c i2) (L.c 20.)))
-                (L.set_at c (L.iter i2) (L.add (at x i2) (L.c 30.)))));
-        L.loop_n i3 n (L.set_at out (L.iter i3) (at a i3));
-      ]
+  let build ~tag =
+    let x = node (tag ^ "_x") and a = node (tag ^ "_a") and b = node (tag ^ "_b") in
+    let c = node (tag ^ "_c") and out = node (tag ^ "_out") in
+    L.materialize x;
+    L.materialize out;
+    let i1 = L.sym () and i2 = L.sym () and i3 = L.sym () in
+    let at tn i = L.get tn [| L.iter i |] in
+    let llc =
+      LL.unflat_lines
+        [
+          L.loop_n i1 n
+            (L.seq
+               (L.set_at b (L.iter i1) (L.add (at x i1) (L.c 1.)))
+               (L.set_at c (L.iter i1) (L.add (at x i1) (L.c 2.))));
+          L.loop_n i2 n
+            (L.seq
+               (L.set_at a (L.iter i2) (L.add (at b i2) (L.c 10.)))
+               (L.seq
+                  (L.set_at b (L.iter i2) (L.add (at c i2) (L.c 20.)))
+                  (L.set_at c (L.iter i2) (L.add (at x i2) (L.c 30.)))));
+          L.loop_n i3 n (L.set_at out (L.iter i3) (at a i3));
+        ]
+    in
+    (x, a, b, c, out, llc)
   in
+  let x, a, b, c, out, llc = build ~tag:"rc" in
   let o = with_pinned_virtualize_settings (fun () -> L.optimize ~name:"vslr_chain" llc) in
   p "retained chain: a, b, and c stay virtual"
     (L.known_virtual o a && L.known_virtual o b && L.known_virtual o c);
   p "retained chain: no buffer reads of a, b, or c survive"
     (L.count_get o a = 0 && L.count_get o b = 0 && L.count_get o c = 0);
   let got = L.execute ~name:"vslr_chain" o ~seed:[ (x, x_vals) ] ~read:[ out ] in
-  (* Replay-time: c = x + 30, b = c + 20 = x + 50, a = b + 10 = x + 60 *)
-  let expected = Array.map x_vals ~f:(fun v -> v +. 60.) in
-  p "retained chain: executed out matches replay-time closed form"
-    (exact (List.hd_exn got) expected)
+  let xm, am, bm, cm, outm, llcm = build ~tag:"rc_m" in
+  let o_m =
+    with_pinned_virtualize_settings (fun () ->
+        L.optimize ~materialized:[ am; bm; cm ] ~name:"vslr_chain_mat" llcm)
+  in
+  let got_m = L.execute ~name:"vslr_chain_mat" o_m ~seed:[ (xm, x_vals) ] ~read:[ outm ] in
+  (* Producer-time (materialized): a reads b before b's sibling update, so a = (x + 1) + 10 = x +
+     11. Replay-time (virtual): c = x + 30, b = c + 20 = x + 50, a = b + 10 = x + 60. The two
+     readings legitimately differ under recompute-at-read. *)
+  let expected_mat = Array.map x_vals ~f:(fun v -> v +. 11.) in
+  let expected_replay = Array.map x_vals ~f:(fun v -> v +. 60.) in
+  p "retained chain: materialized reference matches producer-time closed form (x + 11)"
+    (exact (List.hd_exn got_m) expected_mat);
+  p "retained chain: virtual executed out matches replay-time closed form (x + 60)"
+    (exact (List.hd_exn got) expected_replay)
 
 (* === Part 4: mutual retained-read cycle across two shared loops === *)
 let case_cyclic_retained_reads () =
@@ -508,37 +530,52 @@ let case_inloop_uninit_input_after_read () =
 
 (* === Part 7: mid-write read between two setters of the same candidate in one shared loop === *)
 let case_mid_write_read () =
-  let late_x = node "mw_late_x" and a = node "mw_a" and out = node "mw_out" in
-  let out_after = node "mw_out_after" in
-  L.materialize late_x;
-  L.materialize out;
-  L.materialize out_after;
-  let i1 = L.sym () and i2 = L.sym () in
-  let at tn i = L.get tn [| L.iter i |] in
-  let llc =
-    LL.unflat_lines
-      [
-        L.loop_n i1 n
-          (LL.unflat_lines
-             [
-               L.set_at a (L.iter i1) (L.ramp 11. i1);
-               L.set_at out (L.iter i1) (at a i1);
-               L.set_at late_x (L.iter i1) (L.ramp 100. i1);
-               L.set_at a (L.iter i1) (L.add (at late_x i1) (L.c 50.));
-             ]);
-        L.loop_n i2 n (L.set_at out_after (L.iter i2) (at a i2));
-      ]
+  let build ~tag ~declare_a_virtual =
+    let late_x = node (tag ^ "_late_x") and a = node (tag ^ "_a") in
+    let out = node (tag ^ "_out") and out_after = node (tag ^ "_out_after") in
+    L.materialize late_x;
+    L.materialize out;
+    L.materialize out_after;
+    if declare_a_virtual then L.virtualize a;
+    let i1 = L.sym () and i2 = L.sym () in
+    let at tn i = L.get tn [| L.iter i |] in
+    let llc =
+      LL.unflat_lines
+        [
+          L.loop_n i1 n
+            (LL.unflat_lines
+               [
+                 L.set_at a (L.iter i1) (L.ramp 11. i1);
+                 L.set_at out (L.iter i1) (at a i1);
+                 L.set_at late_x (L.iter i1) (L.ramp 100. i1);
+                 L.set_at a (L.iter i1) (L.add (at late_x i1) (L.c 50.));
+               ]);
+          L.loop_n i2 n (L.set_at out_after (L.iter i2) (at a i2));
+        ]
+    in
+    (late_x, a, out, out_after, llc)
   in
+  let late_x, a, out, out_after, llc = build ~tag:"mw" ~declare_a_virtual:false in
   let o = with_pinned_virtualize_settings (fun () -> L.optimize ~name:"vslr_mw" llc) in
-  p "mid-write read: candidate materializes with 163"
+  p "mid-write read (undecided): candidate materializes with 163"
     (Option.equal Tn.equal_provenance (L.rejection_code o a)
        (Some (Tn.Site "163:shared-loop-mid-write-read")));
   let got = L.execute ~name:"vslr_mw" o ~seed:[ (late_x, L.blank n) ] ~read:[ out; out_after ] in
   let got_mid, got_after = match got with [ a; b ] -> (a, b) | _ -> assert false in
-  p "mid-write read: in-loop out sees first write (11 + i)"
+  p "mid-write read (undecided): in-loop out sees first write (11 + i)"
     (exact got_mid (Array.init n ~f:(fun i -> Float.of_int (11 + i))));
-  p "mid-write read: post-loop out_after sees second write (150 + i)"
-    (exact got_after (Array.init n ~f:(fun i -> Float.of_int (150 + i))))
+  p "mid-write read (undecided): post-loop out_after sees second write (150 + i)"
+    (exact got_after (Array.init n ~f:(fun i -> Float.of_int (150 + i))));
+
+  let _, av, _, _, llc_v = build ~tag:"mw_v" ~declare_a_virtual:true in
+  let refused =
+    match with_pinned_virtualize_settings (fun () -> L.optimize ~name:"vslr_mw_v" llc_v) with
+    | _ -> false
+    | exception Utils.User_error msg ->
+        String.is_substring msg ~substring:"shared-loop mid-write read"
+        && String.is_substring msg ~substring:(Tn.debug_name av)
+  in
+  p "mid-write read (declared virtual): raises named User_error" refused
 
 (* === Part 8: Codex P2 -- dead-arm declared-virtual cycle deferred during speculative capture
    === *)
@@ -573,9 +610,9 @@ let case_dead_arm_local_cycle () =
       ]
   in
   let o = with_pinned_virtualize_settings (fun () -> L.optimize ~name:"vslr_dac" llc) in
-  p "dead-arm local cycle: undecided capture falls back to 156 and compiles"
+  p "dead-arm local cycle: undecided capture falls back to 164 and compiles"
     (Option.equal Tn.equal_provenance (L.rejection_code o w)
-       (Some (Tn.Site "156:capture-read-uninlinable")));
+       (Some (Tn.Site "164:capture-cyclic-replay")));
   let got = L.execute ~name:"vslr_dac" o ~seed:[ (x, x_vals) ] ~read:[ out ] in
   p "dead-arm local cycle: live arm executes to x + 7"
     (exact (List.hd_exn got) (Array.map x_vals ~f:(fun v -> v +. 7.)))
