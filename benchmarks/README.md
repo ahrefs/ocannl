@@ -171,6 +171,13 @@ single-threaded segments that sum to the serial step
 | gh-ocannl-697 (the conv family tree) | `cifar_resnet/<backend>/tuned/exact` and `cifar_resnet_b1/<backend>/tuned/exact`, with `· pad3x3` on a GPU |
 | gh-ocannl-503 (whole-routine zeroed GPU conv sites) | `cifar_resnet/<gpu>/tuned/exact` under `--cell-flag '*/<gpu>/tuned:schedule_fission=false'` |
 
+For a GPT memory preflight, set `BENCH_FOOTPRINT_ONLY=1` with `BENCH_FIXTURE` when running
+`bench_gpt.exe` directly. It prints modeled working and constant pool bytes for both placement
+arms and compares the total with the backend's free and total device bytes when available.
+The model counts the whole work-carrying routine, including nodes already resident after
+parameter initialization. The free-memory comparison is conservative when those nodes are
+reused. The runner exits before tuning, compiling the benchmark step, or timing it.
+
 ## Layout
 
 - `workloads/*.json` — workload specs; `gen_fixtures.py` generates

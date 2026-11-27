@@ -19,15 +19,47 @@ module IDX = Train.IDX
 module St = Safetensors
 module H = Bench_harness
 
+(* The work-carrying routine is the one tune_placements compares. For a host-gated step the separate
+   optimizer has its own untuned compile. These are whole-routine model bytes, so their comparison
+   with currently free memory is conservative where the context already holds nodes. *)
+let report_footprints ctx loss step_shape bindings =
+  let comp =
+    match step_shape with
+    | `Forward comp
+    | `Train (H.Plain_step comp | Device_gated (_, _, comp, _) | Host_gated (_, _, comp, _)) ->
+        comp
+  in
+  let facts = Context.backend_facts ctx and limits = Context.hardware_limits ctx in
+  let static_indices = Ir.Indexing.bound_symbols bindings in
+  let memory = Context.get_free_and_total_memory ctx in
+  let show_limit select bytes =
+    Option.value_map memory ~default:"unavailable" ~f:(fun pair ->
+        let limit = select pair in
+        Printf.sprintf "%d %s" limit (if bytes <= limit then "fits" else "exceeds"))
+  in
+  List.iter
+    [ ("A/default", []); ("B/materialize-all", Train.embedded_nodes loss) ]
+    ~f:(fun (arm, materialized) ->
+      let lowered = Context.lowered_for_decisions ~materialized ctx comp bindings in
+      let score = Context.Backends.score_footprint ~facts ~limits ~static_indices lowered in
+      Stdio.printf
+        "footprint: arm=%s model_bytes=%d working_bytes=%d constant_bytes=%d free_bytes=%s \
+         total_bytes=%s\n\
+         %!"
+        arm score.fp_total score.fp_working score.fp_constants (show_limit fst score.fp_total)
+        (show_limit snd score.fp_total))
+
 let () =
-  let tune = H.env_flag "BENCH_TUNE" in
+  let footprint_only = H.env_flag "BENCH_FOOTPRINT_ONLY" in
+  let tune = (not footprint_only) && H.env_flag "BENCH_TUNE" in
   (* The splice-segments A/B (gh-ocannl-1277): this arm's cache, written from the control's and the
      treatment's before anything else, so the listing needs no fixture. *)
-  let splice = Bench_splice.from_env ~tune in
+  let splice = if footprint_only then None else Bench_splice.from_env ~tune in
   let fixture = Stdlib.Sys.getenv "BENCH_FIXTURE" in
-  H.install_timing_trace ();
-  H.install_search_cut ();
-  let materialize = H.env_flag "BENCH_MATERIALIZE" in
+  if not footprint_only then (
+    H.install_timing_trace ();
+    H.install_search_cut ());
+  let materialize = (not footprint_only) && H.env_flag "BENCH_MATERIALIZE" in
   let debug = H.env_flag "BENCH_DEBUG" in
   let st = St.read fixture in
   let {
@@ -45,6 +77,9 @@ let () =
   } =
     Bench_gpt_model.prepare ~materialize st
   in
+  if footprint_only then (
+    report_footprints ctx batch_loss step_shape bindings;
+    Stdlib.exit 0);
   if debug then (
     H.dump_params batch_loss;
     Stdlib.exit 0);
