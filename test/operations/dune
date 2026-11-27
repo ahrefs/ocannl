@@ -18735,6 +18735,7 @@
  (name unary_math_special_values)
  (package neural_nets_lib)
  (modules unary_math_special_values)
+ (locks /ocannl_unary_math_special_values)
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
@@ -18744,6 +18745,7 @@
   stdio
   arrayjit.verdict
   ll_test
+  test_utils
   unix
   arrayjit.utils
   arrayjit.context))
@@ -18756,6 +18758,7 @@
 
 (rule
  (target unary_math_special_values-reproducible.actual)
+ (locks /ocannl_unary_math_special_values)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
