@@ -442,16 +442,15 @@ let empty_support_aliases : support_aliases = Map.empty (module String)
 
 let rec resolve_module_path ~(aliases : support_aliases) modules = function
   | Longident.Lident name -> (
-      match Map.find modules name with Some denotes -> Some denotes | None -> Some (Named name))
+      match Map.find modules name with Some denotes -> denotes | None -> Named name)
   | Longident.Ldot (prefix, sub) -> (
       match resolve_module_path ~aliases modules prefix with
-      | Some Opaque -> Some Opaque
-      | Some (Named owner) -> (
+      | Opaque -> Opaque
+      | Named owner -> (
           match Option.bind (Map.find aliases owner) ~f:(fun m -> Map.find m sub) with
-          | Some denotes -> Some denotes
-          | None -> Some (Named sub))
-      | None -> Some (Named sub))
-  | Longident.Lapply _ -> Some Opaque
+          | Some denotes -> denotes
+          | None -> Named sub))
+  | Longident.Lapply _ -> Opaque
 
 let rec resolve_module_expr ~(aliases : support_aliases) modules me =
   match me.pmod_desc with
@@ -459,10 +458,7 @@ let rec resolve_module_expr ~(aliases : support_aliases) modules me =
   | Pmod_apply (functor_, _) | Pmod_apply_unit functor_ ->
       resolve_module_expr ~aliases modules functor_
   | Pmod_ident { txt; _ } -> resolve_module_path ~aliases modules txt
-  | _ -> Some Opaque
-
-let rec peel_module_constraint me =
-  match me.pmod_desc with Pmod_constraint (inner, _) -> peel_module_constraint inner | _ -> me
+  | _ -> Opaque
 
 let merge_modules base overlay =
   Map.merge_skewed base overlay ~combine:(fun ~key:_ _ later -> later)
@@ -477,7 +473,9 @@ let merge_modules base overlay =
       functor application ([Pmod_apply] / [Pmod_apply_unit]) resolve through the module's current
       lexical scope and the other support modules' exported aliases;
     - inline structure ([Pmod_structure]) exports [M -> Named M], preserving submodule identity
-      (such as [Verdict.Claims]) while shadowing any earlier [include]d alias of the same name;
+      (such as [Verdict.Claims]) while shadowing any earlier [include]d alias of the same name. This
+      is the one place a [struct] qualifier keeps its own name rather than falling back to
+      [Opaque]/name-only emitter matching as a test-local [struct] does;
     - any other module expression ([Pmod_functor], [Pmod_unpack], [Pmod_extension]) and
       [Pstr_recmodule] declarations export [Opaque].
     - Top-level [include <expr>] ([Pstr_include]): when [<expr>] resolves to a support module in the
@@ -504,7 +502,7 @@ let merge_modules base overlay =
     - Named external module types in [Psig_include] (handled conservatively by keeping the [.ml]'s
       exports).
 
-    Raises if any source or interface does not parse. *)
+    Raises if any source or interface does not parse, or if alias closure fails to converge. *)
 let support_module_aliases (modules : support_module list) : support_aliases =
   let parsed =
     List.map modules ~f:(fun m ->
@@ -513,13 +511,13 @@ let support_module_aliases (modules : support_module list) : support_aliases =
           Option.map m.support_interface ~f:interface_of ))
   in
   let empty = Map.empty (module String) in
-  let export_of_module_expr ~aliases scope_modules ~name me =
-    match (peel_module_constraint me).pmod_desc with
+  let rec export_of_module_expr ~aliases scope_modules ~name me =
+    match me.pmod_desc with
+    | Pmod_constraint (inner, _) -> export_of_module_expr ~aliases scope_modules ~name inner
     | Pmod_ident _ | Pmod_apply _ | Pmod_apply_unit _ ->
-        Option.value (resolve_module_expr ~aliases scope_modules me) ~default:Opaque
+        resolve_module_expr ~aliases scope_modules me
     | Pmod_structure _ -> Named name
     | Pmod_functor _ | Pmod_unpack _ | Pmod_extension _ -> Opaque
-    | Pmod_constraint _ -> Opaque
   in
   let exports_of_structure ~aliases structure =
     let _scope, exported =
@@ -537,19 +535,19 @@ let support_module_aliases (modules : support_module list) : support_aliases =
               (add scope_modules, add exported)
           | Pstr_include { pincl_mod; _ } -> (
               match resolve_module_expr ~aliases scope_modules pincl_mod with
-              | Some (Named target) -> (
+              | Named target -> (
                   match Map.find aliases target with
                   | Some included ->
                       (merge_modules scope_modules included, merge_modules exported included)
                   | None -> (scope_modules, exported))
-              | Some Opaque | None -> (scope_modules, exported))
+              | Opaque -> (scope_modules, exported))
           | Pstr_open { popen_expr; _ } -> (
               match resolve_module_expr ~aliases scope_modules popen_expr with
-              | Some (Named target) -> (
+              | Named target -> (
                   match Map.find aliases target with
                   | Some opened -> (merge_modules scope_modules opened, exported)
                   | None -> (scope_modules, exported))
-              | Some Opaque | None -> (scope_modules, exported))
+              | Opaque -> (scope_modules, exported))
           | _ -> (scope_modules, exported))
     in
     exported
@@ -561,21 +559,18 @@ let support_module_aliases (modules : support_module list) : support_aliases =
           match item.psig_desc with
           | Psig_open { popen_expr = { txt; _ }; _ } -> (
               match resolve_module_path ~aliases sig_scope txt with
-              | Some (Named target) -> (
+              | Named target -> (
                   match Map.find aliases target with
                   | Some opened -> (merge_modules sig_scope opened, sig_exports, has_opaque_include)
                   | None -> (sig_scope, sig_exports, has_opaque_include))
-              | Some Opaque | None -> (sig_scope, sig_exports, has_opaque_include))
+              | Opaque -> (sig_scope, sig_exports, has_opaque_include))
           | Psig_modsubst { pms_name = { txt = name; _ }; pms_manifest = { txt; _ }; _ } ->
-              let denotes =
-                Option.value (resolve_module_path ~aliases sig_scope txt) ~default:Opaque
-              in
+              let denotes = resolve_module_path ~aliases sig_scope txt in
               (Map.set sig_scope ~key:name ~data:denotes, sig_exports, has_opaque_include)
           | Psig_module { pmd_name = { txt = Some name; _ }; pmd_type; _ } ->
               let denotes =
                 match pmd_type.pmty_desc with
-                | Pmty_alias { txt; _ } ->
-                    Option.value (resolve_module_path ~aliases sig_scope txt) ~default:Opaque
+                | Pmty_alias { txt; _ } -> resolve_module_path ~aliases sig_scope txt
                 | Pmty_typeof me -> export_of_module_expr ~aliases sig_scope ~name me
                 | Pmty_signature _ ->
                     Option.value (Map.find impl_exports name) ~default:(Named name)
@@ -597,14 +592,14 @@ let support_module_aliases (modules : support_module list) : support_aliases =
               | Pmty_signature nested -> walk (sig_scope, sig_exports, has_opaque_include) nested
               | Pmty_typeof me -> (
                   match resolve_module_expr ~aliases sig_scope me with
-                  | Some (Named target) -> (
+                  | Named target -> (
                       match Map.find aliases target with
                       | Some included ->
                           ( merge_modules sig_scope included,
                             merge_modules sig_exports included,
                             has_opaque_include )
                       | None -> (sig_scope, sig_exports, true))
-                  | Some Opaque | None -> (sig_scope, sig_exports, true))
+                  | Opaque -> (sig_scope, sig_exports, true))
               | _ -> (sig_scope, sig_exports, true))
           | _ -> (sig_scope, sig_exports, has_opaque_include))
     in
@@ -631,10 +626,11 @@ let support_module_aliases (modules : support_module list) : support_aliases =
   let equal_aliases = Map.equal (Map.equal equal_module_denotes) in
   let max_rounds = Int.max 1 (List.length parsed + 1) in
   let rec close round aliases =
-    if round >= max_rounds then aliases
-    else
-      let next = step aliases in
-      if equal_aliases next aliases then next else close (round + 1) next
+    let next = step aliases in
+    if equal_aliases next aliases then next
+    else if round >= max_rounds then
+      invalid_arg "Codegen_text_scan.support_module_aliases: alias closure did not converge"
+    else close (round + 1) next
   in
   close 0 empty_support_aliases
 
@@ -701,7 +697,9 @@ let scope_of ~emitters ?(helpers = []) ?(support_aliases = empty_support_aliases
       inherit [value_denotes, module_denotes] Lexical_scope.scoped as super
       method local = Bound
       method! shadowed = Some Opaque
-      method module_path env path = resolve_module_path ~aliases:support_aliases env.modules path
+
+      method module_path env path =
+        Some (resolve_module_path ~aliases:support_aliases env.modules path)
 
       method! module_of env module_expr =
         match module_expr.pmod_desc with

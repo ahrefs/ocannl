@@ -1270,6 +1270,9 @@ no source hides a route to generated text behind an open: true
 no test source reads build_files/ itself: generated code is read through Test_utils.Generated: true
 no test source reads a kernel's statements after its Main logic banner unexempted: they are read through Test_utils.Generated.main_logic: true
 every after-marker exemption still names a file reading after the banner: true
+live support aliases attribute an emitter call through an opened Ll_test LL alias: true
+live support aliases refuse opening an emitter alias imported from Ll_builders: true
+live support aliases keep Winner_fixture's .mli-hidden LL alias out of scope: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:a59159ac0fd0f431da9519f8016e6762] every scanned root
@@ -1290,4 +1293,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:7b848f96a84cc15bb6e1027465d08502] Test_utils.Generated
   [scanner-refusal:968edb53fac5a4cfadb338c2a0873278] Test_utils.Generated.main_logic
   [scanner-refusal:65ac789025a090533ae12a66e44fab25] every after-marker exemption
+  [scanner-refusal:ede9d4d135607a80167d420fbbfbbd57] Ll_test
+  [scanner-refusal:feb6a35da6fc5be9e0f1f066c82d6160] Ll_builders
+  [scanner-refusal:89659ed1bd4316a75b179801ae387bb5] Winner_fixture's
 End of synthetic controls.

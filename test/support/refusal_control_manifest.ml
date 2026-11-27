@@ -543,6 +543,9 @@ let raw_entries =
         "[scanner-refusal:7b848f96a84cc15bb6e1027465d08502] Test_utils.Generated";
         "[scanner-refusal:968edb53fac5a4cfadb338c2a0873278] Test_utils.Generated.main_logic";
         "[scanner-refusal:65ac789025a090533ae12a66e44fab25] every after-marker exemption";
+        "[scanner-refusal:ede9d4d135607a80167d420fbbfbbd57] Ll_test";
+        "[scanner-refusal:feb6a35da6fc5be9e0f1f066c82d6160] Ll_builders";
+        "[scanner-refusal:89659ed1bd4316a75b179801ae387bb5] Winner_fixture's";
       ] );
     ( "config_dep_completeness.ml",
       [

@@ -780,7 +780,9 @@ let () =
   let support_aliases =
     match Attempt.run (fun () -> Scan.support_module_aliases support_modules) with
     | Attempt.Scanned aliases -> aliases
-    | Attempt.Unparsed _ -> Scan.empty_support_aliases
+    | Attempt.Unparsed where ->
+        raised := ("support_module_aliases", "unexpected parse error: " ^ where) :: !raised;
+        Scan.empty_support_aliases
     | Attempt.Raised exn ->
         raised := ("support_module_aliases", exn) :: !raised;
         Scan.empty_support_aliases
@@ -1272,6 +1274,33 @@ let () =
   Verdict.p_empty "every after-marker exemption still names a file reading after the banner"
     ~over:(List.map after_marker_exempt ~f:fst)
     (List.map stale_after_marker ~f:fst);
+  (* gh-ocannl-2178: live wiring controls over the real support modules and derived emitter frontier
+     -- pins that [Ll_test]'s re-exported [LL] alias attributes an emitter call, [Ll_builders]'s
+     [LL] alias refuses an unqualified open, and [Winner_fixture]'s [.mli]-hidden [LL] alias stays
+     out of scope. *)
+  let live_open_ll_test =
+    Scan.classify_source ~emitters ~helpers ~support_aliases ~path:"synthetic/open_ll_test.ml"
+      ~contents:
+        "open Ll_test\nlet () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (LL.to_doc () llc)\n"
+  in
+  Verdict.p "live support aliases attribute an emitter call through an opened Ll_test LL alias"
+    (match live_open_ll_test with Some site -> site.Scan.rendered | None -> false);
+  let live_open_ll_builders_rejected =
+    Scan.rejections ~emitters ~support_aliases ~path:"synthetic/open_ll_builders_ll.ml"
+      ~contents:
+        "open Ll_builders\n\
+         open LL\n\
+         let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (to_doc () llc)\n"
+  in
+  Verdict.p "live support aliases refuse opening an emitter alias imported from Ll_builders"
+    (not (List.is_empty live_open_ll_builders_rejected));
+  let live_hidden_winner_fixture =
+    Scan.classify_source ~emitters ~helpers ~support_aliases
+      ~path:"synthetic/open_winner_fixture.ml"
+      ~contents:"open Winner_fixture\nlet () = ignore (LL.to_doc () other)\n"
+  in
+  Verdict.p "live support aliases keep Winner_fixture's .mli-hidden LL alias out of scope"
+    (Option.is_none live_hidden_winner_fixture);
   Test_scan.Refusal_control_manifest.print "codegen_text_inventory.ml";
   if emit_gpu_targets && not (Verdict.any_failed ()) then
     List.iter Test_scan.Slot_kind.gpu_backends ~f:(fun backend ->
