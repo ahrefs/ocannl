@@ -375,7 +375,7 @@ class Gh1180DriverTest(StubRunTest):
         jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
         proc = self.run_tool([box_gate.BASH, str(shell_driver_path("gh1180_tie_ab.sh")), "summary", str(out)])
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-        self.assertIn("ocannl_late_setting resolved differently", proc.stdout)
+        self.assertIn("ocannl_late_setting (unclassified) read in some cells only", proc.stdout)
 
     def test_a_two_mode_arm_is_read_in_modes(self):
         # gh-ocannl-2308's reading on the driver's own table: a clean twelve-round run whose saved
@@ -1524,14 +1524,14 @@ class ConsistencyCheckTest(unittest.TestCase):
                 problems, notes = cells.consistency_check(records)
                 self.assertEqual(notes, [])
                 self.assertEqual(len(problems), 1)
-                self.assertIn(f"arm base: ocannl_{key} resolved differently ({cls}) -- "
+                self.assertIn(f"arm base: ocannl_{key} ({cls}) read in some cells only -- "
                               f"{value!r} in cell(s) 0; not read in cell(s) 1", problems[0])
                 self.assertIn("check why the arm's cells took different paths", problems[0])
                 self.assertIn("Utils.config_key_classification", problems[0])
         proc = self._report_run({("base", 0): {"autotune_timing": self._entry("queued")}})
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertNotIn("- every cell clean", proc.stdout)
-        self.assertIn("ocannl_autotune_timing resolved differently (keyed: timing) -- "
+        self.assertIn("ocannl_autotune_timing (keyed: timing) read in some cells only -- "
                       "'queued' in cell(s) 0; not read in cell(s) 3", proc.stdout)
         self.assertIn("check why the arm's cells took different paths", proc.stdout)
 
@@ -1544,7 +1544,7 @@ class ConsistencyCheckTest(unittest.TestCase):
         self.assertEqual(notes, [])
         self.assertEqual(len(problems), 1)
         self.assertIn(
-            "arm a: ocannl_future_unclassified_key resolved differently (unclassified) -- "
+            "arm a: ocannl_future_unclassified_key (unclassified) read in some cells only -- "
             "not read in cell(s) 0; '1' in cell(s) 1", problems[0])
         self.assertIn("Utils.config_key_classification", problems[0])
         self.assertIn("test/operations/digest_completeness.expected", problems[0])

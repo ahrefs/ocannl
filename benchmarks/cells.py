@@ -357,12 +357,12 @@ def consistency_check(records, *, key_classes=None):
                 notes.append(f"arm {arm}: ocannl_{key} ({cls}) read in some cells only -- {detail}")
             elif cls is not None:
                 problems.append(
-                    f"arm {arm}: ocannl_{key} resolved differently ({cls}) -- {detail} "
+                    f"arm {arm}: ocannl_{key} ({cls}) read in some cells only -- {detail} "
                     "(check why the arm's cells took different paths, or reclassify as "
                     "Execution_neutral in Utils.config_key_classification if it changes no result)")
             else:
                 problems.append(
-                    f"arm {arm}: ocannl_{key} resolved differently (unclassified) -- {detail} "
+                    f"arm {arm}: ocannl_{key} (unclassified) read in some cells only -- {detail} "
                     "(check why the arm's cells took different paths, or classify in "
                     "Utils.config_key_classification and refresh "
                     "test/operations/digest_completeness.expected)")
@@ -768,8 +768,9 @@ def timed_results_problems(results, nothing):
 
 def run_level_problems(manifest, records):
     """The faults of a run that no single cell carries: a kernel compiler that could not be
-    identified, and an arm whose clean cells resolved a setting two ways. A driver re-judging a
-    finished run (`read_run`) applies these beside its per-cell checks, as the front end did."""
+    identified, and any arm whose clean cells fail `consistency_problems` (see `consistency_check`).
+    A driver re-judging a finished run (`read_run`) applies these beside its per-cell checks, as the
+    front end did."""
     problems = [f"arm {arm}: the kernel compiler could not be identified: {c['error']}"
                 for arm, c in manifest.get("kernel_compilers", {}).items() if "error" in c]
     return problems + consistency_problems([r for r in records if r["ok"]])

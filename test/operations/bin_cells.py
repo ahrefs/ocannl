@@ -158,11 +158,11 @@ claim("a result-changing or unclassified setting read in only some cells of an a
                                              "autotune_timing": {"value": "queued"},
                                              "late": {"value": "x"}}}])
       == [
-          "arm a: ocannl_autotune_timing resolved differently (keyed: timing) -- "
+          "arm a: ocannl_autotune_timing (keyed: timing) read in some cells only -- "
           "not read in cell(s) 0; 'queued' in cell(s) 1 "
           "(check why the arm's cells took different paths, or reclassify as Execution_neutral in "
           "Utils.config_key_classification if it changes no result)",
-          "arm a: ocannl_late resolved differently (unclassified) -- "
+          "arm a: ocannl_late (unclassified) read in some cells only -- "
           "not read in cell(s) 0; 'x' in cell(s) 1 "
           "(check why the arm's cells took different paths, or classify in "
           "Utils.config_key_classification and refresh "
