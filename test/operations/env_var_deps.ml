@@ -1165,25 +1165,26 @@ let width_key = "cc_vector_bytes"
    another width happen (gh-ocannl-1149); this rule asks that the default run not depend on the host
    at all. Every program that starts a search and has a run that can select cc either PINS the
    vector file ([vector_file_keys]: the width and the register count) for the whole process -- per
-   key, every such run either sets it on the command line or with `(setenv …)` to a value that pins,
-   or runs a program whose initialization calls a blessed helper ([vector_file_pin_values]) before
-   any search -- or its stanza carries the marker `; cc-vector-width: independent -- <reason>`,
-   saying at the site why its claims hold at every width.
+   key, every such run must omit command-line settings and either set the key with `(setenv …)` to a
+   pinning value or run a program whose initialization calls a blessed helper
+   ([vector_file_pin_values]) -- or its stanza carries the marker `; cc-vector-width: independent --
+   <reason>`, saying at the site why its claims hold at every width.
 
    The rule guards against a program that forgets the width, not against one written to deceive a
    lint: what it credits is narrow on purpose -- a reviewed helper, called in plain sight before the
    first search, or a literal in the stanza -- and everything else needs the marker (Codex P2,
    rounds 1-3 of staging#1263, where proving arbitrary statements of a setting kept finding new ways
-   to write one). An initialization pin is invalidated if any top-level item from the pinning one
-   onward -- including the search item and later items -- spells a vector-file key literal (by
-   config key or env-var name), without trying to distinguish read-only diagnostics from resets, or
-   if any sibling module of the same program (excluding `modules_without_implementation`) spells a
-   vector-file key literal anywhere in its parsed expressions or lacks a parsable implementation
-   source; a program that only makes a read-only mention of a key after pinning or in a sibling
-   module can pin via `(setenv …)` or carry the marker (in-process `Utils.state_config` resets
-   outrank `(setenv …)` and are not checked by the `setenv` branch). Dynamic key strings computed at
-   runtime and linked library modules outside the program's own module set are outside this literal
-   pass.
+   to write one). The helper must precede any item naming a search or a qualified value with a
+   sibling module head (compared case-insensitively with Dune's module names). An initialization pin
+   is invalidated if any item from the pinning one onward in the initialization view spells a
+   vector-file key literal, or any required sibling implementation is unreadable or spells one
+   anywhere. An in-process `Utils.state_config` can outrank the environment, so a `(setenv …)` pin
+   for a key requires every implementation of the program, including all select arms, to be readable
+   and free of that key literal. Whole-file checks read decoded string constants from the original
+   OCaml AST without attributes. A literal matches the config key exactly or the env-var name
+   case-insensitively, since Windows treats case variants as the same variable. Read-only mentions
+   count as well as writes. Interface-only modules need no implementation. Dynamic keys, comments,
+   and linked library modules outside the program's own module set are outside the literal pass.
 
    "Starts a search" is derived from the search's entry points [search_value] (and
    [search_values_extra]) of [search_home] and the values of the framework library
@@ -1274,6 +1275,9 @@ let vector_file_pins key value =
   | _ -> false
 
 let vector_file_literals key = [ key; Utils.env_var_name key ]
+
+let matches_vector_file_key key literal =
+  String.equal key literal || String.Caseless.equal (Utils.env_var_name key) literal
 
 let vector_file_stating_reach ~key content =
   Sources.stating_reach ~literals:(vector_file_literals key) ~tables:width_pin_tables
@@ -3389,6 +3393,28 @@ let main () =
                         List.exists (atoms runner) ~f:(fun atom ->
                             List.exists prefixes ~f:(fun prefix -> String.is_prefix atom ~prefix))
                       in
+                      let module_has_key_or_unreadable ~matches_key m =
+                        if not (Scan.needs_source declared m) then false
+                        else
+                          match module_source_files ~dir:here stanza m with
+                          | [] -> true
+                          | arms ->
+                              List.exists arms ~f:(fun (_, key) ->
+                                  match List.Assoc.find sources key ~equal:String.equal with
+                                  | None -> true
+                                  | Some on_disk -> (
+                                      match
+                                        Test_scan.Scan_attempt.run (fun () ->
+                                            (* Normalizing initialization items drops arguments of
+                                               inlined functor applications. *)
+                                            Test_scan.Agent_notes_scan.source_literals
+                                              (In_channel.read_all on_disk))
+                                      with
+                                      | Scanned literals ->
+                                          List.exists literals ~f:(fun (_, text) ->
+                                              matches_key text)
+                                      | Unparsed _ | Raised _ -> true))
+                      in
                       (* Whether a program's initialization pins the file: one of its modules CALLS
                          a blessed helper in statement position of a top-level item that runs at
                          initialization (a helper in a closure or an argument is not a call, round
@@ -3404,38 +3430,18 @@ let main () =
                         let names_search m =
                           List.exists (module_keys m) ~f:(Map.mem search_reach)
                         in
-                        let key_literals =
-                          List.concat_map vector_file_keys ~f:(fun (key, _) ->
-                              vector_file_literals key)
+                        let matches_key literal =
+                          List.exists vector_file_keys ~f:(fun (key, _) ->
+                              matches_vector_file_key key literal)
                         in
-                        let spells_key item =
-                          List.exists item.Sources.literals ~f:(fun literal ->
-                              List.mem key_literals literal ~equal:String.equal)
-                        in
-                        let sibling_disqualifies m =
-                          if not (Scan.needs_source declared m) then false
-                          else
-                            match module_source_files ~dir:here stanza m with
-                            | [] -> true
-                            | arms ->
-                                List.exists arms ~f:(fun (_, key) ->
-                                    match List.Assoc.find sources key ~equal:String.equal with
-                                    | None -> true
-                                    | Some on_disk -> (
-                                        match
-                                          Test_scan.Scan_attempt.run (fun () ->
-                                              Sources.initialization_items
-                                                (In_channel.read_all on_disk))
-                                        with
-                                        | Scanned items -> List.exists items ~f:spells_key
-                                        | Unparsed _ | Raised _ -> true))
-                        in
+                        let spells_key item = List.exists item.Sources.literals ~f:matches_key in
                         let arm_pin ~others (file, key) =
                           match Map.find vector_file_init_order key with
                           | Some (items, helper_of, is_search, first_applied) ->
                               let barrier = function
                                 | path when is_search path -> true
-                                | first :: _ :: _ -> List.mem others first ~equal:String.equal
+                                | first :: _ :: _ ->
+                                    List.mem others first ~equal:String.Caseless.equal
                                 | _ -> false
                               in
                               let rec scan index pinned = function
@@ -3472,12 +3478,11 @@ let main () =
                         in
                         List.find_map modules ~f:(fun m ->
                             let others =
-                              List.filter modules ~f:(fun m' ->
-                                  not (String.equal (String.lowercase m) (String.lowercase m')))
+                              List.filter modules ~f:(fun m' -> not (String.Caseless.equal m m'))
                             in
                             if
                               List.exists others ~f:names_search
-                              || List.exists others ~f:sibling_disqualifies
+                              || List.exists others ~f:(module_has_key_or_unreadable ~matches_key)
                             then None
                             else
                               match module_source_files ~dir:here stanza m with
@@ -3498,13 +3503,20 @@ let main () =
                          initializer's statement then refuses to start, a failure of its own), then
                          the initializer's pin, which a blessed helper states in process above any
                          environment variable (gh-ocannl-2354: a `setenv` of `-1` no longer undoes
-                         it, as it did in round 2), and only without one, a `setenv` around the
-                         run. *)
+                         it, as it did in round 2), and only without one, a `setenv` around the run
+                         whose key no program implementation can visibly override. *)
                       let pinned_by modules cc_runs =
                         let init = init_pin modules in
                         let answers =
                           List.concat_map vector_file_keys ~f:(fun (key, _) ->
                               let var = Utils.env_var_name key in
+                              let env_untrusted =
+                                lazy
+                                  (List.exists modules
+                                     ~f:
+                                       (module_has_key_or_unreadable
+                                          ~matches_key:(matches_vector_file_key key)))
+                              in
                               List.map cc_runs ~f:(fun (r, pins, _) ->
                                   (* A `setenv` of the key anywhere in the stanza that sets no
                                      pinning value leaves this run unpinned, even one wrapping only
@@ -3512,7 +3524,10 @@ let main () =
                                      them (Codex P2, round 7). *)
                                   if on_command_line r ~key then None
                                   else if Option.is_some init then init
-                                  else if sets_a_value r ~key && Set.mem pins var then
+                                  else if
+                                    Set.mem pins var && sets_a_value r ~key
+                                    && not (Lazy.force env_untrusted)
+                                  then
                                     Some
                                       (Printf.sprintf "every run that can select cc pins `%s`" var)
                                   else None))
@@ -6539,6 +6554,11 @@ let search_control () =
   let wrapped = "open Ocannl\nlet () = Train.tune_placements ()\n" in
   let pin = "let () = Fissioned_chain.small_menu ()\n" in
   let helper = pin ^ tune in
+  let sibling_program = "(name probe)\n (modules probe helper)" in
+  let sibling_setup = "let () = Helper.setup ()\n" in
+  let clean_sibling =
+    [ ("t/helper.ml", Printf.sprintf "(* %s *)\nlet setup () = ()\n" width_key) ]
+  in
   let state key value = Printf.sprintf "let () = Utils.state_config ~key:%S ~data:%S\n" key value in
   let direct = state width_key "16" ^ state registers_key "32" ^ tune in
   (* The width set to [value], the register count to a pin. *)
@@ -6644,9 +6664,13 @@ let search_control () =
         refused (run ~programs:"(name probe)\n (modules probe missing)" ~probe:helper ()) );
       ( "sibling_clean",
         passed
-          (run ~programs:"(name probe)\n (modules probe helper)"
-             ~extra:[ ("t/helper.ml", Printf.sprintf "(* %s *)\nlet setup () = ()\n" width_key) ]
-             ~probe:(pin ^ "let () = Helper.setup ()\n" ^ tune)
+          (run ~programs:sibling_program ~extra:clean_sibling
+             ~probe:(pin ^ sibling_setup ^ tune)
+             ()) );
+      ( "sibling_before_pin",
+        refused
+          (run ~programs:sibling_program ~extra:clean_sibling
+             ~probe:(sibling_setup ^ pin ^ tune)
              ()) );
       ( "sibling_interface_only",
         passed
@@ -6655,6 +6679,36 @@ let search_control () =
              ~probe:helper ()) );
       ("marked", passed (run ~marker ~probe:named ()));
       ("setenv", passed (run ~action:(setenv "32") ~probe:named ()));
+      ("setenv_read_only", refused (run ~action:(setenv "32") ~probe:read ()));
+      ( "setenv_main_reset",
+        refused (run ~action:(setenv "32") ~probe:(state width_key "-1" ^ named) ()) );
+      ( "setenv_functor_argument_reset",
+        refused
+          (run ~action:(setenv "32")
+             ~probe:
+               ("module Include (_ : sig end) = struct end\ninclude Include (struct\n"
+              ^ state width_key "-1" ^ "end)\n" ^ named)
+             ()) );
+      ( "setenv_case_variant_reset",
+        refused
+          (run ~action:(setenv "32")
+             ~probe:
+               (Printf.sprintf "let () = Unix.putenv %S \"-1\"\n" (String.lowercase var) ^ named)
+             ()) );
+      ( "setenv_sibling_clean",
+        passed
+          (run ~action:(setenv "32") ~programs:sibling_program ~extra:clean_sibling
+             ~probe:(sibling_setup ^ tune) ()) );
+      ( "setenv_sibling_reset",
+        refused
+          (run ~action:(setenv "32") ~programs:sibling_program
+             ~extra:
+               [
+                 ( "t/helper.ml",
+                   Printf.sprintf "let setup () = Utils.state_config ~key:%S ~data:\"-1\"\n"
+                     registers_key );
+               ]
+             ~probe:(sibling_setup ^ tune) ()) );
       ("helper", passed (run ~probe:helper ()));
       ("direct", refused (run ~probe:direct ()));
       ("read", refused (run ~probe:read ()));
@@ -6822,7 +6876,10 @@ let search_control () =
   Verdict.p
     "a program starting a search with a run that can select cc is reported when it neither pins \
      the width nor carries the marker"
-    (ok "unanswered");
+    (ok "unanswered" && ok "sibling_before_pin" && ok "setenv_main_reset"
+   && ok "setenv_sibling_reset" && ok "setenv_read_only"
+    && ok "setenv_functor_argument_reset"
+    && ok "setenv_case_variant_reset");
   Verdict.p "an unmarked search through an Autotune.Make instance is refused"
     (ok "applied_unanswered");
   Verdict.p "a search through an Autotune.Make instance can carry the width marker"
@@ -6845,7 +6902,8 @@ let search_control () =
     (ok "sibling_clean" && ok "sibling_interface_only");
   Verdict.p "the same stanza carrying `; cc-vector-width: independent -- <reason>` passes"
     (ok "marked");
-  Verdict.p "and so does one pinning the variable with `setenv` around its run" (ok "setenv");
+  Verdict.p "and so does one pinning the variable with `setenv` around its run"
+    (ok "setenv" && ok "setenv_sibling_clean");
   Verdict.p "and so does a program whose initialization calls a support helper stating the width"
     (ok "helper");
   Verdict.p "a program's own statements of the keys are no pin: only a blessed helper or a run's is"
