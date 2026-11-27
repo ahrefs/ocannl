@@ -4841,13 +4841,6 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                                    statement-site fragment inside the row-block body, which is
                                    weighed with it ([cpu_pack_grid_chunk_bytes]). *)
                                 if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
-                                else if cpu_pack_partitions_k site ~bk:p.sk_bk then
-                                  (* Partition duplicates the row-block loop after staging, with
-                                     both segments writing the same packed A~ node. Each loop needs
-                                     its own copy to privatize the tile. *)
-                                  Sspace.Refuted
-                                    ("the full and edge reduction segments share a packed A~ tile"
-                                   ^ " accessed outside each row-block Grid loop")
                                 else
                                   fused_partial ~shape:`Grid p @@ fun () ->
                                   match

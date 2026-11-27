@@ -1644,15 +1644,22 @@ files.
   statement-site tile IS weighed (since gh-ocannl-1706, through `cpu_pack_acc_masked`; comments
   saying otherwise were stale until gh-ocannl-1856): the shape's per-chunk sum is one spelling,
   `cpu_pack_grid_chunk_bytes`, which the same test pins equal to the renderer's recorded private
-  bytes on padded plain-`grid` sites. When k has both full and partial blocks, the plain `grid`
-  shape is refuted before the cap (gh-ocannl-2275). The k partition copies the row-block Grid body
-  after staging, so the full and edge segments write the same A~ tile outside each other's Grid
-  loop. A single partial k block has no sibling segment. A direct CPU conv `Row_block` panel
+  bytes on padded plain-`grid` sites. When `Partition` or `full_block_split` copies a `Grid` loop
+  body without renaming its symbol (e.g. full and edge k segments sharing `A~` and a masked
+  accumulator fragment), `C_syntax.collect_parallel_grid` judges all outermost `Grid` occurrences
+  binding that symbol together (gh-ocannl-2324): a local privatizes when all its kernel accesses sit
+  inside that symbol's outermost `Grid` loops and every occurrence accessing it passes
+  `first_access_standalone_covering` within the per-chunk cap, and every occurrence of the symbol
+  renders on the pool or none does, each chunk declaring only the privatized locals its own body
+  accesses. Plain `grid` with split k therefore stays in the menu under the normal cap and launch
+  floor. A direct CPU conv `Row_block` panel
   privatizes both staged tiles and any accumulator fragment. Its tree charges their combined
-  footprint against the same cap. `autotune_grid_record` compiles the 40^3 and 72^3 bk=16 matmul
-  controls and compares the conv panel pre-filter's bytes with the renderer below, at and above
-  the cap. Its 41-row conv with 8 input channels and 32 output channels admits a 32-row panel at
-  6,144 bytes. A strict comparison in the pre-filter fails that panel's admission claim. The
+  footprint against the same cap. `autotune_grid_record` compiles and executes the 40^3 and 72^3
+  bk=16 matmul controls (both row-block loops on the pool with floor disabled, bitwise parity
+  against the serial packed twin) and compares the conv panel pre-filter's bytes with the renderer
+  below, at and above the cap. Its 41-row conv with 8 input channels and 32 output channels admits
+  a 32-row panel at 6,144 bytes. A strict comparison in the pre-filter fails that panel's admission
+  claim. The
   launch floor is weighed by `cpu_mma_grid_updates_bound` (gh-ocannl-1857), a saturating upper
   bound using the renderer's resolved `C_syntax.grid_min_updates ()` and
   `Cost_model.tile_mma_macs_per_update`: packing

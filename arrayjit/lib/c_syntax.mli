@@ -416,7 +416,8 @@ type grid_serial_reason =
           would race across chunks. *)
   | Grid_local_accessed_outside of string
       (** This local is written grid-variantly (it fails the shared rule) and is also accessed
-          outside the loop body (it fails the privatization rule). *)
+          outside the outermost [Grid] loops binding this symbol (it fails the privatization rule).
+      *)
   | Grid_local_not_covering of string
       (** This local fails the shared rule, and its first access per iteration is not a standalone
           covering write (it fails the privatization rule). *)
