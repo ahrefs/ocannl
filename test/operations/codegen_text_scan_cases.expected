@@ -227,6 +227,33 @@ ok: helper -- a helper passed as a callback is listed, unvalidated
 ok: helper -- a helper's bare name under an open of its module
 ok: helper -- a helper reached through an alias of a library's qualifier
 ok: helper -- a test's own value of a helper's name, nothing opened, is not
+ok: support aliases -- top-level aliases close over include and respect .mli hiding, and nothing else
+ok: support alias -- an emitter called through an alias exported by an opened support module is recognized
+ok: support alias -- an inline pin through an opened support module's emitter alias records its fragment
+ok: support alias -- an emitter alias re-exported through a support module's include is recognized
+ok: support alias -- a functor-application alias exported by a support module is recognized
+ok: support alias -- a buffer-writing emitter reached through an opened support alias seeds its buffer
+ok: support alias -- a local let open brings a support module's aliases into that body alone
+ok: support alias -- a support alias does not leak past a local let open
+ok: support alias -- a dotted path through a support module resolves its exported alias without an open
+ok: support alias -- a dotted path through a local alias of a support module resolves its exported alias
+ok: support alias -- a shadowed support module name does not resolve the original support module's aliases
+ok: support alias -- a local module binding shadows an alias brought in by an opened support module
+ok: support alias -- an alias bound in a support module through an open is exported, while the opened one is not
+ok: support alias -- an open inside a support module does not re-export the opened module's aliases
+ok: support alias -- a support module redefining an included alias as a struct shadows it
+ok: support alias -- an alias hidden by a support module's .mli is not imported by open
+ok: support alias -- an alias hidden by a support module's .mli does not shadow a caller's own alias
+ok: support alias -- aliases exported by a support module's .mli are imported, while unexported ones stay hidden
+ok: support alias -- an alias omitted from a support module's .mli stays hidden even when another is exported
+ok: support alias -- a support module whose .mli has an opaque include conservatively keeps its .ml aliases
+ok: support alias -- a reader or direct artifact alias exported by an opened support module is attributed
+ok: support alias rejection -- calling an emitter qualified by an opened support alias is accepted
+ok: support alias rejection -- opening an emitter alias imported from an opened support module is refused
+ok: support alias rejection -- opening a support module's emitter alias by dotted path is refused
+ok: support alias rejection -- opening an emitter alias re-exported through a support module's include is refused
+ok: support alias rejection -- opening a reader alias imported from an opened support module is refused
+ok: support alias rejection -- opening a name hidden by a support module's .mli is not refused
 ok: population -- a value reaching the seam reaches a prelowered compile
 ok: population -- a value calling a compiler reaches that compiler alone
 ok: population -- the kernel-text population keeps only the routes reaching a built kernel

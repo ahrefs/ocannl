@@ -5456,11 +5456,14 @@
   (glob_files ../../arrayjit/lib/.utils.objs/byte/*.cmi)
   (glob_files_rec ../../test/*.expected)
   (glob_files_rec ../../test/*.ml)
+  (glob_files_rec ../../test/*.mli)
   (glob_files_rec ../../arrayjit/test/*.expected)
   (glob_files_rec ../../arrayjit/test/*.ml)
+  (glob_files_rec ../../arrayjit/test/*.mli)
   (glob_files_rec ../../test/dune)
   (glob_files_rec ../../arrayjit/test/dune)
   (glob_files ../../benchmarks/runners/ocannl/*.ml)
+  (glob_files ../../benchmarks/runners/ocannl/*.mli)
   (glob_files ../../benchmarks/runners/ocannl/dune))
  (action
   (progn
