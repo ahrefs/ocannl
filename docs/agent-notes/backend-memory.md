@@ -17,7 +17,16 @@ files.
   task); the routine-level schedule `Task.enschedule` wraps it in only enqueues, on the caller. A
   `hit` placed in an enqueued task would fire on the worker against the no-op and vanish from every
   test. `resource_fault_injection_domains` pins both halves (two-domain isolation on `cc`; the same
-  point set from the caller on `multidev_cc`).
+  point set from the caller on `multidev_cc`). Every `hit` carries a concrete `artifact` beside its
+  point's exhaustively derived `ownership_phase` (`with_event_callback`), and asynchronous
+  synchronization seams use `with_sticky_async_fault` as the baseline (persistent until cleared,
+  with one-shot exceptions as negative controls; gh-ocannl-778). `resource_fault_inventory_scan`
+  (`@test/operations/scans`) derives the point set from `Resource_fault_injection.all_of_point` and
+  refuses any undocumented point, renamed test path, un-pathed `Covered` row, or stale `Autotune.*`
+  hook. Growing the reserved merge slab (`merge_buffer_pool_id`) invalidates all four ownership
+  claims via `invalidate_merge_slab` / `commit_merge_slab` across `Make_slab`, CUDA, HIP, and Metal
+  (and on CUDA/HIP eagerly destroys live merge-using cached graphs), and Metal translates
+  `newBufferWithLength:options:` failures into `Schedule_outcome.Device_memory_exhausted`.
 
 - **Device buffers are not GC-reclaimable, and the reason is a table, not GC pressure**
   (gh-ocannl-550). Each backend's private `Slab.pools` (`(device_id, pool_id) -> base`) holds a

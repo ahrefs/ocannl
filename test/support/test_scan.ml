@@ -157,3 +157,8 @@ module Forced_decline_sort = Forced_decline_sort
 module Provenance_tag_scan = Provenance_tag_scan
 (** Where the virtualizer's rejection codes are minted, which files name them, and the boundary
     test's phase table checked against the minting functions (gh-ocannl-1015). *)
+
+module Resource_fault_inventory_scan = Resource_fault_inventory_scan
+(** Checking [docs/resource-fault-injection-inventory.md] against the derived
+    [Ir.Resource_fault_injection.point] constructors, repository test files, and cited module hooks
+    (gh-ocannl-778). *)
