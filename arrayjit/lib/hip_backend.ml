@@ -1888,6 +1888,10 @@ end = struct
            (not (Array.is_empty attrs))
            && Array.for_all attrs ~f:(fun (a : H.Device.attributes) -> a.integrated)
          in
+         let all_discrete =
+           (not (Array.is_empty attrs))
+           && Array.for_all attrs ~f:(fun (a : H.Device.attributes) -> not a.integrated)
+         in
          (* The wavefront the shuffles assume: 32 lanes. *)
          let wave = 32 in
          let mma_ok = mma_supported () in
@@ -1998,34 +2002,43 @@ end = struct
            fill_threads = Some (if all_integrated then 384 else 512);
            (* gh-ocannl-1639: unfitted -- no HIP leg measured the ILP cap: the thread-only fill. *)
            fill_chains = None;
-           (* gh-ocannl-1600: the memory-transaction rate, fitted (benchmarks/gh1600_txn_fit.py) on
-              the gh-ocannl-1479 cells on the unified gfx1151 (minix, 2026-10-26, 630016bd): the qkv
-              and outproj kernels carry no excess (a lane's innermost run is one footprint), the
-              weight gradient's agreement rises 50 -> 75% at rates up to 2e11 and falls back above.
-              Only under all_rdna_wave32 (the count groups lanes by the 32-wide simdgroup, which a
-              CDNA wave64 part does not execute) and on the unified class it was fitted on: the
-              discrete class (tuf) stays unset: at its measured gh-ocannl-1479 cells (2026-11-02,
-              ecb13bb8) the per-lane-group count of that time ranked gh-ocannl-1661's partitioned
-              staged tiles, the fastest measured, 1.8-2.6x slow. Since the count takes a block's
-              lane groups together, no candidate at those cells carries excess, so the rate is inert
-              there. With the capacity below it admits the coalesced layouts to model_default.
+           (* gh-ocannl-1600 / gh-ocannl-2280: the memory-transaction rate, fitted
+              (benchmarks/gh1600_txn_fit.py) on the gh-ocannl-1479 cells on the unified gfx1151
+              (minix, 2026-10-26, 630016bd): the qkv and outproj kernels carry no excess (a lane's
+              innermost run is one footprint), the weight gradient's agreement rises 50 -> 75% at
+              rates up to 2e11 and falls back above. Only under all_rdna_wave32 (the count groups
+              lanes by the 32-wide simdgroup, which a CDNA wave64 part does not execute). Since the
+              count takes a block's lane groups together, no candidate at the gh-ocannl-1479 cells
+              on discrete RX 7700S (tuf) carries excess, so 1e11 is inert there while opening
+              model_default's coalesced menu beside the occupancy capacity and copy rate below.
               Overridable by model_transaction_rate. *)
-           transaction_rate =
-             (if all_integrated && Lazy.force all_rdna_wave32 then Some 1.0e11 else None);
+           transaction_rate = (if Lazy.force all_rdna_wave32 then Some 1.0e11 else None);
            (* gh-ocannl-1600: the occupancy factor's capacity, physical: 128 KiB of LDS per WGP (the
               unit multiprocessor_count counts) on the RDNA wave32 parts. With it the deep-K
               coalesced leaves rank as measured at the gh-ocannl-1479 outproj cells on minix (argmin
-              1.00x of the fastest at b8 and b256, against 3.6x and 3.3x without). Overridable by
+              1.00x of the fastest at b8 and b256, against 3.6x and 3.3x without) and tuf (keeping
+              64x64x128 coal-k behind 64x64x32 coal-k). Overridable by
               model_workgroup_bytes_per_multiprocessor. *)
            workgroup_bytes_per_multiprocessor =
              (if Lazy.force all_rdna_wave32 then Some 131072 else None);
-           (* gh-ocannl-1821: no staged-copy rate. On the discrete RX 7700S (tuf, ecb13bb8) the term
-              moves the outproj argmin to a 64x64x128 coal-k tile 1.30x / 1.14x slower than the
-              fastest leaf, and would favor the uncoalesced 64x64x8 blocktile measured 4.5x slower
-              there: the deep tiles also need the occupancy factor, and the latter a mechanism the
-              counts do not see. The unified class (minix) admits the coalesced layouts through its
-              capacity and was not re-measured. Overridable by model_staged_copy_rate. *)
-           staged_copy_rate = None;
+           (* gh-ocannl-1821 / gh-ocannl-2280: the staged-copy and partition-guarded staged-idle
+              rates, fitted jointly on the discrete RX 7700S (tuf, five-replicate exclusive gh-1479
+              window, 2026-11-27; benchmarks/gh1600_txn_fit.py --staged-rate sweep --idle-rate
+              sweep) beside the physical occupancy capacity and shared-load rate below. On discrete
+              RDNA3, staging volume orders 64x64x32 coal-k ahead of 32x32x8 (outproj b8/b256 argmin
+              1.001x/1.000x of fastest, pick 0.56x/0.20x of seeded), while 64x64x8/4x4's Workgroup i
+              < 8 partition guard leaves half the block idle across the phase barrier and trails
+              32x32x8 on every cell (1.29x at wgrad b8 with 0 VGPR spills; 2.55x at outproj b8 and
+              2.88x / 4.51x at outproj b256). Across 5e11 B/s copy rate, any idle rate in
+              1.58e11-5.0e11 B/s passes all five cells (3.0e11 is the log-midpoint, keeping
+              shared_load_rate 6.3e11 centered in its plateau). The unified class (minix) and mixed
+              integrated+discrete hosts keep both unset so an integrated GPU is never moved by
+              discrete staging rates. Overridable by model_staged_copy_rate and
+              model_staged_idle_rate. *)
+           staged_copy_rate =
+             (if all_discrete && Lazy.force all_rdna_wave32 then Some 5.0e11 else None);
+           staged_idle_rate =
+             (if all_discrete && Lazy.force all_rdna_wave32 then Some 3.0e11 else None);
            (* gh-ocannl-2262: the register-reuse rate and the fill in wavefronts, fitted together on
               the discrete RX 7700S (tuf, gh-ocannl-1600's M3 rows at ecb13bb8, re-scored by
               EXPLAIN_ONLY listings; benchmarks/gh1600_txn_fit.py --shared-rate). Measured, 2x2

@@ -2376,6 +2376,9 @@ end = struct
               model_default's ranking, not the auto seeding gate. Overridable by
               model_staged_copy_rate. *)
            staged_copy_rate = Some 1.0e12;
+           (* gh-ocannl-2280: unset on CUDA -- guarded 64x64x8/4x4 leaves run faster on rog (L2
+              traffic dominates, gh-ocannl-1821). Overridable by model_staged_idle_rate. *)
+           staged_idle_rate = None;
            (* gh-ocannl-2262: the register-reuse rate and the fill in warps, fitted together on the
               gh-ocannl-1479 cells' timings on rog-nv's RTX 5070 Ti (gh-ocannl-1821's window rows,
               re-scored by EXPLAIN_ONLY listings; benchmarks/gh1600_txn_fit.py --shared-rate). At

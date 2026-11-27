@@ -8014,7 +8014,7 @@ box.
   `model_issue_rate`, `model_mma_rate`, `model_multiprocessors`, `model_peak_flops`,
   `model_peak_memory_bandwidth`, `model_peak_mma_bf16`, `model_peak_mma_f16`, `model_peak_mma_fp8`,
   `model_peak_mma_tf32`, `model_shared_load_rate`, `model_staged_copy_rate`,
-  `model_transaction_rate`, `model_workgroup_bytes_per_multiprocessor`.
+  `model_staged_idle_rate`, `model_transaction_rate`, `model_workgroup_bytes_per_multiprocessor`.
 - `c_syntax.ml`: `cc_grid_private_bytes_cap`, `schedule_log_declines`.
 - `context.ml`: `debug_fill_fresh_outputs`.
 - `cc_backend.ml`: `cc_backend_arch_flags`, `cc_backend_compiler_command`,

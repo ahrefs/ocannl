@@ -211,6 +211,8 @@ ORDER
 if harness_leg '1: refuses incompatible options before building'; then
   check 'the compare mode rejects PICK_PROFILES before building' refuses "$SRC" refuse
   for spec in 'TIME_REPEATS=0|TIME_REPEATS must be a positive integer' \
+    'STAGED_COPY_RATE=5e11|STAGED_COPY_RATE conflicts with this mode' \
+    'STAGED_IDLE_RATE=5e11|STAGED_IDLE_RATE conflicts with this mode' \
     'SITES=outproj:1,16,0,2,4|invalid dimensions' \
     'SITES=wgrad:1,32,32,32 wgrad:1,32,32,32|duplicate site'; do
     setting=${spec%%|*}
@@ -283,7 +285,7 @@ if harness_leg '5: stock agreement uses preset attribution and retains the seria
     grep -qF 'conflicting autotune-seeding: plan values' "$TMP/runs/conflict/stdout"
   # The serial report below is the base reader's output for the single-seeded-row fixture.
   # A second seeded row defeats the old uniqueness heuristic.
-  serial_arms=(ceilings nofill nomma mmaonly noocc notxn nostg noilp noshl nolane shipped)
+  serial_arms=(ceilings nofill nomma mmaonly noocc notxn nostg noidl noilp noshl nolane shipped)
   {
     for arm in "${serial_arms[@]}"; do
       cat <<SERIAL
@@ -851,5 +853,57 @@ assert len(coal_res) == 1 and sorted(coal_res[0][2]) == ["admitted+coalesced"], 
 unadm_res = gh1821_geometry_fit.evaluate(gh1821_geometry_fit.load(sys.argv[3], "shipped"), None, 0, 0.10)
 assert len(unadm_res) == 1 and unadm_res[0][2] == {} and unadm_res[0][3] == 1.0, unadm_res
 PY
+fi
+if harness_leg '9: gh1600_txn_fit --idle-rate refuses listings without idl= and rescores ones with it'; then
+  site=rank_wgrad_1x32x32x32
+  txn_fit="$tree/benchmarks/gh1600_txn_fit.py"
+  idl_dir="$TMP/runs/idle-fit"
+  mkdir -p "$idl_dir"
+  cat >"$idl_dir/rows.tsv" <<'TSV'
+hip	11111111/aaaaaaaa	rs_stub	W_sketch[guarded]	2.000		1	4	8	false	false	false
+hip	22222222/bbbbbbbb	rs_stub	W_sketch[unguarded]	1.000		1	4	8	false	false	false
+TSV
+  cat >"$idl_dir/no_idl.out" <<'OUT'
+rank-site: explain site=wgrad label="W_sketch[guarded]" rank_ms=0.900000 admitted=true
+rank-site: kernels site=wgrad label="W_sketch[guarded]" kernels=c=0.900000,m=0.000000,txn=0.000000e+00,txn64=0.000000e+00,txn128=0.000000e+00,unc=0,wg=4096,thr=256,occ=1.000000,stg=1.000000e+08,shl=0.000000e+00
+rank-site: explain site=wgrad label="W_sketch[unguarded]" rank_ms=1.000000 admitted=true
+rank-site: kernels site=wgrad label="W_sketch[unguarded]" kernels=c=1.000000,m=0.000000,txn=0.000000e+00,txn64=0.000000e+00,txn128=0.000000e+00,unc=0,wg=4096,thr=256,occ=1.000000,stg=2.000000e+08,shl=0.000000e+00
+OUT
+  cat >"$idl_dir/with_idl.out" <<'OUT'
+rank-site: explain site=wgrad label="W_sketch[guarded]" rank_ms=0.900000 admitted=true
+rank-site: kernels site=wgrad label="W_sketch[guarded]" kernels=c=0.900000,m=0.000000,txn=0.000000e+00,txn64=0.000000e+00,txn128=0.000000e+00,unc=0,wg=4096,thr=256,occ=1.000000,stg=1.000000e+08,shl=0.000000e+00,idl=1.000000e+08
+rank-site: explain site=wgrad label="W_sketch[unguarded]" rank_ms=1.000000 admitted=true
+rank-site: kernels site=wgrad label="W_sketch[unguarded]" kernels=c=1.000000,m=0.000000,txn=0.000000e+00,txn64=0.000000e+00,txn128=0.000000e+00,unc=0,wg=4096,thr=256,occ=1.000000,stg=2.000000e+08,shl=0.000000e+00,idl=0.000000e+00
+OUT
+  got=0
+  python3 "$txn_fit" --idle-rate 5e11 "w=$idl_dir/rows.tsv,$idl_dir/no_idl.out" \
+    >"$idl_dir/no_idl.stdout" 2>"$idl_dir/no_idl.stderr" || got=$?
+  check 'gh1600_txn_fit --idle-rate refuses listings without idl=' test "$got" = 2
+  check 'missing idl= refusal names idl=' grep -qF 'needs kernel lines carrying idl=' "$idl_dir/no_idl.stderr"
+  check 'missing idl= refusal emits no stdout' test ! -s "$idl_dir/no_idl.stdout"
+  got=0
+  python3 "$txn_fit" --idle-rate 5e11 "w=$idl_dir/rows.tsv,$idl_dir/with_idl.out" \
+    >"$idl_dir/with_idl.stdout" 2>"$idl_dir/with_idl.stderr" || got=$?
+  check 'gh1600_txn_fit --idle-rate succeeds and flips order on listings with idl=' test "$got" = 0
+  check 'gh1600_txn_fit --idle-rate picks the unguarded leaf at 100% agreement' \
+    grep -qF "w=100.0%@1.000:'W_sketch[unguarded]'" "$idl_dir/with_idl.stdout"
+  for bad_spec in \
+    '--idle-rate=-1' '--idle-rate=0' '--idle-rate=nan' '--idle-rate=inf' \
+    '--listed-idle-rate=-1' '--listed-idle-rate=sweep' '--listed-idle-rate=nan' \
+    '--listed-idle-rate=inf'; do
+    flag="${bad_spec%%=*}"
+    val="${bad_spec#*=}"
+    tag="$(printf '%s_%s' "${flag#--}" "$val" | tr -c 'A-Za-z0-9_' '_')"
+    got=0
+    python3 "$txn_fit" "$flag" "$val" "w=$idl_dir/nonexistent.tsv,$idl_dir/nonexistent.out" \
+      >"$idl_dir/bad_${tag}.out" 2>"$idl_dir/bad_${tag}.err" || got=$?
+    check "gh1600_txn_fit refuses $flag $val before loading listings" test "$got" = 2
+    check "refusal of $flag $val names $flag" grep -qF -- "$flag:" "$idl_dir/bad_${tag}.err"
+    check "refusal of $flag $val emits no stdout" test ! -s "$idl_dir/bad_${tag}.out"
+  done
+  got=0
+  python3 "$txn_fit" --idle-rate none --listed-idle-rate none "w=$idl_dir/rows.tsv,$idl_dir/with_idl.out" \
+    >"$idl_dir/none_idl.out" 2>"$idl_dir/none_idl.err" || got=$?
+  check 'gh1600_txn_fit accepts none for --idle-rate and --listed-idle-rate' test "$got" = 0
 fi
 finish

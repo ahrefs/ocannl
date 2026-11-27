@@ -117,6 +117,10 @@ let reached_unread_exemptions =
       "read by the seeded plan's auto gate, which tune seeds first; the plan it resolves to joins \
        the identity as its digest, and the staffed start's gate tag carries the rate \
        (gh-ocannl-2279)" );
+    ( "model_staged_idle_rate",
+      "reached from the seeded plan's auto gate only through the shared ranking path, which the \
+       gate calls with no staged-idle rate: the plan tune seeds does not read it, and the leaf \
+       ranking that does is untimed (gh-ocannl-2280)" );
     ( "model_shared_load_rate",
       "reached from the seeded plan's auto gate only through the shared ranking path, which the \
        gate calls with no shared-load rate: the plan tune seeds does not read it, and the leaf \

@@ -3,6 +3,7 @@
 
 Usage: gh1600_txn_fit.py CELL [CELL ...] [--band B] [--sector 32|64|128] [--rate R] [--show]
                          [--occupancy CAP,TPM] [--staged-rate R|sweep --listed-staged-rate L]
+                         [--idle-rate R|sweep [--listed-idle-rate L]]
                          [--shared-rate R|sweep [--listed-shared-rate L]] [--pairs]
                          [--census [CELL=]TIMING_STDERR ...]
 
@@ -51,6 +52,12 @@ Usage: gh1600_txn_fit.py CELL [CELL ...] [--band B] [--sector 32|64|128] [--rate
             same calibration. The listing passes the rebuild check below as is: its
             c= already carries the term. Kernel lines without stg= (pre-1821 listings) carry none;
             benchmarks/gh1821_geometry_fit.py fits those from the leaves' block tiles instead.
+  --idle-rate  gh-ocannl-2280: re-score the staged-idle term at this rate (refused bytes/s;
+            `none` for 0), or `sweep` a log grid, on a listing scored at --listed-idle-rate L
+            (default 0, meaning none): each kernel's idl= (its partition-guarded workgroup idle
+            bytes over their fill, listed whether or not a rate priced them) moves its compute leg
+            by idl * (1/R - 1/L), before its occupancy. With --staged-rate too, the two sweep
+            jointly (a grid of pairs). Refuses listings without idl= (exit 2).
   --shared-rate  gh-ocannl-2262: re-score the register-reuse term at this rate (cells/s), or
             `sweep` a log grid, on a listing scored at --listed-shared-rate L (default none): each
             kernel's shl= (its shared loads beyond the calibration tile's reuse, over their fill,
@@ -210,7 +217,9 @@ def parse_kernel(spec):
             "thr": int(fields["thr"]), "occ": float(fields.get("occ", "1")),
             "stg": float(fields.get("stg", "0")),
             # gh-ocannl-2262: None on a listing from before the term, which --shared-rate refuses.
-            "shl": float(fields["shl"]) if "shl" in fields else None}
+            "shl": float(fields["shl"]) if "shl" in fields else None,
+            # gh-ocannl-2280: None on a listing from before the term, which --idle-rate refuses.
+            "idl": float(fields["idl"]) if "idl" in fields else None}
 
 
 def occupancy(wg, thr, cap, tpm):
@@ -236,7 +245,7 @@ def listing(path):
     return {l: (r, pos, adm, kernels.get(l)) for l, (r, pos, adm) in ranks.items()}
 
 
-def rescore(kernels, rate, sector, occ=None, staged=None, shared=None):
+def rescore(kernels, rate, sector, occ=None, staged=None, shared=None, idle=None):
     total = 0.0
     for k in kernels:
         c = k["c"]
@@ -250,6 +259,11 @@ def rescore(kernels, rate, sector, occ=None, staged=None, shared=None):
             # gh-ocannl-1821: (rate, listed rate) -- the staged bytes' move between the two.
             r, listed = staged
             c = c + k["stg"] * (1.0 / r - 1.0 / listed) * 1e3
+        if c is not None and idle is not None:
+            # gh-ocannl-2280: (rate, listed rate), a rate of 0 meaning none.
+            r, listed = idle
+            inv = lambda x: 0.0 if not x else 1.0 / x
+            c = c + (k["idl"] or 0.0) * (inv(r) - inv(listed)) * 1e3
         if c is not None and shared is not None:
             # gh-ocannl-2262: (rate, listed rate), a rate of 0 meaning none.
             r, listed = shared
@@ -300,8 +314,8 @@ def spread_of(cands):
     return q[8] / q[0]
 
 
-def evaluate(cands, rate, sector, band, occ=None, staged=None, shared=None):
-    ranks = {l: rescore(c["kernels"], rate, sector, occ, staged, shared) for l, c in cands.items()}
+def evaluate(cands, rate, sector, band, occ=None, staged=None, shared=None, idle=None):
+    ranks = {l: rescore(c["kernels"], rate, sector, occ, staged, shared, idle) for l, c in cands.items()}
     labels = sorted(cands)
     decided = right = 0
     for i, a in enumerate(labels):
@@ -348,11 +362,35 @@ def print_pairs(cells, sector, scoring):
                             f" measured={ca['median'] / cb['median']:.3f} listed={listed:.3f}")
                     if any(v is not None for v in scoring.values()):
                         ra = rescore(ca["kernels"], scoring["rate"], sector, scoring["occ"],
-                                     scoring["staged"], scoring["shared"])
+                                     scoring["staged"], scoring["shared"], scoring["idle"])
                         rb = rescore(cb["kernels"], scoring["rate"], sector, scoring["occ"],
-                                     scoring["staged"], scoring["shared"])
+                                     scoring["staged"], scoring["shared"], scoring["idle"])
                         line += f" rescored={ra / rb:.3f}"
                     print(line)
+
+
+def parse_rate_arg(flag, raw, *, allow_sweep=False, allow_none=False, allow_zero=False):
+    if raw is None:
+        return None
+    if allow_sweep and raw == "sweep":
+        return "sweep"
+    if allow_none and raw == "none":
+        return 0.0
+    try:
+        val = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{flag}: invalid rate {raw!r}") from exc
+    if not math.isfinite(val) or (val < 0.0 if allow_zero else val <= 0.0):
+        expected = "finite non-negative number" if allow_zero else "finite positive number"
+        extras = []
+        if allow_none:
+            extras.append("'none'")
+        if allow_sweep:
+            extras.append("'sweep'")
+        if extras:
+            expected += " or " + "/".join(extras)
+        raise ValueError(f"{flag}: invalid rate {raw!r} (expected {expected})")
+    return val
 
 
 def main():
@@ -360,18 +398,36 @@ def main():
     ap.add_argument("cells", nargs="+")
     ap.add_argument("--band", type=float, default=0.10)
     ap.add_argument("--sector", type=int, default=32, choices=(32, 64, 128))
-    ap.add_argument("--rate", type=lambda v: 0.0 if v == "none" else float(v))
+    ap.add_argument("--rate")
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--occupancy")
     ap.add_argument("--no-coalesced", dest="no_coalesced", action="store_true")
     ap.add_argument("--staged-rate", dest="staged_rate")
-    ap.add_argument("--listed-staged-rate", dest="listed_staged_rate", type=float)
+    ap.add_argument("--listed-staged-rate", dest="listed_staged_rate")
+    ap.add_argument("--idle-rate", dest="idle_rate")
+    ap.add_argument("--listed-idle-rate", dest="listed_idle_rate", default="0")
     ap.add_argument("--shared-rate", dest="shared_rate")
-    ap.add_argument("--listed-shared-rate", dest="listed_shared_rate", type=float, default=0.0)
+    ap.add_argument("--listed-shared-rate", dest="listed_shared_rate", default="0")
     ap.add_argument("--pairs", action="store_true")
     ap.add_argument("--census", action="append", default=[], metavar="[CELL=]TIMING_STDERR",
                     help="stock timing cell's stderr for preset attribution (repeatable)")
     args = ap.parse_args()
+    try:
+        args.rate = parse_rate_arg("--rate", args.rate, allow_none=True)
+        args.staged_rate = parse_rate_arg("--staged-rate", args.staged_rate, allow_sweep=True)
+        args.listed_staged_rate = parse_rate_arg(
+            "--listed-staged-rate", args.listed_staged_rate)
+        args.idle_rate = parse_rate_arg(
+            "--idle-rate", args.idle_rate, allow_sweep=True, allow_none=True)
+        args.listed_idle_rate = parse_rate_arg(
+            "--listed-idle-rate", args.listed_idle_rate, allow_none=True, allow_zero=True)
+        args.shared_rate = parse_rate_arg(
+            "--shared-rate", args.shared_rate, allow_sweep=True, allow_none=True)
+        args.listed_shared_rate = parse_rate_arg(
+            "--listed-shared-rate", args.listed_shared_rate, allow_none=True, allow_zero=True)
+    except ValueError as e:
+        print(f"gh1600_txn_fit: {e}", file=sys.stderr)
+        return 2
     if args.staged_rate is not None and not args.listed_staged_rate:
         print("gh1600_txn_fit: --staged-rate needs --listed-staged-rate (the rate the listing was"
               " scored at)", file=sys.stderr)
@@ -411,13 +467,21 @@ def main():
             print(f"gh1600_txn_fit: {name}: --shared-rate needs kernel lines carrying shl="
                   " (a listing from before gh-ocannl-2262 has none)", file=sys.stderr)
             return 2
+        if args.idle_rate is not None and any(
+                k["idl"] is None for c in cands.values() for k in c["kernels"]):
+            # A listing without idl= would re-score to itself at every rate and pass vacuously.
+            print(f"gh1600_txn_fit: {name}: --idle-rate needs kernel lines carrying idl="
+                  " (a listing from before gh-ocannl-2280 has none)", file=sys.stderr)
+            return 2
         spread = spread_of(cands)
         unc = sum(c["uncovered"] for c in cands.values())
         base = evaluate(cands, None, args.sector, args.band)  # the listing as it was scored
-        if args.shared_rate is not None and args.staged_rate is None:
-            # gh-ocannl-2262: judged against the listing without the register-reuse term.
-            base = evaluate(cands, None, args.sector, args.band,
-                            shared=(0.0, args.listed_shared_rate))
+        if (args.shared_rate is not None or args.idle_rate is not None) and args.staged_rate is None:
+            # gh-ocannl-2262/2280: judged against the listing without the swept term(s).
+            base = evaluate(
+                cands, None, args.sector, args.band,
+                shared=(0.0, args.listed_shared_rate) if args.shared_rate is not None else None,
+                idle=(0.0, args.listed_idle_rate) if args.idle_rate is not None else None)
         if args.staged_rate is not None:
             # gh-ocannl-1821: the comparison is against the cell's fill-only reference, its `nostg`
             # listing, scored as listed -- the staged term cannot be subtracted back out of this
@@ -448,11 +512,11 @@ def main():
     for line in summaries:
         print(line)
 
-    def judge(rate, staged=None, shared=None):
+    def judge(rate, staged=None, shared=None, idle=None):
         rows = []
         for name, cands, spread, base in cells:
             agree, _, sets, ranks = evaluate(cands, rate, args.sector, args.band, occ, staged,
-                                             shared)
+                                             shared, idle)
             pick, slow, best = sets.get("admitted+coalesced", (None, 1.0, None))
             _, adm_slow, _ = sets.get("admitted", (None, 1.0, None))
             _, base_adm_slow, _ = base[2].get("admitted", (None, 1.0, None))
@@ -469,36 +533,78 @@ def main():
         one = lambda v: v is not None and v != "sweep"
         print_pairs(cells, args.sector, dict(
             rate=args.rate or None, occ=occ,
-            staged=((float(args.staged_rate), args.listed_staged_rate)
+            staged=((args.staged_rate, args.listed_staged_rate)
                     if one(args.staged_rate) else None),
-            shared=((float(args.shared_rate), args.listed_shared_rate)
-                    if one(args.shared_rate) else None)))
+            shared=((args.shared_rate, args.listed_shared_rate)
+                    if one(args.shared_rate) else None),
+            idle=((args.idle_rate, args.listed_idle_rate)
+                  if one(args.idle_rate) else None)))
 
     if args.shared_rate is not None:
         listed = args.listed_shared_rate
         rates = ([10 ** (e / 10) for e in range(110, 151)] if args.shared_rate == "sweep"
-                 else [float(args.shared_rate)])
+                 else [args.shared_rate])
         if args.staged_rate is None:
             stageds = [None]
         else:
             stageds = ([10 ** (e / 10) for e in range(110, 131)] if args.staged_rate == "sweep"
-                       else [float(args.staged_rate)])
+                       else [args.staged_rate])
+        if args.idle_rate is None:
+            idles = [None]
+        else:
+            idles = ([10 ** (e / 10) for e in range(100, 141)] if args.idle_rate == "sweep"
+                     else [args.idle_rate])
+        scored = []
+        for st in stageds:
+            for idl in idles:
+                for r in rates:
+                    rows = judge(args.rate or None,
+                                 None if st is None else (st, args.listed_staged_rate),
+                                 (r, listed),
+                                 None if idl is None else (idl, args.listed_idle_rate))
+                    passing = sum(row[5] for row in rows)
+                    worst = max(row[3] for row in rows)
+                    least = min(row[1] for row in rows)
+                    scored.append(((-passing, worst, -least), r, st, idl))
+                    print(f"shared_rate={r:.3e}"
+                          + ("" if st is None else f" staged_rate={st:.3e}")
+                          + ("" if idl is None else f" idle_rate={idl:.3e}")
+                          + f" passing={passing}/{len(rows)} worst_slowdown={worst:.3f}"
+                          f" least_agreement={least:.1f}%"
+                          + "".join(f" {row[0]}={row[1]:.1f}%@{row[3]:.3f}:{row[2]!r}" for row in rows))
+        (key, r, st, idl) = min(scored)
+        print(f"fit: model_shared_load_rate={r:.6e}"
+              + ("" if st is None else f" model_staged_copy_rate={st:.6e}")
+              + ("" if idl is None else f" model_staged_idle_rate={idl:.6e}")
+              + f" passing={-key[0]}/{len(cells)} worst_slowdown={key[1]:.3f}"
+              f" least_agreement={-key[2]:.1f}%")
+        return 0 if len(rates) * len(stageds) * len(idles) > 1 or key[0] == -len(cells) else 1
+    if args.idle_rate is not None:
+        listed = args.listed_idle_rate
+        rates = ([10 ** (e / 10) for e in range(100, 141)] if args.idle_rate == "sweep"
+                 else [args.idle_rate])
+        if args.staged_rate is None:
+            stageds = [None]
+        else:
+            stageds = ([10 ** (e / 10) for e in range(100, 141)] if args.staged_rate == "sweep"
+                       else [args.staged_rate])
         scored = []
         for st in stageds:
             for r in rates:
                 rows = judge(args.rate or None,
-                             None if st is None else (st, args.listed_staged_rate), (r, listed))
+                             None if st is None else (st, args.listed_staged_rate),
+                             idle=(r, listed))
                 passing = sum(row[5] for row in rows)
                 worst = max(row[3] for row in rows)
                 least = min(row[1] for row in rows)
                 scored.append(((-passing, worst, -least), r, st))
-                print(f"shared_rate={r:.3e}"
+                print(f"idle_rate={r:.3e}"
                       + ("" if st is None else f" staged_rate={st:.3e}")
                       + f" passing={passing}/{len(rows)} worst_slowdown={worst:.3f}"
                       f" least_agreement={least:.1f}%"
                       + "".join(f" {row[0]}={row[1]:.1f}%@{row[3]:.3f}:{row[2]!r}" for row in rows))
         (key, r, st) = min(scored)
-        print(f"fit: model_shared_load_rate={r:.6e}"
+        print(f"fit: model_staged_idle_rate={r:.6e}"
               + ("" if st is None else f" model_staged_copy_rate={st:.6e}")
               + f" passing={-key[0]}/{len(cells)} worst_slowdown={key[1]:.3f}"
               f" least_agreement={-key[2]:.1f}%")
@@ -506,7 +612,7 @@ def main():
     if args.staged_rate is not None:
         listed = args.listed_staged_rate
         grid = ([10 ** (e / 10) for e in range(100, 141)] if args.staged_rate == "sweep"
-                else [float(args.staged_rate)])
+                else [args.staged_rate])
         scored = []
         for r in grid:
             rows = judge(args.rate or None, (r, listed))

@@ -1432,6 +1432,15 @@
 # Unset/empty uses the backend's value. Same cache identity as model_cache_capacity.
 #model_staged_copy_rate=
 
+# gh-ocannl-2280: overrides the backend's advisory staged-idle rate, in refused bytes/s, of the
+# ranking score: when a Workgroup i < c partition guard encloses a staged operand copy (e.g. a
+# 64x64x8/4x4 blocktile copying an 8-deep k-tile across a 16-thread axis), the refused workgroup
+# lanes' bytes over their launch fill are added to the compute leg over this rate. Fit it with
+# `benchmarks/gh1600_txn_fit.py --idle-rate`. `none`: no term. Unset/empty uses the backend's
+# value. Read by model_default's ranking and model_explain, not the auto seeding gate. Same cache
+# identity as model_cache_capacity.
+#model_staged_idle_rate=
+
 # gh-ocannl-2262: overrides the backend's advisory shared-load rate of the ranking score, in
 # workgroup-memory cells per second. Per k-step a thread of an rm x rn register tile reads rm + rn
 # staged cells (one cell once per loop iteration: the register file serves repeats) for rm * rn

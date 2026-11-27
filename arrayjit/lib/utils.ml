@@ -244,6 +244,7 @@ let known_config_keys =
       "model_transaction_rate";
       "model_workgroup_bytes_per_multiprocessor";
       "model_staged_copy_rate";
+      "model_staged_idle_rate";
       "model_shared_load_rate";
       "model_fill_lane_width";
       (* Numerics policy (gh-ocannl-478) *)
@@ -577,20 +578,21 @@ let config_key_classification : (config_key_class * string * string list) list =
     ( Untimed_model,
       "they are the cache capacity, cache bandwidth, scalar issue rate, DRAM rate, tile-MMA rate, \
        device-gather rate, launch-fill constants, memory-transaction rate, occupancy capacity, \
-       staged-copy rate and shared-load rate of the analytic model's ranking score \
-       (gh-ocannl-1253, gh-ocannl-1442, gh-ocannl-1479, gh-ocannl-1495, gh-ocannl-1600, \
-       gh-ocannl-1821, gh-ocannl-1639, gh-ocannl-2262), which only the untimed choosers read \
-       (Autotune.model_default's pick and candidate set, and the auto seeding gate of \
-       Autotune.seeded_default; the shared-load rate and the fill's lane group by the leaf ranking \
-       only, gh-ocannl-2262) -- like the backends' advisory cache_capacity_bytes, cache_bandwidth, \
-       issue_rate, dram_bandwidth, mma_rate, device_gather_rate, multiprocessors, fill_threads, \
-       fill_chains, transaction_rate, workgroup_bytes_per_multiprocessor, staged_copy_rate, \
-       shared_load_rate and fill_lane_width they override, Untimed fields of the device \
-       description and outside the cache key for the same reason: a stored winner is a measured \
-       schedule, which they change neither the compilation nor the speed of. Autotune.tune's bound \
-       pruning and keep-fraction ranking read the distinct-cell roofline; the search reaches them \
-       only through the seeded plan it seeds first, which joins the trajectory identity as its \
-       content digest and, for a staffed start, as a gate tag naming these readings",
+       staged-copy rate, staged-idle rate and shared-load rate of the analytic model's ranking \
+       score (gh-ocannl-1253, gh-ocannl-1442, gh-ocannl-1479, gh-ocannl-1495, gh-ocannl-1600, \
+       gh-ocannl-1821, gh-ocannl-1639, gh-ocannl-2262, gh-ocannl-2280), which only the untimed \
+       choosers read (Autotune.model_default's pick and candidate set, and the auto seeding gate \
+       of Autotune.seeded_default; the staged-idle rate, shared-load rate and the fill's lane \
+       group by the leaf ranking only, gh-ocannl-2262, gh-ocannl-2280) -- like the backends' \
+       advisory cache_capacity_bytes, cache_bandwidth, issue_rate, dram_bandwidth, mma_rate, \
+       device_gather_rate, multiprocessors, fill_threads, fill_chains, transaction_rate, \
+       workgroup_bytes_per_multiprocessor, staged_copy_rate, staged_idle_rate, shared_load_rate \
+       and fill_lane_width they override, Untimed fields of the device description and outside the \
+       cache key for the same reason: a stored winner is a measured schedule, which they change \
+       neither the compilation nor the speed of. Autotune.tune's bound pruning and keep-fraction \
+       ranking read the distinct-cell roofline; the search reaches them only through the seeded \
+       plan it seeds first, which joins the trajectory identity as its content digest and, for a \
+       staffed start, as a gate tag naming these readings",
       [
         "model_cache_capacity";
         "model_cache_bandwidth";
@@ -604,6 +606,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "model_transaction_rate";
         "model_workgroup_bytes_per_multiprocessor";
         "model_staged_copy_rate";
+        "model_staged_idle_rate";
         "model_shared_load_rate";
         "model_fill_lane_width";
       ] );

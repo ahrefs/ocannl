@@ -6615,8 +6615,10 @@
  (libraries
   base
   stdio
+  unix
   ocannl
   arrayjit.verdict
+  fresh_process
   ll_test
   arrayjit.autotune
   arrayjit.context

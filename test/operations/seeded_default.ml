@@ -467,6 +467,7 @@ let () =
           "--ocannl_model_device_gather_rate=none";
           "--ocannl_model_transaction_rate=none";
           "--ocannl_model_staged_copy_rate=none";
+          "--ocannl_model_staged_idle_rate=none";
           "--ocannl_model_shared_load_rate=none";
         ]
     in

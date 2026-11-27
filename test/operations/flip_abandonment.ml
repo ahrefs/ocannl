@@ -623,6 +623,8 @@ let () =
       ("model_workgroup_bytes_per_multiprocessor", "");
       (* gh-ocannl-1821: its staged-copy rate, likewise. *)
       ("model_staged_copy_rate", "");
+      (* gh-ocannl-2280: its staged-idle rate, likewise. *)
+      ("model_staged_idle_rate", "");
       (* gh-ocannl-2262: its shared-load rate and its fill's lane group, likewise. *)
       ("model_shared_load_rate", "");
       ("model_fill_lane_width", "");
