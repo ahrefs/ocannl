@@ -187,6 +187,8 @@ Backends are process-wide singletons: use `Backends.get_backend ()` or the Conte
 - Backends implement stream-based execution with FIFO queuing, events, and synchronization between streams/devices, generating code from `Low_level.t`
 - Code generation: `c_syntax.ml` is a functor with default C patterns that each backend overrides for its own syntax; the touch-lists (builtins modules, the `convert_precision` obligation) are in the `extending-ocannl` skill
 
+Do not add arbitrary limits that don't correspond to actual hardware limits that cannot be exceeded. Do not add a limit because you have not tested beyond it. Do not add a limit because you ran out of memory once. Remove any arbitrary limits you encounter along the way.
+
 ### Syntax Extensions
 
 `docs/syntax_extensions.md` is the authoritative reference for `%op`/`%cd` (record syntax, scoping, einsum specs and capture, projection slots). Orientation and traps:
