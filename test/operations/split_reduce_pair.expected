@@ -46,7 +46,7 @@ srs: bias gradient terms have f32-exact partial sums: true
 structural: for cuda the untuned split takes the table fixture's bias gradient at 32 blocks: true
 structural control: for cuda twice the serial chain splits none of the sites: true
 structural control: for cc none of the sites is split at the same threshold: true
-on CUDA and HIP the untuned plan splits the batch-8 bias gradient into 32 blocks: true
-on CUDA and HIP the split routine compiles without falling back to the default: true
-off CUDA and HIP the untuned plan splits nothing: true
+on GPU backends the untuned plan splits the batch-8 bias gradient into 32 blocks: true
+on GPU backends the split routine compiles without falling back to the default: true
+on host-pool backends the untuned plan splits nothing: true
 the untuned plan's bias gradient is the exact sum: true

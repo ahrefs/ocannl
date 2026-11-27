@@ -1,0 +1,23 @@
+structural: Metal untuned split splits gamma.grad into 32 blocks at min_serial=1024: true
+structural: Metal untuned split splits beta.grad into 32 blocks at min_serial=1024: true
+structural control: cc splits none of the LayerNorm reduction sites: true
+structural control: min_serial=0 splits none of the LayerNorm reduction sites on Metal: true
+structural: Metal seeded_plan records 32-block splits for gamma.grad and beta.grad: true
+structural: Metal untuned split launches gamma.grad partials as grid=[32;1;1] block=[256;1;1]: true
+structural: Metal untuned split launches beta.grad partials as grid=[32;1;1] block=[256;1;1]: true
+structural control: unsplit Metal schedule keeps gamma.grad and beta.grad in one workgroup: true
+gamma.grad is not trivially zero: true
+beta.grad is not trivially zero: true
+split beta.grad matches the f64 host reference: true
+split beta.grad matches the sunk unsplit beta.grad: true
+split gamma.grad matches the sunk unsplit gamma.grad: true
+sunk unsplit gamma.grad matches the default gamma.grad: true
+sunk unsplit beta.grad matches the default beta.grad: true
+unsunk default reproduces 2 volatile RMW reads on gamma.grad and beta.grad: true
+sunk unsplit localizes both gamma.grad and beta.grad to 0 volatile RMW reads: true
+split untuned default keeps 0 volatile RMW reads on gamma.grad, beta.grad and partials: true
+unsunk default launches gamma.grad and beta.grad in one workgroup [1;1;1] x [256;1;1]: true
+sunk unsplit still launches gamma.grad and beta.grad in one workgroup [1;1;1] x [256;1;1]: true
+untuned default splits both gamma.grad and beta.grad into 32 blocks without fallback: true
+untuned default launches both partials kernels as grid=[32;1;1] block=[256;1;1]: true
+split reassociation changes at least one cell bitwise vs sunk unsplit: true

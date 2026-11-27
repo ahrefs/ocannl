@@ -25,7 +25,9 @@ open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
-let splits_here = Autotune.seeded_split_backend (Context.backend_facts_of_name backend_name)
+
+let splits_here =
+  (Context.backend_facts_of_name backend_name).Ir.Backend_intf.splits_untuned_reductions
 
 let nb = 128
 and ns = 64
@@ -124,27 +126,27 @@ let () =
   List.iter r.Autotune.sd_split ~f:(fun (tn, blocks) ->
       Stdio.eprintf "split: %s into %d blocks (not part of the golden)\n" (Ir.Tnode.debug_name tn)
         blocks);
-  Verdict.gated ~when_:splits_here ~on:backend_name
-    "on CUDA and HIP the seeded default splits the bias gradient at a threshold below its serial \
-     chain"
-    (split_bgrad r);
-  Verdict.gated ~when_:splits_here ~on:backend_name
-    "on CUDA and HIP the split routine compiles without falling back to the default"
-    (not r.sd_fell_back);
-  Verdict.gated ~when_:(not splits_here) ~on:backend_name
-    "off CUDA and HIP the seeded default splits nothing" (List.is_empty r.sd_split);
+  let split_leg = Verdict.leg ~when_:splits_here ~on:backend_name () in
+  Verdict.in_leg ~leg:split_leg
+    "on GPU backends the seeded default splits the bias gradient at a threshold below its serial \
+     chain" (fun label -> p label (split_bgrad r));
+  Verdict.in_leg ~leg:split_leg
+    "on GPU backends the split routine compiles without falling back to the default" (fun label ->
+      p label (not r.sd_fell_back));
+  let nosplit_leg = Verdict.leg ~when_:(not splits_here) ~on:backend_name () in
+  Verdict.in_leg ~leg:nosplit_leg "on host-pool backends the seeded default splits nothing"
+    (fun label -> p_empty label ~over:[ r ] r.sd_split);
   p_exists "the bias gradient is not trivially zero" (Array.to_list default) ~f:(fun v ->
       Float.(abs v > 1.));
   within "the default pipeline's bias gradient is within the f32 tolerance of the f64 reference"
     default;
   within "the seeded default's bias gradient is within the f32 tolerance of the f64 reference" split;
-  Verdict.gated_all ~when_:(not splits_here) ~on:backend_name
-    "off CUDA and HIP the seeded default's bias gradient is bitwise the default's"
-    (List.zip_exn (Array.to_list split) (Array.to_list default))
-    ~f:(fun (a, b) -> bitwise a b);
-  Verdict.gated ~when_:splits_here ~on:backend_name
-    "on CUDA and HIP the split changed the summation order: some cell differs from the default's"
-    (Array.exists2_exn split default ~f:(fun a b -> not (bitwise a b)));
+  Verdict.in_leg ~leg:nosplit_leg
+    "on host-pool backends the seeded default's bias gradient is bitwise the default's"
+    (fun label -> p_all2 label split default ~f:bitwise);
+  Verdict.in_leg ~leg:split_leg
+    "on GPU backends the split changed the summation order: some cell differs from the default's"
+    (fun label -> p label (Array.exists2_exn split default ~f:(fun a b -> not (bitwise a b))));
   (* The threshold: above every serial chain of the fixture -- the loss sum's [nb * ns * no] too,
      should the detector ever propose it -- nothing qualifies, and 0 disables the split. *)
   let high, r_high = seeded ~min_serial:(nb * ns * no * 2) in
@@ -167,9 +169,6 @@ let () =
   let configured = run (fun ctx comp bindings -> Autotune.seeded_default ctx comp bindings) in
   Stdio.eprintf "model_default picked: %s (not part of the golden)\n"
     (Option.value_map !report ~default:"nothing reported" ~f:(fun r -> r.Autotune.mc_label));
-  Verdict.gated_all
-    ~when_:(Autotune.seeded_default_backend (Context.backend_facts_of_name backend_name))
-    ~on:backend_name
-    "on CUDA/HIP the model's bias gradient is bitwise the seeded default's, split order included"
-    (List.zip_exn (Array.to_list model) (Array.to_list configured))
-    ~f:(fun (a, b) -> bitwise a b)
+  Verdict.in_leg ~leg:(Verdict.leg ~when_:splits_here ~on:backend_name ())
+    "on GPU backends the model's bias gradient is bitwise the seeded default's, split order \
+     included" (fun label -> p_all2 label model configured ~f:bitwise)

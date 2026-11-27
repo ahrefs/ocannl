@@ -2923,9 +2923,9 @@ val seeded_default_backend : Ir.Backend_intf.backend_facts -> bool
     and HIP). *)
 
 val seeded_split_backend : Ir.Backend_intf.backend_facts -> bool
-(** Whether {!seeded_default} splits long reductions on this backend: wherever it seeds, CUDA and
-    HIP (see {!seeded_split_sites}). A test states what each backend promises through these, never a
-    restated list. *)
+(** Whether {!seeded_default} splits long reductions on this backend: its
+    [splits_untuned_reductions] (CUDA, HIP and Metal; see {!seeded_split_sites}). A test states what
+    each backend promises through these, never a restated list. *)
 
 val search_shaping_key_read : facts:Ir.Backend_intf.backend_facts -> string -> bool
 (** Whether a search on a backend with [facts] can read the [Utils.Search_shaping] configuration key

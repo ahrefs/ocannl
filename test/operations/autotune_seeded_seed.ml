@@ -69,7 +69,7 @@ let facts = Context.backend_facts_of_name backend_name
 let seeds_here = facts.Ir.Backend_intf.seeds_untuned_default
 let splits_here = Autotune.seeded_split_backend facts
 let sinks_here = facts.Ir.Backend_intf.sinks_untuned_reductions
-let has_plan = seeds_here || sinks_here
+let has_plan = seeds_here || sinks_here || splits_here
 
 (* The batch axis outermost and long: the split detector splits a reduction over its outermost loop,
    which at [nb = 4] would be too short to propose (the gpt2_mini_train b8 case). *)
@@ -241,8 +241,8 @@ let () =
       p "on CUDA/HIP the untuned plan seeds a contraction"
         (match choice with Some c -> not (List.is_empty c.Autotune.sd_seeded) | None -> false));
   Verdict.gate ~when_:splits_here ~on:backend_name
-    "where the untuned compile splits (CUDA and HIP), the plan splits a reduction" (fun () ->
-      p "where the untuned compile splits (CUDA and HIP), the plan splits a reduction"
+    "where the untuned compile splits (GPU backends), the plan splits a reduction" (fun () ->
+      p "where the untuned compile splits (GPU backends), the plan splits a reduction"
         (match choice with Some c -> not (List.is_empty c.Autotune.sd_split) | None -> false));
   Verdict.gated ~when_:(not has_plan) ~on:backend_name
     "on the host pool the untuned compile is the plain default" (Option.is_none untuned_digest);
