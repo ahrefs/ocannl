@@ -890,17 +890,17 @@ announce_run_record() {
 RUN_RECORD=
 relay() {
   local pid running live=
+  # Stop taking further INT/TERM once cancellation is underway: on a group
+  # signal a lane receives TERM both from the group and from the top level's
+  # relay, so without this a second TERM re-enters `relay` during `wait` or
+  # interrupts `lane_exit` (before it requests a gated box's sleep).
+  trap '' INT TERM
   running=" $(jobs -rp | tr '\n' ' ') "
   for pid in $UNIT_PID $LANE_PIDS; do
     case $running in *" $pid "*) live="$live $pid" ;; esac
   done
   for pid in $live; do kill -TERM "$pid" 2>/dev/null; done
   for pid in $UNIT_PID $LANE_PIDS; do wait "$pid" 2>/dev/null; done
-  # A lane stops taking signals once its unit is reaped: the top level relays its own TERM to every
-  # lane as well, and a second relay arriving while the lane's EXIT trap runs ends the lane there --
-  # before lane_exit has asked for its gated box's sleep and published the line saying so (the
-  # harness's cancelled tuf lane lost both that way).
-  [ "$IN_LANE" = 1 ] && trap '' INT TERM
   # A cancelled run still ended, and the rows its lanes managed to write before
   # the signal are real; the record says which those were. Only the top level
   # writes it -- a lane runs this same relay for its own supervisor -- and only
@@ -927,10 +927,18 @@ trap 'relay 143' TERM
 # and keeps holding the lock, which is how the preparation leg came to differ
 # from the test legs.
 run_capped() {
-  local budget=$1 rc
+  local budget=$1 rc pending_signal=
   shift
+  # Atomic with respect to `relay`, matching the lane-launch loop below: a
+  # signal arriving between `capped_bg ... &` and `UNIT_PID=$!` would otherwise
+  # let `relay` return without signalling or waiting for the new supervisor.
+  trap 'pending_signal=130' INT
+  trap 'pending_signal=143' TERM
   capped_bg "$budget" "$@" &
   UNIT_PID=$!
+  trap 'relay 130' INT
+  trap 'relay 143' TERM
+  [ -z "$pending_signal" ] || relay "$pending_signal"
   wait_child "$UNIT_PID"
   rc=$?
   UNIT_PID=
