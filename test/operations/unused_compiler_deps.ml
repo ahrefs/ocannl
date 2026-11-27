@@ -29,22 +29,19 @@
    OWNERSHIP: a library with its own include directory owns its [.cmi] units. For libraries in scope
    sharing an include directory, dune-resolved [ocamlfind query -predicates byte] supplies their own
    absolute archive paths and dune-resolved [ocamlobjinfo] supplies [Unit name:] definitions.
-   Archive definitions take precedence over imports, including definitions from an importer's
-   co-located dependencies outside the scan's reporting scope. For an interface-only unit (a
-   shared-directory [.cmi] with no archive definition), the candidates are archives whose
-   [Interfaces imported:] sections name it. There must be one dependency-minimal importer, and no
-   archive-bearing library in its [requires] closure may share a directory containing the [.cmi].
-   Such a dependency could define the interface without importing it. If the importer sees the
-   [.cmi] through the shared directory without a [requires] path to its definer, the scan can credit
-   the importer and report the definer unused. Ambiguous or absent ownership refuses the referencing
-   stanza before it can report any unused library. Imports outside the library's include directories
-   contribute nothing. Imported entries have two tab-separated fields (digest and unit); malformed
-   entries refuse. This preserves type-only units such as [Parsetree] without crediting its users.
-   Archive-less findlib packages own no units. Ownership uses directory contents, byte archive
-   metadata and Dune's resolved dependency graph. No module inventory is inferred from [META] or
-   [dune-package]. A failed query, unreadable archive or output without definitions refuses without
-   directory fallback. Shared local libraries refuse: findlib cannot resolve their archives and
-   [@check] does not build them.
+   Archive definitions take precedence over imports in a single known directory. If Dune's workspace
+   and probe descriptions expose the same shared-directory [.cmi] name in multiple directories, a
+   typed-tree unit name alone cannot distinguish them. In one directory, a shared-directory
+   interface-only unit needs an importing archive with no other archive-bearing peer. A peer may
+   define the interface even if it imports it and requires another importer. [Parsetree] in the
+   compiler's own [compiler-libs] directory is attributed to [compiler-libs.common] because the
+   compiler distribution ships it as part of the common library's parsing sources. Ambiguous or
+   absent ownership refuses the referencing stanza before it reports any unused library. Imports
+   outside the library's include directories contribute nothing. Imported entries have two
+   tab-separated fields (digest and unit); malformed entries refuse. Archive-less findlib packages
+   own no units. No module inventory is inferred from [META] or [dune-package]. A failed query,
+   unreadable archive or output without definitions refuses without directory fallback. Shared local
+   libraries refuse: findlib cannot resolve their archives and [@check] does not build them.
 
    USE: the typed tree of every [.cmt]/[.cmti] in the stanza's byte object directory
    ([Cmt_references]): post-preprocessing, so generated modules, a [select]-chosen source and a
@@ -213,13 +210,11 @@ let temp name = Stdlib.Filename.concat (Lazy.force temp_root) name
 
 (* [dune describe workspace] of the project rooted at [root], in a build directory of its own. The
    nested dune must not believe it is an action of the running one; its stderr is discarded. *)
-let run_describe ~fail:(module F : FAIL) ~dune ~root ~tag =
+let run_describe ~fail:(module F : FAIL) ~dune ~env ~root ~tag =
   let open F in
   let build_dir = temp ("ucd-" ^ tag ^ "-build") in
   let status, out, _ =
-    Fresh_process.run ~exe:dune
-      ~env:(Fresh_process.nested_dune_environment ())
-      ~temp_dir:(Lazy.force temp_root) ~stderr:`Discard
+    Fresh_process.run ~exe:dune ~env ~temp_dir:(Lazy.force temp_root) ~stderr:`Discard
       [
         "describe";
         "workspace";
@@ -342,9 +337,9 @@ let cmi_units dir =
 
 (* These tools are action arguments resolved by dune, not shell commands found on PATH. Their stderr
    goes to the caller's [stderr], so archive diagnostics stay visible. *)
-let capture ~stderr tool args =
+let capture ?env ~stderr tool args =
   match
-    Fresh_process.run ~exe:tool ~temp_dir:(Lazy.force temp_root) ~stderr:(`Into stderr) args
+    Fresh_process.run ~exe:tool ?env ~temp_dir:(Lazy.force temp_root) ~stderr:(`Into stderr) args
   with
   | WEXITED 0, out, _ -> Ok out
   | _ -> Error "tool did not exit 0"
@@ -390,7 +385,7 @@ let archive_units ~fail:sink ?(stderr = Unix.stderr) ~objinfo archive =
       empty_archive
   | Ok text -> read_archive ~fail:sink ~archive text
 
-let shared_units ~fail:sink ?(stderr = Unix.stderr) ~findlib ~objinfo l =
+let shared_units ~fail:sink ?env ?(stderr = Unix.stderr) ~findlib ~objinfo l =
   let (module F : FAIL) = sink in
   let open F in
   if l.local then (
@@ -398,7 +393,7 @@ let shared_units ~fail:sink ?(stderr = Unix.stderr) ~findlib ~objinfo l =
     empty_archive)
   else
     match
-      capture ~stderr findlib [ "query"; "-predicates"; "byte"; "-format"; "%+a"; l.lib_name ]
+      capture ?env ~stderr findlib [ "query"; "-predicates"; "byte"; "-format"; "%+a"; l.lib_name ]
     with
     | Error e ->
         fail "archive query for %s: %s" l.lib_name e;
@@ -413,27 +408,14 @@ let shared_units ~fail:sink ?(stderr = Unix.stderr) ~findlib ~objinfo l =
               interfaces = info.interfaces @ acc.interfaces;
             })
 
-(* Even the least-dependent importer may be a consumer of a co-located interface whose defining
-   archive never imports it. *)
-let interface_owner ~fail:(module F : FAIL) ~depends_on ~possible_definers ~name unit candidates =
+let refuse_interface_owner ~fail:(module F : FAIL) ~name unit peers =
   let open F in
-  let candidates = List.dedup_and_sort candidates ~compare:String.compare in
-  let minimal =
-    List.filter candidates ~f:(fun uid ->
-        not
-          (List.exists candidates ~f:(fun other ->
-               (not (String.equal uid other)) && depends_on uid other)))
-  in
-  let ambiguous candidates =
-    fail "interface-only unit %s: no unique archive owner among [%s]" unit
-      (String.concat ~sep:", "
-         (List.dedup_and_sort (List.map candidates ~f:name) ~compare:String.compare));
-    None
-  in
-  match minimal with
-  | [ uid ] -> (
-      match possible_definers uid with [] -> Some uid | deps -> ambiguous (candidates @ deps))
-  | _ -> ambiguous candidates
+  fail "interface-only unit %s: no unique archive owner among [%s]" unit
+    (String.concat ~sep:", " (List.dedup_and_sort (List.map peers ~f:name) ~compare:String.compare));
+  None
+
+let realpath path =
+  match Unix.realpath path with path -> Some path | exception Unix.Unix_error _ -> None
 
 let depends_on by_uid uid target =
   let rec walk seen = function
@@ -469,7 +451,7 @@ let reach_path by_uid uid =
   in
   bfs (Set.singleton (module String) uid) [ (uid, [ name uid ]) ]
 
-let library_owners ~fail ~cmi_units ~archive_of ~tracked by_uid =
+let library_owners ~fail ?compiler_libs_dir ~cmi_units ~archive_of ~tracked by_uid =
   let directories = Hashtbl.create (module String) in
   Hashtbl.iter by_uid ~f:(fun l ->
       List.iter l.include_dirs ~f:(fun d -> Hashtbl.add_multi directories ~key:d ~data:l.uid));
@@ -484,7 +466,9 @@ let library_owners ~fail ~cmi_units ~archive_of ~tracked by_uid =
   in
   let owners = Hashtbl.create (module String) in
   let interface_candidates = Hashtbl.create (module String) in
-  let shared_cmis = ref (Set.empty (module String)) in
+  let cmi_dirs = Hashtbl.create (module String) in
+  let shared_cmis = Hash_set.create (module String) in
+  let name uid = (Hashtbl.find_exn by_uid uid).lib_name in
   Hashtbl.iter by_uid ~f:(fun l ->
       if tracked l.uid then
         let shared =
@@ -492,10 +476,17 @@ let library_owners ~fail ~cmi_units ~archive_of ~tracked by_uid =
               List.exists (Hashtbl.find_multi directories d) ~f:(fun uid ->
                   not (String.equal uid l.uid)))
         in
-        let cmis = List.map l.include_dirs ~f:cmis_in |> Set.union_list (module String) in
+        let cmis =
+          List.map l.include_dirs ~f:(fun dir ->
+              let units = cmis_in dir in
+              Set.iter units ~f:(fun unit ->
+                  Hashtbl.add_multi cmi_dirs ~key:unit ~data:dir;
+                  if shared then Hash_set.add shared_cmis unit);
+              units)
+          |> Set.union_list (module String)
+        in
         let definitions =
           if shared then (
-            shared_cmis := Set.union !shared_cmis cmis;
             let info = archive l.uid in
             List.iter info.interfaces ~f:(fun u ->
                 if Set.mem cmis u then Hashtbl.add_multi interface_candidates ~key:u ~data:l.uid);
@@ -503,40 +494,43 @@ let library_owners ~fail ~cmi_units ~archive_of ~tracked by_uid =
           else Set.to_list cmis
         in
         List.iter definitions ~f:(fun u -> Hashtbl.add_multi owners ~key:u ~data:l.uid));
-  let co_located_dependencies unit uid =
-    let l = Hashtbl.find_exn by_uid uid in
-    List.concat_map l.include_dirs ~f:(fun dir ->
-        if Set.mem (cmis_in dir) unit then Hashtbl.find_multi directories dir else [])
-    |> List.filter ~f:(fun peer ->
-        (not (String.equal uid peer))
-        && depends_on by_uid uid peer
-        && not (List.is_empty (archive peer).definitions))
+  let known_owners unit dir =
+    let peers =
+      List.dedup_and_sort (Hashtbl.find_multi directories dir) ~compare:String.compare
+      |> List.filter ~f:(fun uid -> not (List.is_empty (archive uid).definitions))
+    in
+    let definitions =
+      List.filter peers ~f:(fun uid -> List.mem (archive uid).definitions unit ~equal:String.equal)
+    in
+    let importers = Hashtbl.find_multi interface_candidates unit in
+    let compiler_owner =
+      (* OCaml's Makefile includes [parsing/parsetree.mli] in [ocamlcommon_SOURCES]. *)
+      if
+        String.equal unit "Parsetree"
+        && Option.exists compiler_libs_dir ~f:(fun canonical_dir ->
+            Option.equal String.equal (Some canonical_dir) (realpath dir))
+      then List.find peers ~f:(fun uid -> String.equal (name uid) compiler_root)
+      else None
+    in
+    match (definitions, compiler_owner, peers) with
+    | (_ :: _ as definitions), _, _ -> Some definitions
+    | [], Some uid, _ -> Some [ uid ]
+    | [], None, [ uid ] when List.mem importers uid ~equal:String.equal -> Some [ uid ]
+    | [], None, _ -> refuse_interface_owner ~fail ~name unit peers
   in
   let interface_cache = Hashtbl.create (module String) in
   fun unit ->
-    match Hashtbl.find_multi owners unit with
-    | [] when Set.mem !shared_cmis unit ->
-        Hashtbl.find_or_add interface_cache unit ~default:(fun () ->
-            let candidates = Hashtbl.find_multi interface_candidates unit in
-            let dependencies =
-              List.map candidates ~f:(fun uid -> (uid, co_located_dependencies unit uid))
-            in
-            (* A peer outside the reporting scope can still establish ownership. *)
-            let definitions =
-              List.concat_map dependencies ~f:snd
-              |> List.filter ~f:(fun uid ->
-                  List.mem (archive uid).definitions unit ~equal:String.equal)
-              |> List.dedup_and_sort ~compare:String.compare
-            in
-            match definitions with
-            | [] ->
-                interface_owner ~fail ~depends_on:(depends_on by_uid)
-                  ~possible_definers:(List.Assoc.find_exn dependencies ~equal:String.equal)
-                  ~name:(fun uid -> (Hashtbl.find_exn by_uid uid).lib_name)
-                  unit candidates
-                |> Option.map ~f:List.return
-            | definitions -> Some definitions)
-    | owners -> Some owners
+    if Hash_set.mem shared_cmis unit then
+      Hashtbl.find_or_add interface_cache unit ~default:(fun () ->
+          let dirs =
+            List.dedup_and_sort (Hashtbl.find_multi cmi_dirs unit) ~compare:String.compare
+          in
+          match dirs with
+          | [ dir ] -> known_owners unit dir
+          | _ ->
+              let peers = List.concat_map dirs ~f:(Hashtbl.find_multi directories) in
+              refuse_interface_owner ~fail ~name unit peers)
+    else Some (Hashtbl.find_multi owners unit)
 
 (* {1 Stanzas} *)
 
@@ -747,6 +741,149 @@ let bind_probed ~fail:(module F : FAIL) ~by_uid ~by_name ~probed unresolved =
 
 let refused_with ?quiet ~format f = Refusals.refused_with ?quiet ~source:manifest_source ~format f
 
+let shared_directory_control ~dune ~ocamlc ~findlib ~objinfo =
+  let definer_name = "ucd_shared_fixture.definer" in
+  let importer_name = "ucd_shared_fixture.importer" in
+  let unit = "Ucd_shared_types" in
+  let caller_name = "ucd_direct_use" in
+  let tag = "shared-fixture" in
+  let root =
+    probe_project ~tag
+      (Printf.sprintf "(library (name %s) (modules %s) (libraries %s))\n%s" caller_name caller_name
+         definer_name (probe_stanzas [ importer_name ]))
+  in
+  let packages = root ^ "/findlib" in
+  let shared = packages ^ "/ucd_shared_fixture" in
+  List.iter [ packages; shared ] ~f:(fun dir -> Unix.mkdir dir 0o755);
+  let write file data = Out_channel.write_all (shared ^ "/" ^ file) ~data in
+  write "META"
+    (Printf.sprintf
+       {|package "definer" (
+  requires = "%s"
+  archive(byte) = "ucd_definer.cma"
+)
+package "importer" (
+  requires = "%s"
+  archive(byte) = "ucd_importer.cma"
+)
+|}
+       compiler_root compiler_root);
+  (* The definer ships the .cmi without an archive unit or any import of it. *)
+  write "ucd_shared_types.mli" "type t\n";
+  write "ucd_definer.ml" "let marker = ()\n";
+  write "ucd_importer.ml" ("type t = " ^ unit ^ ".t\n");
+  Out_channel.write_all (root ^ "/" ^ caller_name ^ ".ml") ~data:("type t = " ^ unit ^ ".t\n");
+  let checked_command ~exe ?cwd ?env args =
+    let ((status, _, _) as result) =
+      Fresh_process.run ~exe ?cwd ?env ~temp_dir:(Lazy.force temp_root) args
+    in
+    match status with
+    | WEXITED 0 -> ()
+    | _ ->
+        Fresh_process.report ~label:"shared-directory findlib fixture" result;
+        failwith "could not build the shared-directory findlib fixture"
+  in
+  List.iter
+    [
+      [ "-c"; "ucd_shared_types.mli"; "ucd_definer.ml"; "ucd_importer.ml" ];
+      [ "-a"; "-o"; "ucd_definer.cma"; "ucd_definer.cmo" ];
+      [ "-a"; "-o"; "ucd_importer.cma"; "ucd_importer.cmo" ];
+    ]
+    ~f:(fun args -> checked_command ~exe:ocamlc ~cwd:shared args);
+  let env =
+    Fresh_process.nested_dune_environment ()
+    |> Array.filter ~f:(fun binding -> not (String.is_prefix binding ~prefix:"OCAMLPATH="))
+    |> Array.to_list
+    |> List.cons ("OCAMLPATH=" ^ packages)
+    |> Array.of_list
+  in
+  let description, messages =
+    Refusals.collect_refusals (fun ~fail -> run_describe ~fail ~dune ~env ~root ~tag)
+  in
+  let text, build_dir =
+    match (description, messages) with
+    | Some result, [] -> result
+    | _ -> failwith "could not describe the shared-directory findlib fixture"
+  in
+  checked_command ~exe:dune ~env
+    [ "build"; "--root"; root; "--build-dir"; build_dir; "-j"; "1"; "@check" ];
+  let workspace_root = build_dir ^ "/default" in
+  let libraries, parse_refusals =
+    Refusals.collect_refusals (fun ~fail -> read_description ~fail ~workspace_root ~build_dir text)
+  in
+  let resolve name = List.find libraries ~f:(fun l -> String.equal l.lib_name name) in
+  let definer = Option.value_exn (resolve definer_name) in
+  let importer = Option.value_exn (resolve importer_name) in
+  let by_uid =
+    List.map libraries ~f:(fun l -> (l.uid, l)) |> Hashtbl.of_alist_exn (module String)
+  in
+  let population_of uid =
+    Option.map (reach_path by_uid uid) ~f:(fun path -> Compiler_reaching path)
+  in
+  let archive_of ~fail l = shared_units ~fail ~env ~findlib ~objinfo l in
+  let (definer_archive, importer_archive), archive_refusals =
+    Refusals.collect_refusals (fun ~fail -> (archive_of ~fail definer, archive_of ~fail importer))
+  in
+  let imports archive = List.mem archive.interfaces unit ~equal:String.equal in
+  let fixture_metadata =
+    match (parse_refusals, archive_refusals) with
+    | [], [] ->
+        (not (depends_on by_uid importer.uid definer.uid))
+        && Option.is_some (population_of definer.uid)
+        && Option.is_some (population_of importer.uid)
+        && List.mem definer_archive.definitions "Ucd_definer" ~equal:String.equal
+        && (not (List.mem definer_archive.definitions unit ~equal:String.equal))
+        && (not (List.mem importer_archive.definitions unit ~equal:String.equal))
+        && (not (imports definer_archive))
+        && imports importer_archive
+    | _ -> false
+  in
+  p_exists "the findlib importer reads a co-located interface with no requires path to its definer"
+    importer.include_dirs ~f:(fun dir ->
+      fixture_metadata
+      && List.mem definer.include_dirs dir ~equal:String.equal
+      && Option.value_map (cmi_units dir) ~default:false ~f:(fun units ->
+          List.mem units unit ~equal:String.equal));
+  let stanza =
+    match
+      Refusals.collect_refusals (fun ~fail ->
+          collect_stanzas ~fail ~dir:"" (Scan.stanzas (In_channel.read_all (root ^ "/dune"))))
+    with
+    | stanzas, [] -> List.find_exn stanzas ~f:(fun s -> String.equal s.name caller_name)
+    | _ -> failwith "could not read the shared-directory fixture stanzas"
+  in
+  let verdict = ref Inactive in
+  let refused =
+    refused_with ~format:"interface-only unit %s: no unique archive owner among [%s]" (fun ~fail ->
+        let owners =
+          library_owners ~fail ~cmi_units ~archive_of:(archive_of ~fail)
+            ~tracked:(fun uid -> Option.is_some (population_of uid))
+            by_uid
+        in
+        let w =
+          {
+            workspace_root;
+            resolve;
+            available = (fun name -> Option.is_some (resolve name));
+            population_of;
+            owners;
+            rewriters = Set.empty (module String);
+          }
+        in
+        verdict := judge ~fail w stanza)
+  in
+  let refused_stanza =
+    match !verdict with
+    | Refused -> true
+    | Inactive -> false
+    | Checked findings ->
+        eprintf "shared-directory fixture reported unused: [%s]\n"
+          (String.concat ~sep:", " (List.map findings ~f:(fun finding -> finding.library)));
+        false
+  in
+  p "the findlib fixture refuses the stanza that declares the interface's possible definer"
+    (refused && refused_stanza)
+
 let controls ~dune ~objinfo ~tool_stderr =
   let stanza_of text =
     let stanzas, messages =
@@ -787,25 +924,6 @@ let controls ~dune ~objinfo ~tool_stderr =
        (fun ~fail ->
          ignore
            (shared_units ~fail ~findlib:dune ~objinfo { shared with local = true } : archive_info)));
-  p "an interface-only unit belongs to its unique dependency-minimal archive"
-    (let owner, messages =
-       Refusals.collect_refusals (fun ~fail ->
-           interface_owner ~fail
-             ~depends_on:(fun a b -> String.equal a "consumer" && String.equal b "owner")
-             ~possible_definers:(Fn.const []) ~name:Fn.id "Types_only" [ "consumer"; "owner" ])
-     in
-     (match messages with [] -> true | _ :: _ -> false)
-     && Option.equal String.equal owner (Some "owner"));
-  p_all "missing, incomparable and cyclic interface-only owners are refused"
-    [ ([], false); ([ "a"; "b" ], false); ([ "a"; "b" ], true) ]
-    ~f:(fun (candidates, cyclic) ->
-      refused_with ~format:"interface-only unit %s: no unique archive owner among [%s]"
-        (fun ~fail ->
-          ignore
-            (interface_owner ~fail
-               ~depends_on:(fun _ _ -> cyclic)
-               ~possible_definers:(Fn.const []) ~name:Fn.id "Types_only" candidates
-              : string option)));
   let w =
     {
       workspace_root = temp "ucd-control-root";
@@ -820,20 +938,12 @@ let controls ~dune ~objinfo ~tool_stderr =
      { lib_name = name; uid = name; local = false; requires; include_dirs = [ dir ] }
    in
    let unit = "Shared_types" in
-   let fixture ~fail ~owner_requires ~owner_definitions =
-     let owner = library "owner" owner_requires "/shared" in
-     let bridge = library "bridge" [ owner.uid ] "/bridge" in
-     let consumer = library "consumer" [ bridge.uid; compiler_root ] "/shared" in
+   let fixture ~fail ?compiler_libs_dir cmi_units entries =
      let by_uid =
-       List.map [ owner; bridge; consumer ] ~f:(fun l -> (l.uid, l))
-       |> Hashtbl.of_alist_exn (module String)
-     in
-     let cmi_units dir =
-       if String.equal dir "/shared" then Some ("Consumer" :: unit :: owner_definitions) else None
+       List.map entries ~f:(fun (l, _) -> (l.uid, l)) |> Hashtbl.of_alist_exn (module String)
      in
      let archive_of l =
-       if String.equal l.uid owner.uid then { definitions = owner_definitions; interfaces = [] }
-       else { definitions = [ "Consumer" ]; interfaces = [ unit ] }
+       List.find_exn entries ~f:(fun (peer, _) -> String.equal l.uid peer.uid) |> snd
      in
      let population_of uid =
        Option.map (reach_path by_uid uid) ~f:(fun path -> Compiler_reaching path)
@@ -843,25 +953,111 @@ let controls ~dune ~objinfo ~tool_stderr =
        resolve = Hashtbl.find by_uid;
        population_of;
        owners =
-         library_owners ~fail ~cmi_units ~archive_of
+         library_owners ~fail ?compiler_libs_dir ~cmi_units ~archive_of
            ~tracked:(fun uid -> Option.is_some (population_of uid))
            by_uid;
      }
    in
+   let shared_fixture ~fail ~owner_requires ~owner_definitions ~downstream_owner =
+     let owner = library "owner" owner_requires "/shared" in
+     let bridge = library "bridge" [ owner.uid ] "/bridge" in
+     let consumer_requires =
+       if downstream_owner then [ compiler_root ] else [ bridge.uid; compiler_root ]
+     in
+     let consumer = library "consumer" consumer_requires "/shared" in
+     let owner =
+       if downstream_owner then { owner with requires = consumer.uid :: owner.requires } else owner
+     in
+     let cmi_units dir =
+       if String.equal dir "/shared" then Some ("Consumer" :: unit :: owner_definitions) else None
+     in
+     fixture ~fail cmi_units
+       [
+         ( owner,
+           {
+             definitions = owner_definitions;
+             interfaces = (if downstream_owner then [ unit ] else []);
+           } );
+         (bridge, empty_archive);
+         (consumer, { definitions = [ "Consumer" ]; interfaces = [ unit ] });
+       ]
+   in
    let read_references _ = Units (Set.singleton (module String) unit) in
    let stanza = stanza_of "(library (name direct_use) (libraries owner))" in
-   let verdict = ref Inactive in
-   let refused =
-     refused_with ~format:"interface-only unit %s: no unique archive owner among [%s]" (fun ~fail ->
-         let w = fixture ~fail ~owner_requires:[ compiler_root ] ~owner_definitions:[ "Owner" ] in
-         verdict := judge ~fail ~read_references w stanza)
+   let refuses_stanza make_world =
+     let verdict = ref Inactive in
+     let refused =
+       refused_with ~format:"interface-only unit %s: no unique archive owner among [%s]"
+         (fun ~fail -> verdict := judge ~fail ~read_references (make_world ~fail) stanza)
+     in
+     refused && match !verdict with Refused -> true | _ -> false
    in
    p "a consumer-only interface import refuses the stanza that declares its possible owner"
-     (refused && match !verdict with Refused -> true | _ -> false);
+     (refuses_stanza
+        (shared_fixture ~owner_requires:[ compiler_root ] ~owner_definitions:[ "Owner" ]
+           ~downstream_owner:false));
+   p "a downstream importer could itself supply the shared interface"
+     (refuses_stanza
+        (shared_fixture ~owner_requires:[ compiler_root ] ~owner_definitions:[ "Owner" ]
+           ~downstream_owner:true));
+   let first =
+     [
+       (library "owner" [ compiler_root ] "/first", { definitions = [ "Owner" ]; interfaces = [] });
+       ( library "first_use" [ compiler_root ] "/first",
+         { definitions = [ "First_use" ]; interfaces = [ unit ] } );
+     ]
+   in
+   p_all "an exact definition in another directory cannot settle a same-named interface"
+     [
+       [
+         ( library "second_use" [ compiler_root ] "/second",
+           { definitions = [ "Second_use" ]; interfaces = [ unit ] } );
+         (library "other" [] "/second", { definitions = [ unit ]; interfaces = [] });
+       ];
+       [
+         ( library "standalone" [ compiler_root ] "/second",
+           { definitions = [ unit ]; interfaces = [] } );
+       ];
+     ]
+     ~f:(fun second ->
+       refuses_stanza (fun ~fail -> fixture ~fail (fun _ -> Some [ unit ]) (first @ second)));
+   p "a sole archive that never imports the interface leaves ownership unresolved"
+     (refuses_stanza (fun ~fail ->
+          fixture ~fail
+            (fun _ -> Some [ unit ])
+            [
+              ( library "owner" [ compiler_root ] "/shared",
+                { definitions = [ "Owner" ]; interfaces = [] } );
+              (library "archive_less" [] "/shared", empty_archive);
+            ]));
+   let compiler_fixture ~fail dir =
+     let parsetree = "Parsetree" in
+     let w =
+       fixture ~fail ?compiler_libs_dir:(realpath empty_dir)
+         (fun _ -> Some [ parsetree ])
+         [
+           (library compiler_root [] dir, { definitions = [ "Common" ]; interfaces = [ parsetree ] });
+           ( library "toplevel" [ compiler_root ] dir,
+             { definitions = [ "Toplevel" ]; interfaces = [ parsetree ] } );
+         ]
+     in
+     w.owners parsetree
+   in
+   p "the compiler's own Parsetree belongs to compiler-libs.common"
+     (let owner, messages =
+        Refusals.collect_refusals (fun ~fail -> compiler_fixture ~fail empty_dir)
+      in
+      (match messages with [] -> true | _ :: _ -> false)
+      && Option.equal (List.equal String.equal) owner (Some [ compiler_root ]));
+   p "compiler-libs.common does not get Parsetree from a different directory"
+     (refused_with ~format:"interface-only unit %s: no unique archive owner among [%s]"
+        (fun ~fail -> ignore (compiler_fixture ~fail corrupt_dir : string list option)));
    let owner_is ~owner_requires ~owner_definitions expected =
      let known_owner, messages =
        Refusals.collect_refusals (fun ~fail ->
-           let w = fixture ~fail ~owner_requires ~owner_definitions in
+           let w =
+             shared_fixture ~fail ~owner_requires ~owner_definitions ~downstream_owner:false
+           in
            w.owners unit)
      in
      (match messages with [] -> true | _ :: _ -> false)
@@ -988,6 +1184,7 @@ let controls ~dune ~objinfo ~tool_stderr =
     (refused_with ~format:"dune describe workspace of %s did not exit 0" (fun ~fail ->
          ignore
            (run_describe ~fail ~dune
+              ~env:(Fresh_process.nested_dune_environment ())
               ~root:(probe_project ~tag:"control-bad" "(library")
               ~tag:"control-bad"
              : (string * string) option)));
@@ -1016,10 +1213,13 @@ let controls ~dune ~objinfo ~tool_stderr =
 let () =
   Test_utils.set_binary_stdout ();
   let argv = Array.to_list (Test_scan.Scan_argv.expand Stdlib.Sys.argv) in
-  let workspace_root, dune, findlib, objinfo, deps =
+  let workspace_root, dune, ocamlc, findlib, objinfo, deps =
     match argv with
-    | _ :: root :: dune :: findlib :: objinfo :: deps -> (root, dune, findlib, objinfo, deps)
-    | _ -> failwith "usage: unused_compiler_deps WORKSPACE_ROOT DUNE OCAMLFIND OCAMLOBJINFO @DEPS"
+    | _ :: root :: dune :: ocamlc :: findlib :: objinfo :: deps ->
+        (root, dune, ocamlc, findlib, objinfo, deps)
+    | _ ->
+        failwith
+          "usage: unused_compiler_deps WORKSPACE_ROOT DUNE OCAMLC OCAMLFIND OCAMLOBJINFO @DEPS"
   in
   let source_root =
     match Stdlib.Sys.getenv_opt "DUNE_SOURCEROOT" with
@@ -1032,6 +1232,7 @@ let () =
             controls ~dune ~objinfo ~tool_stderr:(Unix.descr_of_out_channel sink)))
   in
   p "the synthetic tool calls leave action stderr empty" (String.is_empty control_stderr);
+  shared_directory_control ~dune ~ocamlc ~findlib ~objinfo;
   let refusals = ref [] in
   let fail : (module FAIL) =
     (module struct
@@ -1039,7 +1240,7 @@ let () =
     end)
   in
   let describe ~root ~tag =
-    match run_describe ~fail ~dune ~root ~tag with
+    match run_describe ~fail ~dune ~env:(Fresh_process.nested_dune_environment ()) ~root ~tag with
     | None -> []
     | Some (text, build_dir) -> read_description ~fail ~workspace_root ~build_dir text
   in
@@ -1117,8 +1318,16 @@ let () =
     | Some path -> Some (Compiler_reaching path)
     | None -> if Set.mem support_uids uid then Some Test_support else None
   in
+  let compiler_libs_dir =
+    match capture ~stderr:Unix.stderr ocamlc [ "-where" ] with
+    | Error _ -> None
+    | Ok dir ->
+        let dir = String.strip dir in
+        if Stdlib.Filename.is_relative dir then None
+        else realpath (Stdlib.Filename.concat dir "compiler-libs")
+  in
   let owners =
-    library_owners ~fail ~cmi_units
+    library_owners ~fail ?compiler_libs_dir ~cmi_units
       ~archive_of:(shared_units ~fail ~findlib ~objinfo)
       ~tracked:(fun uid -> Option.is_some (population_of uid))
       by_uid

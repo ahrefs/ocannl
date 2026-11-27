@@ -18995,6 +18995,7 @@
      %{dep:unused_compiler_deps.exe}
      %{workspace_root}
      %{bin:dune}
+     %{ocamlc}
      %{bin:ocamlfind}
      %{bin:ocamlobjinfo}
      @unused_compiler_deps.filelist)))))

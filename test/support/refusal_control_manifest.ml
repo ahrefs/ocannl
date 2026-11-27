@@ -64,15 +64,23 @@ let raw_entries =
         "[scanner-refusal:e654ceab66220252a649c7bb36aa0e49] object directory";
         "[scanner-refusal:4bb6aa436016609d636df4dbb21c88fd] unreadable typed tree";
         "[scanner-refusal:1705a50114bbcfdc7d549777efcf1348] no single library";
+        "[scanner-refusal:3f1d076365e378b925ddb2d0e2a10505] shared-directory findlib fixture";
+        "[scanner-refusal:8cda105643bd96c09dc8261c3b932999] shared-directory findlib fixture";
+        "[scanner-refusal:fabd0f74da554892c9472b380dd864cb] co-located interface with";
+        "[scanner-refusal:ff089c8ce0d0f584240e2b63b6d20faf] shared-directory fixture stanzas";
+        "[scanner-refusal:12eb34f55ce2d30bbcca2c13c584516c] interface's possible definer";
         "[scanner-refusal:1262ba0367f56ab63b0ef45185bb1257] control stanza must";
         "[scanner-refusal:1c8850699d8f9fec6290b9542a410741] an unreadable archive";
         "[scanner-refusal:e25a1cf286ceb521ee4eb7746aad5229] archive tool producing";
         "[scanner-refusal:ff2924c3a9869dd3bc7f7d72acd8ead1] malformed archive interface";
         "[scanner-refusal:f684c2c391ba5d7246a2468a4d4584ca] failed archive query";
         "[scanner-refusal:38b0123ae5353ab2b03e006a018d2bc6] shared local library";
-        "[scanner-refusal:8321fb2ab306d6d7f47b17136d308f5d] unique dependency-minimal archive";
-        "[scanner-refusal:9444a57b2ad4731e29ce408670e73e59] cyclic interface-only owners";
         "[scanner-refusal:afa29a41b9bcf5f2edb420167b2557b1] consumer-only interface import";
+        "[scanner-refusal:af4e3d44d44af611e87c6c3fbba6db59] downstream importer could";
+        "[scanner-refusal:238e4af10feb723d7bd9328dab4222b6] another directory cannot";
+        "[scanner-refusal:6d3939107d94def89d4eb5d59ebcff14] leaves ownership unresolved";
+        "[scanner-refusal:66109474577b0481b9b58c8b76e13d7f] compiler-libs.common";
+        "[scanner-refusal:b41831879e1d43e58af207034cdb4ecf] compiler-libs.common";
         "[scanner-refusal:e465b31053262fa064a9c23ff3892b2c] dependency's archive definition";
         "[scanner-refusal:52ed7f2b3e43e26453e5f6c31ebb5965] co-located archive-less dependency";
         "[scanner-refusal:ffa4bc91bdd9e0c6519d47ab6e078f3c] csexp reader refuses";
@@ -101,7 +109,7 @@ let raw_entries =
         "[scanner-refusal:69ce705759093b5f97c6cc8e0413a500] description dune refuses";
         "[scanner-refusal:8c24881b343b90be6f9574bf281e5045] or multiple libraries";
         "[scanner-refusal:80993f82fb1569705822b50a7436584e] rejects another refusal";
-        "[scanner-refusal:351ce2a461cb37393c61069ee2649d96] unused_compiler_deps";
+        "[scanner-refusal:b0838acc6eaf79cf95f6a2045fe2af6c] unused_compiler_deps";
         "[scanner-refusal:36778054d93aa08eac389989017aed7a] DUNE_SOURCEROOT";
         "[scanner-refusal:044e249871007719b6bc46d149189c1d] synthetic tool calls";
         "[scanner-refusal:22c08112ff7b660af6dab49542313b14] compiler-libs.common";
@@ -1469,9 +1477,15 @@ let raw_catalogue_only : (string * string) list =
   [
     ( "explicit_library_deps.ml:79b83d87bc35a637a45c0dd6dc7479cf",
       "decided by the argument vector its own dune rule writes" );
+    ( "unused_compiler_deps.ml:3f1d076365e378b925ddb2d0e2a10505",
+      "a tool failure while compiling the check's private findlib control" );
+    ( "unused_compiler_deps.ml:8cda105643bd96c09dc8261c3b932999",
+      "a tool failure while describing the check's private findlib control" );
+    ( "unused_compiler_deps.ml:ff089c8ce0d0f584240e2b63b6d20faf",
+      "a defect in the check's own generated findlib control Dune file" );
     ( "unused_compiler_deps.ml:1262ba0367f56ab63b0ef45185bb1257",
       "a defect in the check's own synthetic control text, not a malformed tree" );
-    ( "unused_compiler_deps.ml:351ce2a461cb37393c61069ee2649d96",
+    ( "unused_compiler_deps.ml:b0838acc6eaf79cf95f6a2045fe2af6c",
       "decided by the argument vector its own dune rule writes" );
     ( "unused_compiler_deps.ml:36778054d93aa08eac389989017aed7a",
       "decided by dune, which sets DUNE_SOURCEROOT for every action; unset only outside the rule" );
