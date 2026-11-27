@@ -3202,6 +3202,7 @@
   bin_cells.py
   bin_cells.expected
   bench_design.expected
+  digest_completeness.expected
   bin_cells_probe.exe
   ../../benchmarks/bin_cells.py
   ../../benchmarks/cells.py

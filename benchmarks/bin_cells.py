@@ -37,8 +37,10 @@ revisions.
   read, with its value and where it came from. A cell fails when any setting came from the
   environment or a config file (a profile picked there included), when a commandline source names
   no argument of the cell, when the backend it ran is not the one pinned, or when a record is
-  unreadable or there are none; the run fails when two cells of one arm resolved a setting
-  differently. The report
+  unreadable or there are none; the run fails when two cells of one arm resolved a setting to
+  different values, or when a non-`execution-neutral` (or unclassified) setting was read in only
+  some cells of an arm (one-sided `execution-neutral` reads are listed as informational; see
+  `cells.consistency_check`). The report
   lists what the arms differ by as RESOLVED, and the whole resolved configuration beside the
   numbers, so a published number carries the settings that produced it -- the knobs a bench cannot
   pin itself (`autotune_bound_pruning`, the roofline constants, `gpu_graph_capture`, ...) included.
@@ -112,7 +114,7 @@ import box_gate
 import cell_group
 import cells
 import config_records  # noqa: F401  (re-exported: test/operations/bin_cells.py reads it here)
-from cells import (consistency_problems, design_orders, sign_test_p,  # noqa: F401
+from cells import (consistency_notes, consistency_problems, design_orders, sign_test_p,  # noqa: F401
                    treatment_problems)
 from display_safe import code_span, display_value, log_line, table_lines
 
@@ -399,6 +401,11 @@ def render_report(manifest, records, problems, title="bin/ bench cells", extra=(
                      "differs" if k in differing else "all arms"))
     if rows:
         lines += table_lines(("setting", "value", "source", "arms"), rows)
+    notes = cells.consistency_notes(ok)
+    if notes:
+        lines += ["", "Execution-neutral settings read in only some cells of an arm (informational; "
+                      "every reading cell agreed on the value):", ""]
+        lines += [log_line(f"- {n}") for n in notes]
     lines += ["", "## Cells", ""]
     rows = [(str(r["cell"]), str(r["round"]), str(r["position"]), display_value(r["arm"]),
              str(r["status"]), str(len(r["results"])),
