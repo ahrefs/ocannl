@@ -15,6 +15,7 @@ import contextlib
 import enum
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -35,6 +36,66 @@ UNKNOWN = Observation.UNKNOWN
 
 class CleanupFailed(SystemExit):
     """A managed group was not proven gone; its message owns the operator's next action."""
+
+
+def cancel_on_launcher_exit():
+    """Ask Linux to route direct-launcher death through the driver's SIGTERM handler."""
+    if sys.platform != "linux":
+        return
+    import ctypes
+
+    parent = os.getppid()
+    prctl = ctypes.CDLL(None, use_errno=True).prctl
+    # PR_SET_PDEATHSIG. A launcher that exits during registration cannot send this signal.
+    if prctl(1, signal.SIGTERM, 0, 0, 0) == -1:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    if os.getppid() != parent:
+        signal.raise_signal(signal.SIGTERM)
+
+
+class _DriverDeathGuard:
+    """Hold inherited fleet locks until the driver has cleaned its group or we have."""
+
+    def __init__(self):
+        owner, reader = socket.socketpair()
+        try:
+            with reader:
+                # The slot's flock and sleep-inhibitor pipe are intentionally inheritable.
+                # Only the guard needs to keep them when the driver is gone.
+                self.proc = subprocess.Popen(
+                    [sys.executable, "-B", str(Path(__file__).resolve())],
+                    stdin=reader, stdout=subprocess.DEVNULL, close_fds=False,
+                    start_new_session=True,
+                )
+        except BaseException:
+            owner.close()
+            raise
+        self.owner = owner
+
+    def register_child(self):
+        # Called in the child after setsid and before exec. Even if Popen never returns to
+        # the driver, exec cannot start the cell until its group is known to the guard.
+        self.owner.sendall(b"%d\n" % os.getpid())
+        os.set_inheritable(self.owner.fileno(), False)
+
+    def finish(self):
+        with self.owner:
+            self.owner.sendall(b"D")
+        self.proc.wait()
+
+
+def _guard_driver():
+    registration = sys.stdin.buffer.readline()
+    if not registration.rstrip(b"\n").isdigit() or sys.stdin.buffer.read(1) == b"D":
+        return
+    pgid = int(registration)
+    # EOF without a completion byte is a driver death. A live member can still own GPU
+    # resources after SIGKILL was sent, so keep the locks until the group is observed gone.
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(pgid, signal.SIGKILL)
+    while _observe_posix_group(pgid, allow_zombie_gone=True) is not GONE:
+        time.sleep(0.05)
 
 
 class CancellationDeferral:
@@ -319,6 +380,7 @@ class ManagedProcess:
     proc: subprocess.Popen
     pgid: int = None
     job: object = None
+    guard: object = None
 
     def __getattr__(self, name):
         return getattr(self.proc, name)
@@ -362,11 +424,17 @@ class ManagedProcess:
         if self.job is not None:
             self.job.close()
             self.job = None
+        if self.guard is not None:
+            guard, self.guard = self.guard, None
+            guard.finish()
 
     def __del__(self):
         # KILL_ON_JOB_CLOSE is the last safety net if a caller loses the object during unwinding.
         with contextlib.suppress(Exception):
-            self.close()
+            if self.job is not None:
+                self.job.close()
+            if self.guard is not None:
+                self.guard.owner.close()
 
 
 def _cleanup_failed_windows_spawn(job, proc):
@@ -383,13 +451,25 @@ def _cleanup_failed_windows_spawn(job, proc):
             proc.wait(timeout=1)
 
 
-def spawn(args, **kwargs):
+def spawn(args, *, watch_driver=False, **kwargs):
     """Spawn ``args`` isolated from the driver and return its managed group."""
     if os.name == "posix":
         if kwargs.pop("start_new_session", True) is not True:
             raise ValueError("benchmark children must start in their own session")
-        proc = subprocess.Popen(args, start_new_session=True, **kwargs)
-        return ManagedProcess(proc=proc, pgid=proc.pid)
+        guard = _DriverDeathGuard() if watch_driver and sys.platform == "linux" else None
+        if guard is not None:
+            # The synchronous cells driver owns this path. The child callback only
+            # publishes its group ID on the inherited socket.
+            kwargs["preexec_fn"] = guard.register_child
+            kwargs["pass_fds"] = (guard.owner.fileno(),)
+        try:
+            proc = subprocess.Popen(args, start_new_session=True, **kwargs)
+        except BaseException:
+            if guard is not None:
+                guard.owner.close()
+                guard.proc.wait()
+            raise
+        return ManagedProcess(proc=proc, pgid=proc.pid, guard=guard)
     if os.name == "nt":
         requested = kwargs.pop("creationflags", 0)
         flags = requested | subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED
@@ -560,3 +640,7 @@ def terminate(group, grace, poll_interval=0.05, final_reap=1.0, observe=None):
     if observation is GONE:
         group.close()
     return Termination(stdout, stderr, observation, reaped)
+
+
+if __name__ == "__main__":
+    _guard_driver()

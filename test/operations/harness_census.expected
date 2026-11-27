@@ -266,6 +266,11 @@ tools/test-mutation-run.sh	tools/per-test-cap.sh
 tools/test-mutation-run.sh	tools/promote.sh
 tools/test-mutation-run.sh	tools/test-mutation-run.sh
 tools/test-mutation-run.sh	tools/test-run.sh
+tools/test-owed-run-tty.sh	scripts/harness-support.sh
+tools/test-owed-run-tty.sh	tools/opam-env.sh
+tools/test-owed-run-tty.sh	tools/owed-run.sh
+tools/test-owed-run-tty.sh	tools/owed-run.sh	declares	-
+tools/test-owed-run-tty.sh	tools/test-owed-run-tty.sh
 tools/test-pin-revisions.sh	.github/actions/pin-revisions/resolve.sh
 tools/test-pin-revisions.sh	scripts/harness-support.sh
 tools/test-pin-revisions.sh	tools/opam-env.sh

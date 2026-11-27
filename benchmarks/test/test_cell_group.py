@@ -342,8 +342,14 @@ class CellGroupTest(unittest.TestCase):
         if not cell_group.process_is_alive(pid):
             return False
         if Path(f"/proc/{pid}/stat").exists():
-            with contextlib.suppress(OSError, IndexError):
+            try:
                 return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+            except FileNotFoundError:
+                return False  # Reaped between probing and reading /proc.
+            except (OSError, IndexError):
+                pass
+        elif sys.platform == "linux":
+            return cell_group.process_is_alive(pid)
         return True
 
     def wait_gone(self, pid, timeout=10):
@@ -538,6 +544,81 @@ class CellGroupTest(unittest.TestCase):
                 else:
                     self.assertIn(f"test shared cells: terminated by signal {signum}", err)
                 self.assertTrue(self.wait_gone(pid), "descendant outlived the shared cell driver")
+
+    @unittest.skipUnless(sys.platform == "linux", "the shared cell death guard is Linux-specific")
+    def test_shared_cells_retain_the_slot_through_launcher_or_driver_death(self):
+        import fcntl
+
+        worker = (
+            "import signal, sys, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "time.sleep(300)\n"
+        )
+        leader = (
+            "import subprocess, sys\n"
+            f"subprocess.run([sys.executable, '-c', {worker!r}, sys.argv[1]], check=True)\n"
+        )
+        driver_source = (
+            "import os, subprocess, sys, cells\n"
+            "cells.install_cancellation('test shared cells')\n"
+            "cells.run_in_group([sys.executable, '-c', sys.argv[1], sys.argv[2]], "
+            "'.', os.environ, 60, subprocess.DEVNULL, subprocess.DEVNULL)\n"
+        )
+        launcher_source = (
+            "import subprocess, sys\n"
+            "driver = subprocess.Popen(sys.argv[2:], close_fds=False)\n"
+            + publish_pid("sys.argv[1]", "driver.pid")
+            + "sys.exit(driver.wait())\n"
+        )
+        for victim in ("launcher", "driver"):
+            with self.subTest(victim=victim):
+                pidfile = self.dir / f"{victim}-cell.pid"
+                kill_the_group_on_cleanup(self, pidfile)
+                driver_file = self.dir / f"{victim}-driver.pid"
+                lockfile = self.dir / f"{victim}.lock"
+                with lockfile.open("wb") as slot:
+                    fcntl.flock(slot, fcntl.LOCK_EX)
+                    launcher = subprocess.Popen(
+                        self.python(launcher_source, driver_file,
+                                    *self.python(driver_source, leader, pidfile)),
+                        cwd=HERE, pass_fds=(slot.fileno(),), start_new_session=True,
+                        stderr=subprocess.DEVNULL,
+                    )
+                try:
+                    self.wait_file(pidfile)
+                    self.wait_file(driver_file)
+                    holder = int(pidfile.read_text())
+                    pgid = os.getpgid(holder)
+                    driver_pid = int(driver_file.read_text())
+                    self.assertTrue(self.alive(holder))
+                    with lockfile.open("rb") as contender:
+                        flags = fcntl.LOCK_EX | fcntl.LOCK_NB
+                        with self.assertRaises(BlockingIOError):
+                            fcntl.flock(contender, flags)
+                        if victim == "launcher":
+                            launcher.terminate()
+                        else:
+                            os.kill(driver_pid, signal.SIGKILL)
+                        launcher.wait(timeout=10)
+                        deadline = time.monotonic() + 5
+                        while True:
+                            try:
+                                fcntl.flock(contender, flags)
+                                break
+                            except BlockingIOError:
+                                if time.monotonic() >= deadline:
+                                    self.fail("the cell's slot was never released")
+                                time.sleep(0.02)
+                        self.assertFalse(self.alive(holder), "slot released with a live cell member")
+                        self.assertFalse(self.alive(pgid), "slot released with a live cell leader")
+                finally:
+                    if launcher.poll() is None:
+                        launcher.kill()
+                        launcher.wait()
+                    if driver_file.exists() and self.alive(int(driver_file.read_text())):
+                        with contextlib.suppress(ProcessLookupError):
+                            os.kill(int(driver_file.read_text()), signal.SIGKILL)
 
     def gh1002_driver(self, child_source, pidfile, timeout=30):
         driver = subprocess.Popen(
