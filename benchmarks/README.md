@@ -935,7 +935,8 @@ single-threaded segments that sum to the serial step
   `--ocannl_no_config_file=true` from a directory of its own, and reads back the library's
   resolved-configuration records (`--ocannl_log_config_json=true`, one JSON line per setting on
   stderr, read by `benchmarks/config_records.py`; gh-ocannl-1566): a cell fails if any setting came
-  from the environment or a config file, the run fails if two cells of one arm resolved a setting differently, and the report lists
+  from the environment or a config file, the run fails on within-arm configuration drift (see
+  `cells.py` below), and the report lists
   every resolved setting and what the arms differ by. Arms are named argument sets
   (`--arm rn6=--rn=6`), visited as whole processes round by round in `Bench_design`'s spread
   mirrored rotation, each cell a supervised process group under `--cell-timeout`; the report pairs
@@ -962,7 +963,14 @@ single-threaded segments that sum to the serial step
 - `cells.py` — the shared cell runner under `bin_cells.py` and `ab.py` (gh-ocannl-1565): the
   hermetic environment, the resolved-configuration check, `cell_group` supervision, `Bench_design`'s
   visiting order, the cell loop and the paired sign test, so a new driver imports them rather than
-  re-deriving them (`gh834_cells.sh` took ten review rounds of exactly that machinery).
+  re-deriving them (`gh834_cells.sh` took ten review rounds of exactly that machinery). Within an
+  arm, `consistency_check` compares resolved values wherever cells read a key (two different values
+  always fail the run) and splits one-sided reads -- read in some cells of the arm and not others,
+  every reading cell agreeing on one value -- by `Utils.config_key_classification` (read from
+  `test/operations/digest_completeness.expected`, gh-ocannl-2408): `execution-neutral` keys (such as
+  `ocannl_autotune_log`) are listed in the report as informational (`consistency_notes`), while
+  result-changing classes and unclassified keys (fail-closed) stay refusals naming the key's class
+  and fix.
 - `ab.py` — the two-revision A/B driver (gh-ocannl-1443): `python3 benchmarks/ab.py BASE HEAD
   --target bin/narrow_gebp_bench.exe --backend cc --out DIR --rounds 12 -- f16 512 20` builds the
   dune target once per revision, each in a detached worktree of its own under DIR (removed once its

@@ -54,6 +54,8 @@
   fixtures/DIGESTS.txt
   ../ocannl_config.reference
   ../test/operations/bench_result_line.expected
+  ; cells.py reads Utils.config_key_classification from this golden (gh-ocannl-2408).
+  ../test/operations/digest_completeness.expected
   ; The bench-line reader scan (test/test_bench_line_scan.py, gh-ocannl-1767) holds
   ; bench_output.FORMATS to the sources that print each format, and test_cells.py's
   ; ProgressCommandTest holds bench_output.PROGRESS_PREFIXES the same way (gh-ocannl-2378).

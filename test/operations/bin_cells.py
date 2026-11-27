@@ -140,11 +140,33 @@ claim("two cells of one arm resolving a setting differently are reported",
           {"arm": "b", "cell": 1, "config": {"k": {"value": "2"}}},
           {"arm": "a", "cell": 2, "config": {"k": {"value": "3"}}}])
       == ["arm a: ocannl_k resolved differently -- '1' in cell(s) 0; '3' in cell(s) 2"])
-claim("a setting read in some cells of an arm and not in others is reported",
+claim("an execution-neutral setting read in only some cells of an arm is informational",
+      bc.consistency_problems([
+          {"arm": "a", "cell": 0, "config": {"backend": {"value": "cc"},
+                                             "autotune_log": {"value": "false"}}},
+          {"arm": "a", "cell": 1, "config": {"backend": {"value": "cc"}}}]) == []
+      and bc.consistency_notes([
+          {"arm": "a", "cell": 0, "config": {"backend": {"value": "cc"},
+                                             "autotune_log": {"value": "false"}}},
+          {"arm": "a", "cell": 1, "config": {"backend": {"value": "cc"}}}])
+      == ["arm a: ocannl_autotune_log (execution-neutral) read in some cells only -- "
+          "'false' in cell(s) 0; not read in cell(s) 1"])
+claim("a result-changing or unclassified setting read in only some cells of an arm is reported",
       bc.consistency_problems([
           {"arm": "a", "cell": 0, "config": {"k": {"value": "1"}}},
-          {"arm": "a", "cell": 1, "config": {"k": {"value": "1"}, "late": {"value": "x"}}}])
-      == ["arm a: ocannl_late resolved differently -- not read in cell(s) 0; 'x' in cell(s) 1"])
+          {"arm": "a", "cell": 1, "config": {"k": {"value": "1"},
+                                             "autotune_timing": {"value": "queued"},
+                                             "late": {"value": "x"}}}])
+      == [
+          "arm a: ocannl_autotune_timing resolved differently (keyed: timing) -- "
+          "not read in cell(s) 0; 'queued' in cell(s) 1 "
+          "(check why the arm's cells took different paths, or reclassify as Execution_neutral in "
+          "Utils.config_key_classification if it changes no result)",
+          "arm a: ocannl_late resolved differently (unclassified) -- "
+          "not read in cell(s) 0; 'x' in cell(s) 1 "
+          "(check why the arm's cells took different paths, or classify in "
+          "Utils.config_key_classification and refresh "
+          "test/operations/digest_completeness.expected)"])
 CHK = ',"check":"passed","check_note":""}'
 claim("a well-formed result line is read with its check",
       bc.parse_results('bench-result: {"variant":"v","seconds":0.5' + CHK)
