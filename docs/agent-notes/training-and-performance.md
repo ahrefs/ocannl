@@ -523,8 +523,23 @@ files.
   (b) the `kernels` line's `shl=` lists the excess whether or not a rate priced it, so one listing
   re-scores at any rate, but the lane width moves the fill and needs a listing per width
   (`FILL_LANE_WIDTH=W`); (c) the unified HIP class and Metal are unmeasured, `None`.
-  Residuals: rog's 16-thread blocks measure 0.52 against 0.59 (likely the
-  per-multiprocessor block cap, not modeled); the plain, under-filled pairs stay gh-ocannl-1639's.
+  Residuals: rog's 16-thread blocks measure 0.49-0.52 against 0.59 on `outproj`/`qkv`, and
+  0.86 on `wgrad_b8`. The per-multiprocessor resident-block cap is NOT the cause (gh-ocannl-2350,
+  exclusive rog RTX 5070 Ti sm_120 window, `max_blocks_per_mp = 24`, `max_threads_per_mp = 1536`):
+  the verbatim `outproj_b256` `16x16x8/4x4 bgrid` kernel is flat from 24 down to 11 blocks/SM
+  (2.099 -> 2.112 ms, +0.6%), slowing only below 8 warps/SM (`fill_threads = 256`), and adding
+  physical `max_blocks_per_mp = 24` to `Cost_model.occupancy` overshoots (0.148 stacked or 0.296
+  warp-rounded / against `nolane`) and lowers agreement (`outproj_b256` 90.3% -> 88.6%/89.9%,
+  `qkv_b8` 100.0% -> 97.5%; warp-rounded against `nolane` reproduces 0.592 while mispricing
+  unsaturated 16-thread blocks). The actual gap is `Schedule.Stage`'s non-cooperative copy folding
+  (`divide`: `List.last` of unfolded loops divisible by `w`): for `16x16x8/4x4` (`w = 4`) it
+  partitions `j_t(4)` rather than `k_i(8)` across `i_w`, giving 16-row strided reads on `w[N, K]`
+  (`outproj`/`qkv`; coalescing only that copy at the same 16 threads and 24-block cap cuts runtime
+  2.099 -> 1.401 ms, 1.50x, moving `2x2/4x4` to 0.781) while making `x[K, N]` contiguous on
+  `wgrad_b8` (0.859); `memory_transactions` reports 0 excess sectors because contiguous serial-run
+  folding collapses each thread's 8 serial `K` reads into one 32-byte sector span, matching the
+  compact baseline and hiding the per-instruction coalescing cost. The plain, under-filled pairs
+  stay gh-ocannl-1639's.
   The `noshl`/`nolane` arms of `gh1253_cells.sh` are the references.
 - **Compare a plan and its rivals in ONE kernel decomposition** (gh-ocannl-1477). The ranking score
   sums `max(compute, memory)` per kernel, so a memory-bound kernel run on its own (the seeded plan's
