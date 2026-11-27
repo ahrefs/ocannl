@@ -609,6 +609,9 @@ val privatize : accum_prec:(Ops.prec -> Ops.prec) -> target:Tn.t -> over:Indexin
     the serial rendering's accumulator by — so the privatized reduction's width is the policy's, not
     the schedule's (gh-ocannl-1116). *)
 
+val is_privatize_index_vectors_refusal : Schedule_outcome.rejection_key -> bool
+(** Identifies the two-index-vector refusal independently of the sampled diagnostic details. *)
+
 val privatize_index_vectors_refusal : Tn.t -> string
 (** The detail of [Privatize]'s v1 refusal of [target]: under the accumulation loop it is accessed
     at more than one index vector. Unlike [Stage]'s (gh-ocannl-1147), this refusal is not relaxed:

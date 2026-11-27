@@ -766,7 +766,9 @@ files.
   `report.privatize_drops` (gh-ocannl-1438), aggregated by cause like `declines` but kept out of it:
   a drop costs a proposal inside a candidate that still compiles, and counting it there would break
   `declines`' sum to `candidates_failed`. `Autotune.privatize_extension` returns the drops for
-  segments no search compiles, and `privatize_census` is the tripwire that says when a workload
+  segments no search compiles. `privatize_census` reads the real search's drops by the
+  `privatize_index_vectors` rejection key, which survives the per-key detail sample. Its exhaustive
+  sketch walk remains separate because a tuner can prune sketches. The census says when a workload
   needs the relaxation. Nothing in the corpus reaches a real refusal on cc, so
   `test/operations/autotune_report_drops` injects one through `Autotune.on_privatize_proposal`,
   which raises inside the extension's refusal boundary.
