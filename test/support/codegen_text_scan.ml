@@ -319,6 +319,9 @@ let longident_of expr =
     report an empty census. *)
 let structure_of content = Parse.implementation (Lexing.from_string content)
 
+(** Raises if [content] does not parse as an OCaml interface. *)
+let interface_of content = Parse.interface (Lexing.from_string content)
+
 let path_ends path ~name = match List.last path with Some n -> String.equal n name | None -> false
 
 (** Every unqualified identifier occurring in [expr]: the names taint can travel along. *)
@@ -393,11 +396,13 @@ type emitter = {
     the interfaces record [compile_proc]), and a qualifier the file does not bind is the library
     module of that name. A qualifier the scan cannot see into -- a functor parameter, a [struct], an
     unpack -- keeps the name-only match, since a miss here costs a silent omission and a name too
-    many an inventory line. The boundary: a module alias another file defines and this one [open]s
-    is read as a module of that name, as for every attribution here ([Generated], [Utils]). A
-    qualifier is required either way, so a test's own [to_doc] is not swept in; and what a qualifier
-    cannot survive is an [open], which is why {!rejections} refuses that spelling outright instead
-    of guessing. *)
+    many an inventory line. A module alias exported by a support module in the hand-over (such as
+    [module LL = Ir.Low_level] in [Ll_builders], re-exported by [Ll_test]'s [include]) is derived by
+    {!support_module_aliases} and resolved both through [open]/[include] and through dotted paths
+    ([Ll_builders.LL.to_doc]) (gh-ocannl-2178); see {!support_module_aliases} for the closed set of
+    recognised forms and its boundary. A qualifier is required either way, so a test's own [to_doc]
+    is not swept in; and what a qualifier cannot survive is an [open], which is why {!rejections}
+    refuses that spelling outright instead of guessing. *)
 
 (* -------------------------------------------------------------- lexical scope *)
 
@@ -414,6 +419,224 @@ type emitter = {
     [B.contents] does not fire, and a backstop that fails silently is worse than none (Codex rounds
     4 and 5 on lukstafi/ocannl-staging#487). *)
 type module_denotes = Named of string | Opaque
+
+let equal_module_denotes a b =
+  match (a, b) with
+  | Named a, Named b -> String.equal a b
+  | Opaque, Opaque -> true
+  | Named _, Opaque | Opaque, Named _ -> false
+
+type support_module = {
+  support_name : string;
+  support_contents : string;
+  support_interface : string option;
+}
+(** A library-owned support module handed to {!support_module_aliases}, with its optional sibling
+    [.mli] interface. *)
+
+type support_aliases = module_denotes Map.M(String).t Map.M(String).t
+(** Top-level module bindings exported by each support module, keyed by support module name then
+    exported submodule name. *)
+
+let empty_support_aliases : support_aliases = Map.empty (module String)
+
+let rec resolve_module_path ~(aliases : support_aliases) modules = function
+  | Longident.Lident name -> (
+      match Map.find modules name with Some denotes -> Some denotes | None -> Some (Named name))
+  | Longident.Ldot (prefix, sub) -> (
+      match resolve_module_path ~aliases modules prefix with
+      | Some Opaque -> Some Opaque
+      | Some (Named owner) -> (
+          match Option.bind (Map.find aliases owner) ~f:(fun m -> Map.find m sub) with
+          | Some denotes -> Some denotes
+          | None -> Some (Named sub))
+      | None -> Some (Named sub))
+  | Longident.Lapply _ -> Some Opaque
+
+let rec resolve_module_expr ~(aliases : support_aliases) modules me =
+  match me.pmod_desc with
+  | Pmod_constraint (inner, _) -> resolve_module_expr ~aliases modules inner
+  | Pmod_apply (functor_, _) | Pmod_apply_unit functor_ ->
+      resolve_module_expr ~aliases modules functor_
+  | Pmod_ident { txt; _ } -> resolve_module_path ~aliases modules txt
+  | _ -> Some Opaque
+
+let rec peel_module_constraint me =
+  match me.pmod_desc with Pmod_constraint (inner, _) -> peel_module_constraint inner | _ -> me
+
+let merge_modules base overlay =
+  Map.merge_skewed base overlay ~combine:(fun ~key:_ _ later -> later)
+
+(** Derives each support module's exported top-level module bindings from the handed-over library
+    sources, closed to a fixed point across [include]s and cross-module aliases (gh-ocannl-2178).
+
+    {2 Recognised forms (closed)}
+
+    - Top-level [module M = <expr>] ([Pstr_module] with a named module):
+    - module path alias ([Pmod_ident]), signature-constrained expression ([Pmod_constraint]), and
+      functor application ([Pmod_apply] / [Pmod_apply_unit]) resolve through the module's current
+      lexical scope and the other support modules' exported aliases;
+    - inline structure ([Pmod_structure]) exports [M -> Named M], preserving submodule identity
+      (such as [Verdict.Claims]) while shadowing any earlier [include]d alias of the same name;
+    - any other module expression ([Pmod_functor], [Pmod_unpack], [Pmod_extension]) and
+      [Pstr_recmodule] declarations export [Opaque].
+    - Top-level [include <expr>] ([Pstr_include]): when [<expr>] resolves to a support module in the
+      hand-over, its exported module bindings merge into both the module's internal scope and its
+      exports (later definitions overwrite earlier ones).
+    - Top-level [open <expr>] ([Pstr_open]): when [<expr>] resolves to a support module in the
+      hand-over, its exported module bindings merge into the module's internal scope only, never
+      into its exports.
+    - Sibling [.mli] interface (when provided): [Psig_module] with [Pmty_alias] or [Pmty_typeof]
+      exports the resolved denotation; any other [Psig_module] or [Psig_recmodule] keeps the
+      implementation's denotation for that name (or [Named name] for [Pmty_signature], else
+      [Opaque]); [Psig_open] and [Psig_modsubst] update the signature's internal scope without
+      exporting; [Psig_include] of [Pmty_signature] or a support module's [Pmty_typeof] is followed,
+      while any other [Psig_include] conservatively retains the implementation's exported bindings.
+      Without an opaque [Psig_include], implementation bindings absent from the [.mli] are hidden.
+    - Duplicate support module names (such as [(select)] arms) merge order-independently: matching
+      denotations stay intact and disagreements become [Opaque].
+
+    {2 Boundary (deliberately excluded)}
+
+    - Module aliases nested inside a [module Sub = struct ... end] (only top-level exports are
+      tracked).
+    - Local [open struct ... end] items and [include] of non-support modules or inline structures.
+    - Named external module types in [Psig_include] (handled conservatively by keeping the [.ml]'s
+      exports).
+
+    Raises if any source or interface does not parse. *)
+let support_module_aliases (modules : support_module list) : support_aliases =
+  let parsed =
+    List.map modules ~f:(fun m ->
+        ( m.support_name,
+          structure_of m.support_contents,
+          Option.map m.support_interface ~f:interface_of ))
+  in
+  let empty = Map.empty (module String) in
+  let export_of_module_expr ~aliases scope_modules ~name me =
+    match (peel_module_constraint me).pmod_desc with
+    | Pmod_ident _ | Pmod_apply _ | Pmod_apply_unit _ ->
+        Option.value (resolve_module_expr ~aliases scope_modules me) ~default:Opaque
+    | Pmod_structure _ -> Named name
+    | Pmod_functor _ | Pmod_unpack _ | Pmod_extension _ -> Opaque
+    | Pmod_constraint _ -> Opaque
+  in
+  let exports_of_structure ~aliases structure =
+    let _scope, exported =
+      List.fold structure ~init:(empty, empty) ~f:(fun (scope_modules, exported) item ->
+          match item.pstr_desc with
+          | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
+              let denotes = export_of_module_expr ~aliases scope_modules ~name pmb_expr in
+              ( Map.set scope_modules ~key:name ~data:denotes,
+                Map.set exported ~key:name ~data:denotes )
+          | Pstr_recmodule mbs ->
+              let names = List.filter_map mbs ~f:(fun mb -> mb.pmb_name.txt) in
+              let add map =
+                List.fold names ~init:map ~f:(fun m name -> Map.set m ~key:name ~data:Opaque)
+              in
+              (add scope_modules, add exported)
+          | Pstr_include { pincl_mod; _ } -> (
+              match resolve_module_expr ~aliases scope_modules pincl_mod with
+              | Some (Named target) -> (
+                  match Map.find aliases target with
+                  | Some included ->
+                      (merge_modules scope_modules included, merge_modules exported included)
+                  | None -> (scope_modules, exported))
+              | Some Opaque | None -> (scope_modules, exported))
+          | Pstr_open { popen_expr; _ } -> (
+              match resolve_module_expr ~aliases scope_modules popen_expr with
+              | Some (Named target) -> (
+                  match Map.find aliases target with
+                  | Some opened -> (merge_modules scope_modules opened, exported)
+                  | None -> (scope_modules, exported))
+              | Some Opaque | None -> (scope_modules, exported))
+          | _ -> (scope_modules, exported))
+    in
+    exported
+  in
+  let filter_by_interface ~aliases impl_exports signature =
+    let rec walk (sig_scope, sig_exports, has_opaque_include) items =
+      List.fold items ~init:(sig_scope, sig_exports, has_opaque_include)
+        ~f:(fun (sig_scope, sig_exports, has_opaque_include) item ->
+          match item.psig_desc with
+          | Psig_open { popen_expr = { txt; _ }; _ } -> (
+              match resolve_module_path ~aliases sig_scope txt with
+              | Some (Named target) -> (
+                  match Map.find aliases target with
+                  | Some opened -> (merge_modules sig_scope opened, sig_exports, has_opaque_include)
+                  | None -> (sig_scope, sig_exports, has_opaque_include))
+              | Some Opaque | None -> (sig_scope, sig_exports, has_opaque_include))
+          | Psig_modsubst { pms_name = { txt = name; _ }; pms_manifest = { txt; _ }; _ } ->
+              let denotes =
+                Option.value (resolve_module_path ~aliases sig_scope txt) ~default:Opaque
+              in
+              (Map.set sig_scope ~key:name ~data:denotes, sig_exports, has_opaque_include)
+          | Psig_module { pmd_name = { txt = Some name; _ }; pmd_type; _ } ->
+              let denotes =
+                match pmd_type.pmty_desc with
+                | Pmty_alias { txt; _ } ->
+                    Option.value (resolve_module_path ~aliases sig_scope txt) ~default:Opaque
+                | Pmty_typeof me -> export_of_module_expr ~aliases sig_scope ~name me
+                | Pmty_signature _ ->
+                    Option.value (Map.find impl_exports name) ~default:(Named name)
+                | _ -> Option.value (Map.find impl_exports name) ~default:Opaque
+              in
+              ( Map.set sig_scope ~key:name ~data:denotes,
+                Map.set sig_exports ~key:name ~data:denotes,
+                has_opaque_include )
+          | Psig_recmodule decls ->
+              let names = List.filter_map decls ~f:(fun d -> d.pmd_name.txt) in
+              let add map =
+                List.fold names ~init:map ~f:(fun m name ->
+                    let denotes = Option.value (Map.find impl_exports name) ~default:Opaque in
+                    Map.set m ~key:name ~data:denotes)
+              in
+              (add sig_scope, add sig_exports, has_opaque_include)
+          | Psig_include { pincl_mod; _ } -> (
+              match pincl_mod.pmty_desc with
+              | Pmty_signature nested -> walk (sig_scope, sig_exports, has_opaque_include) nested
+              | Pmty_typeof me -> (
+                  match resolve_module_expr ~aliases sig_scope me with
+                  | Some (Named target) -> (
+                      match Map.find aliases target with
+                      | Some included ->
+                          ( merge_modules sig_scope included,
+                            merge_modules sig_exports included,
+                            has_opaque_include )
+                      | None -> (sig_scope, sig_exports, true))
+                  | Some Opaque | None -> (sig_scope, sig_exports, true))
+              | _ -> (sig_scope, sig_exports, true))
+          | _ -> (sig_scope, sig_exports, has_opaque_include))
+    in
+    let _scope, sig_exports, has_opaque_include = walk (empty, empty, false) signature in
+    if has_opaque_include then merge_modules impl_exports sig_exports else sig_exports
+  in
+  let combine_exports a b =
+    Map.merge_skewed a b ~combine:(fun ~key:_ x y -> if equal_module_denotes x y then x else Opaque)
+  in
+  let step aliases =
+    List.fold parsed ~init:empty_support_aliases ~f:(fun acc (name, structure, signature) ->
+        let impl_exports = exports_of_structure ~aliases structure in
+        let exported =
+          match signature with
+          | None -> impl_exports
+          | Some signature -> filter_by_interface ~aliases impl_exports signature
+        in
+        if Map.is_empty exported then acc
+        else
+          Map.update acc name ~f:(function
+            | None -> exported
+            | Some existing -> combine_exports existing exported))
+  in
+  let equal_aliases = Map.equal (Map.equal equal_module_denotes) in
+  let max_rounds = Int.max 1 (List.length parsed + 1) in
+  let rec close round aliases =
+    if round >= max_rounds then aliases
+    else
+      let next = step aliases in
+      if equal_aliases next aliases then next else close (round + 1) next
+  in
+  close 0 empty_support_aliases
 
 (** What an unqualified value name denotes where it is spelled: the string a [let] binds it to
     directly, a name an [open] of an attributed module made unqualified ({!rejections}), a support
@@ -471,20 +694,14 @@ let hidden_names ~emitters target =
     qualified call resolves through its qualifier as any other, and a bare name under an [open] of
     the helper's module denotes the helper ([Opened_helper]) rather than being refused, since the
     call is attributed either way (gh-ocannl-1772). *)
-let scope_of ~emitters ?(helpers = []) structure =
+let scope_of ~emitters ?(helpers = []) ?(support_aliases = empty_support_aliases) structure =
   let qualifiers = Hashtbl.Poly.create () and values = Hashtbl.Poly.create () in
   let resolver =
     object (self)
       inherit [value_denotes, module_denotes] Lexical_scope.scoped as super
       method local = Bound
       method! shadowed = Some Opaque
-
-      method module_path env path =
-        match (path, Map.find env.modules (Lexical_scope.head path)) with
-        | _, Some Opaque -> Some Opaque
-        | Longident.Lident _, Some (Named target) -> Some (Named target)
-        | (Lident last | Ldot (_, last)), _ -> Some (Named last)
-        | Lapply _, _ -> Some Opaque
+      method module_path env path = resolve_module_path ~aliases:support_aliases env.modules path
 
       method! module_of env module_expr =
         match module_expr.pmod_desc with
@@ -502,6 +719,11 @@ let scope_of ~emitters ?(helpers = []) structure =
       method! opened ~top:_ ~include_:_ env denoted =
         match denoted with
         | Some (Named target) -> (
+            let env =
+              match Map.find support_aliases target with
+              | None -> env
+              | Some exported -> { env with modules = merge_modules env.modules exported }
+            in
             let hidden =
               List.map (hidden_names ~emitters target) ~f:(fun name ->
                   (name, Hidden { opened = target; name }))
@@ -1921,8 +2143,8 @@ let render_pin = function
     lukstafi/ocannl-staging#487, then gh-ocannl-1079).
 
     Raises if [contents] does not parse. *)
-let rejections ~emitters ~path ~contents =
-  let scope = scope_of ~emitters (structure_of contents) in
+let rejections ~emitters ~support_aliases ~path ~contents =
+  let scope = scope_of ~emitters ~support_aliases (structure_of contents) in
   Hashtbl.data scope.values
   |> List.filter_map ~f:(function
     | Hidden { opened; name } -> Some (opened, name)
@@ -2042,9 +2264,9 @@ let top_level_values_with_rhs structure =
     these names is [helper_partial].
 
     Raises if [contents] does not parse. *)
-let helper_predicates ~emitters ~module_name ~path ~contents =
+let helper_predicates ~emitters ~support_aliases ~module_name ~path ~contents =
   let structure = structure_of contents in
-  let scope = scope_of ~emitters structure in
+  let scope = scope_of ~emitters ~support_aliases structure in
   let fields = record_field_fragments scope structure in
   let top = top_level_values_with_rhs structure in
   let analyse (name, rhs) =
@@ -2200,7 +2422,7 @@ let helper_predicates ~emitters ~module_name ~path ~contents =
     caller's qualifier.
 
     Raises if [contents] does not parse. *)
-let classify_source ~emitters ~helpers ~path ~contents =
+let classify_source ~emitters ~helpers ~support_aliases ~path ~contents =
   let structure = structure_of contents in
   (* Every qualifier and every literal-bound name resolved where it is spelled: [Generated] and
      [Utils] for the artifact readers, and [Buffer] for the backstop below -- [module B = Buffer]
@@ -2208,7 +2430,7 @@ let classify_source ~emitters ~helpers ~path ~contents =
   let scope =
     scope_of ~emitters
       ~helpers:(List.filter_map helpers ~f:(fun h -> String.lsplit2 h.helper_key ~on:'.'))
-      structure
+      ~support_aliases structure
   in
   (* The helper a callee names: through its qualifier, or -- a bare name -- the open that brought
      the helper's module in. *)

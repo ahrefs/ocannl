@@ -4085,6 +4085,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   otherwise miss. Membership, taint, the buffer destinations and the pin walk all go through
   the one resolver: rules that know different routes are how a file stays listed while its pin
   disappears.
+- **Module aliases exported by support modules are derived too** (gh-ocannl-2178): support modules
+  such as `Ll_builders` and `Lowering_fingerprint` export `module LL = Ir.Low_level`, and `Ll_test`
+  re-exports it through `include Ll_builders`. `Codegen_text_scan.support_module_aliases` derives
+  each library-owned support module's top-level module bindings to a fixed point across `include`s
+  and `open`s, filtered by any sibling `.mli` (keeping `.ml` exports conservatively on an opaque
+  `include` in `.mli`), so `scope_of` resolves aliases reached via `open`/`include` or dotted paths
+  (`Ll_builders.LL.to_doc`) for attribution and `rejections` alike. Nested module aliases inside
+  `module Sub = struct ... end` and local `open struct ... end` stay outside its closed boundary.
 - **Module aliases and literal `let`s resolve by lexical scope** (gh-ocannl-1079), over
   `Lexical_scope`, the model `ll_test_scan` resolves over too: a qualifier or a fragment's name
   reaches the binding in scope where it is spelled. File-wide lookup failed silently both ways:

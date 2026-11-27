@@ -532,8 +532,8 @@ let refusal_control ~wrapper =
   in
   refuse_direct_reads ~fail
     (Option.to_list
-       (Scan.classify_source ~emitters:[] ~helpers:[] ~path:"test/direct.ml"
-          ~contents:direct_fixture));
+       (Scan.classify_source ~emitters:[] ~helpers:[] ~support_aliases:Scan.empty_support_aliases
+          ~path:"test/direct.ml" ~contents:direct_fixture));
   Verdict.p "a test reading build_files/ itself reaches the direct-read refusal" !direct_refused;
   (* gh-ocannl-1708: the after-marker refusal, on the reader test_uniform_virtual_lane had before
      gh-ocannl-1678 -- a substr_index on the banner, then a slice -- classified by the scan's own
@@ -549,8 +549,8 @@ let refusal_control ~wrapper =
   in
   let after_marker_sites =
     Option.to_list
-      (Scan.classify_source ~emitters:[] ~helpers:[] ~path:"test/after_marker.ml"
-         ~contents:after_marker_fixture)
+      (Scan.classify_source ~emitters:[] ~helpers:[] ~support_aliases:Scan.empty_support_aliases
+         ~path:"test/after_marker.ml" ~contents:after_marker_fixture)
   in
   let after_refused = ref false in
   let fail _message =
@@ -583,8 +583,8 @@ let refusal_control ~wrapper =
     stale_after_marker_exemptions
       ~exempt:[ ("test/direct.ml", "fixture"); ("test/after_marker.ml", "fixture") ]
       (Option.to_list
-         (Scan.classify_source ~emitters:[] ~helpers:[] ~path:"test/direct.ml"
-            ~contents:direct_fixture)
+         (Scan.classify_source ~emitters:[] ~helpers:[] ~support_aliases:Scan.empty_support_aliases
+            ~path:"test/direct.ml" ~contents:direct_fixture)
       @ after_marker_sites)
   in
   refuse_stale_after_marker_exemptions ~fail stale;
@@ -736,18 +736,65 @@ let () =
   let unparsed = ref [] in
   let raised = ref [] in
   let rejected = ref [] in
+  (* gh-ocannl-2178: top-level module aliases exported by the support modules -- [module LL =
+     Ir.Low_level] in [Ll_builders], re-exported by [Ll_test]'s [include], filtered by a sibling
+     [.mli] when present -- so an emitter or reader call spelled through an [open] or dotted path of
+     a support module resolves to the target module rather than dropping silently. *)
+  let mli_by_path =
+    of_suffix ".mli" |> Map.of_alist_reduce (module String) ~f:(fun first _ -> first)
+  in
+  let support_files =
+    List.filter (harness_only_ml @ source_files) ~f:(fun (name, _) ->
+        Rerun.owned_by_library stanzas ~path:name && not (is_excluded name))
+  in
+  let support_modules =
+    List.filter_map support_files ~f:(fun (name, on_disk) ->
+        let contents = read on_disk in
+        match Attempt.run (fun () -> ignore (Scan.structure_of contents)) with
+        | Attempt.Unparsed _ -> None
+        | Attempt.Raised exn ->
+            raised := (name, exn) :: !raised;
+            None
+        | Attempt.Scanned () ->
+            let support_interface =
+              Option.bind (String.chop_suffix name ~suffix:".ml") ~f:(fun stem ->
+                  let mli_name = stem ^ ".mli" in
+                  Option.bind (Map.find mli_by_path mli_name) ~f:(fun mli_on_disk ->
+                      let mli_contents = read mli_on_disk in
+                      match Attempt.run (fun () -> ignore (Scan.interface_of mli_contents)) with
+                      | Attempt.Scanned () -> Some mli_contents
+                      | Attempt.Unparsed _ ->
+                          unparsed := mli_name :: !unparsed;
+                          None
+                      | Attempt.Raised exn ->
+                          raised := (mli_name, exn) :: !raised;
+                          None))
+            in
+            Some
+              {
+                Scan.support_name = Exec.module_name_of_path name;
+                support_contents = contents;
+                support_interface;
+              })
+  in
+  let support_aliases =
+    match Attempt.run (fun () -> Scan.support_module_aliases support_modules) with
+    | Attempt.Scanned aliases -> aliases
+    | Attempt.Unparsed _ -> Scan.empty_support_aliases
+    | Attempt.Raised exn ->
+        raised := ("support_module_aliases", exn) :: !raised;
+        Scan.empty_support_aliases
+  in
   (* gh-ocannl-1772: the support helpers testing a text they are handed, derived from every support
      module -- a module some [(library)] stanza owns, or a runner library's -- before the census,
      which judges each call of one by its caller's provenance. A module that does not parse is
      reported by the census (a test-root source) or by the harness derivation below. *)
   let helpers =
-    List.filter (harness_only_ml @ source_files) ~f:(fun (name, _) ->
-        Rerun.owned_by_library stanzas ~path:name && not (is_excluded name))
-    |> List.concat_map ~f:(fun (name, on_disk) ->
+    List.concat_map support_files ~f:(fun (name, on_disk) ->
         match
           Attempt.run (fun () ->
-              Scan.helper_predicates ~emitters ~module_name:(Exec.module_name_of_path name)
-                ~path:name ~contents:(read on_disk))
+              Scan.helper_predicates ~emitters ~support_aliases
+                ~module_name:(Exec.module_name_of_path name) ~path:name ~contents:(read on_disk))
         with
         | Attempt.Scanned helpers -> helpers
         | Attempt.Unparsed _ -> []
@@ -762,8 +809,8 @@ let () =
           let contents = read on_disk in
           match
             Attempt.run (fun () ->
-                ( Scan.rejections ~emitters ~path:name ~contents,
-                  Scan.classify_source ~emitters ~helpers ~path:name ~contents ))
+                ( Scan.rejections ~emitters ~support_aliases ~path:name ~contents,
+                  Scan.classify_source ~emitters ~helpers ~support_aliases ~path:name ~contents ))
           with
           | Attempt.Scanned (rejections, site) ->
               rejected := rejections @ !rejected;

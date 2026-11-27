@@ -211,7 +211,8 @@ let lines src = String.split_lines src
 let names_metal backend = String.is_substring backend ~substring:"metal"|}
 
 let helpers =
-  Scan.helper_predicates ~emitters ~module_name:"Kit" ~path:"t/kit.ml" ~contents:helper_module
+  Scan.helper_predicates ~emitters ~support_aliases:Scan.empty_support_aliases ~module_name:"Kit"
+    ~path:"t/kit.ml" ~contents:helper_module
 
 let render_destination = function
   | Scan.At_label label -> "~" ^ label
@@ -280,6 +281,216 @@ let () = p "b" (K.has_barrier (Generated.read "r"))|ocaml},
       {ocaml|let has_barrier s = String.length s > 0
 let () = p "b" (has_barrier (Generated.read "r"))|ocaml},
       "" );
+  ]
+
+(** Support-module top-level aliases derived by {!Scan.support_module_aliases} (gh-ocannl-2178).
+    [Ll_test] is placed BEFORE [Ll_builders] to pin order-independence of the fixed-point closure
+    over [include]. *)
+let support_modules : Scan.support_module list =
+  [
+    {
+      Scan.support_name = "Ll_test";
+      support_contents = {|include Ll_builders
+module Syntax = Ir.C_syntax.C_syntax (Cfg)|};
+      support_interface = None;
+    };
+    {
+      Scan.support_name = "Ll_builders";
+      support_contents =
+        {|module LL = Ir.Low_level
+module CR = LL.Canonical_render
+module G = Test_utils.Generated
+module U = Utils
+module Claims = struct let x = 1 end|};
+      support_interface = None;
+    };
+    {
+      Scan.support_name = "Ll_opener";
+      support_contents = {|open Ll_builders
+module My_LL = LL|};
+      support_interface = None;
+    };
+    {
+      Scan.support_name = "Ll_shadower";
+      support_contents = {|include Ll_builders
+module LL = struct let to_doc x = x end|};
+      support_interface = None;
+    };
+    {
+      Scan.support_name = "Hidden_sig";
+      support_contents = {|module LL = Ir.Low_level
+module G = Other_reader|};
+      support_interface = Some {|val run : unit -> unit|};
+    };
+    {
+      Scan.support_name = "Exported_sig";
+      support_contents =
+        {|module LL = Ir.Low_level
+module CR = Ir.Low_level.Canonical_render
+module G = Test_utils.Generated|};
+      support_interface = Some {|module LL = Ir.Low_level
+module CR : sig val emit : unit end|};
+    };
+    {
+      Scan.support_name = "Include_sig";
+      support_contents = {|module LL = Ir.Low_level|};
+      support_interface = Some {|include Some_sig|};
+    };
+  ]
+
+let support_aliases = Scan.support_module_aliases support_modules
+
+let render_support_aliases aliases =
+  Map.to_alist aliases
+  |> List.map ~f:(fun (owner, exported) ->
+      let entries =
+        Map.to_alist exported
+        |> List.map ~f:(fun (name, denotes) ->
+            match denotes with
+            | Scan.Named target -> name ^ "->" ^ target
+            | Scan.Opaque -> name ^ "->?")
+      in
+      owner ^ " [" ^ String.concat ~sep:", " entries ^ "]")
+
+let support_alias_frontier_expected =
+  [
+    "Exported_sig [CR->Canonical_render, LL->Low_level]";
+    "Include_sig [LL->Low_level]";
+    "Ll_builders [CR->Canonical_render, Claims->Claims, G->Generated, LL->Low_level, U->Utils]";
+    "Ll_opener [My_LL->Low_level]";
+    "Ll_shadower [CR->Canonical_render, Claims->Claims, G->Generated, LL->LL, U->Utils]";
+    "Ll_test [CR->Canonical_render, Claims->Claims, G->Generated, LL->Low_level, Syntax->C_syntax, \
+     U->Utils]";
+  ]
+
+let support_alias_cases =
+  [
+    ( "an emitter called through an alias exported by an opened support module is recognized",
+      {ocaml|open Ll_builders
+let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (LL.to_doc () llc)|ocaml},
+      "+rendered" );
+    ( "an inline pin through an opened support module's emitter alias records its fragment",
+      {ocaml|open Ll_builders
+let () = p "radix" (String.is_substring (render (LL.to_doc () llc)) ~substring:"-0.0")|ocaml},
+      {|"-0.0" +rendered|} );
+    ( "an emitter alias re-exported through a support module's include is recognized",
+      {ocaml|open Ll_test
+let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (LL.to_doc () llc)|ocaml},
+      "+rendered" );
+    ( "a functor-application alias exported by a support module is recognized",
+      {ocaml|open Ll_test
+let () =
+  let doc = Syntax.compile_main ~name [] optimized in
+  p "guard" (String.is_substring (doc_to_string doc) ~substring:"? producer[")|ocaml},
+      {|"? producer[" +rendered|} );
+    ( "a buffer-writing emitter reached through an opened support alias seeds its buffer",
+      {ocaml|open Ll_builders
+let () =
+  let buf = Buffer.create 64 in
+  CR.emit ~buf policy llc;
+  p "free" (String.is_substring (Buffer.contents buf) ~substring:"s0")|ocaml},
+      {|"s0" +rendered|} );
+    ( "a local let open brings a support module's aliases into that body alone",
+      {ocaml|let rendered llc =
+  let open Ll_builders in
+  LL.to_doc () llc|ocaml},
+      "+rendered" );
+    ( "a support alias does not leak past a local let open",
+      {ocaml|let describe () =
+  let open Ll_builders in
+  ignore 1
+let () = ignore (LL.to_doc () other)|ocaml},
+      "none" );
+    ( "a dotted path through a support module resolves its exported alias without an open",
+      {ocaml|let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (Ll_builders.LL.to_doc () llc)|ocaml},
+      "+rendered" );
+    ( "a dotted path through a local alias of a support module resolves its exported alias",
+      {ocaml|module B = Ll_builders
+let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (B.LL.to_doc () llc)|ocaml},
+      "+rendered" );
+    ( "a shadowed support module name does not resolve the original support module's aliases",
+      {ocaml|module Ll_builders = Other_module
+let () = ignore (Ll_builders.LL.to_doc () other)|ocaml},
+      "none" );
+    ( "a local module binding shadows an alias brought in by an opened support module",
+      {ocaml|open Ll_builders
+module LL = Other_module
+let () = ignore (LL.to_doc () other)|ocaml},
+      "none" );
+    ( "an alias bound in a support module through an open is exported, while the opened one is not",
+      {ocaml|open Ll_opener
+let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (My_LL.to_doc () llc)|ocaml},
+      "+rendered" );
+    ( "an open inside a support module does not re-export the opened module's aliases",
+      {ocaml|open Ll_opener
+let () = ignore (LL.to_doc () other)|ocaml},
+      "none" );
+    ( "a support module redefining an included alias as a struct shadows it",
+      {ocaml|open Ll_shadower
+let () = ignore (LL.to_doc () other)|ocaml},
+      "none" );
+    ( "an alias hidden by a support module's .mli is not imported by open",
+      {ocaml|open Hidden_sig
+let () = ignore (LL.to_doc () other)|ocaml},
+      "none" );
+    ( "an alias hidden by a support module's .mli does not shadow a caller's own alias",
+      {ocaml|module G = Test_utils.Generated
+open Hidden_sig
+let () = G.assert_emits ~routine:"r" ~contains:"__shared__" "shared"|ocaml},
+      {|"__shared__"|} );
+    ( "aliases exported by a support module's .mli are imported, while unexported ones stay hidden",
+      {ocaml|open Exported_sig
+let () =
+  let buf = Buffer.create 64 in
+  CR.emit ~buf policy llc;
+  p "free" (String.is_substring (Buffer.contents buf) ~substring:"s0")|ocaml},
+      {|"s0" +rendered|} );
+    ( "an alias omitted from a support module's .mli stays hidden even when another is exported",
+      {ocaml|open Exported_sig
+let () = ignore (G.read "r")|ocaml},
+      "none" );
+    ( "a support module whose .mli has an opaque include conservatively keeps its .ml aliases",
+      {ocaml|open Include_sig
+let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (LL.to_doc () llc)|ocaml},
+      "+rendered" );
+    ( "a reader or direct artifact alias exported by an opened support module is attributed",
+      {ocaml|open Ll_builders
+let () =
+  G.assert_emits ~routine:"r" ~contains:"__shared__" "shared";
+  ignore (U.build_file "k.c")|ocaml},
+      {|"__shared__" +direct|} );
+  ]
+
+let support_alias_rejection_cases =
+  [
+    ( "calling an emitter qualified by an opened support alias is accepted",
+      {ocaml|open Ll_builders
+let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (LL.to_doc () llc)|ocaml},
+      0 );
+    ( "opening an emitter alias imported from an opened support module is refused",
+      {ocaml|open Ll_builders
+open LL
+let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (to_doc () llc)|ocaml},
+      1 );
+    ( "opening a support module's emitter alias by dotted path is refused",
+      {ocaml|open Ll_builders.LL
+let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (to_doc () llc)|ocaml},
+      1 );
+    ( "opening an emitter alias re-exported through a support module's include is refused",
+      {ocaml|open Ll_test
+open LL
+let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (to_doc () llc)|ocaml},
+      1 );
+    ( "opening a reader alias imported from an opened support module is refused",
+      {ocaml|open Ll_builders
+open G
+let () = ignore (read "r")|ocaml},
+      1 );
+    ( "opening a name hidden by a support module's .mli is not refused",
+      {ocaml|open Hidden_sig
+open LL
+let () = ignore (to_doc () other)|ocaml},
+      0 );
   ]
 
 let source_cases =
@@ -1615,7 +1826,11 @@ let association_cases =
     errors are the file's, anything else -- here {!Scan.boundaries_of}'s precondition, broken by a
     provenance no source can produce -- is reported as itself. *)
 let attempt_cases =
-  let parse source () = ignore (Scan.rejections ~emitters ~path:"case.ml" ~contents:source) in
+  let parse source () =
+    ignore
+      (Scan.rejections ~emitters ~support_aliases:Scan.empty_support_aliases ~path:"case.ml"
+         ~contents:source)
+  in
   [
     ( "a syntax error is the file's, with where the parser stopped",
       parse "let =\n",
@@ -1948,7 +2163,9 @@ let () =
   List.iter source_cases ~f:(fun (name, source, expected) ->
       let found =
         Attempt.attempted ~what:"source" ~name ~default:"<unscanned>" (fun () ->
-            render_site (Scan.classify_source ~emitters ~helpers ~path:"case.ml" ~contents:source))
+            render_site
+              (Scan.classify_source ~emitters ~helpers ~support_aliases:Scan.empty_support_aliases
+                 ~path:"case.ml" ~contents:source))
       in
       if String.equal (String.strip found) (String.strip expected) then
         printf "ok: source -- %s\n" name
@@ -1957,7 +2174,9 @@ let () =
       let expected = String.strip (pins ^ " +partial(" ^ Scan.boundary_tag boundary ^ ")") in
       let found =
         Attempt.attempted ~what:"boundary" ~name ~default:"<unscanned>" (fun () ->
-            render_site (Scan.classify_source ~emitters ~helpers ~path:"case.ml" ~contents:source))
+            render_site
+              (Scan.classify_source ~emitters ~helpers ~support_aliases:Scan.empty_support_aliases
+                 ~path:"case.ml" ~contents:source))
       in
       if String.equal (String.strip found) expected then printf "ok: boundary -- %s\n" name
       else fail "boundary -- %s: expected [%s], found [%s]" name expected found);
@@ -1988,11 +2207,40 @@ let () =
   List.iter helper_cases ~f:(fun (name, source, expected) ->
       let found =
         Attempt.attempted ~what:"helper" ~name ~default:"<unscanned>" (fun () ->
-            render_site (Scan.classify_source ~emitters ~helpers ~path:"case.ml" ~contents:source))
+            render_site
+              (Scan.classify_source ~emitters ~helpers ~support_aliases:Scan.empty_support_aliases
+                 ~path:"case.ml" ~contents:source))
       in
       if String.equal (String.strip found) (String.strip expected) then
         printf "ok: helper -- %s\n" name
       else fail "helper -- %s: expected [%s], found [%s]" name expected found);
+  let support_alias_frontier = render_support_aliases support_aliases in
+  if List.equal String.equal support_alias_frontier support_alias_frontier_expected then
+    printf
+      "ok: support aliases -- top-level aliases close over include and respect .mli hiding, and \
+       nothing else\n"
+  else
+    fail "support aliases: expected [%s], found [%s]"
+      (String.concat ~sep:"; " support_alias_frontier_expected)
+      (String.concat ~sep:"; " support_alias_frontier);
+  List.iter support_alias_cases ~f:(fun (name, source, expected) ->
+      let found =
+        Attempt.attempted ~what:"support alias" ~name ~default:"<unscanned>" (fun () ->
+            render_site
+              (Scan.classify_source ~emitters ~helpers ~support_aliases ~path:"case.ml"
+                 ~contents:source))
+      in
+      if String.equal (String.strip found) (String.strip expected) then
+        printf "ok: support alias -- %s\n" name
+      else fail "support alias -- %s: expected [%s], found [%s]" name expected found);
+  List.iter support_alias_rejection_cases ~f:(fun (name, source, expected) ->
+      let found =
+        Attempt.attempted ~what:"support alias rejection" ~name ~default:(-1) (fun () ->
+            List.length
+              (Scan.rejections ~emitters ~support_aliases ~path:"case.ml" ~contents:source))
+      in
+      if expected = found then printf "ok: support alias rejection -- %s\n" name
+      else fail "support alias rejection -- %s: expected %d refusals, found %d" name expected found);
   List.iter population_cases ~f:(fun (name, f, expected) ->
       let found = render_exec (f ()) in
       if String.equal found expected then printf "ok: population -- %s\n" name
@@ -2028,7 +2276,9 @@ let () =
   List.iter rejection_cases ~f:(fun (name, source, expected) ->
       let found =
         Attempt.attempted ~what:"rejection" ~name ~default:(-1) (fun () ->
-            List.length (Scan.rejections ~emitters ~path:"case.ml" ~contents:source))
+            List.length
+              (Scan.rejections ~emitters ~support_aliases:Scan.empty_support_aliases ~path:"case.ml"
+                 ~contents:source))
       in
       if expected = found then printf "ok: rejection -- %s\n" name
       else fail "rejection -- %s: expected %d refusals, found %d" name expected found);
