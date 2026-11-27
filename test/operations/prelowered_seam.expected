@@ -20,4 +20,5 @@ phase5: Y = [2; 4] — the second user sees the intervening write: true
 phase6: the analysis entry points admit two impure siblings: true
 phase6: the hoist declined, so the impure body is still inside its scope: true
 phase6: compiling the specialized routine is still rejected: true
+the frontend names the first invalid prelowered node in source order: true
 prelowered seam: PASS

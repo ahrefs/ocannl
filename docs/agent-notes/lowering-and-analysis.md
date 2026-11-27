@@ -191,6 +191,9 @@ files.
   routine never mentions would land as a fresh `read_only` entry over uninitialized scratch, so
   `refuse_uncovered_local_reads` judges those reads on the final code first (gh-ocannl-1646,
   owned by virtualization-and-inlining.md).
+  For two uncovered scratch nodes, the diagnostic chooses the first access in the final live
+  code (gh-ocannl-1877). The replay cases in `stored_template_elision` exercise this gate with one
+  uncovered scratch node at a time, so they leave the choice between multiple refusals unpinned.
   The walk observes the raw analysis' conventions or it re-diverges (review rounds 3-6):
   dead-loop bodies register (renderers emit them, so their identifiers need parameters) but
   neither supply coverage (`written_seen`) nor demand it, and the coverage query filters through

@@ -9,25 +9,6 @@ let builtins =
        for the value-typed [Set_from_vec] uses. *)
     ("float4_t", {|typedef struct __align__(16) { float v[4]; } float4_t;|}, []);
     ("double2_t", {|typedef struct __align__(16) { double v[2]; } double2_t;|}, []);
-    (* Integer-precision [Max] / [Min] / [Relu] / [Satur01] (gh-ocannl-1883): the comparison in the
-       operands' common type -- C's usual arithmetic conversions -- typed that, as [Builtins_cc]'s
-       [OCANNL_MAX] and [Builtins_metal]'s [ocannl_max] are. *)
-    ( "ocannl_max",
-      {|template <typename A, typename B>
-__device__ __forceinline__ decltype(A() + B()) ocannl_max(A a, B b) {
-  typedef decltype(A() + B()) C;
-  C x = (C)a, y = (C)b;
-  return x > y ? x : y;
-}|},
-      [] );
-    ( "ocannl_min",
-      {|template <typename A, typename B>
-__device__ __forceinline__ decltype(A() + B()) ocannl_min(A a, B b) {
-  typedef decltype(A() + B()) C;
-  C x = (C)a, y = (C)b;
-  return x < y ? x : y;
-}|},
-      [] );
     ( "ocannl_shfl_xor",
       (* Butterfly warp shuffle for the [Workgroup_reduce] warp-shuffle rendering (gh-ocannl-462).
          The full mask is sound because the rendering requires the reduce axis to cover whole warps
@@ -672,4 +653,5 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
   ]
 
 let builtins =
-  Builtins_cc.cuda_like_power_builtins @ Builtins_cc.cuda_like_sat01_builtins @ builtins
+  Builtins_cc.cuda_like_power_builtins @ Builtins_cc.cuda_like_sat01_builtins
+  @ Builtins_cc.cuda_like_extrema_builtins @ builtins

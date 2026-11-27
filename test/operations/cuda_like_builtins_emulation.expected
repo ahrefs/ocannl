@@ -1,3 +1,7 @@
+CUDA: Min and Max accept every rendered integer type and bool on either side: true
+CUDA: integer Min and Max reject a float in either operand: true
+HIP: Min and Max accept every rendered integer type and bool on either side: true
+HIP: integer Min and Max reject a float in either operand: true
 CUDA: every host render refusal is one the C reference refuses too: true
 CUDA: the host shared-arm preflight emitted guards: true
 CUDA: op_table_compile's shared scalar and packed-lane arms compile guarded on the host: true
