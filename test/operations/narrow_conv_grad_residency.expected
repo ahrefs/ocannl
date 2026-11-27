@@ -99,10 +99,10 @@ overlapping_pair: every sunk guarded FP8 reduction widens: true
 overlapping_pair: the guarded FP8 reference preserves untouched bytes: true
 overlapping_pair: the guarded FP8 reference updates its finite cells: true
 overlapping_pair: guarded FP8 preserves the materialized result byte for byte: true
-guarded FP8 per-step rounding loses 4*0.5 onto 4.0 while preserving untouched bytes: true
-guarded FP8 sunk accumulation rounds once to 6.0 and preserves untouched bytes: true
-guarded FP8 materialized unroll rounds once to 6.0 and preserves untouched bytes: true
-guarded FP8 partition rounds once to 6.0 and preserves untouched bytes: true
+guarded FP8 per-step rounding loses 4*0.5 onto 8.0 while preserving untouched bytes: true
+guarded FP8 sunk accumulation rounds once to 10.0 and preserves untouched bytes: true
+guarded FP8 materialized unroll rounds once to 10.0 and preserves untouched bytes: true
+guarded FP8 partition rounds once to 10.0 and preserves untouched bytes: true
 a tied traversal chooses the frame with one residue nest: true
 the order witness loses the first small term at the overlapping cell: true
 the guarded nonunit-stride pair has a wide reduction in every residue: true

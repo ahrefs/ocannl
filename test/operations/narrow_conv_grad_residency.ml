@@ -445,18 +445,19 @@ let () =
   Test_utils.with_policy
     (fun policy -> { policy with Ir.Numerics.narrow_compute_f32 = true })
     (fun () ->
-      (* Plain iterator path: [for d, for i, if (d + 1 < i) out[i] += 1]. *)
+      (* Plain iterator path: [for d, for i, if (d + 1 < i) out[i] += i + d + 1]. *)
       let d = sym () and i = sym () in
       check_guarded_fp8 ~label:"plain" ~first_id:24791 ~dims:[| 4 |]
         ~initial:[| 0x7c; 0x7d; 0x3c; 0x3c |] ~untouched:[ 0; 1 ] ~updated:[ 2; 3 ]
         ~expected_sunk_paths:(fun paths -> List.equal same_index paths [ [ i; d ] ])
         ~build:(fun out ->
           let cell = iter i in
+          let contribution = embed_idx (aff [ (1, i); (1, d) ] 1) in
           let guard = cmp Ir.Ops.Cmplt (embed_idx (aff [ (1, d) ] 1)) (embed i) in
-          let update = set_at out cell (add_own (get out [| cell |]) (c 1.)) in
+          let update = set_at out cell (add_own (get out [| cell |]) contribution) in
           loop_n d 3 (loop_n i 4 (if_ guard update)))
         ();
-      (* Single-term positive affine path: [for d, for i, if (d + 1 < i) out[2*i] += 1]. *)
+      (* Single-term positive affine path: [for d, for i, if (d + 1 < i) out[2*i] += i + d + 1]. *)
       let d = sym () and i = sym () in
       check_guarded_fp8 ~label:"single_term" ~first_id:24792 ~dims:[| 8 |]
         ~initial:[| 0x7c; 0x40; 0x7d; 0x44; 0x3c; 0x48; 0x3c; 0x4c |]
@@ -464,22 +465,26 @@ let () =
         ~expected_sunk_paths:(fun paths -> List.equal same_index paths [ [ i; d ] ])
         ~build:(fun out ->
           let cell = aff [ (2, i) ] 0 in
+          let contribution = embed_idx (aff [ (1, i); (1, d) ] 1) in
           let guard = cmp Ir.Ops.Cmplt (embed_idx (aff [ (1, d) ] 1)) (embed i) in
-          let update = set_at out cell (add_own (get out [| cell |]) (c 1.)) in
+          let update = set_at out cell (add_own (get out [| cell |]) contribution) in
           loop_n d 3 (loop_n i 4 (if_ guard update)))
         ();
-      (* Injective-pair path: [for d, for i, for j, if (d + 1 < 2*i + j) out[2*i + j] += 1]. *)
+      (* Injective-pair path: [for d, for i, for j, if (d + 1 < 2*i + j) out[2*i + j] += 2*i + j + d
+         + 1]. *)
       let d = sym () and i = sym () and j = sym () in
       check_guarded_fp8 ~label:"injective_pair" ~first_id:24793 ~dims:[| 4 |]
         ~initial:[| 0x7c; 0x7d; 0x3c; 0x3c |] ~untouched:[ 0; 1 ] ~updated:[ 2; 3 ]
         ~expected_sunk_paths:(fun paths -> List.equal same_index paths [ [ i; j; d ] ])
         ~build:(fun out ->
           let cell = aff [ (2, i); (1, j) ] 0 in
+          let contribution = embed_idx (aff [ (2, i); (1, j); (1, d) ] 1) in
           let guard = cmp Ir.Ops.Cmplt (embed_idx (aff [ (1, d) ] 1)) (embed_idx cell) in
-          let update = set_at out cell (add_own (get out [| cell |]) (c 1.)) in
+          let update = set_at out cell (add_own (get out [| cell |]) contribution) in
           loop_n d 3 (loop_n i 2 (loop_n j 2 (if_ guard update))))
         ();
-      (* Overlapping-pair path: [for d, for i, for j, if (d + 1 < i + j) out[i + j] += 1]. *)
+      (* Overlapping-pair path: [for d, for i, for j, if (d + 1 < i + j) out[i + j] += 0.5 * (-i -
+         2*j + d + 1)]. *)
       let d = sym () and i = sym () and j = sym () in
       check_guarded_fp8 ~label:"overlapping_pair" ~first_id:24794 ~dims:[| 5 |]
         ~initial:[| 0x7c; 0x7d; 0x3c; 0x3c; 0x3c |]
@@ -488,15 +493,17 @@ let () =
           match paths with [ [ _owner; d'; _step ] ] -> Ir.Indexing.equal_symbol d d' | _ -> false)
         ~build:(fun out ->
           let cell = aff [ (1, i); (1, j) ] 0 in
+          let contribution = mul_own (c 0.5) (embed_idx (aff [ (-1, i); (-2, j); (1, d) ] 1)) in
           let guard = cmp Ir.Ops.Cmplt (embed_idx (aff [ (1, d) ] 1)) (embed_idx cell) in
-          let update = set_at out cell (add_own (get out [| cell |]) (c 1.)) in
+          let update = set_at out cell (add_own (get out [| cell |]) contribution) in
           loop_n d 3 (loop_n i 3 (loop_n j 3 (if_ guard update))))
         ();
       (* Schedule-minted [Unroll ~materialize:true] and [Partition] over a guarded FP8 reduction
-         share the same conditional write-back, and wide residency is preserved on updated cells:
-         [4.0 (0x44) + 4 * 0.5] stays [4.0 (0x44)] under per-step E5M2 rounding (4.5 ties to even
-         4.0) while single-rounding produces [6.0 (0x46)], and untouched [0x7c]/[0x7d] stay
-         intact. *)
+         share the same conditional write-back, and wide residency is preserved across the whole
+         nest including partition seams: [8.0 (0x48) + 4 * 0.5] stays [8.0 (0x48)] both under
+         per-step E5M2 rounding (8.5 rounds to 8.0) and under per-segment rounding across two 2-step
+         segments (8.0 + 1.0 = 9.0 ties to even 8.0), while single-rounding across all 4 steps
+         produces [10.0 (0x49)], and untouched [0x7c]/[0x7d] stay intact. *)
       let run_fp8 ~name ~raw ~out ~initial ?(sched = []) code =
         let seed =
           Bigarray.Array1.of_array Bigarray.Char Bigarray.C_layout
@@ -521,12 +528,12 @@ let () =
       materialize out;
       let cell = iter i in
       (* Guard [d < 4 * i - 4]: cells 0 and 1 receive zero updates; cell 2 receives four updates of
-         0.5 onto 4.0 (0x44). *)
+         0.5 onto 8.0 (0x48). *)
       let guard = cmp Ir.Ops.Cmplt (embed d) (embed_idx (aff [ (4, i) ] (-4))) in
       let update = set_at out cell (add_own (get out [| cell |]) (c 0.5)) in
       let source = loop_n d 4 (loop_n i 3 (if_ guard update)) in
       let sunk = LL.sink_narrow_reduction_loops source in
-      let initial = [| 0x7c; 0x7d; 0x44 |] in
+      let initial = [| 0x7c; 0x7d; 0x48 |] in
       let per_step = run_fp8 ~name:"ncgr_fp8_wide_ref" ~raw:source ~out ~initial source in
       let wide = run_fp8 ~name:"ncgr_fp8_wide_sunk" ~raw:source ~out ~initial sunk in
       let unrolled =
@@ -540,14 +547,14 @@ let () =
           ~sched:[ Sched.Partition { axis = d; breakpoints = [ 2 ]; segment_indices = [ s0; s1 ] } ]
           sunk
       in
-      let want_wide = [| 0x7c; 0x7d; 0x46 |] in
-      p "guarded FP8 per-step rounding loses 4*0.5 onto 4.0 while preserving untouched bytes"
-        (Array.equal Int.equal per_step [| 0x7c; 0x7d; 0x44 |]);
-      p_all2 "guarded FP8 sunk accumulation rounds once to 6.0 and preserves untouched bytes" wide
+      let want_wide = [| 0x7c; 0x7d; 0x49 |] in
+      p "guarded FP8 per-step rounding loses 4*0.5 onto 8.0 while preserving untouched bytes"
+        (Array.equal Int.equal per_step [| 0x7c; 0x7d; 0x48 |]);
+      p_all2 "guarded FP8 sunk accumulation rounds once to 10.0 and preserves untouched bytes" wide
         want_wide ~f:Int.equal;
-      p_all2 "guarded FP8 materialized unroll rounds once to 6.0 and preserves untouched bytes"
+      p_all2 "guarded FP8 materialized unroll rounds once to 10.0 and preserves untouched bytes"
         unrolled want_wide ~f:Int.equal;
-      p_all2 "guarded FP8 partition rounds once to 6.0 and preserves untouched bytes" partitioned
+      p_all2 "guarded FP8 partition rounds once to 10.0 and preserves untouched bytes" partitioned
         want_wide ~f:Int.equal)
 
 let () =

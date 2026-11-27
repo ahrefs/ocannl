@@ -2561,6 +2561,9 @@ let warp_reduce_derivations = (("wred_v_", "__"), ("wred_partials_", "__"))
 (* An MMA fragment register, named by its node's uid. *)
 let mma_fragment_derivation = ("__mma_fragment_", "")
 
+(* A guarded localized accumulator's write-back flag, named by its scope id (gh-ocannl-2500). *)
+let acc_touched_derivation = ("ocannl_acc_touched_", "")
+
 let minted_derivations =
   let c, l, h = grid_chunk_derivations in
   [
@@ -2574,6 +2577,7 @@ let minted_derivations =
     fst warp_reduce_derivations;
     snd warp_reduce_derivations;
     mma_fragment_derivation;
+    acc_touched_derivation;
   ]
 
 (** The cc builtins a register tile's A column widens its rows through, as [(pack, row)], where the
@@ -7027,7 +7031,10 @@ module C_syntax (B : C_syntax_config) = struct
           when Low_level.Scope_id.equal id id' && Tn.equal tn tn'
                && Array.equal Indexing.equal_axis_index idcs idcs'
                && not (definitely_updates_local ~id (Low_level.unflat_lines rest)) ->
-            Some (id, Printf.sprintf "ocannl_acc_touched_%d" id.Low_level.scope_id, opening)
+            Some
+              ( id,
+                derived_name acc_touched_derivation (Int.to_string id.Low_level.scope_id),
+                opening )
         | _ -> None)
     | _ -> None
 
