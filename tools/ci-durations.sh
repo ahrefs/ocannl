@@ -137,7 +137,8 @@ workflow_path=$(urlenc "$workflow")
 case "$runs" in '' | *[!0-9]*) die "-n wants a positive integer, got: $runs" ;; esac
 [ "$runs" -gt 0 ] || die "-n wants a positive integer, got: $runs"
 
-python3 "$(dirname "$0")/ci-timing.py" validate "${selectors[@]}"
+# Bash 3.2 treats an empty "${selectors[@]}" expansion as unbound under `set -u`.
+python3 "$(dirname "$0")/ci-timing.py" validate ${selectors[@]+"${selectors[@]}"}
 
 # Every filter goes through `gh api --method GET -f`, which URL-encodes each
 # value, rather than being concatenated into the path: a branch name may legally
@@ -189,4 +190,5 @@ jobs_json=$(
 [ -n "$jobs_json" ] || die "the $run_count matched run(s) reported no jobs"
 
 printf '%s\n' "$jobs_json" | python3 "$(dirname "$0")/ci-timing.py" durations \
-  "$repo  $workflow  branch=${branch:-any}  event=${event:-any}  runs=$run_count" "${selectors[@]}"
+  "$repo  $workflow  branch=${branch:-any}  event=${event:-any}  runs=$run_count" \
+  ${selectors[@]+"${selectors[@]}"}
