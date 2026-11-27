@@ -39,11 +39,12 @@
 # gh-ocannl-2504) reads `FLEET_LEG_RECEIPT_DIR` (supplied by the fleet from
 # `FLEET_LEG_RECEIPT_LINK`) and never falls back to `tools/test-run.sh paths run last` or the
 # worktree's `linux-shell` pointer. When `FLEET_LEG_RECEIPT_DIR` is unset, it logs `recorded
-# nothing (no receipt registered for this leg)` and exits 0. A validly bound, clean, exit-0
-# receipt for this leg and observed SHA whose backend is not `cc` or whose recorded request is
-# not a FULL/TRAIN command logs `ineligible leg` instead of `record refused`; malformed or
-# missing `FLEET_LEG_RECEIPT_DIR` values, broken bindings, stale receipts, wrong heads, and
-# dirty/failed runs log `record refused`.
+# nothing (no receipt registered for this leg)` and exits 0 (assuming the fleet reports an
+# unresolvable `FLEET_LEG_RECEIPT_LINK` itself rather than leaving `FLEET_LEG_RECEIPT_DIR`
+# unset). A validly bound, clean, exit-0 receipt for this leg and observed SHA whose backend is
+# not `cc` or whose recorded request is not a FULL/TRAIN command logs `ineligible leg` instead of
+# `record refused`; malformed or missing `FLEET_LEG_RECEIPT_DIR` values, broken bindings, stale
+# receipts, wrong heads, and dirty/failed runs log `record refused`.
 #
 # What `check HEAD NEED...` admits (exit 0, one `owed-run: admitted ...` line per record it
 # used), as a fail-closed allowlist. NEED is `runtest` (the full suite), `train` (every `train-`
