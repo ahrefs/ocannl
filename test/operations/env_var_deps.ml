@@ -103,14 +103,15 @@
    {1 Routine logging coverage}
 
    The [routine-logging] family reads literal enabling arguments of Dune [run]/[dynamic-run] actions
-   and literal action-local [setenv] bindings, the declared [ocannl_config] inputs of test runs, and
-   test programs' own parsed OCaml modules. In OCaml it recognizes writes to
+   and literal action-local [setenv] bindings, the nearest [ocannl_config] of each located test run,
+   and test programs' own parsed OCaml modules. In OCaml it recognizes writes to
    [settings.debug_log_from_routines] other than literal [false], and concatenation of a literal
    flag prefix with a value (the fresh-process notice probe). This is a census of enabling inputs:
    it does not solve precedence, control flow or the companion log-level condition, interpret shell
    or computed Dune arguments, follow OCaml calls into linked libraries, or read personal
-   configuration and ambient overrides. A producer and its same-directory golden diff count through
-   the diff's alias, so the check distinguishes logged variants of one binary.
+   configuration and ambient overrides. Test runs are Dune tests and inline tests, rules with
+   per-test aliases, and producers of files judged by a same-directory golden diff. Literal
+   workspace executable paths and public names link runs to their source declarations.
 
    {1 What decides "addressed to the configuration"}
 
@@ -1128,6 +1129,16 @@ let enables_logging_in_source content =
   visitor#structure (Sources.structure_of content);
   !found
 
+let logging_source_or_refusal ~read ~fail path =
+  match Test_scan.Scan_attempt.run read with
+  | Scanned enables -> enables
+  | Unparsed why ->
+      fail (Printf.sprintf "%s cannot be checked for routine logging: %s" path why);
+      false
+  | Raised why ->
+      fail (Printf.sprintf "routine logging reader raised on %s: %s" path why);
+      false
+
 (* The names dune generates a `runtest-<name>` alias for by itself (>= 3.20): every `(test)`/
    `(tests)` stanza name, and every inline-test library's name. A hand-written alias must not reuse
    one (Codex P2, round 5): the two aliases MERGE, so the targeted entry point runs that test as
@@ -1997,12 +2008,13 @@ let main () =
         else
           let lines = String.split_lines (In_channel.read_all on_disk) in
           let settings = Utils.parse_config_lines ~source:path lines in
-          Option.some_if
-            (Option.exists
-               (List.Assoc.find settings routine_logging_key ~equal:String.equal)
-               ~f:enables_flag)
-            path)
-    |> Set.of_list (module String)
+          let enabled =
+            Option.exists
+              (List.Assoc.find settings routine_logging_key ~equal:String.equal)
+              ~f:enables_flag
+          in
+          Some (path, enabled))
+    |> Map.of_alist_exn (module String)
   in
   let copies =
     (Config.ambient_config_source, Scan.in_subdir Config.ambient_home Scan.config_file)
@@ -2018,21 +2030,57 @@ let main () =
   let rec propagate_logging configs =
     let next =
       List.fold copies ~init:configs ~f:(fun acc (into, from) ->
-          if Set.mem configs from then Set.add acc into else acc)
+          match Map.find configs from with
+          | Some enabled when not (Map.mem acc into) -> Map.set acc ~key:into ~data:enabled
+          | _ -> acc)
     in
-    if Set.equal next configs then configs else propagate_logging next
+    if Int.equal (Map.length next) (Map.length configs) then configs else propagate_logging next
   in
   let logging_configs = propagate_logging logging_configs in
-  let logging_source path on_disk =
-    match
-      Test_scan.Scan_attempt.run (fun () -> enables_logging_in_source (In_channel.read_all on_disk))
-    with
-    | Scanned enables -> enables
-    | Unparsed why | Raised why ->
-        fail (Printf.sprintf "%s cannot be checked for routine logging: %s" path why);
-        false
-  in
+  let any_logging_configs = Map.exists logging_configs ~f:Fn.id in
+  let config_path directory = Config.under directory Scan.config_file in
+  let has_config directory = Map.mem logging_configs (config_path directory) in
   let logging_sources = Hashtbl.create (module String) in
+  let logging_units = Hash_set.Poly.create () in
+  let logging_programs = Hash_set.Poly.create () in
+  let source_paths = List.map source_files ~f:fst in
+  (* Build identities before checking runners: a rule can run a binary from another dune file. *)
+  List.iter lifecycle_dune_files ~f:(fun (dune_file, content) ->
+      let dir = Config.root_normalized (Stdlib.Filename.dirname dune_file) in
+      let stanzas =
+        Scan.walk "" (Scan.stanzas content) ~f:(fun subdir stanza -> [ (subdir, stanza) ])
+      in
+      per_directory stanzas
+        ~checks:
+          [
+            (fun subdir group ->
+              let here = Config.under dir subdir in
+              let directory_modules =
+                Scan.directory_modules ~stanzas:group ~dir:here source_paths
+              in
+              List.iter group ~f:(fun stanza ->
+                  if Policy.runnable stanza then
+                    let head = Scan.head stanza in
+                    let shared = Scan.modules_of ~directory_modules group stanza in
+                    List.iter (Scan.names_of stanza) ~f:(fun name ->
+                        let modules = Scan.program_modules stanza ~modules:shared ~name in
+                        let source_enables_logging m =
+                          List.exists (module_source_files ~dir:here stanza m) ~f:(fun (_, path) ->
+                              Option.exists (List.Assoc.find sources ~equal:String.equal path)
+                                ~f:(fun on_disk ->
+                                  Hashtbl.find_or_add logging_sources path ~default:(fun () ->
+                                      logging_source_or_refusal ~fail path ~read:(fun () ->
+                                          enables_logging_in_source (In_channel.read_all on_disk)))))
+                        in
+                        if List.exists modules ~f:source_enables_logging then (
+                          Hash_set.add logging_units (here, head, name);
+                          if Option.exists head ~f:(List.mem Scan.program_heads ~equal:String.equal)
+                          then (
+                            let file, public = executable_identities stanza ~subdir:here ~name in
+                            Hash_set.add logging_programs (`File file);
+                            List.iter public ~f:(fun name ->
+                                Hash_set.add logging_programs (`Public name)))))));
+          ]);
   let links_verdict, verdict_programs = verdict_linkage lifecycle_dune_files in
   List.iter dune_files ~f:(fun (dune_file, on_disk) ->
       let dir = match Stdlib.Filename.dirname dune_file with "." -> "" | dir -> dir in
@@ -2825,72 +2873,40 @@ let main () =
                 && Option.equal String.equal (Some name) u.unit_name))
       in
       let logging_config subdir stanza =
-        (* Config dependency completeness already checks that this is the file the run reads. *)
-        (not (Set.is_empty logging_configs))
+        any_logging_configs
         && List.exists (Scan.sites_of_stanza subdir stanza) ~f:(fun site ->
-            let here = Config.under dir site.Scan.subdir in
-            List.exists site.Scan.declared_config_paths ~f:(fun path ->
-                Set.mem logging_configs (Config.under here path)))
+            match site.Scan.kind with
+            | Scan.Test | Scan.Inline_tests | Scan.Runs_executable ->
+                let here = Config.under dir (Scan.in_subdir site.Scan.subdir site.Scan.cwd) in
+                Option.exists (Config.nearest_config ~has_config here) ~f:(fun directory ->
+                    Map.find_exn logging_configs (config_path directory))
+            | Scan.Unreadable_command | Scan.Unreadable_directory | Scan.Unclassified_action ->
+                false)
       in
-      let logged_names = ref [] in
-      check_per_directory (fun subdir group ->
-          let here = Scan.in_subdir dir subdir in
-          let directory_modules =
-            Scan.directory_modules ~stanzas:group ~dir:here (List.map source_files ~f:fst)
-          in
-          List.iter group ~f:(fun stanza ->
-              if Policy.runnable stanza then
-                let shared = Scan.modules_of ~directory_modules group stanza in
-                List.iter (Scan.names_of stanza) ~f:(fun name ->
-                    let modules = Scan.program_modules stanza ~modules:shared ~name in
-                    let source_enables_logging m =
-                      List.exists (Policy.module_sources stanza m) ~f:(fun file ->
-                          let source = String.lowercase (Scan.in_subdir here file) in
-                          Option.exists (List.Assoc.find sources ~equal:String.equal source)
-                            ~f:(fun on_disk ->
-                              Hashtbl.find_or_add logging_sources source ~default:(fun () ->
-                                  logging_source source on_disk)))
-                    in
-                    if List.exists modules ~f:source_enables_logging then
-                      logged_names := (subdir, stanza, Some name) :: !logged_names)));
-      let logging_members () =
+      let logging_members =
         List.concat_map units ~f:(fun u ->
+            let stanza = u.unit_stanza in
+            let head = Scan.head stanza in
+            let here = Config.under dir u.unit_subdir in
             let source_enables =
-              List.mem !logged_names (u.unit_subdir, u.unit_stanza, u.unit_name) ~equal:Poly.equal
+              Option.exists u.unit_name ~f:(fun name ->
+                  Hash_set.mem logging_units (here, head, name))
+              || List.exists (Scan.runs_of ~subdir:here stanza) ~f:(fun (program, _) ->
+                  Hash_set.mem logging_programs program)
             in
-            let action_enables = logging_action u.unit_stanza in
-            if source_enables || action_enables || logging_config u.unit_subdir u.unit_stanza then
+            if source_enables || logging_action stanza || logging_config u.unit_subdir stanza then
               let aliases =
-                match (Scan.head u.unit_stanza, u.unit_name) with
-                | Some head, Some name
-                  when source_enables && List.mem Scan.program_heads head ~equal:String.equal ->
-                    (* A test can also have a variant run by name in a separate rule. *)
-                    let identities =
-                      executable_identities u.unit_stanza ~subdir:u.unit_subdir ~name
-                    in
-                    u.unit_aliases
-                    @ runner_aliases file_stanzas ~identities
-                    @ diff_judge_aliases file_stanzas ~identities
-                | Some "rule", _ ->
-                    u.unit_aliases @ judges_of_runner file_stanzas (u.unit_subdir, u.unit_stanza)
-                | _ -> u.unit_aliases
+                match head with
+                | Some ("test" | "tests" | "library") -> u.unit_aliases
+                | Some "rule" ->
+                    u.unit_aliases @ judges_of_runner file_stanzas (u.unit_subdir, stanza)
+                | _ -> []
               in
-              let aliases =
-                List.filter aliases ~f:(fun (_, alias) ->
-                    List.exists [ "runtest"; "slow"; "train" ] ~f:(fun suite ->
-                        member_of suite alias))
-              in
-              match aliases with
-              | [] when action_enables -> [ { u with unit_aliases = [] } ]
-              | [] -> []
-              | _ ->
-                  List.map aliases ~f:(fun ((subdir, alias) as entry) ->
-                      {
-                        u with
-                        unit_subdir = subdir;
-                        unit_aliases = [ entry ];
-                        unit_identity = alias;
-                      })
+              List.filter_map aliases ~f:(fun ((subdir, alias) as entry) ->
+                  Option.some_if
+                    (List.exists [ "runtest"; "slow"; "train" ] ~f:(fun suite ->
+                         member_of suite alias))
+                    { u with unit_subdir = subdir; unit_aliases = [ entry ]; unit_identity = alias })
             else [])
         |> List.dedup_and_sort ~compare:(fun a b ->
             Poly.compare (a.unit_subdir, a.unit_identity) (b.unit_subdir, b.unit_identity))
@@ -2922,7 +2938,8 @@ let main () =
               then
                 List.iter (Scan.alias_deps stanza) ~f:(fun alias ->
                     if not (List.mem gates alias ~equal:String.equal) then
-                      logging_listed := (subdir, alias) :: !logging_listed));
+                      logging_listed :=
+                        (subdir, alias, Scan.field stanza "enabled_if") :: !logging_listed));
           policy_listed :=
             ( subdir,
               List.filter (Policy.listed group) ~f:(fun (_, alias) ->
@@ -2984,16 +3001,29 @@ let main () =
               Hashtbl.set family_reaches ~key:(family_directory family subdir)
                 ~data:(aliases_reached_from here family.family_alias)));
       let check_family_members () =
-        let logging_members = logging_members () in
-        List.iter !logging_listed ~f:(fun ((_, alias) as entry) ->
+        List.iter !logging_listed ~f:(fun (subdir, alias, condition) ->
             if
               not
                 (List.exists logging_members ~f:(fun u ->
-                     List.mem u.unit_aliases entry ~equal:Poly.equal))
+                     List.mem u.unit_aliases (subdir, alias) ~equal:Poly.equal))
             then
               fail
                 (Printf.sprintf
                    "%s: @routine-logging lists %s, which has no detected routine logging input"
+                   dune_file alias)
+            else if
+              not
+                (List.exists file_stanzas ~f:(fun (member_subdir, member) ->
+                     String.equal member_subdir subdir
+                     && (List.mem (aliases_of member) alias ~equal:String.equal
+                        || Option.exists
+                             (String.chop_prefix alias ~prefix:"runtest-")
+                             ~f:(Set.mem (generated_runtest_names [ member ])))
+                     && Policy.same_condition ~listing:condition ~member))
+            then
+              fail
+                (Printf.sprintf
+                   "%s: @routine-logging lists %s under a different enabled_if than its test alias"
                    dune_file alias));
         let policy_units = policy_units () in
         let policy_members = List.filter policy_units ~f:(fun u -> Option.is_none (opt_out_of u)) in
@@ -5445,7 +5475,7 @@ let family_control () =
     "t/dune" :: "t/gate.ml" :: "t/probe.ml" :: "t/probe2.ml" :: "t/child/probe.ml" :: "t/harness.ml"
     :: "t/child/childgate.ml" :: "t/ocannl_config" :: List.map context ~f:fst
   in
-  let run ?(shape = Single_test) ?(listing = Every) ?probe ?source ?(config = "")
+  let run ?(shape = Single_test) ?(listing = Every) ?probe ?source ?(config = "") ?(extra = [])
       ?(transform = Fn.id) ~metal ~lifecycle ~family () =
     let declares = lifecycle in
     let probe =
@@ -5461,7 +5491,9 @@ let family_control () =
           (Stdlib.Filename.concat root path)
           (Option.value source ~default:(family_probe probe)));
     write_file (Stdlib.Filename.concat root "t/ocannl_config") config;
-    run_checker ~root ~exe ("." :: paths)
+    List.iter extra ~f:(fun (path, content) ->
+        write_file (Stdlib.Filename.concat root path) content);
+    run_checker ~root ~exe (("." :: paths) @ List.map extra ~f:fst)
   in
   let report label (status, text) =
     eprintf "the family control's %s run %s. Its captured output:\n%s\n" label
@@ -5474,8 +5506,8 @@ let family_control () =
   let metal_listed = run ~metal:true ~lifecycle:false ~family:metal () in
   let lifecycle_omitted = run ~metal:false ~lifecycle:true ~family:None () in
   let lifecycle_listed = run ~metal:false ~lifecycle:true ~family:lifecycle () in
-  let run_logging ?family ?source ?config ?(transform = Fn.id) () =
-    run ~metal:false ~lifecycle:false ~family ?source ?config ~transform ()
+  let run_logging ?family ?source ?config ?extra ?(transform = Fn.id) () =
+    run ~metal:false ~lifecycle:false ~family ?source ?config ?extra ~transform ()
   in
   let logging_action value content =
     String.substr_replace_all content ~pattern:"(name probe)"
@@ -5488,21 +5520,54 @@ let family_control () =
   let logging_false_listed =
     run_logging ~family:routine_logging_family.family_alias ~transform:(logging_action "false") ()
   in
-  let logging_config_omitted = run_logging ~config:"debug_log_from_routines=1\n" () in
-  let logging_source_omitted =
+  let logging_condition_mismatch =
     run_logging ~family:routine_logging_family.family_alias
-      ~source:"let () = Utils.settings.debug_log_from_routines <- true\n"
+      ~transform:(fun content ->
+        String.substr_replace_all (logging_action "true" content) ~pattern:"(name routine-logging)"
+          ~with_:"(name routine-logging) (enabled_if (= %{env:OCANNL_BACKEND=cc} cuda))")
+      ()
+  in
+  let logging_config_omitted = run_logging ~config:"debug_log_from_routines=1\n" () in
+  let logging_fixture_config =
+    run_logging
+      ~extra:[ ("t/fixtures/ocannl_config", "debug_log_from_routines=true\n") ]
+      ~transform:(fun content ->
+        String.substr_replace_all content ~pattern:"(deps ocannl_config)"
+          ~with_:"(deps ocannl_config fixtures/ocannl_config)")
+      ()
+  in
+  let logging_tool =
+    run_logging
       ~transform:(fun content ->
         content
         ^ {|
 (rule
  ; ocannl-backend: none -- the fixture links no backend.
+ (alias tool-smoke)
+ (deps ocannl_config (alias runtest-gate))
+ (action (run %{dep:probe.exe} --ocannl_debug_log_from_routines=true)))
+|})
+      ()
+  in
+  let logging_source_omitted =
+    let variant_dune =
+      family_gate ~elsewhere:false
+      ^ {|
+(rule
+ ; ocannl-backend: none -- the fixture links no backend.
  (target probe-variant.actual)
  (deps ocannl_config (alias runtest-gate))
- (action (with-stdout-to %{target} (run %{dep:probe.exe}))))
+ (action (with-stdout-to %{target} (run %{dep:../probe.exe}))))
 (rule (alias runtest-probe-variant) (action (diff probe.expected probe-variant.actual)))
 (alias (name runtest) (deps (alias runtest-probe-variant)))
-|})
+|}
+    in
+    run_logging ~family:routine_logging_family.family_alias
+      ~source:"let () = Utils.settings.debug_log_from_routines <- true\n"
+      ~extra:[ ("t/variants/dune", variant_dune); ("t/variants/gate.ml", "let () = ()\n") ]
+      ~transform:
+        (String.substr_replace_all ~pattern:"(libraries base))"
+           ~with_:"(libraries base arrayjit.utils))")
       ()
   in
   let logging_source_unreadable =
@@ -5701,7 +5766,10 @@ let family_control () =
   if not (logging_omitted logging_config_omitted) then
     report "routine logging set by a config" logging_config_omitted;
   let logging_source_variant_omitted =
-    logging_omitted logging_source_omitted
+    exited 1 logging_source_omitted
+    && String.is_substring (snd logging_source_omitted) ~substring:"t/variants/dune"
+    && String.is_substring (snd logging_source_omitted)
+         ~substring:"routine-logging` alias does not reach"
     && String.is_substring (snd logging_source_omitted) ~substring:"`(alias runtest-probe-variant)`"
   in
   if not logging_source_variant_omitted then
@@ -5847,6 +5915,16 @@ let family_control () =
     && String.is_substring (snd logging_false_listed)
          ~substring:
            "@routine-logging lists runtest-probe, which has no detected routine logging input");
+  let mismatched_condition = "a backend condition cannot narrow a logging test's alias" in
+  attribute mismatched_condition [ logging_condition_mismatch ];
+  Verdict.p mismatched_condition
+    (exited 1 logging_condition_mismatch
+    && String.is_substring (snd logging_condition_mismatch)
+         ~substring:"@routine-logging lists runtest-probe under a different enabled_if");
+  Verdict.p "an unselected fixture config leaves the test outside routine-logging"
+    (listed_ok logging_fixture_config);
+  Verdict.p "an ungoldened tooling action can enable logging without joining routine-logging"
+    (listed_ok logging_tool);
   Verdict.p "an enabling config input makes an unlisted test a missing routine-logging member"
     (logging_omitted logging_config_omitted);
   Verdict.p "an enabling source assignment makes an unlisted test a missing routine-logging member"
@@ -5857,6 +5935,21 @@ let family_control () =
     (exited 1 logging_source_unreadable
     && String.is_substring (snd logging_source_unreadable)
          ~substring:"cannot be checked for routine logging");
+  let messages = ref [] in
+  let enabled =
+    logging_source_or_refusal "probe.ml"
+      ~read:(fun () -> raise Stdlib.Exit)
+      ~fail:(fun message -> messages := message :: !messages)
+  in
+  let reader_raised =
+    (not enabled)
+    && List.equal String.equal !messages
+         [ "routine logging reader raised on probe.ml: " ^ Stdlib.Printexc.to_string Stdlib.Exit ]
+  in
+  if reader_raised then
+    Refusal_manifest.observe_failure ~source:"test/operations/env_var_deps.ml"
+      ~format:"routine logging reader raised on %s: %s";
+  Verdict.p "a routine logging reader exception reports a scanner defect" reader_raised;
   Verdict.p "a local declaration remains a member without any OCaml module reference"
     (omitted_ok lifecycle_family.family_alias marker_only_omitted);
   Verdict.p "the same declared unit with its family alias listed passes without resolving OCaml"
