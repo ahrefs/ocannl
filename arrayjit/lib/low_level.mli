@@ -2500,9 +2500,6 @@ val mma_operand_layout :
     leading dimension; [`Decline] (with the reason) for any other swizzle, which renders the scalar
     fallback without reaching a hook. Shared by the renderer and the cost model (gh-ocannl-1254). *)
 
-val contains_barrier : t -> bool
-(** Whether [llc] contains any {!t.Workgroup_barrier} or {!t.Tile_mma} statement. *)
-
 val contains_explicit_barrier : t -> bool
 (** Whether [llc] contains an explicit {!t.Workgroup_barrier} statement (excluding bare
     {!t.Tile_mma} on CPU register-tiled schedules). *)

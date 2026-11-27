@@ -6554,8 +6554,9 @@ module C_syntax (B : C_syntax_config) = struct
      an allocation per call would cost the most against -- in order of size, then of [tns], until
      the next would overflow the budget; that one and every larger array take the heap. Empty on a
      backend without [heap_local_arrays]. *)
-  let heap_locals ~budget (tns : Tn.t list) : Set.M(Tn).t =
-    let bytes tn = Tn.num_elems tn * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec) in
+  let heap_locals
+      ?(bytes = fun tn -> Tn.num_elems tn * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec))
+      ~budget (tns : Tn.t list) : Set.M(Tn).t =
     if not B.heap_local_arrays then Set.empty (module Tn)
     else
       List.mapi tns ~f:(fun k tn -> (bytes tn, k, tn))
@@ -7686,8 +7687,9 @@ module C_syntax (B : C_syntax_config) = struct
         | Some s -> string s
         | None ->
             invalid_arg
-              "C_syntax.pp_ll: Workgroup_barrier not supported by this backend (serialization \
-               cannot implement a barrier)")
+              "C_syntax.pp_ll: unexpected Workgroup_barrier on a backend without barrier_syntax \
+               (Low_level.serialize_workgroup_barriers must eliminate every barrier before \
+               rendering)")
     | Tile_mma { d; a; b; ta; tb; m; n; k; ldd; lda; ldb; lane; tile; fallback } -> (
         (* Cooperative tile-MMA (docs/design/tensorize-mma.md §4). Backends with an [mma_syntax]
            hook emit the intrinsic sequence on every lane; everywhere else (including per-call
@@ -10914,7 +10916,7 @@ module C_syntax (B : C_syntax_config) = struct
     in
     (* Render before declarations so accepted marked-fragment regions can suppress their otherwise
        dead scalar local arrays. Declining/debug paths leave the set empty and keep the arrays. *)
-    let main_logic_doc, part_docs =
+    let raw_main_doc, part_docs =
       if serial_workgroup_staging then (
         let saved_stack = !(ctx.serial_loop_stack) in
         ctx.serial_loop_stack := List.rev_map grid_loops ~f:fst @ saved_stack;
@@ -10923,43 +10925,7 @@ module C_syntax (B : C_syntax_config) = struct
             ~f:(fun () -> (pp_ll ctx) ~in_loop:(not (List.is_empty grid_loops)) llc)
             ~finally:(fun () -> ctx.serial_loop_stack := saved_stack)
         in
-        (* Poison every workgroup-shared tile with 0xFF bytes (quiet NaN for every float format,
-           non-zero sentinel for integers) on entry to each workgroup: eliminates C UB on
-           uninitialized stack reads and makes missing load->compute barriers fail deterministically
-           instead of reading zero or a previous workgroup's leftovers (gh-ocannl-678). *)
-        let plc = ctx.current_placements in
-        let touched, untouched = store_order ~llc ~traced_store in
-        let poison_docs =
-          List.filter_map (touched @ untouched) ~f:(fun tn ->
-              if
-                Set.mem workgroup_shared tn
-                && not
-                     (Tn.Placements.is_virtual_force plc tn (Site "333:local-decl-virtual-query")
-                     || Tn.Placements.is_materialized_force plc tn
-                          (Site "336:local-decl-materialized-query"))
-              then
-                let total_bytes =
-                  shared_total_elems tn * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)
-                in
-                Some (string (shared_poison_line ~ident:(get_ident tn) ~total_bytes))
-              else None)
-        in
-        let inner_doc =
-          match poison_docs with
-          | [] -> wg_doc
-          | _ -> separate hardline poison_docs ^^ hardline ^^ wg_doc
-        in
-        let wrapped =
-          List.fold_right grid_loops ~init:inner_doc ~f:(fun (sym, ext) body ->
-              group
-                (string ("for (" ^ B.loop_index_type)
-                ^^ pp_symbol sym ^^ string " = 0; " ^^ pp_symbol sym ^^ string " <= "
-                ^^ PPrint.OCaml.int (ext - 1)
-                ^^ string "; ++" ^^ pp_symbol sym ^^ string ") " ^^ lbrace
-                ^^ nest 2 (hardline ^^ body)
-                ^^ hardline ^^ rbrace))
-        in
-        (wrapped, []))
+        (wg_doc, []))
       else
         match outlined_groups with
         | None -> ((compile_main ctx) llc, [])
@@ -11004,6 +10970,35 @@ module C_syntax (B : C_syntax_config) = struct
                  && not (Set.mem !(ctx.unscoped_simdgroup_fragments) tn)))
             (tn, Hashtbl.find_exn traced_store tn))
     in
+    let main_logic_doc =
+      if serial_workgroup_staging then
+        (* Poison every declared workgroup-shared tile with 0xFF bytes (quiet NaN for every float
+           format, non-zero sentinel for integers) on entry to each workgroup: derived from
+           [declared] so the poisoned set cannot drift from the declared set (gh-ocannl-678). *)
+        let poison_docs =
+          List.filter_map declared ~f:(fun (tn, _) ->
+              if Set.mem workgroup_shared tn then
+                let total_bytes =
+                  shared_total_elems tn * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)
+                in
+                Some (string (shared_poison_line ~ident:(get_ident tn) ~total_bytes))
+              else None)
+        in
+        let inner_doc =
+          match poison_docs with
+          | [] -> raw_main_doc
+          | _ -> separate hardline poison_docs ^^ hardline ^^ raw_main_doc
+        in
+        List.fold_right grid_loops ~init:inner_doc ~f:(fun (sym, ext) body ->
+            group
+              (string ("for (" ^ B.loop_index_type)
+              ^^ pp_symbol sym ^^ string " = 0; " ^^ pp_symbol sym ^^ string " <= "
+              ^^ PPrint.OCaml.int (ext - 1)
+              ^^ string "; ++" ^^ pp_symbol sym ^^ string ") " ^^ lbrace
+              ^^ nest 2 (hardline ^^ body)
+              ^^ hardline ^^ rbrace))
+      else raw_main_doc
+    in
     let private_arrays =
       List.filter_map declared ~f:(fun (tn, _) ->
           Option.some_if (not (Set.mem workgroup_shared tn)) tn)
@@ -11015,23 +11010,11 @@ module C_syntax (B : C_syntax_config) = struct
       match B.shared_decl_prefix with
       | Some _ -> heap_locals ~budget:routine_stack_locals_bytes private_arrays
       | None ->
-          let all_locals = List.map declared ~f:fst in
-          if not B.heap_local_arrays then Set.empty (module Tn)
-          else
-            let bytes tn =
-              (if Set.mem workgroup_shared tn then shared_total_elems tn else Tn.num_elems tn)
-              * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)
-            in
-            List.mapi all_locals ~f:(fun k tn -> (bytes tn, k, tn))
-            |> List.sort ~compare:(fun (b1, k1, _) (b2, k2, _) ->
-                [%compare: int * int] (b1, k1) (b2, k2))
-            |> List.fold
-                 ~init:(0, Set.empty (module Tn))
-                 ~f:(fun (used, heap) (b, _, tn) ->
-                   if Set.is_empty heap && used + b <= routine_stack_locals_bytes then
-                     (used + b, heap)
-                   else (used, Set.add heap tn))
-            |> snd
+          let bytes tn =
+            (if Set.mem workgroup_shared tn then shared_total_elems tn else Tn.num_elems tn)
+            * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)
+          in
+          heap_locals ~bytes ~budget:routine_stack_locals_bytes (List.map declared ~f:fst)
     in
     (* A single private array left in a CUDA depot can still cost a copy per resident thread. Once
        the combined frame exceeds the budget, give all of its arrays device slices. *)

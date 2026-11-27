@@ -149,7 +149,7 @@ let () =
   let ctx_a = Context.set_values ctx_a mc1.Tensor.value mc1_prefill in
   let ctx_a = Context.run ctx_a routine_a in
   let got_smem = Context.get_values ctx_a mc1.Tensor.value in
-  p_close "SMEM matmul parity (GPU) or clean rejection (CPU)" got_smem got_serial ~tol:approx_tol;
+  p_close "SMEM matmul parity (GPU and CPU)" got_smem got_serial ~tol:approx_tol;
   if has_shared then
     let src = Generated.read "mm_smem" in
     let has sub = String.is_substring src ~substring:sub in
@@ -170,9 +170,9 @@ let () =
        fold, and each copy is partitioned across its unused workgroup axis, so no If is left. The k
        loop accumulates into the privatized scalar [acc_mc1] instead of round-tripping mc1 through
        global memory. *)
-    p "shared tiles, barriers, no edge guards (GPU) or rejected (CPU)"
+    p "shared tiles, barriers, no edge guards (GPU)"
       (shared_ok && count_sub "if (" = 0 && has "acc_mc1")
-  else skipped "shared tiles, barriers, no edge guards (GPU) or rejected (CPU)";
+  else skipped "shared tiles, barriers, no edge guards (GPU)";
   (let post = transform (Ll_test.captured_lowering ~name:"mm_smem_capture" smem_comp) in
    let guards, barriers = Ll_test.guards_and_barriers post.LL.llc in
    p "structural: the SMEM schedule places two tiles in workgroup-shared memory"
@@ -232,8 +232,7 @@ let () =
   in
   let ctx_b = Context.run ctx_b routine_b in
   let got_b = Context.get_values ctx_b cb.Tensor.value in
-  p_close "broadcast staging values correct (GPU) or clean rejection (CPU)" got_b bcast_expected
-    ~tol:approx_tol;
+  p_close "broadcast staging values correct (GPU and CPU)" got_b bcast_expected ~tol:approx_tol;
   if has_shared then
     let src = Generated.read "bcast_staged" in
     let count_sub sub =

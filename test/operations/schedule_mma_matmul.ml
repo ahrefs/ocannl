@@ -1807,8 +1807,7 @@ let () =
   in
   let ctx_c = run_prefilled ctx_c routine_c mc3 in
   let got_staged = Context.get_values ctx_c mc3.Tensor.value in
-  p_close "staged+tensorized matmul parity (GPU) or clean rejection (CPU)" got_staged got_serial
-    ~tol:approx_tol;
+  p_close "staged+tensorized matmul parity (GPU and CPU)" got_staged got_serial ~tol:approx_tol;
   in_leg ~leg:gpu_leg "staged+tensorized structure as expected" (fun label ->
       let src = Generated.read "mm_staged_mma" in
       let has s = String.is_substring src ~substring:s in

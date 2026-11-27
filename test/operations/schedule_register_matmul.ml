@@ -146,8 +146,7 @@ let () =
   let ctx_a = Context.set_values ctx_a mc1.Tensor.value mc1_prefill in
   let ctx_a = Context.run ctx_a routine_a in
   let got_reg = Context.get_values ctx_a mc1.Tensor.value in
-  p_close "register-tiled matmul parity (GPU) or clean rejection (CPU)" got_reg got_serial
-    ~tol:approx_tol;
+  p_close "register-tiled matmul parity (GPU and CPU)" got_reg got_serial ~tol:approx_tol;
   if has_shared then
     let src = Generated.read "mmr_tiled" in
     let count_sub sub =
@@ -158,7 +157,7 @@ let () =
        plain [acc + a * b] -- contraction is a licence, off by default (gh-ocannl-998) -- or, with
        [fp_contract] on, an FMA: Metal spells it [fma(], CUDA and HIP [fmaf(]. The three patterns
        are disjoint, so the counts add. *)
-    p "unrolled register tile structure (GPU) or rejected (CPU)"
+    p "unrolled register tile structure (GPU)"
       (count_sub ("(" ^ Generated.node_ident ~facts "acc_mc1" ^ "[")
        + count_sub "fma(" + count_sub "fmaf("
        = tm * tn
@@ -170,7 +169,7 @@ let () =
       if String.is_substring backend_name ~substring:"metal" then
         count_sub ("threadgroup float " ^ Generated.node_ident ~facts "tile_") = 2
       else count_sub ("__shared__ float " ^ Generated.node_ident ~facts "tile_") = 2)
-  else skipped "unrolled register tile structure (GPU) or rejected (CPU)";
+  else skipped "unrolled register tile structure (GPU)";
   (* The structural leg (gh-ocannl-1626): the claim above that reads GPU-dialect emitted source is
      skipped on C backends (which render serialized C loops instead of [threadgroup]/[__shared__]).
      What it pins up to the dialect's spelling is the scheduled IR, which [Sched.apply] builds on

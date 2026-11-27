@@ -165,8 +165,7 @@ let () =
   let ctx_a = Context.set_values ctx_a mc1.Tensor.value prefill in
   let ctx_a = Context.run ctx_a routine_a in
   let got_smem = Context.get_values ctx_a mc1.Tensor.value in
-  p_close "swizzled SMEM matmul parity (GPU) or clean rejection (CPU)" got_smem got_serial
-    ~tol:approx_tol;
+  p_close "swizzled SMEM matmul parity (GPU and CPU)" got_smem got_serial ~tol:approx_tol;
   if on_gpu then
     let src = Generated.read "mm_swizzled_smem" in
     let has sub = String.is_substring src ~substring:sub in
@@ -183,9 +182,9 @@ let () =
     in
     (* Each tile is written by its cooperative load and read by the micro-kernel, all through the
        swizzled offset [P*8 + (col ^ (P & 7))]: at least 4 masked-XOR sites. *)
-    p "tile accesses XOR-swizzled (GPU) or rejected (CPU)"
+    p "tile accesses XOR-swizzled (GPU)"
       (shared_ok && count_sub " & 7)" >= 4 && count_sub " ^ " >= 4)
-  else skipped "tile accesses XOR-swizzled (GPU) or rejected (CPU)";
+  else skipped "tile accesses XOR-swizzled (GPU)";
 
   (* --- The same schedule under the 16-byte-unit flavor ([Swizzle_b128], gh-ocannl-481 item 3 D1):
      the XOR permutes whole 16-byte units of the row instead of single elements, leaving the offset
@@ -208,8 +207,7 @@ let () =
   let ctx_b = Context.set_values ctx_b mc1b.Tensor.value prefill in
   let ctx_b = Context.run ctx_b routine_b in
   let got = Context.get_values ctx_b mc1b.Tensor.value in
-  p_close "b128-swizzled SMEM matmul parity (GPU) or clean rejection (CPU)" got got_serial
-    ~tol:approx_tol;
+  p_close "b128-swizzled SMEM matmul parity (GPU and CPU)" got got_serial ~tol:approx_tol;
   if on_gpu then
     let src = Generated.read "mm_swz128_smem" in
     let count_sub sub =
@@ -218,13 +216,13 @@ let () =
     (* Four access sites (two cooperative loads, two micro-kernel reads), each rendering the unit
        index, its XOR mask, the shift back and the within-unit remainder. The element flavor's [& 7]
        mask must NOT appear: that would be the wrong granularity. *)
-    p "tile accesses b128-swizzled (GPU) or rejected (CPU)"
+    p "tile accesses b128-swizzled (GPU)"
       (count_sub " >> 2)" >= 4
       && count_sub " & 1)" >= 4
       && count_sub " << 2)" >= 4
       && count_sub " & 3)" >= 4
       && count_sub " & 7)" = 0)
-  else skipped "tile accesses b128-swizzled (GPU) or rejected (CPU)";
+  else skipped "tile accesses b128-swizzled (GPU)";
 
   (* --- [Stage ~pad_stride] (gh-ocannl-481 item 4): the same schedule with the tiles' minor dim
      rounded up from 8 to a multiple of 12. Nothing about the DATA changes — the load nest and the
@@ -245,8 +243,7 @@ let () =
   let ctx_p = Context.set_values ctx_p mc1p.Tensor.value prefill in
   let ctx_p = Context.run ctx_p routine_p in
   let got = Context.get_values ctx_p mc1p.Tensor.value in
-  p_close "pad_stride SMEM matmul parity (GPU) or clean rejection (CPU)" got got_serial
-    ~tol:approx_tol;
+  p_close "pad_stride SMEM matmul parity (GPU and CPU)" got got_serial ~tol:approx_tol;
   if on_gpu then
     let src = Generated.read "mm_padstride_smem" in
     let has sub = String.is_substring src ~substring:sub in
@@ -257,14 +254,14 @@ let () =
       (if on_metal then "threadgroup float " else "__shared__ float ")
       ^ Generated.node_ident ~facts "tile_"
     in
-    p "pad_stride widens the tile stride (GPU) or rejected (CPU)"
+    p "pad_stride widens the tile stride (GPU)"
       (count_sub decl = 2
       && count_sub "[96]" = 2
       && count_sub " * 12 + " >= 4
       && (not (has " * 8 + "))
       (* Padding alone is not a swizzle: the offsets stay plain row-major. *)
       && not (has " ^ "))
-  else skipped "pad_stride widens the tile stride (GPU) or rejected (CPU)";
+  else skipped "pad_stride widens the tile stride (GPU)";
 
   (* --- Swizzled tiles feeding Tensorize: the intrinsic/fragment renderings assume row-major
      pointer+stride operands, so they must decline and the lane-0 scalar fallback must run — and
@@ -329,8 +326,7 @@ let () =
   let ctx_c = Context.set_values ctx_c mc2.Tensor.value prefill in
   let ctx_c = Context.run ctx_c routine_c in
   let got_staged = Context.get_values ctx_c mc2.Tensor.value in
-  p_close "swizzled staged+tensorized parity (GPU) or clean rejection (CPU)" got_staged got_serial
-    ~tol:approx_tol;
+  p_close "swizzled staged+tensorized parity (GPU and CPU)" got_staged got_serial ~tol:approx_tol;
   if on_gpu then
     let src = Generated.read "mm_swizzled_mma" in
     let has sub = String.is_substring src ~substring:sub in

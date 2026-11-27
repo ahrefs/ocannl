@@ -269,7 +269,7 @@ let () =
         let ctx = Context.run ctx routine in
         (key, Context.get_values ctx mc.Tensor.value))
   in
-  (let label = "staged depths approximate the serial twin (GPU) or clean rejection (CPU)" in
+  (let label = "staged depths approximate the serial twin (GPU and CPU)" in
    p_all label results ~f:(fun (key, got) ->
        Verdict.within ~what_ran:(Printf.sprintf "depth %d" key) label got got_serial ~tol:(fun _ ->
            1e-2)));

@@ -103,9 +103,7 @@ let () =
   in
   let ctx_a = Context.run ctx_a routine_a in
   let got_s1 = Context.get_values ctx_a s1.Tensor.value in
-  p_close "workgroup reduction parity (GPU) or clean rejection (CPU)"
-    [| got_s1.(0) |]
-    [| expected_sum |] ~tol;
+  p_close "workgroup reduction parity (GPU and CPU)" [| got_s1.(0) |] [| expected_sum |] ~tol;
   if has_barriers then
     let src = Generated.read "sum_wg_reduce" in
     let has sub = String.is_substring src ~substring:sub in
@@ -119,5 +117,5 @@ let () =
         has ("__shared__ float " ^ Generated.node_ident ~facts "partial_sums" ^ "[64]")
         && has "__syncthreads()"
     in
-    p "shared tile and barrier rendered (GPU) or rejected (CPU)" shared_ok
-  else skipped "shared tile and barrier rendered (GPU) or rejected (CPU)"
+    p "shared tile and barrier rendered (GPU)" shared_ok
+  else skipped "shared tile and barrier rendered (GPU)"

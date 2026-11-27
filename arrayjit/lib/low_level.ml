@@ -8250,71 +8250,50 @@ let reads_scope_before_set (target : scope_id) (body : t) : bool =
   in
   match scan body with `Written -> false | `Read | `Neither -> true
 
-(** Whether a statement tree contains an explicit [Workgroup_barrier] anywhere (excluding bare
-    [Tile_mma], so CPU register-tiled schedules without shared memory or barriers stay on the
-    fork-join path). *)
-let rec contains_explicit_barrier (llc : t) : bool =
+(** Shared walk for {!contains_barrier} and {!contains_explicit_barrier}: whether a statement tree
+    contains a [Workgroup_barrier] anywhere (including inside [For_loop] bodies and [Local_scope]
+    bodies of its scalar expressions), optionally treating [Tile_mma] itself as barrier-strength. *)
+let rec contains_barrier_aux ~tile_mma_is_barrier (llc : t) : bool =
   match llc with
   | Workgroup_barrier -> true
-  | Seq (a, b) -> contains_explicit_barrier a || contains_explicit_barrier b
-  | For_loop { body; _ } -> contains_explicit_barrier body
+  (* A cooperative tile statement is barrier-strength for code motion and [validate_parallel], while
+     [contains_explicit_barrier] recurses only into [fallback] so bare CPU register-tiled schedules
+     stay on the fork-join path. *)
+  | Tile_mma { fallback; _ } ->
+      tile_mma_is_barrier || contains_barrier_aux ~tile_mma_is_barrier fallback
+  | Seq (a, b) ->
+      contains_barrier_aux ~tile_mma_is_barrier a || contains_barrier_aux ~tile_mma_is_barrier b
+  | For_loop { body; _ } -> contains_barrier_aux ~tile_mma_is_barrier body
   | Scan_loop { carried; body; _ } ->
-      List.exists carried ~f:(fun c -> scalar_contains_explicit_barrier c.init)
-      || contains_explicit_barrier body
-  | Set { llsc; _ } -> scalar_contains_explicit_barrier llsc
+      List.exists carried ~f:(fun c -> scalar_contains_barrier_aux ~tile_mma_is_barrier c.init)
+      || contains_barrier_aux ~tile_mma_is_barrier body
+  | Set { llsc; _ } -> scalar_contains_barrier_aux ~tile_mma_is_barrier llsc
   | Set_dynamic { dyn_value = v, _; llsc; _ } ->
-      scalar_contains_explicit_barrier v || scalar_contains_explicit_barrier llsc
-  | Set_from_vec { arg = a, _; _ } -> scalar_contains_explicit_barrier a
-  | Set_local (_, llsc) -> scalar_contains_explicit_barrier llsc
-  | If { cond = c, _; body } -> scalar_contains_explicit_barrier c || contains_explicit_barrier body
-  | Tile_mma { fallback; _ } -> contains_explicit_barrier fallback
+      scalar_contains_barrier_aux ~tile_mma_is_barrier v
+      || scalar_contains_barrier_aux ~tile_mma_is_barrier llsc
+  | Set_from_vec { arg = s, _; _ } -> scalar_contains_barrier_aux ~tile_mma_is_barrier s
+  | Set_local (_, llsc) -> scalar_contains_barrier_aux ~tile_mma_is_barrier llsc
+  | If { cond = c, _; body } ->
+      scalar_contains_barrier_aux ~tile_mma_is_barrier c
+      || contains_barrier_aux ~tile_mma_is_barrier body
   | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ -> false
 
-and scalar_contains_explicit_barrier (sc : scalar_t) : bool =
-  match sc with
-  | Local_scope { body; _ } -> contains_explicit_barrier body
-  | Unop (_, (a, _)) -> scalar_contains_explicit_barrier a
-  | Binop (_, (a, _), (b, _)) ->
-      scalar_contains_explicit_barrier a || scalar_contains_explicit_barrier b
-  | Ternop (_, (a, _), (b, _), (c, _)) ->
-      scalar_contains_explicit_barrier a
-      || scalar_contains_explicit_barrier b
-      || scalar_contains_explicit_barrier c
-  | Get_dynamic { dyn_value = v, _; _ } -> scalar_contains_explicit_barrier v
-  | Constant _ | Constant_bits _ | Embed_index _ | Get _ | Get_local _ | Get_merge_buffer _ -> false
-
-(** Whether a statement tree contains a [Workgroup_barrier] anywhere, including inside [For_loop]
-    bodies and [Local_scope] bodies of its scalar expressions. Used to delimit code motion:
-    [flat_lines] keeps [For_loop] opaque, so this recursive check is what splits hoisting at a
-    barrier nested in a sibling statement. *)
-let rec contains_barrier (llc : t) : bool =
-  match llc with
-  | Workgroup_barrier -> true
-  (* A cooperative tile statement is barrier-strength: all lanes must reach it together, and no code
-     motion may cross it. Treating it as a barrier also makes [validate_parallel] apply the
-     workgroup-extent-uniformity and no-If-guard rules to kernels containing it. *)
-  | Tile_mma _ -> true
-  | Seq (a, b) -> contains_barrier a || contains_barrier b
-  | For_loop { body; _ } -> contains_barrier body
-  | Scan_loop { carried; body; _ } ->
-      List.exists carried ~f:(fun c -> scalar_contains_barrier c.init) || contains_barrier body
-  | Set { llsc; _ } -> scalar_contains_barrier llsc
-  | Set_dynamic { dyn_value = v, _; llsc; _ } ->
-      scalar_contains_barrier v || scalar_contains_barrier llsc
-  | Set_from_vec { arg = s, _; _ } -> scalar_contains_barrier s
-  | Set_local (_, llsc) -> scalar_contains_barrier llsc
-  | If { cond = c, _; body } -> scalar_contains_barrier c || contains_barrier body
-  | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ -> false
-
-and scalar_contains_barrier (llsc : scalar_t) : bool =
+and scalar_contains_barrier_aux ~tile_mma_is_barrier (llsc : scalar_t) : bool =
   match llsc with
-  | Local_scope { body; _ } -> contains_barrier body
-  | Get_dynamic { dyn_value = v, _; _ } -> scalar_contains_barrier v
+  | Local_scope { body; _ } -> contains_barrier_aux ~tile_mma_is_barrier body
+  | Get_dynamic { dyn_value = v, _; _ } -> scalar_contains_barrier_aux ~tile_mma_is_barrier v
   | Ternop (_, (s1, _), (s2, _), (s3, _)) ->
-      scalar_contains_barrier s1 || scalar_contains_barrier s2 || scalar_contains_barrier s3
-  | Binop (_, (s1, _), (s2, _)) -> scalar_contains_barrier s1 || scalar_contains_barrier s2
-  | Unop (_, (s, _)) -> scalar_contains_barrier s
+      scalar_contains_barrier_aux ~tile_mma_is_barrier s1
+      || scalar_contains_barrier_aux ~tile_mma_is_barrier s2
+      || scalar_contains_barrier_aux ~tile_mma_is_barrier s3
+  | Binop (_, (s1, _), (s2, _)) ->
+      scalar_contains_barrier_aux ~tile_mma_is_barrier s1
+      || scalar_contains_barrier_aux ~tile_mma_is_barrier s2
+  | Unop (_, (s, _)) -> scalar_contains_barrier_aux ~tile_mma_is_barrier s
   | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
+
+let contains_explicit_barrier (llc : t) : bool = contains_barrier_aux ~tile_mma_is_barrier:false llc
+let contains_barrier (llc : t) : bool = contains_barrier_aux ~tile_mma_is_barrier:true llc
 
 (* Whether the tree carries a read-modify-write accumulation: some [Set] (resp. [Set_local]) reads
    its own target — a loop-carried dependency through memory when the written cell does not vary

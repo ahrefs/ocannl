@@ -1,5 +1,5 @@
 the prefill of the targets differs from the serial twin's result in every cell: true
-staged depths approximate the serial twin (GPU) or clean rejection (CPU): true
+staged depths approximate the serial twin (GPU and CPU): true
 depth 2 matches depth 1 BITWISE: true
 depth 1 matches the un-elided barrier structure BITWISE: true
 depth 2 rotates the buffers the depth-1 kernel does not: true

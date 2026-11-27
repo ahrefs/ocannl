@@ -148,9 +148,7 @@ let staged_schedule ~bm ~out ~src_a ~src_b ~swz_a ~swz_b ~bk ~ta ~tb (opt : LL.o
 let leg ?schedule_of ~tag ~build ~src_a ~src_b ~swz_a ~swz_b ~check ~acc_prec ?(bm = bm) ?(bk = bm)
     ?(ta = false) ?(tb = false) () =
   let name = "ldm_" ^ tag in
-  let parity_label =
-    Printf.sprintf "%s staged ldmatrix parity (GPU) or clean rejection (CPU)" tag
-  in
+  let parity_label = Printf.sprintf "%s staged ldmatrix parity (GPU and CPU)" tag in
   let struct_label = Printf.sprintf "%s ldmatrix structure and census as expected" tag in
   (* Each [build ()] mints a fresh root over the shared leaves, so a root must be fully consumed
      before the next is built ([Tensor.consume_forward_code] rejects overlapping live roots). *)

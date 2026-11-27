@@ -40,9 +40,6 @@ Site -- arrayjit/lib/c_syntax.ml, declared:
 Site -- arrayjit/lib/c_syntax.ml, is_local:
   431:is-local-virtual-query
   432:is-local-materialized-query
-Site -- arrayjit/lib/c_syntax.ml, poison_docs:
-  333:local-decl-virtual-query
-  336:local-decl-materialized-query
 Site -- arrayjit/lib/c_syntax.ml, pp_device_read_ptr:
   820:volatile-accumulation-read
 Site -- arrayjit/lib/c_syntax.ml, rmw_volatile_reads:
