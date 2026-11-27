@@ -2381,7 +2381,7 @@ def substitution_check(results):
 SUBSTITUTED_MARK = " **SHIPPED UNTUNED**"
 
 
-def substitution_notice(substituted):
+def substitution_gate(substituted):
     """Name the cells whose timed artifact is the untuned default substituted for their tuning."""
     labels = ", ".join(
         f"{gate_label(r)} (discarded {r['substituted_from']})"
@@ -2390,7 +2390,7 @@ def substitution_notice(substituted):
         for r in substituted
     )
     return (
-        f"SUBSTITUTION NOTICE: {len(substituted)} tuned cell(s) shipped the untuned default in "
+        f"SUBSTITUTION GATE: {len(substituted)} tuned cell(s) shipped the untuned default in "
         f"place of their measured schedule, so their step times are untuned: {labels}"
     )
 
@@ -3813,11 +3813,13 @@ def main():
         # (gh-ocannl-1702), and the row's variant says nothing about it.
         print(log_line(grid_notice(grid_serial)), flush=True)
     if substituted:
-        # Not a gate, like the tensorization notice: the substitute computes the right thing, and
-        # the tuner substitutes deliberately when its winner cannot ship as measured. It is
-        # announced because the row is honest only about untuned code under a tuned variant, and
-        # before gh-ocannl-1559 a stderr warning a successful cell discards was the only trace.
-        print(log_line(substitution_notice(substituted)), flush=True)
+        # Not a parity problem: the substitute computes the right thing, and the tuner substitutes
+        # deliberately when its winner cannot ship as measured. It is a gate (gh-ocannl-1613), like
+        # the provenance, regime and precision gates: a tuned cell whose step times came from the
+        # untuned default must not pass a sweep green, and the report written above still carries
+        # its row marked `SHIPPED UNTUNED`.
+        ok = False
+        print(log_line(substitution_gate(substituted)), flush=True)
     if regime_mismatches:
         # A row labelled with a regime its process did not run in is worse than a missing row:
         # its number would be quoted as the other regime's (gh-ocannl-719).

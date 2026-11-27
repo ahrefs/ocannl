@@ -50,10 +50,13 @@ for o in overrides:
 print(json.dumps(a, separators=(",", ":")))
 PY
 }
-# [line ARM_JSON...]: a result line around the given arms.
+# [line ARM_JSON...]: a result line around the given arms (TUNE_SHIP_FIELDS overrides the
+# ship_substituted/substituted_from pair when set, or omits them when set to "-").
 line() {
   local IFS=,
-  printf '{"framework":"ocannl","backend":"cc","compile_s":3.5,"searched":true,"tune":{"shipped":"A","searches":2,"replays":0,"no_searches":0,"shipped_mma":null,"arms":[%s]},"step_ms":{"p10":1,"p50":1,"p90":1},"losses":[]}\n' "$*"
+  local ship_fields=${TUNE_SHIP_FIELDS-'"ship_substituted":false,"substituted_from":null,'}
+  if [ "$ship_fields" = "-" ]; then ship_fields=""; fi
+  printf '{"framework":"ocannl","backend":"cc","compile_s":3.5,"searched":true,"tune":{"shipped":"A",%s"searches":2,"replays":0,"no_searches":0,"shipped_mma":null,"arms":[%s]},"step_ms":{"p10":1,"p50":1,"p90":1},"losses":[]}\n' "$ship_fields" "$*"
 }
 
 # [check DRIVER CHECKER RUN RESULT_LINE]: run DRIVER's require_complete_session over a session
@@ -146,6 +149,22 @@ leg 'a dropped degenerate-reading count is not a pass' \
   'INCOMPLETE SESSION: arm B carries no timings_unreadable'
 leg 'a truncated result line is incomplete' \
   rejects truncated "${complete%???}" 'INCOMPLETE SESSION: the result line is not JSON'
+leg 'a substituted ship is incomplete and names the discarded crown (gh-ocannl-1613)' \
+  rejects substituted_crown \
+  "$(TUNE_SHIP_FIELDS='"ship_substituted":true,"substituted_from":"grid 128",' line "$A" "$B")" \
+  'INCOMPLETE SESSION: the shipping compile substituted the untuned default (discarded grid 128)'
+leg 'a last-resort substituted ship is incomplete without a crown name (gh-ocannl-1613)' \
+  rejects substituted_last_resort \
+  "$(TUNE_SHIP_FIELDS='"ship_substituted":true,"substituted_from":null,' line "$A" "$B")" \
+  'INCOMPLETE SESSION: the shipping compile substituted the untuned default'
+leg 'a null ship_substituted is not a pass (gh-ocannl-1613)' \
+  rejects substituted_null \
+  "$(TUNE_SHIP_FIELDS='"ship_substituted":null,"substituted_from":null,' line "$A" "$B")" \
+  'INCOMPLETE SESSION: the tune record carries no boolean ship_substituted'
+leg 'a dropped ship_substituted is not a pass (gh-ocannl-1613)' \
+  rejects substituted_dropped \
+  "$(TUNE_SHIP_FIELDS='-' line "$A" "$B")" \
+  'INCOMPLETE SESSION: the tune record carries no boolean ship_substituted'
 
 # The runner's own wire format, rendered from bench_json.ml's templates rather than from a second
 # copy of its field names: a field the checker reads that the runner renames or drops fails here.
@@ -160,7 +179,8 @@ def render(t, **fixed):
     return t.replace('"%s"', '"x"').replace("%s", "null").replace("%d", "0").replace("%b", "true")
 arms = [render(arm, **{'"arm":"%s"': '"arm":"%s"' % n, '"state":"%s"': '"state":"searched"',
                        '"best_ms":%s': '"best_ms":1.5'}) for n in "AB"]
-t = render(tune.replace("[%s]", "[" + ",".join(arms) + "]"))
+t = render(tune.replace("[%s]", "[" + ",".join(arms) + "]"),
+           **{'"ship_substituted":%s': '"ship_substituted":false'})
 print(json.dumps({"compile_s": 1.0, "searched": True, "tune": json.loads(t)}, separators=(",", ":")))
 PY
 ) || { echo "could not render bench_json.ml's arm and tune templates" >&2; exit 2; }
@@ -187,6 +207,11 @@ checker_splits_contention() {
 checker_splits_unreadable() {
   check "$SRC" "$1" "$2" "$(line "$A" "$(arm B timings_contended=1 timings_unreadable=1)")"
   ! grep -q 'CONTENDED SESSION' "$TMP/runs/$2/stdout"
+}
+checker_rejects_substituted() {
+  check "$SRC" "$1" "$2" \
+    "$(TUNE_SHIP_FIELDS='"ship_substituted":true,"substituted_from":"grid 128",' line "$A" "$B")"
+  grep -qx 'status=1' "$TMP/runs/$2/stdout"
 }
 # The driver as it was: best_ms read by a scan from the arm's name to its first closing brace.
 cat >"$TMP/brace-scan.txt" <<'EOF'
@@ -231,4 +256,11 @@ expect_rejected 'unbatched refusals counted as contention' "$merged" checker_spl
 unreadable_merged=$(py_mutant unreadable_merged '{ sub(/ \+ a\["timings_unreadable"\]/, ""); print }') || exit 2
 expect_rejected 'degenerate clock readings counted as contention' "$unreadable_merged" \
   checker_splits_unreadable 'CONTENDED SESSION'
+# A checker that ignores tune.ship_substituted (gh-ocannl-1613).
+no_sub=$(py_mutant no_sub '
+  /if "ship_substituted" not in tune/ { skip = 1; next }
+  skip && /^    for name in REQUIRED_ARMS:/ { skip = 0 }
+  skip { next }
+  { print }') || exit 2
+expect_rejected 'a substituted ship reads as complete' "$no_sub" checker_rejects_substituted 'status=0'
 finish

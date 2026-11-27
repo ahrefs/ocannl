@@ -1596,10 +1596,10 @@ both `cifar_resnet` and `cifar_resnet_b1` absent from the store (gh-ocannl-1825)
   untuned compile. Every other field still names the search whose crown was discarded, so this one
   is the only record that the row's step times are untuned; `substituted_from` names the discarded
   crown (`null` on the last resort, which discards none), and both are `null` when the harness
-  recorded no ship. `orchestrate.py` marks such a row's variant **`SHIPPED UNTUNED`** and prints a
-  `SUBSTITUTION NOTICE` naming the cells -- a notice rather than a gate, like the tensorization one
-  below: the tuner substitutes deliberately when its winner cannot ship as measured, and the defect
-  is quoting the row as a tuned number. Each arm reports its crowned candidate's label, whether that
+  recorded no ship. `orchestrate.py` marks such a row's variant **`SHIPPED UNTUNED`** in the
+  report and fails the sweep with a `SUBSTITUTION GATE` naming the cells (gh-ocannl-1613) — unlike
+  the tensorization notice below, a substituted ship is never an expected optimizer decision on a
+  healthy run, and `gh728_protocol.py` / `gh834_session.py` reject it too. Each arm reports its crowned candidate's label, whether that
   schedule tensorizes, how many of its `Tile_mma` statements were emitted and how many of those
   rendered as the lane-0 scalar fallback, the seeded/timed tensorized counts, and the best *timed*
   tensorized candidate's time.
