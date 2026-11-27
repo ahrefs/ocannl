@@ -950,8 +950,10 @@ DUNE
 (* Example item: {%%fixture.item|*)
 |} Before the quoted extension. *)
 let used = ignore {%fixture.payload tag|a bare |} and a literal (*
+let unused = 0
 *) close neither the extension nor an OCaml comment|tag}; 1
 let unused = 2
+let example = "{ABC|"
 ML
   git_q commit -qam tagged-quoted-base || exit 2
   perl -pi -e 's/^\*\) close/\n*) close/' "$repo/lib/helper.ml"
@@ -959,8 +961,8 @@ ML
   trailer
   if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] &&
      grep -qxF "$comment_alias" "$out" && ! grep -q '^affected: comment-only reason:' "$err"; then
-    report 0 'a blank payload line in a tagged quoted extension reaches its named definition'
-  else report 1 'a blank payload line in a tagged quoted extension reaches its named definition' "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
+    report 0 'a blank payload line after a literal let in a tagged extension reaches its named definition'
+  else report 1 'a blank payload line after a literal let in a tagged extension reaches its named definition' "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
 
   git_q checkout -q -- lib/helper.ml || exit 2
   perl -pi -e 's/Before the quoted extension/Near the quoted extension/' "$repo/lib/helper.ml"
@@ -1245,11 +1247,26 @@ if harness_leg 'helper definitions'; then
   hctl 'the definitions named are what leave an unnamed one out' \
     'next if $done{"$f\0$k"} || ($c->{names} && !(@by = grep { $tok{$_} } @{$c->{names}}));' 'next if $done{"$f\0$k"};' @t8/runtest-t_hplain
   hctl 'blanking comments is what keeps a doc comment from naming a module' \
-    '    my $code = code_of($s);' '    my $code = $s;' @t8/runtest-t_hplain
+    '    my $code = code_of($s, 0, \%lex);' '    my $code = $s;' @t8/runtest-t_hplain
   hctl 'naming the re-exporting module is what a re-exported name needs' \
     'next if $via && !@by;' '' @t8/runtest-t_hbare
   hctl 'a qualified path or an open, not any token of the re-exporting module, is what a re-exported name needs' \
     'my @by = $via ? grep { $through->($_, $n) } sort keys %$via : ();' 'my @by = $via ? grep { $tok->{$_} } sort keys %$via : ();' @t8/runtest-t_hbeside
+  cat >"$repo/t8/hlp.ml" <<'ML'
+let plain () =
+  ignore {%fixture.payload|literal (*
+let fake = 0
+  *) text|};
+  ignore Core.H.used
+ML
+  git_q commit -qm quoted-helper -- t8/hlp.ml || exit 2
+  perl -pi -e 's/^let used = 1$/let used = 3/' "$repo/lib/helper.ml"
+  affected --referenced-only HEAD
+  if [ "$rc" = 0 ] && grep -qxF '@t8/runtest-t_hplain' "$out"; then
+    report 0 'a payload line resembling a binding leaves the subsequent reference in the named helper definition'
+  else report 1 'a payload line resembling a binding leaves the subsequent reference in the named helper definition' \
+    "exit $rc; $(grep -F 't_hplain' "$err")"; fi
+  git_q reset -q --hard HEAD~1 || exit 2
   git_q reset -q --hard HEAD~1 && rm -rf "${repo:?}/t8" || exit 2
 fi
 

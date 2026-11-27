@@ -110,9 +110,10 @@
 # Quoted extensions use one or two percent signs, ASCII dotted identifiers,
 # and either an empty delimiter or a lowercase ASCII tag (letters and
 # underscores) separated from the name by horizontal whitespace. Payload
-# lines are literal code outside OCaml comments. Unrecognized quoted openers
-# and unterminated quoted strings keep ordinary reach, as do added or deleted
-# sources, mode changes, unreadable hunks, unknown owners and `--files`.
+# lines are literal code outside OCaml comments and do not start definitions.
+# Unrecognized brace-delimited openers at lexical boundaries and missing
+# closers keep ordinary reach, as do added or deleted sources, mode changes,
+# unreadable hunks, unknown owners and `--files`.
 # Compiler output, source locations and Markdown contents are outside this
 # check. Compile and scans cover the library edit's link-only reach. The
 # ordinary list still prints it, but only the first tier counts for width.
@@ -5099,42 +5100,54 @@ sub tokens_of {
 # they mention. A misread line boundary only merges two definitions, which errs
 # towards "names it".
 my $ext_ident = qr/[A-Za-z_][A-Za-z_0-9']*(?:\.[A-Za-z_][A-Za-z_0-9']*)*/;
-my $quoted_open = qr/\{(?:%{1,2}$ext_ident(?:[\t\f ]+|(?=\|)))?([a-z_]*)\|/;
+my $quoted_open = qr/(?:%{1,2}$ext_ident(?:[\t\f ]+|(?=\|)))?([a-z_]*)\|/;
 # Spelling outside the byte lexer's allowlist can hide apparent comments in
 # literal text. Keep ordinary reach even when the byte lexer missed that span.
 my $unsupported_quote = qr{
-  (?!$quoted_open) \{
-    (?: %{1,2}[A-Za-z_\x80-\xff][A-Za-z_0-9'.\x80-\xff]*(?:[\t\f ]+[A-Za-z_\x80-\xff]*)?
-      | [A-Za-z_\x80-\xff]* )\|
+  (?: %{1,2}[A-Za-z_\x80-\xff][A-Za-z_0-9'.\x80-\xff]*(?:[\t\f ]+[A-Za-z_\x80-\xff]*)?
+    | [A-Za-z_\x80-\xff]* )\|
 }x;
 sub code_of {   # OCaml text with every comment blanked, newlines kept; strings inside comments are comment
-  my ($s, $mark, $unterminated) = @_;   # MARK: make every literal line non-blank, keeping newlines
+  my ($s, $mark, $lex) = @_;   # MARK: make every literal line non-blank, keeping newlines
   my ($out, $depth) = ("", 0);
+  my $line = 1;
   pos($s) = 0;
   while (pos($s) < length $s) {
-    my $piece;
+    my ($piece, $quoted);
     if ($s =~ /\G\(\*/gc) { $depth++; $piece = "  " }
     elsif ($depth && $s =~ /\G\*\)/gc) { $depth--; $piece = "  " }
     # A trailing apostrophe belongs to the identifier. Treating it as a
     # character opener can swallow the quote before a following literal.
     elsif ($s =~ /\G([A-Za-z_\x80-\xff][A-Za-z_0-9'\x80-\xff]*)/gc) { $piece = $1 }
-    elsif ($s =~ /\G$quoted_open/gc) {
+    elsif ($s =~ /\G\{/gc) {
       my $start = $-[0];
-      my $close = "|$1}";
-      my $end = index($s, $close, pos($s));
-      if ($end < 0) {
-        $$unterminated = 1 if $unterminated;
-        $end = length $s;
-      } else {
-        $end += length $close;
+      $piece = "{";
+      if ($s =~ /\G$quoted_open/gc) {
+        my $close = "|$1}";
+        my $end = index($s, $close, pos($s));
+        if ($end < 0) {
+          $lex->{uncertain} = 1 if $lex;
+          $end = length $s;
+        } else {
+          $end += length $close;
+        }
+        $piece = substr($s, $start, $end - $start);
+        pos($s) = $end;
+        $quoted = 1;
+      } elsif ($lex && $s =~ /\G(?=$unsupported_quote)/gc) {
+        $lex->{uncertain} = 1;
       }
-      $piece = substr($s, $start, $end - $start);
-      pos($s) = $end;
     }
     elsif ($s =~ /\G("(?:[^"\\]++|\\.)*+")/gcs
            || $s =~ /\G('(?:[^'\\\n]|\\(?:[\\'"ntbr ]|[0-9]{3}|x[0-9A-Fa-f]{2}|o[0-7]{3}))')/gc
            || $s =~ /\G([^(*"{'\nA-Za-z_\x80-\xff]+|.)/gcs) {
       $piece = $1;
+    }
+    if ($lex) {
+      my $end_line = $line + ($piece =~ tr/\n//);
+      # Record layout separately because payload tokens can name generated code.
+      if ($quoted && !$depth) { $lex->{continued}{$_} = 1 for $line + 1 .. $end_line }
+      $line = $end_line;
     }
     $piece = $piece =~ s/[^\n]/S/gr =~ s/\n/\nS/gr if $mark && !$depth && $piece =~ /^["'{]./s;
     $out .= $depth || $piece eq "  " ? $piece =~ s/[^\n]/ /gr : $piece;
@@ -5148,17 +5161,20 @@ sub def_chunks {   # FILE -> [{ names => [NAME...] or undef (always counted), to
     my $s = "";
     if (open my $fh, "<", $f) { local $/; $s = <$fh> // "" }
     my (@chunks, $cur);
-    my $code = code_of($s);
+    my %lex;
+    my $code = code_of($s, 0, \%lex);
     my $scope = file_scope($code, $f);
+    my $line = 0;
     for my $l (split /\n/, $code) {
-      if ($l =~ /^and\b/ && $cur) {
+      my $at_boundary = !$lex{continued}{++$line};
+      if ($at_boundary && $l =~ /^and\b/ && $cur) {
         if ($cur->{names} && $l =~ /^and\s+(?:type\s+)?(?:'[\w']+\s+|\([^()]*\)\s+)?([A-Za-z_][\w']*)\b(?!\s*,)/) {
           push @{$cur->{names}}, $1;
         } else { $cur->{names} = undef }
         push @{$cur->{lines}}, $l;
         next;
       }
-      if ($l =~ /^[^\s)\]}|]/ && $l !~ /^(?:end|done|in|then|else|with)\b/) {
+      if ($at_boundary && $l =~ /^[^\s)\]}|]/ && $l !~ /^(?:end|done|in|then|else|with)\b/) {
         push @chunks, $cur if $cur;
         my ($name, $type);
         $name = $1 if $l =~ /^let(?:%\w+)?\s+(?:rec\s+)?([a-z_][\w']*)\b(?!\s*,)/ && $1 ne "_";
@@ -5372,8 +5388,9 @@ sub type_names {   # TYPE-NAME CHANGED-LINE -> the names a change to that line o
   return [grep { !/^(?:of|mutable|private|nonrec)$/ } @n];
 }
 sub enclosing_def {   # -> [NAME...], or undef: the whole module
-  my ($lines, $n) = @_;   # 1-based line number
+  my ($lines, $n, $continued) = @_;   # 1-based line number
   for (my $k = $n; $k >= 1; $k--) {
+    next if $continued && $continued->{$k};
     my $l = $lines->[$k - 1] // next;
     next if $l =~ /^\s/ || $l eq "" || $l =~ /^(?:\(\*|\[\@|\)|;;|\||end\b|\})/;
     # Whitelisted forms only: a `let` value, a `val`/`external`, a type, a module,
@@ -5433,8 +5450,8 @@ if (-f "$tmp/ml-diff") {
     # A changed line holding no code -- blank, or comment only, outside every
     # literal -- changes no definition (gh-ocannl-1765: the blank line above an
     # added definition was attributed to the definition above it).
-    my $unterminated = 0;
-    my %code = map { ($_ => [split /\n/, code_of($source{$_}, 1, \$unterminated), -1]) } qw(old new);
+    my %lex = (old => {}, new => {});
+    my %code = map { ($_ => [split /\n/, code_of($source{$_}, 1, $lex{$_}), -1]) } qw(old new);
     my %inert = map { my $l = $code{$_}; ($_ => { map { $l->[$_] =~ /\S/ ? () : ($_ + 1 => 1) } 0 .. $#$l }) } qw(old new);
     # A file new on this side (an `.mli` added beside its `.ml`, say) or gone from
     # it can hide or expose any member: the whole module.
@@ -5462,7 +5479,7 @@ if (-f "$tmp/ml-diff") {
       for my $n ($start .. $start + $count - 1) {
         next if $inert{$which}{$n};
         $changed_code = 1;
-        my $names = enclosing_def($side{$which}, $n);
+        my $names = enclosing_def($side{$which}, $n, $lex{$which}{continued});
         if (!defined $names) { %defs = (); $defs{"\0whole"} = 1; last }
         # An operator or other non-identifier: tokens hold identifiers only, so the
         # whole module counts.
@@ -5473,8 +5490,8 @@ if (-f "$tmp/ml-diff") {
     }
     # No definition at all: only comments or blank lines changed.
     $path_defs{$p} = $defs{"\0whole"} ? undef : \%defs;
-    $comment_only_module{$p} = 1 if $canonical && $library_module{$p} && defined $path_defs{$p} && !$changed_code && !$unterminated
-      && !grep { /$unsupported_quote/ } values %source;
+    $comment_only_module{$p} = 1 if $canonical && $library_module{$p} && defined $path_defs{$p} && !$changed_code
+      && !$lex{old}{uncertain} && !$lex{new}{uncertain};
   }
 }
 my $comment_only = %comment_only_module && !grep { !$comment_only_module{$_} && !/\.md\z/ } @changed;
