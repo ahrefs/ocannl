@@ -1208,6 +1208,10 @@ module With_device_wedge_guard (Device : Lowered_backend) = struct
     check_wedged device;
     Device.await device
 
+  let align_timing_queue device ~await =
+    check_wedged device;
+    Device.align_timing_queue device ~await
+
   let bounded_wait device ~seconds =
     check_wedged device;
     let completed =

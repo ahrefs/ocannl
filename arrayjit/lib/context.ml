@@ -1865,6 +1865,16 @@ let await_within ctx ~seconds =
           Backend.await_within c.BI.device ~seconds);
     }
 
+let align_timing_queue ctx ~await =
+  check_live ~fn:"align_timing_queue" ctx;
+  check_not_poisoned ctx;
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
+          Backend.align_timing_queue c.BI.device ~await);
+    }
+
 let static_properties ctx =
   let (module Backend) = backend_module ctx in
   Backend.static_properties ()

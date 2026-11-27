@@ -4194,6 +4194,7 @@ module type Driver = sig
   val run : ?timing:bool -> ctx -> routine -> ctx
   val sync : ctx -> unit
   val await_within : ctx -> seconds:float -> bool
+  val align_timing_queue : ctx -> await:(unit -> unit) -> bool
   val release : ctx -> unit
   val adopt_ancestor : ctx -> ancestor:ctx -> unit
   val check_lineage_runnable : ctx -> routine -> unit
@@ -4506,6 +4507,10 @@ module Make (D : Driver) : sig
       observers. Both are per call, which is how a search's accounting stays its own
       (gh-ocannl-1263). The tuner's own instrument, exposed so a harness can rank candidates by
       exactly what a search ranks them by (gh-ocannl-755) rather than by a re-derivation of it.
+
+      A backend may probe and pad the dispatch queue before warmup. Both finish within setup,
+      outside ranked samples and the routine's dispatch counts.
+
       Binds test values ({!set_test_bindings}) and restores the routine's bindings afterwards, runs
       one warmup, then minimizes the per-launch time over at least 16 and [repeats] timed runs,
       topping up until ~25 ms of per-launch samples has accumulated (up to 64 runs unless the

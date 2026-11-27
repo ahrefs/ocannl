@@ -1703,15 +1703,15 @@ let () =
    configured, and a nest heavy enough to be interesting would run as a single work item there. *)
 let counter_node = Ll_test.node_factory ~first_id:9900 ~dims:[| 1 |] () "gh755_counter"
 
-let counter_routine () =
+let counter_routine ?(name = "gh755_counter") () =
   Ll_test.materialize counter_node;
   let idx = Ll_test.fixed 0 in
   let bump =
     Ll_test.set_at counter_node idx
       (Ll_test.add (Ll_test.get counter_node [| idx |]) (Ll_test.c 1.))
   in
-  let o = Ll_test.optimize ~materialized:[ counter_node ] ~name:"gh755_counter" bump in
-  let ctx, routine = Ll_test.link ~name:"gh755_counter" o in
+  let o = Ll_test.optimize ~materialized:[ counter_node ] ~name bump in
+  let ctx, routine = Ll_test.link ~name o in
   (o, ctx, routine)
 
 type reading = {
@@ -2274,3 +2274,36 @@ let () =
   Verdict.p_all "the key's objective spelling round-trips through the mode"
     [ Autotune.Isolated; Autotune.Queued ] ~f:(fun m ->
       Poly.equal (Autotune.timing_of_setting (Autotune.timing_string m)) m)
+
+let () =
+  let _, ctx, routine = counter_routine ~name:"gh2509_alignment_counter" () in
+  let ctx = Context.set_values ctx counter_node [| 0. |] in
+  let events = ref [] in
+  let record event = events := event :: !events in
+  let module Driver = struct
+    include Autotune.Context_driver
+
+    let align_timing_queue _ctx ~await =
+      record `Align;
+      await ();
+      true
+
+    let run ?timing ctx routine =
+      record `Run;
+      Context.run ?timing ctx routine
+
+    let await_within ctx ~seconds =
+      record `Await;
+      Context.await_within ctx ~seconds
+  end in
+  let module Timing = Autotune.Make (Driver) in
+  let clock ~depth ~ordinal:_ _ = Float.of_int depth in
+  Autotune.Seam.with_value Autotune.on_batch_wall clock (fun () ->
+      ignore
+        (Timing.time_routine ~repeats:1 ~timing:Autotune.Isolated ctx routine
+          : Autotune.timing_result));
+  let trace = List.rev !events in
+  p "time_routine aligns the timing queue once and drains it before warmup"
+    (Poly.equal (List.take trace 3) [ `Align; `Await; `Run ]
+    && List.count trace ~f:(Poly.equal `Align) = 1);
+  Context.release ctx

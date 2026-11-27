@@ -6840,6 +6840,7 @@ module type Driver = sig
   val run : ?timing:bool -> ctx -> routine -> ctx
   val sync : ctx -> unit
   val await_within : ctx -> seconds:float -> bool
+  val align_timing_queue : ctx -> await:(unit -> unit) -> bool
   val release : ctx -> unit
   val adopt_ancestor : ctx -> ancestor:ctx -> unit
   val check_lineage_runnable : ctx -> routine -> unit
@@ -6901,12 +6902,12 @@ module Make (D : Driver) = struct
        calibration. *)
     let started = Mtime_clock.counter () in
     let saved_bindings = List.map (D.routine_bindings routine) ~f:(fun (_ss, r) -> (r, !r)) in
+    let launch f = if tag_failures then Outcome.tag Outcome.Launch f else f () in
     let run ctx =
       (* [~timing]: a gradient the routine accumulates into without zeroing is not refused for the
          repeats (gh-ocannl-1781); the search restores the lineage around its windows
          (gh-ocannl-1621). *)
-      if tag_failures then Outcome.tag Outcome.Launch (fun () -> D.run ~timing:true ctx routine)
-      else D.run ~timing:true ctx routine
+      launch (fun () -> D.run ~timing:true ctx routine)
     in
     (* gh-ocannl-2134: every wait is bounded ({!wait_bound_s}); [own_ms] is the largest per-launch
        wall of this window's completed waits. An expiry raises inside the [Sync] tag, where
@@ -6981,6 +6982,8 @@ module Make (D : Driver) = struct
         (* Warmup run: absorbs lazy initialization and fills caches like a steady-state
            iteration. *)
         check_stop ();
+        if launch (fun () -> D.align_timing_queue cctx ~await:(fun () -> sync ~depth:1 cctx)) then
+          check_stop ();
         let warmup = Mtime_clock.counter () in
         let ctx = ref (run cctx) in
         sync ~depth:1 !ctx;

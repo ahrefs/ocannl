@@ -160,3 +160,4 @@ isolated keys retain their unchanged timing generation: true
 cc and Metal queued keys retain their unchanged timing generation: true
 an omitted objective keys as the configured one: true
 the key's objective spelling round-trips through the mode: true
+time_routine aligns the timing queue once and drains it before warmup: true
