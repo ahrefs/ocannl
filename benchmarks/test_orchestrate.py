@@ -3205,19 +3205,31 @@ class FixtureDigestTest(unittest.TestCase):
         entries, declared = fixture_digest._read_document(digests)
         specs = [json.loads(spec.read_text()) for spec in (HERE / "workloads").glob("*.json")]
         expected = {f"{spec['name']}.safetensors" for spec in specs if spec.get("model") == "gpt"}
-        resnet = {f"{spec['name']}.safetensors" for spec in specs if spec.get("arch") == "resnet"}
+        # The gh-ocannl-1161 publication copied these two fixtures. A new workload spec
+        # enters this cohort after its fixture is distributed and each holder records it.
+        resnet = {"cifar_resnet.safetensors", "cifar_resnet_b1.safetensors"}
+        resnet_specs = {
+            f"{spec['name']}.safetensors" for spec in specs if spec.get("arch") == "resnet"
+        }
         self.assertTrue(expected, "no GPT workload specs found")
-        self.assertTrue(resnet, "no cifar_resnet workload specs found")
+        self.assertLessEqual(resnet, resnet_specs, "copied ResNet fixtures keep their specs")
+        self.assertLessEqual(resnet, set(entries), "copied ResNet fixtures keep their rows")
         lenet = {"lenet.safetensors"}
-        on_tuf = {name for name, recorded in entries.items() if any(e.origin == "tuf" for e in recorded)}
-        self.assertEqual(on_tuf, expected | lenet, "TUF must record every GPT fixture copy and lenet")
-        on_m4_pro = {name for name, recorded in entries.items() if any(e.origin == "m4-pro" for e in recorded)}
+
+        def recorded_copies(box):
+            return {
+                name for name in copied if any(entry.origin == box for entry in entries.get(name, ()))
+            }
+
+        copied = expected | resnet | lenet
         self.assertEqual(
-            on_m4_pro,
+            recorded_copies("tuf"), expected | lenet, "TUF must record every GPT fixture copy and lenet"
+        )
+        self.assertEqual(
+            recorded_copies("m4-pro"),
             (expected - {"gpt2_mini_b1.safetensors"}) | resnet | lenet,
             "m4-pro must record its store's copies of m4-max fixtures",
         )
-        copied = expected | resnet | lenet
         # Which boxes hold each family's copies: TUF's GPT copies, m4-pro's store copies (all GPT
         # except gpt2_mini_b1, plus resnet and lenet), the resnet leg's boxes, and lenet's rows.
         copy_boxes = {

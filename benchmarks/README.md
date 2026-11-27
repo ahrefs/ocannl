@@ -53,7 +53,9 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
 - **cifar_resnet** / **cifar_resnet_b1** / **cifar_resnet_b8** (`model: conv`, `arch: resnet`,
   training): a reduced ResNet-style classifier (gh-ocannl-1161) at batch 64, 1 and 8. Batch 8
   exercises both sides of the strided shortcut rule (gh-ocannl-1397): the stage-2 width of 16
-  beats the batch row, and the stage-3 width of 8 ties it. 3-channel 32×32 images; a padded 3×3 stem into 16 channels, then
+  beats the batch row, and the stage-3 width of 8 ties it. The batch-8 spec can generate a local
+  fixture for smoke runs. A measured publication needs its own digest and records from the boxes
+  holding those bytes. The model uses 3-channel 32×32 images, a padded 3×3 stem into 16 channels, and
   one residual block per stage at 16, 32 and 64 channels: two **padded 3×3 stride-1 convs**
   (`s<i>c1`, `s<i>c2`), the **residual add** (`s<i>res`, then its relu `s<i>out`), and from
   stage 2 on, downsampling by a 2×2 max pool on the main path with a **stride-2 1×1 conv** on

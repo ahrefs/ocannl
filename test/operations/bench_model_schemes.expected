@@ -16,6 +16,11 @@ check and off give every tensor of the graph the same label and dims: true
 under check, the model builds without a shape error: true
 control (off): the model builds: true
 under check, scheme applications were checked: true
+cifar_resnet_b8: 182 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
 cifar_stride: 87 tensors
 check and off give every tensor of the graph the same label and dims: true
 under check, the model builds without a shape error: true
