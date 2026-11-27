@@ -1195,6 +1195,12 @@ files.
   carries a `program_source:L:C: error:` diagnostic, and why every backend leaves a header the
   compiler could not open untyped (`C_syntax.missing_include`) although its toolchain reports it
   under that same status (`compile_failure_declines`, ahrefs/ocannl#1387).
+- ROCm can report a rejected `hip_extra_compile_options` flag as `HIPRTC_ERROR_COMPILATION`
+  (gh-ocannl-2503). HIP diagnoses this at the failed program's compile site, with its exact option
+  vector under the compile lock. If a trivial kernel fails with the extras and compiles without
+  them, the rejection is an uncontainable `Configuration` fault at `toolchain_stage`. The probe
+  uses no generated kernel source or diagnostic text matching. `hip_extra_compile_options` pins
+  the candidate outcome and the reported option vector.
 - A vendor compiler that CRASHES on a kernel is a decline too, at its own stage: Metal reports a
   dead `MTLCompilerService` as `XPC_ERROR_CONNECTION_INTERRUPTED` only after relaunching it and
   retrying itself, so `Metal_failure` types it, at either compile site, as `Backend_rejected` at

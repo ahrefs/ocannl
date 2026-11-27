@@ -401,7 +401,7 @@ end = struct
      [prepend_conditional_includes]: whether it uses rocWMMA adds that header tree's include path
      and the language level it needs. A function of the source and the device set alone, so the
      kernel code cache keys on it (gh-ocannl-1314). *)
-  let hiprtc_options ~target_archs hip_src =
+  let hiprtc_options ~target_archs ~extra_options hip_src =
     let uses_rocwmma = C_syntax.source_mentions ~marker:"rocwmma::" hip_src in
     (* hiprtc targets the architecture of the current default device when no [--offload-arch] is
        given. On Linux hiprtc ships built-in HIP headers; on Windows (observed with ROCm 7.1)
@@ -422,9 +422,7 @@ end = struct
       ~rocwmma_include_options:rocwmma_include_opt ~uses_rocwmma
       ~fast_math:(Cuda_like_config.hip_fast_math ())
       ~with_debug:(Utils.with_runtime_debug ())
-      ~with_line_info:Utils.settings.output_debug_files_in_build_directory
-      ~extra_options:(Cuda_like_config.hip_extra_compile_options ())
-      ()
+      ~with_line_info:Utils.settings.output_debug_files_in_build_directory ~extra_options ()
 
   let with_conditional_includes hip_src =
     C_syntax.prepend_conditional_includes
@@ -473,11 +471,67 @@ end = struct
   let hip_to_code ~name hip_src =
     let options =
       Lazy.force ensure_initialized;
-      hiprtc_options ~target_archs:(hiprtc_target_archs ()) hip_src
+      hiprtc_options ~target_archs:(hiprtc_target_archs ())
+        ~extra_options:(Cuda_like_config.hip_extra_compile_options ())
+        hip_src
     in
     let hip_src = with_conditional_includes hip_src in
     write_source_artifact ~name hip_src;
     compile_program ~name ~options hip_src
+
+  let hiprtc_status_name status =
+    match Hiprtc.sexp_of_result status with Sexp.Atom atom -> atom | sexp -> Sexp.to_string sexp
+
+  let hiprtc_rejected_input status =
+    match hiprtc_status_name status with
+    | "HIPRTC_ERROR_COMPILATION" | "HIPRTC_ERROR_INVALID_OPTION" -> true
+    | _ -> false
+
+  (* ROCm can use the same status for bad options and rejected source. Diagnose inside the compile
+     lock, where the exact options of the failed group are available and before routine name
+     attribution. A successful probe without the extra flags isolates them as the cause. *)
+  let diagnose_compile_options ~options ~extra_options exn =
+    match exn with
+    | Hiprtc.Hiprtc_error { status; message }
+      when (not (List.is_empty extra_options)) && hiprtc_rejected_input status -> (
+        let probe options =
+          let hip_src = {|extern "C" __global__ void ocannl_hiprtc_options_probe() {}|} in
+          match
+            Hiprtc.compile_to_code ~hip_src ~name:"ocannl_hiprtc_options_probe.hip" ~options
+              ~with_debug:false
+          with
+          | _ -> Ok ()
+          | exception Hiprtc.Hiprtc_error { status; message } -> Error (status, message)
+        in
+        match probe options with
+        | Error (status, probe_output) when hiprtc_rejected_input status -> (
+            (* [Compiler_options.hiprtc] appends the configured extra options verbatim. *)
+            let base_options =
+              List.take options (List.length options - List.length extra_options)
+            in
+            match probe base_options with
+            | Error _ -> None
+            | Ok () ->
+                let cause =
+                  Schedule_outcome.Backend_rejected
+                    {
+                      backend = name;
+                      stage = Schedule_outcome.toolchain_stage;
+                      severity = Schedule_outcome.Configuration;
+                      detail =
+                        [%string
+                          "OCANNL hip backend: hiprtc rejected a trivial kernel with \
+                           hip_extra_compile_options. The probe compiled with the extra options \
+                           removed.\n\
+                           Probe output:\n\
+                           %{probe_output}\n\
+                           Original compiler output:\n\
+                           %{message}"];
+                    }
+                in
+                Some (Schedule_outcome.Cause_at (Schedule_outcome.Backend_compile, cause)))
+        | _ -> None)
+    | _ -> None
 
   let run_options () =
     (* NOTE: on the AMD platform these are accepted for CUDA-driver-API compatibility but mostly
@@ -1165,6 +1219,7 @@ end = struct
     in
     Lazy.force ensure_initialized;
     let target_archs = hiprtc_target_archs () in
+    let extra_options = Cuda_like_config.hip_extra_compile_options () in
     (* The routine's full source, as codegen emitted it, is its [.hip] artifact whatever was
        compiled: the debug view of what codegen emitted (and what tests read) does not depend on
        what the cache held. The renaming is the key's alone; hiprtc compiles the emitted text. *)
@@ -1212,6 +1267,9 @@ end = struct
               compile_program ~name:artifact ~log_header ~options source)
         with exn ->
           let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+          let exn =
+            Option.value (diagnose_compile_options ~options ~extra_options exn) ~default:exn
+          in
           r.attribute idxs exn backtrace
       in
       (new_program code, code.Hiprtc.code_length)
@@ -1223,7 +1281,7 @@ end = struct
           clear_artifacts ();
           let program, _ =
             compile_group ~log_header ~group:0 ~n_groups:1
-              (hiprtc_options ~target_archs full_source)
+              (hiprtc_options ~target_archs ~extra_options full_source)
               all
           in
           (Array.map kernel_names ~f:(fun symbol -> (program, symbol)), r.entries))
@@ -1231,7 +1289,9 @@ end = struct
       (* Each kernel keyed by its canonical standalone source ([render_batch]'s [key_text]: the
          names it owns renamed, its segment index dropped, gh-ocannl-1525) plus the complete hiprtc
          option list its standalone source compiles under. *)
-      let options = Array.init n ~f:(fun i -> hiprtc_options ~target_archs (r.assemble [ i ])) in
+      let options =
+        Array.init n ~f:(fun i -> hiprtc_options ~target_archs ~extra_options (r.assemble [ i ]))
+      in
       let keys =
         Array.init n ~f:(fun i -> Kernel_code_cache.key ~parts:(options.(i) @ [ r.key_text i ]))
       in
@@ -2059,16 +2119,13 @@ end = struct
      under this very status: [C_syntax.missing_include] reads it off the log. The gh-ocannl-1313
      frame-size refusal also arrives as [HIPRTC_ERROR_COMPILATION] and so lands here too, inside the
      reserve band [compiler_frame_limit_bytes] leaves; it is reported as the compiler's rejection
-     rather than as a [Resource_exceeded] with numbers parsed out of a log. HIP driver errors stay
-     unclassified: no HIP fault has been characterized the way CUDA's are. *)
+     rather than as a [Resource_exceeded] with numbers parsed out of a log. Rejected extra compiler
+     options can also use this status; [compile_kernels] diagnoses those before this fallback. HIP
+     driver errors stay unclassified: no HIP fault has been characterized the way CUDA's are. *)
   let classify_failure phase exn =
     match exn with
     | Hiprtc.Hiprtc_error { status; message } -> (
-        let status =
-          match Hiprtc.sexp_of_result status with
-          | Sexp.Atom atom -> atom
-          | sexp -> Sexp.to_string sexp
-        in
+        let status = hiprtc_status_name status in
         let claim = C_syntax.codegen_bug_claim ~artifact:"the generated .hip file" in
         match status with
         | "HIPRTC_ERROR_COMPILATION" when not (C_syntax.missing_include message) ->
