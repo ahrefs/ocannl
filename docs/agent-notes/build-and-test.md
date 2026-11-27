@@ -4579,6 +4579,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     with one function per threshold (`first_tier_wide`, `list_wide`), which is where a different
     cross-cutting rule goes; the `verdict trailer` leg of `tools/test-affected-tests.sh` calls it
     on the counts above.
+    The gh-ocannl-1997 audit checked the Ludics fleet and ship-pr implementations and local
+    installed scripts. The documented fleet targets-file example redirects only stdout.
+    Fleet run evidence comes from the runner's saved record and status, and ship-pr delegates
+    reach planning to OCANNL's merge build, which reads the trailer alongside `prepush`.
     The contract: LINK-ONLY is a heuristic ranking,
     and `--referenced-only` a deliberate trade (faster, with a possible miss) for iterating
     mid-change, except the explicit CROSS-CUTTING first-tier local run below. The pre-push run
@@ -4774,6 +4778,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `tools/test-test-harnesses.sh` drives the real `affected --harnesses` over a git fixture whose
     commit reaches two members, and reads the closing line's form out of `tools/test-run.sh`, so
     the two tools cannot disagree on its spelling.
+  - The project-context checks in `tools/test-typecheck-scan-cases.sh` exercise snippet and stub
+    sources through the owning module's PPX. The gh-ocannl-1997 audit found the stub and PPX paths
+    select the corresponding legs and found no concrete stub regression to justify listing broad
+    library paths. Extend the declaration with a reproducing library path when there is one.
 
 ## Testing a dependency candidate without changing the switch
 
