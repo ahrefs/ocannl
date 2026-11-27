@@ -121,6 +121,9 @@ search-shaping -- they define the seeded untuned plan -- which large CUDA/HIP co
 keyed: codegen -- a numerics gate on the seeded untuned plan (gh-ocannl-1405): it admits narrow-storage sites, and a sunk narrow reduction rounds to storage once where the default rounds every step, so a winner crowned from that plan is not the default regime's answer and must not replay under it; AGENTS.md's numerics-gate rule. Hashed into the codegen tag on CUDA and HIP, where the plan runs, when on
   gpu_default_seed_narrow_storage [read at codegen]
 
+keyed: codegen -- a numerics gate on the seeded model's tensorized matmul candidates (gh-ocannl-1663), whose reduction can round differently from the scalar seed. Keyed on CUDA and HIP, where the model can start from a seeded plan, when on
+  model_default_tensorize [read at codegen]
+
 search-shaping -- it steers the search: how wide, how long, what is proposed, what is pruned, how candidates are ranked, and when a candidate's failure ends the search
   autotune_beam_width
   autotune_bound_pruning

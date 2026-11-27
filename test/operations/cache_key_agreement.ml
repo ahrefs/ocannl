@@ -221,6 +221,7 @@ let keyed_flips =
     ("cuda_ptx_target", config ~scope:Cuda [ "floor"; "native" ]);
     ("gpu_elide_covered_zeros", config ~scope:Gpu flag);
     ("gpu_default_seed_narrow_storage", config ~scope:Cuda_hip flag);
+    ("model_default_tensorize", config ~scope:Cuda_hip flag);
     ("autotune_timing", config [ "isolated"; "queued" ]);
   ]
 

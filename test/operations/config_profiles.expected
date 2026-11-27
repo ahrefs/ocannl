@@ -29,6 +29,7 @@ Profile picked via the config file:
 Profile "reproducible" sets:
   autotune_search=false
   model_default_schedule=false
+  model_default_tensorize=false
   tune_inline_flips=0
   cc_backend_arch_flags=none
   cc_backend_simd_flags=none
@@ -71,6 +72,7 @@ Profile "approximate" sets:
   cc_backend_simd_flags=auto
   fp16_arithmetic=prefer_narrow
   tf32_matmuls=true
+  model_default_tensorize=true
   bf16_arithmetic=true
   online_softmax=true
   online_softmax_backward=true

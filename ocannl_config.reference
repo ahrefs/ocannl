@@ -104,10 +104,12 @@
 # A goal-oriented preset bundle. Three are built in:
 #   reproducible -- deterministic, and identical across machines wherever reasonable
 #                   (cross-BACKEND reproducibility is out of scope).
-#   performance  -- the fastest configuration AT UNCHANGED SEMANTICS.
+#   performance  -- throughput settings that allow narrow f16 arithmetic and tensorized
+#                   matmuls in the seeded cost model.
 #   approximate  -- the fastest configuration at tolerance-bounded semantics: the
 #                   `performance` payload plus every numerics-changing knob (tf32_matmuls,
-#                   fp16_arithmetic, bf16_arithmetic, cc_backend_fast_math, cc_backend_fp_contract,
+#                   fp16_arithmetic, bf16_arithmetic, model_default_tensorize,
+#                   cc_backend_fast_math, cc_backend_fp_contract,
 #                   tune_inline_flips, cuda_fast_math, hip_fast_math and metal_fp_contract at their
 #                   defaults, and the algebraic-rewrite gates as they land).
 #                   Results differ from the exact profiles by the tolerance the benchmark
@@ -1228,13 +1230,18 @@
 # untuned plan instead of the default pipeline (gh-ocannl-1253, gpu_default_sketch_min_reduction),
 # which a candidate displaces only by ranking strictly below the plan's own sketch scored as the
 # candidates are (gh-ocannl-1477: the score ties every scalar sketch of a site however its work is
-# launched, and a batch-serial one measured up to 35x slower), and its sketch candidates are
-# restricted to the seeding's numerics-preserving forms (scalar register-blocktiled sketches at a
-# site accumulating at its storage precision: no tensor-core or conv form), so the pick never changes a value the untuned compile computes. The coalesced
-# layouts the autotuner seeds preserve values too; the model ranks them only where its score can
-# tell them from their uncoalesced twins: a memory-transaction rate beside a geometry term, the
-# occupancy capacity or the staged-copy rate (gh-ocannl-1278, gh-ocannl-1600, gh-ocannl-1821).
+# launched, and a batch-serial one measured up to 35x slower). The seeded ranking considers scalar
+# blocktiles and, with model_default_tensorize, tensorized matmuls. The model ranks coalesced
+# layouts where its score can tell them from their uncoalesced twins: a memory-transaction rate
+# beside a geometry term, the occupancy capacity or the staged-copy rate (gh-ocannl-1278,
+# gh-ocannl-1600, gh-ocannl-1821).
 #model_default_schedule=false
+
+# gh-ocannl-1663: allow tensorized matmuls in model_default's ranking with a seeded incumbent
+# (CUDA/HIP). The backend's numeric policy still decides which formats are legal. An admitted MMA
+# can round the reduction differently from the scalar seed. The reproducible profile pins this
+# off, and the CUDA/HIP schedule cache distinguishes the two settings.
+#model_default_tensorize=true
 
 # gh-ocannl-514, the placement levels of the untuned regime: with model_default_schedule=true and
 # this set to N > 0, `Autotune.model_default` first branch-and-bounds over the top-N ranked flip
@@ -2409,6 +2416,8 @@
 # # The analytic cost model picks schedules from per-backend (and, once calibrated, per-machine)
 # # envelope constants -- the same leak without the timing runs.
 # model_default_schedule=false
+# # If the seeded model is explicitly enabled, keep tensorized leaves out of its ranking.
+# model_default_tensorize=false
 # # The greedy inlining refinement of Train.tune_placements accepts a flip when the timing
 # # improves, so which nodes end up inlined is machine-dependent -- and inlining is not
 # # numerics-neutral where storage precision is narrower than compute precision: a materialized
@@ -2490,9 +2499,9 @@
 # --- END PROFILE PAYLOAD reproducible ---
 
 # --- BEGIN PROFILE PAYLOAD performance ---
-# # The fastest configuration AT UNCHANGED SEMANTICS. Result-changing gates (tf32_matmuls,
-# # fp16_arithmetic's accuracy-for-throughput trade is the one exception below, and the
-# # algebraic-rewrite tiers) belong to the numerics axis, not to this one.
+# # Throughput settings with two changes to floating-point results: fp16_arithmetic and the
+# # seeded model's admission of tensorized matmuls. The other numerics gates belong to
+# # the approximate profile.
 #
 # # Empirical schedule search on, with a wider beam and more rounds than the everyday defaults.
 # # The benchmark runners (benchmarks/runners/ocannl) pass ~rounds:0, so their tuned cells get
@@ -2501,7 +2510,8 @@
 # autotune_search=true
 # autotune_beam_width=4
 # autotune_rounds=4
-# # Untuned compiles still get the cost model's pick instead of the plain default pipeline.
+# # Untuned compiles get the cost model's pick. On seeded CUDA/HIP it can rank tensorized matmuls
+# # (model_default_tensorize defaults to true), whose matrix instructions can reround the sum.
 # model_default_schedule=true
 #
 # # Target the host CPU, and let the SIMD probe add what that target already supports.
@@ -2511,7 +2521,7 @@
 # # Native 16-bit arithmetic where the target has it; ignored on targets that promote fp16 to
 # # float. On CUDA and Metal it keeps the f16-accumulate tensor units and storage-width f16
 # # accumulators -- on CUDA the narrow side of the trade auto no longer takes (gh-ocannl-2195), and
-# # the one result-changing key of this payload. HIP floors it to auto, wide (gh-ocannl-2233): gfx11's
+# # a result-changing setting of this payload. HIP floors it to auto, wide (gh-ocannl-2233): gfx11's
 # # f16-accumulate WMMA misses whole-output checksums by 7-82% and runs slower than the wide arm, so
 # # no profile selects it; an explicit fp16_arithmetic=true still does.
 # fp16_arithmetic=prefer_narrow
@@ -2544,6 +2554,8 @@
 # # f32 matmul operands computed at tf32 (10-bit mantissa, f32 accumulation) on the backends with
 # # a tf32 tile shape (CUDA sm_80+); a no-op elsewhere.
 # tf32_matmuls=true
+# # Allow the seeded CUDA/HIP model to rank legal tensorized matmuls, the built-in default.
+# model_default_tensorize=true
 # # The narrow side of the bf16 accumulator trade (gh-ocannl-838), the twin of fp16_arithmetic
 # # above but with no backend floor: never the strict f32 residency `false` requests. It
 # # resolves as auto everywhere except HIP and Metal, where auto went wide (gh-ocannl-1051,

@@ -36,7 +36,16 @@ let seeds_here = (Context.backend_facts_of_name backend_name).Ir.Backend_intf.se
 let with_mma_seeding f = Utils.with_stated_config [ ("gpu_default_sketch_min_reduction", "1") ] f
 
 let mma_standin =
-  let target = Ll_test.cuda_model_target ~limits:Ll_test.f16_mma_limits () in
+  let open Ir.Backend_intf in
+  let limits =
+    Ll_test.mma_8x8x8_limits
+      [
+        (Mma_f16, Mma_f16, Mma_f32);
+        (Mma_bf16, Mma_bf16, Mma_f32);
+        (Mma_fp8_e5m2, Mma_fp8_e5m2, Mma_f32);
+      ]
+  in
+  let target = Ll_test.cuda_model_target ~limits () in
   (* The CUDA syntax stand-in has no MMA hook. Give the model a matrix unit that accepts the
      scheduled tile so the advertised matrix rate is used; the device leg reads its own hook. *)
   let capabilities =
@@ -60,80 +69,84 @@ let mma_standin =
   in
   { target with mt_capabilities = capabilities }
 
-type mma_ranking = { unrestricted_mma : bool; seeded_scalar : bool; seeding_active : bool }
-
-(* This aligned f16 contraction offers an f32-accumulating tile on CUDA and HIP. The gradient
-   fixture is smaller and serves the bitwise parity checks. *)
-let mma_picks ~device =
-  let half = Ir.Ops.half and single = Ir.Ops.single in
+let mma_site prec =
   let n = 256 and k = 512 in
+  (* Nonnegative dyadic operands also suit the one-sign requirement of gfx11's WMMA. A partial sum
+     has at most [k * 36] units of 1/16, within the f32 accumulator's 24 significant bits. *)
   let init label ~i ~o stride =
-    NTDSL.init ~l:label ~prec:half ~i:[ i ] ~o:[ o ]
-      ~f:
-        (Ll_test.weighted ~weights:[| stride; 31 |] ~modulus:1009 ~offset:(-504.5)
-           ~stride:(1. /. 1009.))
+    NTDSL.init ~l:label ~prec ~i:[ i ] ~o:[ o ]
+      ~f:(Ll_test.weighted ~weights:[| stride; 31 |] ~modulus:7 ~offset:0. ~stride:0.25)
       ()
   in
   let a = init "sd_mma_a" ~i:k ~o:n 17 and b = init "sd_mma_b" ~i:n ~o:k 43 in
   let%op out = a * b in
-  Ir.Tnode.update_prec out.Tensor.value single;
-  let comp = Train.forward out in
-  let ctx = Context.auto () in
-  let bindings = Ir.Indexing.Empty in
-  let is_mma r = String.is_substring r.Autotune.mc_label ~substring:"mma-" in
-  let pick () =
-    Autotune.model_pick ~name:"sd_mma_pick"
-      ?target:(if device then None else Some mma_standin)
-      ctx comp bindings
-  in
-  let control =
-    Utils.with_stated_config
-      [
-        ("gpu_default_sketch_min_reduction", "0");
-        ("gpu_default_split_reduce_min_serial", "0");
-        ("gpu_default_reduction_sink", "false");
-      ]
-      pick
-  in
-  let seeded, seeding_active =
-    with_mma_seeding (fun () ->
-        let facts, limits =
-          if device then (Context.backend_facts ctx, Context.hardware_limits ctx)
-          else (mma_standin.Autotune.mt_facts, mma_standin.Autotune.mt_limits)
-        in
-        let seeding_active = Option.is_some (Autotune.model_seeding ~facts ~limits) in
-        let report =
-          if device then (
-            let report = ref None in
-            let compiled, _ =
-              Autotune.model_default ~report:(fun r -> report := Some r) ctx comp bindings
-            in
-            Context.release compiled;
-            Option.value_exn ~here:[%here] !report)
-          else pick ()
-        in
-        (report, seeding_active))
-  in
-  Stdio.eprintf "%s matmul: unrestricted %s, seeded %s (not part of the golden)\n"
-    (if device then "device" else "structural")
-    control.Autotune.mc_label seeded.Autotune.mc_label;
-  {
-    unrestricted_mma = is_mma control;
-    seeded_scalar =
-      Option.is_some seeded.Autotune.mc_rank_ms
-      && not (is_mma seeded || String.is_substring seeded.Autotune.mc_label ~substring:"conv-");
-    seeding_active;
-  }
+  Ir.Tnode.update_prec out.Tensor.value Ir.Ops.single;
+  Train.set_materialized out.Tensor.value;
+  (Train.forward out, out.Tensor.value)
 
-let host_mma_child = "--host-mma-ranking"
-let device_mma_child = "--device-mma-ranking"
+let mma_formats = [ ("f16", Ir.Ops.half); ("bf16", Ir.Ops.bfloat16); ("fp8", Ir.Ops.fp8) ]
+
+let mma_census ctx ?target (name, prec) =
+  let comp, _ = mma_site prec in
+  let explained =
+    with_mma_seeding (fun () ->
+        Autotune.model_explain ~name:("sd_mma_" ^ name) ?target ctx comp Ir.Indexing.Empty)
+  in
+  let rows =
+    explained.Autotune.x_routine
+    @ List.concat_map explained.Autotune.x_segments ~f:(fun seg -> seg.Autotune.xs_candidates)
+  in
+  let tensorized =
+    List.filter rows ~f:(fun (_, row) ->
+        Option.exists row.Autotune.ex_mma_work ~f:(List.exists ~f:(fun work -> Float.(work > 0.))))
+  in
+  let available = List.length tensorized in
+  let admitted = List.count tensorized ~f:(fun (_, row) -> row.Autotune.ex_admitted) in
+  let seeded = String.equal (fst (List.hd_exn explained.Autotune.x_routine)) "seeded" in
+  Stdio.eprintf "%s %s: seeded=%b, admits %d/%d tensorized candidates (not part of the golden)\n"
+    (if Option.is_some target then "stand-in" else Context.backend_name ctx)
+    name seeded admitted available;
+  (seeded, available, admitted)
+
+let mma_parity () =
+  let comp, out = mma_site Ir.Ops.half in
+  let run (ctx, routine) =
+    let ctx = Context.run ctx routine in
+    Context.sync ctx;
+    let values = Context.get_values ctx out in
+    Context.release ctx;
+    (values, routine.Context.mma)
+  in
+  let plain, _ =
+    run (Context.compile ~name:"sd_mma_reference" (Context.auto ()) comp Ir.Indexing.Empty)
+  in
+  let model, census =
+    with_mma_seeding (fun () ->
+        run
+          (Autotune.model_default ~name:"sd_mma_selected" (Context.auto ()) comp Ir.Indexing.Empty))
+  in
+  let same =
+    Array.exists plain ~f:(fun value -> Float.(value > 0.))
+    && Array.equal (fun a b -> Float.is_finite a && Float.equal a b) plain model
+  in
+  let tensorized = List.exists (Ll_test.renderings census) ~f:Ir.C_syntax.is_tensorized_rendering in
+  Stdio.eprintf "%s f16 parity: tensorized=%b, %d output cells (not part of the golden)\n"
+    backend_name tensorized (Array.length model);
+  (same, tensorized)
+
+let mma_child = "--mma-ranking"
 
 let () =
-  let requested flag = Array.exists Stdlib.Sys.argv ~f:(String.equal flag) in
-  let device = requested device_mma_child in
-  if device || requested host_mma_child then (
-    let { unrestricted_mma; seeded_scalar; seeding_active } = mma_picks ~device in
-    Stdio.printf "%b\n%b\n%b\n" unrestricted_mma seeded_scalar seeding_active;
+  if Array.exists Stdlib.Sys.argv ~f:(String.equal mma_child) then (
+    let ctx = Context.auto () in
+    let print_census (seeded, available, admitted) =
+      Stdio.printf "%b %d %d\n" seeded available admitted
+    in
+    List.iter mma_formats ~f:(fun format ->
+        print_census (mma_census ctx ~target:mma_standin format);
+        print_census (mma_census ctx format));
+    let same, tensorized = mma_parity () in
+    Stdio.printf "%b %b\n" same tensorized;
     Stdlib.exit 0)
 
 let nb = 4
@@ -441,19 +454,32 @@ let () =
          .Autotune.mc_label
        "default")
 
-(* Run the ranking fixture in a fresh process so its price parameters reach the model's
-   process-lifetime readers without changing the gradient checks. The device supplies its real tile
-   and hook, with the same rates as the stand-in. The child's stdout protocol is exactly three
-   boolean lines: the unrestricted pick, the restricted pick and whether seeding was active. *)
+(* Run each profile in a fresh process so its payload and the model's price constants resolve before
+   the ranking reads them. Exact dyadic operands give both f16 schedules the same reference at every
+   output cell regardless of summation order. *)
 let () =
-  let choices mode =
+  (* The performance payload relies on the built-in default for this key. *)
+  let env =
+    Array.filter (Unix.environment ()) ~f:(fun entry ->
+        match String.lsplit2 entry ~on:'=' with
+        | Some (name, _) -> (
+            match Utils.classify_env_var name with
+            | Utils.Env_config_key "model_default_tensorize" -> false
+            | _ -> true)
+        | None -> true)
+  in
+  let results profile =
     let ((status, stdout, stderr) as child) =
-      Fresh_process.run
+      Fresh_process.run ~env
         [
-          mode;
+          mma_child;
+          "--ocannl_profile=" ^ profile;
           "--ocannl_backend=" ^ backend_name;
+          "--ocannl_model_default_schedule=true";
           "--ocannl_automatic_gpu_schedule=true";
           "--ocannl_schedule_fission=true";
+          "--ocannl_fp16_arithmetic=false";
+          "--ocannl_bf16_arithmetic=false";
           "--ocannl_debug_log_from_routines=false";
           "--ocannl_model_peak_flops=1e14";
           "--ocannl_model_peak_memory_bandwidth=1e15";
@@ -471,39 +497,59 @@ let () =
         ]
     in
     match (status, String.split_lines stdout) with
-    | Unix.WEXITED 0, [ unrestricted; restricted; active ] ->
-        Stdio.eprintf "%s%!" stderr;
-        {
-          unrestricted_mma = Stdlib.bool_of_string unrestricted;
-          seeded_scalar = Stdlib.bool_of_string restricted;
-          seeding_active = Stdlib.bool_of_string active;
-        }
+    | Unix.WEXITED 0, [ hf16; df16; hbf16; dbf16; hfp8; dfp8; parity ] ->
+        Stdio.eprintf "%s:\n%s%!" profile stderr;
+        let census line =
+          Stdlib.Scanf.sscanf line "%B %d %d" (fun seeded available admitted ->
+              (seeded, available, admitted))
+        in
+        ( List.map [ hf16; hbf16; hfp8 ] ~f:census,
+          List.map [ df16; dbf16; dfp8 ] ~f:census,
+          Stdlib.Scanf.sscanf parity "%B %B" (fun same tensorized -> (same, tensorized)) )
     | _ ->
-        Fresh_process.report ~label:mode child;
+        Fresh_process.report ~label:profile child;
         failwith "seeded model ranking child failed"
   in
-  let host = choices host_mma_child in
-  p "structural: without seeding, the model picks a tensor-core leaf" host.unrestricted_mma;
-  p "structural: with seeding, the ranked pick is no tensor-core or conv form" host.seeded_scalar;
-  p "structural: seeding is active under the fixture's seeded settings" host.seeding_active;
-  let available, aggregation =
-    if not seeds_here then (false, `Backend)
-    else
-      let ctx = Context.auto () in
-      let limits = Context.hardware_limits ctx in
-      match
-        Ll_test.tensorized_capability ~is_gpu:true ~is_cpu:false ~limits ~a_prec:Ir.Ops.half
-          ~b_prec:Ir.Ops.half ~d_prec:Ir.Ops.single
-      with
-      | `Advertised -> (true, `Backend)
-      | `Withheld aggregation -> (false, aggregation)
+  let host_performance, device_performance, (same_performance, tensorized_performance) =
+    results "performance"
   in
-  let gpu_leg = Verdict.leg ~when_:available ~aggregation ~on:backend_name () in
-  let gpu = lazy (choices device_mma_child) in
-  Verdict.in_leg ~leg:gpu_leg "on CUDA/HIP without seeding, the model picks a tensor-core leaf"
-    (fun label -> p label (Lazy.force gpu).unrestricted_mma);
-  Verdict.in_leg ~leg:gpu_leg
-    "on CUDA/HIP with seeding, the ranked pick is no tensor-core or conv form" (fun label ->
-      p label (Lazy.force gpu).seeded_scalar);
-  Verdict.in_leg ~leg:gpu_leg "on CUDA/HIP seeding is active under the fixture's seeded settings"
-    (fun label -> p label (Lazy.force gpu).seeding_active)
+  let host_reproducible, device_reproducible, (same_reproducible, tensorized_reproducible) =
+    results "reproducible"
+  in
+  let all_admitted (seeded, available, admitted) =
+    seeded && available > 0 && admitted = available
+  in
+  let none_admitted (seeded, available, admitted) = seeded && available > 0 && admitted = 0 in
+  p_all ~min:3 "structural: the seeded performance model admits every f16, bf16 and fp8 MMA leaf"
+    host_performance ~f:all_admitted;
+  p_all ~min:3 "structural: the seeded reproducible model excludes every f16, bf16 and fp8 MMA leaf"
+    host_reproducible ~f:none_admitted;
+  p "the f32 output of the model's f16 matmul equals the nonzero reference in both profiles"
+    (same_performance && same_reproducible);
+  let ctx = Context.auto () in
+  let limits = Context.hardware_limits ctx in
+  let device_leg prec =
+    let available, aggregation =
+      if not seeds_here then (false, `Backend)
+      else
+        match
+          Ll_test.tensorized_capability ~is_gpu:true ~is_cpu:false ~limits ~a_prec:prec ~b_prec:prec
+            ~d_prec:Ir.Ops.single
+        with
+        | `Advertised -> (true, `Backend)
+        | `Withheld aggregation -> (false, aggregation)
+    in
+    Verdict.leg ~when_:available ~aggregation ~on:backend_name ()
+  in
+  List.iter2_exn mma_formats (List.zip_exn device_performance device_reproducible)
+    ~f:(fun (name, prec) (performance, reproducible) ->
+      let leg = device_leg prec in
+      Verdict.in_leg ~leg ("seeded performance admits " ^ name) (fun label ->
+          p label (all_admitted performance));
+      Verdict.in_leg ~leg ("seeded reproducible excludes " ^ name) (fun label ->
+          p label (none_admitted reproducible)));
+  let f16_leg = device_leg Ir.Ops.half in
+  Verdict.in_leg ~leg:f16_leg "the admitted f16 pick executes a tensorized kernel" (fun label ->
+      p label tensorized_performance);
+  Verdict.in_leg ~leg:f16_leg "the reproducible f16 pick executes without tensorization"
+    (fun label -> p label (not tensorized_reproducible))
