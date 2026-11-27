@@ -1,0 +1,29 @@
+both refused: winner replay was refused for both arm A and fallback arm B: true
+both refused: arm B shipped substituted with arm B's own report and non-empty crown label: true
+both refused: result line records ship_substituted=true and arm B's discarded crown: true
+both refused: stderr warns that the searched winner did not replay: true
+both refused: the substituted untuned routine computes the reference bit for bit: true
+both refused: placement lookup was active on the call: true
+both refused: the substituted ship attempted no placement-store write: true
+fallback ok: only arm A's winner replay was refused: true
+fallback ok: arm B shipped unsubstituted with arm B's own report after arm A's substitute was rejected: true
+fallback ok: result line records ship_substituted=false and null substituted_from: true
+fallback ok: arm B's shipped routine computes the reference bit for bit: true
+forced refused: arm A's single winner replay was refused: true
+forced refused: forced arm A shipped substituted with arm A's own report and crown label: true
+forced refused: result line records ship_substituted=true and arm A's discarded crown: true
+forced refused: the substituted routine computes the reference bit for bit: true
+control: nothing was refused and arm A shipped unsubstituted with arm A's own report: true
+control: result line records ship_substituted=false and null substituted_from: true
+control: arm A's shipped routine computes the reference bit for bit: true
+orchestrate flags exactly the two real substituted rows: true
+orchestrate substitution_gate emits SUBSTITUTION GATE naming both discarded crowns: true
+orchestrate report marks only the substituted row SHIPPED UNTUNED: true
+gh728_protocol refuses both refused with ship_substituted=True and discarded crown: true
+gh728_protocol refuses forced refused with ship_substituted=True and discarded crown: true
+gh728_protocol accepts fallback ok with ship_substituted=False: true
+gh728_protocol accepts control with ship_substituted=False: true
+gh834_session refuses both refused naming its discarded crown: true
+gh834_session refuses forced refused naming its discarded crown: true
+gh834_session accepts fallback ok with no diagnostics: true
+gh834_session accepts control with no diagnostics: true

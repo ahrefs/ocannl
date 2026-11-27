@@ -61,6 +61,17 @@ def problems(path):
     arms = tune.get("arms") if isinstance(tune, dict) else None
     if not isinstance(arms, list) or not all(isinstance(a, dict) for a in arms):
         return out + ["INCOMPLETE SESSION: the result line carries no tune arms"]
+    if "ship_substituted" not in tune or not isinstance(tune["ship_substituted"], bool):
+        out.append("INCOMPLETE SESSION: the tune record carries no boolean ship_substituted")
+    elif tune["ship_substituted"] is True:
+        discarded = tune.get("substituted_from")
+        if isinstance(discarded, str) and discarded:
+            out.append(
+                "INCOMPLETE SESSION: the shipping compile substituted the untuned default "
+                "(discarded %s)" % discarded
+            )
+        else:
+            out.append("INCOMPLETE SESSION: the shipping compile substituted the untuned default")
     for name in REQUIRED_ARMS:
         found = [a for a in arms if a.get("arm") == name]
         state = found[0].get("state") if len(found) == 1 else None

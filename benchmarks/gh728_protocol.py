@@ -11,7 +11,8 @@ searched, and the second must have replayed every arm and searched none -- a rep
 incomplete cache searches the missing arms and would publish a search-loaded table. Neither pass
 may carry an arm that neither searched nor replayed (a pre-search failure ships the untuned
 default), nor a search that refused a timing window (its winner was crowned from an incomplete
-comparison).
+comparison), nor a substituted ship (`tune.ship_substituted` must be explicitly `false`: when the
+shipping compile falls back to the untuned default, the step times are untuned under a tuned arm).
 
 Prints one `   protocol: ...` line (marked `-- NOT A <PASS> PASS` when it fails) and exits 0 when the
 leg is the pass it was run as, 1 otherwise; a file with no single readable result line exits 1
@@ -39,14 +40,18 @@ def verdict(row, want):
     tune = row.get("tune") or {}
     searched, n_search, n_replay = row.get("searched"), tune.get("searches"), tune.get("replays")
     n_none = tune.get("no_searches")
+    substituted = tune.get("ship_substituted")
+    substituted_from = tune.get("substituted_from")
     refused = sum((a.get("timings_contended") or 0) for a in tune.get("arms") or [])
     if want == "search":
         passed = searched is True and (n_search or 0) > 0
     else:
         passed = searched is False and n_search == 0 and (n_replay or 0) > 0
-    ok = n_none == 0 and refused == 0 and passed
+    ok = n_none == 0 and refused == 0 and substituted is False and passed
     line = (f"   protocol: {want} pass searched={searched} searches={n_search} replays={n_replay}"
-            f" no_searches={n_none} refused_windows={refused}")
+            f" no_searches={n_none} refused_windows={refused} ship_substituted={substituted}")
+    if substituted is True and isinstance(substituted_from, str) and substituted_from:
+        line += f" substituted_from={substituted_from!r}"
     return ok, line + ("" if ok else "  -- NOT A " + want.upper() + " PASS")
 
 
