@@ -2780,6 +2780,9 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
       | stmt when Option.is_some (direct_write stmt) ->
           invalid_arg
             "Low_level.check_and_store_virtual: a write this pass does not handle reached it"
+      (* Deliberately fail-open on unrecognised non-write statements (gh-ocannl-1628) so a new
+         constructor flags only [Access_fold] and [direct_write]; [direct_write] catches unknown
+         writes only, so a new non-write effect constructor must add a refusal arm here. *)
       | _ -> ());
       Continue ()
     in

@@ -662,7 +662,9 @@ files.
   `accumulating_writes`, `serial_accum_widths` and `seed_first_write`'s binders use. A new analysis
   asks one of them before writing its own recursion; one that must refuse unknown writes matches
   its known ones and refuses whatever else `direct_write` calls a write, as `trace_node_facts` and
-  `check_and_store_virtual` do. Rewriters, affine path construction and cleanup's
+  `check_and_store_virtual` do (the wildcard is deliberately fail-open on non-writes, so a new
+  non-write effect constructor must still add a refusal arm in `check_and_store_virtual`).
+  Rewriters, affine path construction and cleanup's
   placement-dependent survival checks retain their own semantics; do not infer execution order
   among hoisted sibling scope definitions from scalar source order: an analysis that needs it walks
   the `Emitted` mode (next bullet).
