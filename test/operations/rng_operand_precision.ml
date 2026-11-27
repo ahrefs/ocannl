@@ -2,13 +2,21 @@
    the slot rule: the heterogeneous uniform conversion takes its block at uint4x32, so Threefry
    never evaluates its operands at half. Compare a nested block with an explicitly materialized
    block, for both RNGs, both input conversion paths (double bits versus an integer index), and both
-   uniform conversions. Each counter varies with the output cell. *)
+   uniform conversions. Each counter varies with the output cell. Read the statements of each
+   freshly emitted RNG routine, including outlined bodies. Only the deliberately constant-key
+   variants allow a double literal at the key's value, at the two RNG sites. The indexed variants
+   allow none. Computed conversion arguments, macro expansions and builtins are outside this
+   audit. *)
 open Base
 open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level
 module Ops = Ir.Ops
 open Verdict.Claims
+module Generated = Test_utils.Generated
 
+let () = Utils.settings.output_debug_files_in_build_directory <- true
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
+let () = Generated.init ~backend_name
 let n = 8
 let big = 70000
 
@@ -64,6 +72,9 @@ let check ~ordinal ~op ~indexed ~lane =
        | _ -> false)
     > 0);
   let got = Ll_test.execute ~name optimized ~seed:[] ~read:[ nested; stored ] in
+  let allowed = if indexed then [] else List.init 2 ~f:(fun _ -> Float.of_int big) in
+  Generated.assert_double_counter_literals ~routine:name ~allowed (Generated.read name)
+    (label ^ ": only the deliberate double key conversions are emitted");
   let a = List.nth_exn got 0 and b = List.nth_exn got 1 in
   p
     (label ^ ": large RNG input is accepted under a half store and matches materialized")

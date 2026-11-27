@@ -71,6 +71,7 @@ test/operations/mixed_prec_twin_rounding.expected [derived] beside test/operatio
 test/operations/n3_fwd_with_prec-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop; re-run by @test/operations/runtest-n3_fwd_with_prec-unoptimized
 test/operations/online_softmax_block_mma.expected [derived] beside test/operations/online_softmax_block_mma.ml; re-run by @test/operations/runtest-online_softmax_block_mma
 test/operations/scan_loop.expected [ll] markers ll-assign; re-run by @test/operations/runtest-scan_loop
+test/operations/simplify_rng_operands.expected [derived] beside test/operations/simplify_rng_operands.ml; re-run by @test/operations/runtest-simplify_rng_operands
 test/operations/test_ident_blacklist.expected [derived] beside test/operations/test_ident_blacklist.ml; re-run by @test/operations/runtest-test_ident_blacklist
 test/operations/test_log_stmt_format.c.expected [c] extension .c.expected; markers c-decl-banner c-logic-banner c-prec-cast c-restrict ll-assign routine-log; re-run by @test/operations/runtest-test_log_stmt_format
 test/operations/test_uniform_virtual_lane.expected [derived] beside test/operations/test_uniform_virtual_lane.ml; re-run by @test/operations/runtest-test_uniform_virtual_lane, @test/operations/runtest-test_uniform_virtual_lane-lane_checked, @test/operations/runtest-test_uniform_virtual_lane-outlined
@@ -330,6 +331,7 @@ test/operations/reserved_routine_names.ml [run by @test/operations/runtest-reser
     "printf__"
     "void " ^ "gh686_ordinary_name" ^ "("
     "void " ^ ... ^ "("
+test/operations/rng_operand_precision.ml [run by @test/operations/runtest-rng_operand_precision]
 test/operations/runtime_integer_power.ml [run by @test/operations/runtest-runtime_integer_power]
     "__float2half(ocannl_pow_f32(__half2float("
     "ocannl_pow_f32("
@@ -531,6 +533,7 @@ test/operations/scope_collapse_rounding.ml [run by @test/operations/runtest-scop
     "_mid"
     "ocannl_vec"
 test/operations/select_blend_override.ml [run by @test/operations/runtest-select_blend_override; also pins text this scan cannot name: computed fragment]
+test/operations/simplify_rng_operands.ml [run by @test/operations/runtest-simplify_rng_operands]
 test/operations/source_tokens_joined.ml [renders generated text in memory; run by @test/operations/runtest-source_tokens_joined]
 test/operations/test_bounds_folded_gather.ml [run by @test/operations/runtest-test_bounds_folded_gather]
     "!= 0 ?"
@@ -748,6 +751,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-op_table_compile
 @test/operations/runtest-reduction_accumulator_residency
 @test/operations/runtest-reserved_routine_names
+@test/operations/runtest-rng_operand_precision
 @test/operations/runtest-runtime_integer_power
 @test/operations/runtest-scan_loop
 @test/operations/runtest-schedule_batch_grid
@@ -771,6 +775,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-scheme_codegen
 @test/operations/runtest-scope_collapse_rounding
 @test/operations/runtest-select_blend_override
+@test/operations/runtest-simplify_rng_operands
 @test/operations/runtest-source_tokens_joined
 @test/operations/runtest-test_bounds_folded_gather
 @test/operations/runtest-test_ident_blacklist

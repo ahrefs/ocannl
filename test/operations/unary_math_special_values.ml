@@ -114,6 +114,7 @@ open Verdict.Claims
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let () = Stdio.eprintf "unary-math-special-values backend: %s\n" backend_name
 let is_metal = String.equal backend_name "metal"
+let metal_leg = Verdict.leg ~when_:is_metal ~on:backend_name ()
 
 module Generated = Test_utils.Generated
 
@@ -357,11 +358,9 @@ let run ?(ops = ops) c ~first_id =
          ~seed:[ (input, Array.of_list inputs); (out, Ll_test.blank (n * m)) ]
          ~read:[ out ])
   in
-  (if half_tanh then
-     let claim = "Metal half tanh widens to precise f32 and narrows once" in
-     if is_metal then
-       Generated.assert_emits ~routine:name ~contains:"(half)precise::tanh((float)" claim
-     else skipped ~backend:backend_name claim);
+  if half_tanh then
+    Verdict.in_leg ~leg:metal_leg "Metal half tanh widens to precise f32 and narrows once"
+      (Generated.assert_emits ~routine:name ~contains:"(half)precise::tanh((float)");
   (inputs, got)
 
 (* The f32 inputs within 2^-13 of 1, at the spacing of f32 on each side, and 1 itself: the arguments

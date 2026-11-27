@@ -14447,7 +14447,15 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules rng_operand_precision)
- (libraries base ocannl stdio arrayjit.verdict ll_test arrayjit.context))
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  test_utils
+  arrayjit.context
+  arrayjit.utils))
 
 (test
  (name root_ledger)
@@ -16446,7 +16454,15 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules simplify_rng_operands)
- (libraries base ocannl stdio arrayjit.verdict ll_test arrayjit.ir))
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  test_utils
+  arrayjit.ir
+  arrayjit.utils))
 
 ; The matmul sketch family as a refinement tree (gh-ocannl-514 phase 1): golden of the seed
 ; enumeration under synthetic limits (pure in the lowering, so GPU legs need no GPU).

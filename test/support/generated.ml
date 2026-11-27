@@ -1013,6 +1013,20 @@ let double_to_uint4x32_literals source =
   in
   scan [] tokens
 
+(* The allowances are a multiset: an unexpected second conversion of an allowed value fails. *)
+let assert_double_counter_literals ~routine ~allowed source claim =
+  let found = double_to_uint4x32_literals source in
+  let spellings = List.map found ~f:snd |> List.sort ~compare:String.compare in
+  let permitted =
+    List.map allowed ~f:Utils.decimal_float_literal |> List.sort ~compare:String.compare
+  in
+  let ok = List.equal String.equal spellings permitted in
+  if not ok then
+    Stdio.eprintf "%s: allowed double counter literals [%s]; found [%s]\n" routine
+      (String.concat ~sep:", " permitted)
+      (String.concat ~sep:", " (List.map found ~f:(fun (line, s) -> Printf.sprintf "%d:%s" line s)));
+  Verdict.p claim ok
+
 (* [toks] after an opening brace: the tokens up to its matching [}], and those after it. *)
 let split_brace toks =
   let rec go depth acc = function

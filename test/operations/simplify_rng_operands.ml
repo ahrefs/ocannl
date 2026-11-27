@@ -22,7 +22,13 @@
    leaves directly beneath the threefry, materialized in nodes the draw reads back, and (for the
    fixed counter) behind the wrappers both inlined and materialized -- must agree bit for bit. The
    controls: iterator draws are pairwise distinct, and fixed draws differ from the draw of the
-   counter as a double-converted [Constant]. *)
+   counter as a double-converted [Constant].
+
+   The literal-counter audit reads each freshly emitted iterator, fixed-index and packed draw's
+   statements, including outlined bodies, through Generated. Only the fixed-index case's deliberate
+   double control is allowed, once with its specified value. This allowance would not hide the same
+   value folded into any of the other counter sites. Builtins, macro expansions and computed
+   conversion arguments are outside the direct-literal audit. *)
 
 (* cc-fp-contract: no-contraction -- threefry bit draws and their uniform conversions, no product
    feeding an add *)
@@ -32,7 +38,11 @@ module LL = Ir.Low_level
 module Ops = Ir.Ops
 module Idx = Ir.Indexing
 open Verdict.Claims
+module Generated = Test_utils.Generated
 
+let () = Utils.settings.output_debug_files_in_build_directory <- true
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
+let () = Generated.init ~backend_name
 let u4 = Ops.uint4x32
 let iprec = Ops.index_prec ()
 let n = 6
@@ -192,7 +202,11 @@ let check ~first_id ~name ~counter ~fixed =
   in
   let routine = "rngop_" ^ name in
   let optimized = Ll_test.optimize ~materialized:f.materialized ~name:routine program in
-  match Ll_test.execute ~name:routine optimized ~seed:[] ~read:f.outputs with
+  let values = Ll_test.execute ~name:routine optimized ~seed:[] ~read:f.outputs in
+  let allowed = List.map (Option.to_list fixed) ~f:Float.of_int in
+  Generated.assert_double_counter_literals ~routine ~allowed (Generated.read routine)
+    (name ^ ": only the deliberate double counter conversions are emitted");
+  match values with
   | v_scoped :: v_direct :: v_mat :: fixed_values -> (
       Stdio.printf "%s: %d cells drawn %d ways\n" name (Array.length v_mat)
         (List.length f.outputs - if Option.is_some fixed then 1 else 0);
@@ -260,7 +274,10 @@ let check_two_packed_draws ~first_id =
     (scopes (LL.simplify_llc [] llc) = 0);
   let name = "rngop_two_packed" in
   let optimized = Ll_test.optimize ~materialized:[ a; b ] ~name llc in
-  match Ll_test.execute ~name optimized ~seed:[] ~read:[ a; b ] with
+  let values = Ll_test.execute ~name optimized ~seed:[] ~read:[ a; b ] in
+  Generated.assert_double_counter_literals ~routine:name ~allowed:[] (Generated.read name)
+    "two packed draws: the fixed counters emit no double literal conversions";
+  match values with
   | [ va; vb ] ->
       p_all "two packed draws: every draw lies in [0, 1)" (Array.to_list va) ~f:(fun x ->
           Float.(0. <= x && x < 1.));

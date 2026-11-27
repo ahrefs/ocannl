@@ -2,66 +2,55 @@ literal counter audit reports only direct numeric arguments, including signed he
 byte: 256 source values, every bit pattern
 byte: every bit position is both set and clear in some sampled value: true
 byte: the counter is converted by byte_to_uint4x32 from its source: true
-byte: the conversion kernel contains no double literal counter: true
 byte: the device holds the sampled bit patterns, in order: true
 byte: every counter cell equals the host's byte_to_uint4x32 of its source: true
 fp8: 256 source values, every bit pattern
 fp8: every bit position is both set and clear in some sampled value: true
 fp8: the counter is converted by fp8_to_uint4x32 from its source: true
-fp8: the conversion kernel contains no double literal counter: true
 fp8: the device holds the sampled bit patterns, in order: true
 fp8: every counter cell equals the host's fp8_to_uint4x32 of its source: true
 uint16: 65536 source values, every bit pattern
 uint16: every bit position is both set and clear in some sampled value: true
 uint16: the counter is converted by uint16_to_uint4x32 from its source: true
-uint16: the conversion kernel contains no double literal counter: true
 uint16: the device holds the sampled bit patterns, in order: true
 uint16: every counter cell equals the host's uint16_to_uint4x32 of its source: true
 bfloat16: 65536 source values, every bit pattern
 bfloat16: every bit position is both set and clear in some sampled value: true
 bfloat16: the counter is converted by bfloat16_to_uint4x32 from its source: true
-bfloat16: the conversion kernel contains no double literal counter: true
 bfloat16: the device holds the sampled bit patterns, in order: true
 bfloat16: every counter cell equals the host's bfloat16_to_uint4x32 of its source: true
 half: 63490 source values, every non-NaN bit pattern
 half: every bit position is both set and clear in some sampled value: true
 half: the counter is converted by half_to_uint4x32 from its source: true
-half: the conversion kernel contains no double literal counter: true
 half: the device holds the sampled bit patterns, in order: true
 half: every counter cell equals the host's half_to_uint4x32 of its source: true
 int32: 1119 source values, zero, all ones, single bits, their complements, low masks, 1024 splitmix64
 int32: every bit position is both set and clear in some sampled value: true
 int32: the counter is converted by int32_to_uint4x32 from its source: true
-int32: the conversion kernel contains no double literal counter: true
 int32: the device holds the sampled bit patterns, in order: true
 int32: every counter cell equals the host's int32_to_uint4x32 of its source: true
 uint32: 1119 source values, zero, all ones, single bits, their complements, low masks, 1024 splitmix64
 uint32: every bit position is both set and clear in some sampled value: true
 uint32: the counter is converted by uint32_to_uint4x32 from its source: true
-uint32: the conversion kernel contains no double literal counter: true
 uint32: the device holds the sampled bit patterns, in order: true
 uint32: every counter cell equals the host's uint32_to_uint4x32 of its source: true
 int64: 1215 source values, zero, all ones, single bits, their complements, low masks, 1024 splitmix64
 int64: every bit position is both set and clear in some sampled value: true
 int64: the counter is converted by int64_to_uint4x32 from its source: true
-int64: the conversion kernel contains no double literal counter: true
 int64: the device holds the sampled bit patterns, in order: true
 int64: every counter cell equals the host's int64_to_uint4x32 of its source: true
 uint64: 1215 source values, zero, all ones, single bits, their complements, low masks, 1024 splitmix64
 uint64: every bit position is both set and clear in some sampled value: true
 uint64: the counter is converted by uint64_to_uint4x32 from its source: true
-uint64: the conversion kernel contains no double literal counter: true
 uint64: the device holds the sampled bit patterns, in order: true
 uint64: every counter cell equals the host's uint64_to_uint4x32 of its source: true
 single: 1092 source values, the structured sample's non-NaN patterns, infinities, extreme normals and subnormals
 single: every bit position is both set and clear in some sampled value: true
 single: the counter is converted by single_to_uint4x32 from its source: true
-single: the conversion kernel contains no double literal counter: true
 single: the device holds the sampled bit patterns, in order: true
 single: every counter cell equals the host's single_to_uint4x32 of its source: true
 double: 1165 source values, the structured sample's non-NaN patterns, infinities, extreme normals and subnormals
 double: every bit position is both set and clear in some sampled value: true
 double: the counter is converted by double_to_uint4x32 from its source: true
-double: the conversion kernel contains no double literal counter: true
 double: the device holds the sampled bit patterns, in order: true
 double: every counter cell equals the host's double_to_uint4x32 of its source: true

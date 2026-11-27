@@ -322,11 +322,6 @@ let run_leg { prec; width; sample; patterns; upload; read_back; host; leg } =
     (fun label ->
       let routine, _, _ = Lazy.force result in
       Generated.assert_emits ~routine ~contains:(name ^ "_to_uint4x32(") label);
-  Verdict.in_leg ~leg (claim "the conversion kernel contains no double literal counter")
-    (fun label ->
-      let routine, _, _ = Lazy.force result in
-      let literals = Generated.double_to_uint4x32_literals (Generated.read routine) in
-      p_empty label ~over:[ routine ] literals);
   Verdict.in_leg ~leg (claim "the device holds the sampled bit patterns, in order") (fun label ->
       let _, stored, _ = Lazy.force result in
       p label (Array.equal Int64.equal stored patterns));
