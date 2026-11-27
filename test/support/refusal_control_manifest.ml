@@ -75,9 +75,9 @@ let raw_entries =
         "[scanner-refusal:ff2924c3a9869dd3bc7f7d72acd8ead1] malformed archive interface";
         "[scanner-refusal:f684c2c391ba5d7246a2468a4d4584ca] failed archive query";
         "[scanner-refusal:38b0123ae5353ab2b03e006a018d2bc6] shared local library";
-        "[scanner-refusal:8321fb2ab306d6d7f47b17136d308f5d] unique dependency-minimal archive";
-        "[scanner-refusal:9444a57b2ad4731e29ce408670e73e59] cyclic interface-only owners";
         "[scanner-refusal:afa29a41b9bcf5f2edb420167b2557b1] consumer-only interface import";
+        "[scanner-refusal:af4e3d44d44af611e87c6c3fbba6db59] downstream importer could";
+        "[scanner-refusal:238e4af10feb723d7bd9328dab4222b6] another directory cannot";
         "[scanner-refusal:e465b31053262fa064a9c23ff3892b2c] dependency's archive definition";
         "[scanner-refusal:52ed7f2b3e43e26453e5f6c31ebb5965] co-located archive-less dependency";
         "[scanner-refusal:ffa4bc91bdd9e0c6519d47ab6e078f3c] csexp reader refuses";

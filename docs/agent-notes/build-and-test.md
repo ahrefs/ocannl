@@ -2958,17 +2958,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `.cmi` units. A compiler-reaching library
   sharing a directory is owned by its byte archives instead (gh-ocannl-2248): dune-resolved
   `ocamlfind` supplies the archive paths and dune-resolved `ocamlobjinfo` supplies their defined
-  units. For a shared-directory interface-only `.cmi`, the scan requires one dependency-minimal
-  archive importing the interface. Each other Dune-resolved library with a byte archive in a
-  directory shared by the importer and the `.cmi` must import the unit and transitively require
-  the importer.
-  A peer may supply the interface without importing it (gh-ocannl-2289) or without a `requires`
-  edge from the importer (gh-ocannl-2339). A findlib control builds the latter pair in a private
-  prefix and checks Dune's graph, the archive imports and refusal of the stanza referencing the
-  interface. Unresolved ownership refuses the referencing stanza before any unused finding.
-  This preserves `Parsetree` under common without crediting toplevel for its imports. Definitions
-  always take precedence over imported interfaces, including definitions from an importer's
-  co-located peer outside the reporting scope.
+  units. A shared-directory interface-only `.cmi` needs one known directory and a sole
+  archive-bearing library that imports it. A co-located archive peer could supply the interface
+  without an import (gh-ocannl-2289), without an edge from the importer (gh-ocannl-2339), or
+  while itself importing the interface downstream. A findlib control builds an independent
+  definer and importer in a private prefix and checks Dune's graph, the archive imports and
+  refusal of the referencing stanza. Multiple directories carrying the same interface name
+  also refuse because the typed-tree reference supplies only a unit name. Within one directory,
+  exact archive definitions take precedence, including those from peers outside the reporting
+  scope. OCaml's Makefile puts `parsing/parsetree.mli` in `ocamlcommon_SOURCES`, so the scan
+  attributes `Parsetree` in the Dune-resolved compiler's own `compiler-libs` directory to
+  `compiler-libs.common`. Unresolved ownership refuses the referencing stanza before any unused
+  finding.
   An archive-less package owns no units; a failed query or
   unreadable archive refuses without falling back to directory ownership. Shared local libraries
   refuse because findlib cannot resolve their archives and `@check` does not build them.
