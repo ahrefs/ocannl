@@ -2072,6 +2072,10 @@ module type Backend_device_common = sig
       discovery is unavailable and disables persistent schedule AND placement I/O. Missing toolchain
       metadata alone does not disable persistence. Query lazily, never at initialization. *)
 
+  val align_timing_queue : device -> await:(unit -> unit) -> bool
+  (** Prepare the selected runner for a timing call. [await] supplies the caller's bounded wait for
+      the probe and any padding. Returns [true] when preparation submitted work. *)
+
   val hardware_limits : unit -> hardware_limits
   (** Conservative per-workgroup device limits: on multi-device backends the minimum across the
       devices, so code compiled once (compilation is not per-device) is valid wherever it links.

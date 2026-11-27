@@ -512,6 +512,10 @@ val await_within : t -> seconds:float -> bool
     Boundary: on [cc] a routine runs on the calling thread inside {!run}, so the device is idle here
     and nothing bounds {!run} itself. *)
 
+val align_timing_queue : t -> await:(unit -> unit) -> bool
+(** Backend preparation on the selected runner, for [Autotune.time_routine]. [await] must drain the
+    runner or raise. Returns whether preparation submitted work. *)
+
 val failure_classifier :
   t -> Ir.Schedule_outcome.phase -> exn -> Ir.Schedule_outcome.classified_cause option
 (** The backend's own failure classifier, for callers that wrap {!run} / {!sync} in

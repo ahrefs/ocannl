@@ -3146,12 +3146,20 @@ files.
   against a spinner-generated load ladder (`_build/default/test/operations/`, `OCANNL_BACKEND=...`
   pinned) yields the distribution directly — and CPU-backend depths sit at the 200 cap, Metal's at
   31-80, HIP's at 200-750 and CUDA's at ~1700, so one box cannot stand in for the fleet.
-- **Discrete HIP `gfx1102` sequential candidate timing can misrank 32-WG-multiple grids**
-  (gh-ocannl-2384). Because in-process `Autotune.tune` candidates share one HSA AQL hardware queue,
-  a candidate whose grid is a multiple of 32 workgroups locks into the per-WGP SIMD-pair phase left
-  by prior non-32-WG-multiple candidates and can read ~20-40% slower than its phase-0 timing,
-  misranking the crowned choice. See `training-and-performance.md` (gh-ocannl-2384) for the
-  mechanism, the `GPU_MAX_HW_QUEUES` separate-stream control, and surviving reading methods.
+- **`Autotune.time_routine` aligns the timing queue on discrete HIP `gfx1102`**
+  (gh-ocannl-2509). On the measured Linux 16-WGP device, a 32-workgroup grid multiple holds the
+  starting SIMD-pair phase and may time 20–40% slower after an interleaved candidate. On tuf, all
+  24 fresh processes started in the same phase, but small HIP copies advanced it and graph replay
+  advanced it by the submitted workgroup count. The backend reads `HW_ID1` across a whole cycle
+  on the timing runner before warmup. It writes the IDs in mapped host memory so the readback
+  does not submit another blit. The even-pair boundary gives the number of padding workgroups,
+  with probe and padding both drained by the bounded wait and charged to timing setup. Alignment
+  applies to an ordered stream of submissions at candidate entry. Routine dispatches within the
+  call advance the phase normally, including any work submitted by debug instrumentation.
+  If the IDs do not show one complete even/odd cycle, the backend reports that once per runner
+  and proceeds without padding. Mixed dispatch shapes can leave such a phase pattern.
+  The affected device's timing identity retires its prior schedule and placement cache keys.
+  See `training-and-performance.md` (gh-ocannl-2384) for measurements outside the tuner.
 ## Cache regimes and placement replay
 - The schedule-cache directory carries one key-regime stamp, independent of the serialized entry's
   `entry_version` (gh-ocannl-835). Bump `Schedule_cache.cache_regime_version` whenever

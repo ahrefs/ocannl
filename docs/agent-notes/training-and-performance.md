@@ -1295,9 +1295,9 @@ files.
   flips and 0/11 full-tuner flips at odd `seed1` depths `1` and `617`, while `GPU_MAX_HW_QUEUES=1`
   forces both streams onto one HQD and restores 15/15 and 11/11 flips). Destroying and recreating a
   HIP stream does NOT reset the HQD phase: ROCclr recycles the persistent hardware queue with its
-  dirty phase intact. Shared-stream interleaved or sequential multi-candidate timing on discrete
-  gfx1102 does not survive this effect when a 32-WG-multiple candidate shares an HQD with
-  non-32-WG-multiple kernels.
+  dirty phase intact. Since gh-ocannl-2509, `Autotune.time_routine` aligns the queue before its
+  warmup on the measured discrete gfx1102 topology. The workgroup-phase controls above still
+  apply to custom measurement loops which submit directly to HIP.
 - **Interleaved timing visits arms in `Bench_design`'s spread mirrored rotation** (`bin/bench_design.ml`,
   gh-ocannl-743). Mirroring each batch cancels LINEAR drift (every pair exchanged, equal mean
   positions); it does not equalize each arm's position histogram, which is what a nonlinear effect
