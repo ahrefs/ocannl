@@ -546,6 +546,10 @@ class CellGroupTest(unittest.TestCase):
                 "if hasattr(signal, 'SIGUSR1'):\n"
                 "    faulthandler.register(signal.SIGUSR1)\n"
                 "from test.test_cell_group import cap_counted_from\n"
+                # A terminal driver does not inherit SIG_IGN from a detached parent shell;
+                # nohup preservation is pinned by test_a_nohup_driver_keeps_ignoring_hangups.
+                "if hasattr(signal, 'SIGHUP'):\n"
+                "    signal.signal(signal.SIGHUP, signal.SIG_DFL)\n"
                 "driver._cancellation.install()\n"
                 "driver.CELL_TERMINATE_GRACE_S = 0.1\n"
                 f"driver.CELL_TIMEOUT_S = {timeout!r}\n"
@@ -760,8 +764,11 @@ class CellGroupTest(unittest.TestCase):
         )
         driver = subprocess.Popen(
             self.python(
-                "import pathlib, subprocess, sys, gh1002_cells as driver\n"
+                "import pathlib, signal, subprocess, sys, gh1002_cells as driver\n"
                 "from test.test_cell_group import cap_counted_from\n"
+                # Same terminal-driver SIGHUP disposition as gh1002_driver.
+                "if hasattr(signal, 'SIGHUP'):\n"
+                "    signal.signal(signal.SIGHUP, signal.SIG_DFL)\n"
                 "driver._cancellation.install()\n"
                 "driver.CELL_TERMINATE_GRACE_S = 0.1\n"
                 f"driver.BUILD_TIMEOUT_S = {timeout!r}\n"
