@@ -1614,12 +1614,15 @@ harness_leg_run '39: read-only paths and lock-status queries #queries' leg_39
 shared_through argv_probe
 
 leg_125() {
+  local outer_link=$1
   local path="$TMP/leg record" other_path="$TMP/other leg" target=@test/training/train-receipt
   local link="$TMP/leg-receipt-link" gpu_link="$TMP/leg-receipt-link-gpu"
   local foreign_link="$TMP/leg-receipt-link-foreign" plain_link="$TMP/leg-receipt-link-plain"
   local local_link="$TMP/leg-receipt-link-local" dirty_link="$TMP/leg-receipt-link-dirty" cc_dir gpu_dir
   local env_bin="$TMP/leg125-env-bin" env_out="$TMP/leg125-child-env" saved_repeat_bin=$repeat_bin
   local FLEET_LEG_RUN_RECORD FLEET_LEG_RECEIPT_LINK FLEET_LEG_RECEIPT_DIR
+  local -a fixture_launcher=()
+  local probe_env
   cp "$HERE/owed-run.sh" "$repeat_root/tools/owed-run.sh" || { report 1 'stage owed-run.sh for leg 125'; return; }
   rm -f "$link" "$gpu_link" "$foreign_link" "$plain_link" "$local_link" "$dirty_link" "$env_out"
   mkdir -p "$env_bin"
@@ -1747,25 +1750,58 @@ EOF
       "foreign=$(readlink "$foreign_link" 2>/dev/null || echo bad) plain=$(ls -ld "$plain_link" 2>/dev/null || echo bad)"
   fi
 
-  # Bash 3.2 can uncover the caller's exported record when unsetting a local.
-  local -a fixture_launcher=(env -u FLEET_LEG_RUN_RECORD)
+  # Bash 3.2 can uncover a caller's exported FLEET_LEG_* variables when unsetting
+  # locals, so clear each unwanted variable at launch with `env -u` instead.
+  fixture_launcher=(env -u FLEET_LEG_RECEIPT_LINK -u FLEET_LEG_RECEIPT_DIR)
+  probe_env=$("${fixture_launcher[@]}" "$BASH" -c 'printf "%s|%s|%s" "${FLEET_LEG_RUN_RECORD-unset}" "${FLEET_LEG_RECEIPT_LINK-unset}" "${FLEET_LEG_RECEIPT_DIR-unset}"')
+  argv_probe owed-receipt-no-link run --expect-backend cc build "$target" -j 1
+  if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
+     [ "$probe_env" = "$path|unset|unset" ] &&
+     cmp -s "$argv_dir/fleet-leg-run-record" <(printf '%s\n' "$path") &&
+     cmp -s "$argv_dir/fleet-leg-command" <(printf 'build %s -j 1 \n' "$target") &&
+     [ ! -e "$outer_link" ] && [ ! -L "$outer_link" ]; then
+    report 0 'a fleet run without FLEET_LEG_RECEIPT_LINK or FLEET_LEG_RECEIPT_DIR records metadata and ignores outer receipt vars'
+  else
+    report 1 'a fleet run without FLEET_LEG_RECEIPT_LINK or FLEET_LEG_RECEIPT_DIR records metadata and ignores outer receipt vars' \
+      "exit $argv_rc; env=$probe_env; receipt: $argv_dir; outer_link: $(ls -ld "$outer_link" 2>/dev/null || echo absent)"
+  fi
+
+  fixture_launcher=(env -u FLEET_LEG_RUN_RECORD -u FLEET_LEG_RECEIPT_DIR)
   export FLEET_LEG_RECEIPT_LINK="$local_link"
+  probe_env=$("${fixture_launcher[@]}" "$BASH" -c 'printf "%s|%s|%s" "${FLEET_LEG_RUN_RECORD-unset}" "${FLEET_LEG_RECEIPT_LINK-unset}" "${FLEET_LEG_RECEIPT_DIR-unset}"')
   argv_probe owed-receipt-local run --expect-backend cc build "$target" -j 1
   if [ "$argv_rc" = 0 ] && [ -n "$argv_dir" ] &&
+     [ "$probe_env" = "unset|$local_link|unset" ] &&
      [ ! -e "$argv_dir/fleet-leg-run-record" ] && [ ! -e "$argv_dir/fleet-leg-command" ] &&
-     [ ! -e "$local_link" ] && [ ! -L "$local_link" ]; then
-    report 0 'a local run records no fleet metadata or receipt symlink'
+     [ ! -e "$local_link" ] && [ ! -L "$local_link" ] &&
+     [ ! -e "$outer_link" ] && [ ! -L "$outer_link" ]; then
+    report 0 'a local run with a supplied FLEET_LEG_RECEIPT_LINK records no fleet metadata or receipt symlink'
   else
-    report 1 'a local run records no fleet metadata or receipt symlink' \
-      "exit $argv_rc; receipt: $argv_dir; link: $(ls -ld "$local_link" 2>/dev/null || echo absent)"
+    report 1 'a local run with a supplied FLEET_LEG_RECEIPT_LINK records no fleet metadata or receipt symlink' \
+      "exit $argv_rc; env=$probe_env; receipt: $argv_dir; link: $(ls -ld "$local_link" 2>/dev/null || echo absent); outer_link: $(ls -ld "$outer_link" 2>/dev/null || echo absent)"
   fi
 }
 
 leg_125_with_caller_record() {
-  # Give ordinary CI the same outer export that a fleet leg supplies.
-  local FLEET_LEG_RUN_RECORD="$TMP/caller-leg-record"
-  export FLEET_LEG_RUN_RECORD
-  leg_125
+  # Give ordinary CI the same outer exports that a fleet leg supplies.
+  local outer_record="$TMP/caller-leg-record"
+  local outer_link="$TMP/caller-leg-receipt-link"
+  local outer_dir="$TMP/caller-leg-receipt-dir"
+  local FLEET_LEG_RUN_RECORD="$outer_record"
+  local FLEET_LEG_RECEIPT_LINK="$outer_link"
+  local FLEET_LEG_RECEIPT_DIR="$outer_dir"
+  export FLEET_LEG_RUN_RECORD FLEET_LEG_RECEIPT_LINK FLEET_LEG_RECEIPT_DIR
+  rm -f "$outer_link"
+  leg_125 "$outer_link"
+  if [ "${FLEET_LEG_RUN_RECORD-unset}" = "$outer_record" ] &&
+     [ "${FLEET_LEG_RECEIPT_LINK-unset}" = "$outer_link" ] &&
+     [ "${FLEET_LEG_RECEIPT_DIR-unset}" = "$outer_dir" ] &&
+     [ ! -e "$outer_link" ] && [ ! -L "$outer_link" ]; then
+    report 0 'leg 125 preserves outer FLEET_LEG_RUN_RECORD, FLEET_LEG_RECEIPT_LINK, and FLEET_LEG_RECEIPT_DIR'
+  else
+    report 1 'leg 125 preserves outer FLEET_LEG_RUN_RECORD, FLEET_LEG_RECEIPT_LINK, and FLEET_LEG_RECEIPT_DIR' \
+      "record=${FLEET_LEG_RUN_RECORD-unset} link=${FLEET_LEG_RECEIPT_LINK-unset} dir=${FLEET_LEG_RECEIPT_DIR-unset} outer_link=$(ls -ld "$outer_link" 2>/dev/null || echo absent)"
+  fi
 }
 harness_leg_run '125: fleet receipts preserve the binding and the original command #options' leg_125_with_caller_record
 

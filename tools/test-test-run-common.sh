@@ -103,6 +103,10 @@ unset OCANNL_BACKEND
 # Hermetic against a caller that allowed its own unmerged tree
 # (gh-ocannl-1991): leg 104 sets the override where it means it.
 unset OCANNL_TOOL_TEST_UNMERGED
+# Hermetic against an outer fleet execution leg (gh-ocannl-2504): fixture runs
+# must not write into or symlink the caller leg's receipt variables; leg 125
+# supplies its own decoy outer exports to pin Bash 3.2 local shadowing.
+unset FLEET_LEG_RUN_RECORD FLEET_LEG_RECEIPT_LINK FLEET_LEG_RECEIPT_DIR
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # The member being run: the legs that run or cut a copy of their own harness name it.
