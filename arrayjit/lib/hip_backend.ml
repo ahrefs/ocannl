@@ -583,8 +583,11 @@ end = struct
   module Mapped_phase_memory = struct
     open Ctypes
 
+    exception Unavailable of string
+
     let check call status =
-      if status <> 0 then failwith (Printf.sprintf "%s failed with HIP status %d" call status)
+      if status <> 0 then
+        raise (Unavailable (Printf.sprintf "%s failed with HIP status %d" call status))
 
     let allocate workgroups =
       let malloc =
@@ -612,39 +615,50 @@ end = struct
           Stdlib.Printexc.raise_with_backtrace exn backtrace
   end
 
-  let make_timing_phase_probe dev primary_context =
-    let attrs =
-      Utils.with_device_init_deadline ~backend_name:name (fun () -> H.Device.get_attributes dev)
-    in
-    Option.map (timing_phase_period attrs) ~f:(fun workgroups ->
-        set_ctx primary_context;
-        (* On gfx1102 a 64-thread group uses both SIMDs of its starting pair. The first wave's SIMD
-           id in HW_ID1 (register 23, bits 9:8) tells which pair was assigned. A null result pointer
-           gives the padding dispatch precisely the probe's launch shape. *)
-        let hip_src =
-          {|
+  let compile_timing_phase_probe ~arch ~workgroups =
+    (* On gfx1102 a 64-thread group uses both SIMDs of its starting pair. The first wave's SIMD id
+       in HW_ID1 (register 23, bits 9:8) tells which pair was assigned. A null result pointer gives
+       the padding dispatch precisely the probe's launch shape. *)
+    let hip_src =
+      {|
 #include <hip/hip_runtime.h>
 extern "C" __global__ void ocannl_timing_phase(unsigned int* ids) {
     if (ids && threadIdx.x == 0)
         ids[blockIdx.x] = __builtin_amdgcn_s_getreg((31 << 11) | 23);
 }
 |}
-        in
-        let options = ("--offload-arch=" ^ attrs.gcn_arch_name) :: hip_include_options () in
-        let code =
-          Hiprtc.compile_to_code ~hip_src ~name:"ocannl_timing_phase.hip" ~options ~with_debug:false
-        in
-        let run_module = load_module code in
-        let kernel = H.Module.get_function run_module ~name:"ocannl_timing_phase" in
-        let host_ids, device_address, release_host_ids = Mapped_phase_memory.allocate workgroups in
-        {
-          workgroups;
-          kernel;
-          host_ids;
-          device_address;
-          release_host_ids;
-          reported_unrecognized_phase = false;
-        })
+    in
+    let options = ("--offload-arch=" ^ arch) :: hip_include_options () in
+    let code =
+      Hiprtc.compile_to_code ~hip_src ~name:"ocannl_timing_phase.hip" ~options ~with_debug:false
+    in
+    let run_module = load_module code in
+    let kernel = H.Module.get_function run_module ~name:"ocannl_timing_phase" in
+    let host_ids, device_address, release_host_ids = Mapped_phase_memory.allocate workgroups in
+    {
+      workgroups;
+      kernel;
+      host_ids;
+      device_address;
+      release_host_ids;
+      reported_unrecognized_phase = false;
+    }
+
+  let make_timing_phase_probe dev primary_context =
+    let attrs =
+      Utils.with_device_init_deadline ~backend_name:name (fun () -> H.Device.get_attributes dev)
+    in
+    Option.bind (timing_phase_period attrs) ~f:(fun workgroups ->
+        set_ctx primary_context;
+        match compile_timing_phase_probe ~arch:attrs.gcn_arch_name ~workgroups with
+        | probe -> Some probe
+        | exception
+            (( Mapped_phase_memory.Unavailable _ | Dl.DL_error _ | H.Hip_error _
+             | Hiprtc.Hiprtc_error _ ) as exn) ->
+            (* The probe is optional and hasn't submitted anything. Cache its absence for this
+               runner so a private compilation or pinned memory failure leaves timing usable. *)
+            Stdio.eprintf "hip: timing queue probe unavailable: %s\n%!" (Exn.to_string exn);
+            None)
 
   let align_timing_queue (device : device) ~await =
     Stdlib.Mutex.protect device.dev.timing_phase_lock (fun () ->

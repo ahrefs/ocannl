@@ -3158,6 +3158,8 @@ files.
   call advance the phase normally, including any work submitted by debug instrumentation.
   If the IDs do not show one complete even/odd cycle, the backend reports that once per runner
   and proceeds without padding. Mixed dispatch shapes can leave such a phase pattern.
+  A probe compilation, mapping or allocation failure before submission leaves ordinary timing
+  available. Launch and bounded-wait failures follow the existing launch and sync paths.
   The affected device's timing identity retires its prior schedule and placement cache keys.
   See `training-and-performance.md` (gh-ocannl-2384) for measurements outside the tuner.
 ## Cache regimes and placement replay
