@@ -735,4 +735,121 @@ PY
     grep -qF 'conflicting autotune-seeding: plan values' "$TMP/runs/preset-conflict-fits/geo.err"
   check 'gh1821_geometry_fit conflict emits no stdout' test ! -s "$TMP/runs/preset-conflict-fits/geo.out"
 fi
+if harness_leg '8: gh1821_geometry_fit refuses <2 candidates and handles empty pick sets'; then
+  site=rank_wgrad_1x32x32x32
+  geo_fit="$tree/benchmarks/gh1821_geometry_fit.py"
+  geo_base="$TMP/runs/geo-guards"
+
+  write_geo_cell() { # DIR ROW_SPECS EXPLAIN_SPECS
+    local dir=$1 rows=$2 explains=$3
+    mkdir -p "$dir"
+    : >"$dir/$site.tsv"
+    : >"$dir/${site}_shipped.out"
+    while IFS='|' read -r label digest ms; do
+      [ -n "$label" ] || continue
+      printf 'cuda\t%s\trs_stub\t%s\t%s\t\t1\t4\t8\tfalse\tfalse\tfalse\n' \
+        "$digest" "$label" "$ms" >>"$dir/$site.tsv"
+    done <<<"$rows"
+    while IFS='|' read -r label rank_ms admitted; do
+      [ -n "$label" ] || continue
+      printf 'rank-site: explain label="%s" rank_ms=%s admitted=%s\n' \
+        "$label" "$rank_ms" "$admitted" >>"$dir/${site}_shipped.out"
+      printf 'rank-site: kernels label="%s" kernels="c=%s,m=0.0,txn=0,txn64=0,txn128=0,unc=0,wg=0,thr=32"\n' \
+        "$label" "$rank_ms" >>"$dir/${site}_shipped.out"
+    done <<<"$explains"
+  }
+
+  # 1-candidate cell (2 listed, only 1 joins): must refuse with exit 2 and no stdout.
+  one_dir="$geo_base/one-cand"
+  write_geo_cell "$one_dir" \
+    $'W_sketch[control]|11111111/aaaaaaaa|1.25' \
+    $'default|0.5|true\nW_sketch[control]|1.25|true'
+  got=0
+  python3 "$geo_fit" "$one_dir" >"$geo_base/one-cand.out" 2>"$geo_base/one-cand.err" || got=$?
+  check 'gh1821_geometry_fit refuses a 1-candidate cell with exit 2' test "$got" = 2
+  check '1-candidate refusal names fewer than two candidates join' \
+    grep -qF "${site}: fewer than two candidates join" "$geo_base/one-cand.err"
+  check '1-candidate refusal emits no stdout' test ! -s "$geo_base/one-cand.out"
+
+  # Repeated explain label for a single timed candidate still counts as 1 candidate.
+  dup_dir="$geo_base/dup-cand"
+  write_geo_cell "$dup_dir" \
+    $'W_sketch[control]|11111111/aaaaaaaa|1.25' \
+    $'W_sketch[control]|1.25|true\nW_sketch[control]|1.25|true'
+  got=0
+  python3 "$geo_fit" "$dup_dir" >"$geo_base/dup-cand.out" 2>"$geo_base/dup-cand.err" || got=$?
+  check 'gh1821_geometry_fit refuses a repeated single explain label with exit 2' test "$got" = 2
+  check 'repeated-label refusal names fewer than two candidates join' \
+    grep -qF "${site}: fewer than two candidates join" "$geo_base/dup-cand.err"
+  check 'repeated-label refusal emits no stdout' test ! -s "$geo_base/dup-cand.out"
+
+  # 0-candidate cell (calibration rows present, none join): same refusal.
+  zero_dir="$geo_base/zero-cand"
+  write_geo_cell "$zero_dir" \
+    $'W_sketch[other]|11111111/aaaaaaaa|1.25' \
+    $'W_sketch[control]|1.25|true'
+  got=0
+  python3 "$geo_fit" "$zero_dir" >"$geo_base/zero-cand.out" 2>"$geo_base/zero-cand.err" || got=$?
+  check 'gh1821_geometry_fit refuses a 0-candidate cell with exit 2' test "$got" = 2
+  check '0-candidate refusal names fewer than two candidates join' \
+    grep -qF "${site}: fewer than two candidates join" "$geo_base/zero-cand.err"
+  check '0-candidate refusal emits no stdout' test ! -s "$geo_base/zero-cand.out"
+
+  # All-coalesced cell: admitted set is empty, admitted+coalesced still judges slowdown vs spread.
+  coal_dir="$geo_base/all-coal"
+  write_geo_cell "$coal_dir" \
+    $'W_sketch[gpu 64x64x16/4x4 coal-k]|11111111/aaaaaaaa|0.50\nW_sketch[gpu 64x64x16/4x4 coal-k]|11111111/aaaaaaaa|0.25\nW_sketch[gpu 64x64x16/4x4 coal-k]|11111111/aaaaaaaa|0.50\nW_sketch[gpu 32x32x16/4x4 coal-n]|22222222/bbbbbbbb|1.25\nW_sketch[gpu 32x32x16/4x4 coal-n]|22222222/bbbbbbbb|1.25\nW_sketch[gpu 32x32x16/4x4 coal-n]|22222222/bbbbbbbb|1.25' \
+    $'W_sketch[gpu 64x64x16/4x4 coal-k]|0.5|true\nW_sketch[gpu 32x32x16/4x4 coal-n]|1.25|true'
+  got=0
+  python3 "$geo_fit" "$coal_dir" --copy-rate 1e12 \
+    >"$geo_base/all-coal.out" 2>"$geo_base/all-coal.err" || got=$?
+  check 'gh1821_geometry_fit handles an all-coalesced cell without crashing' test "$got" = 0
+  check 'all-coalesced cell reports admitted+coalesced argmin with admitted_argmin=none' \
+    grep -qxF "F ${site}: agreement=100.0% spread=1.667 argmin='W_sketch[gpu 64x64x16/4x4 coal-k]'@1.000 admitted_argmin=none pass=true" \
+      "$geo_base/all-coal.out"
+  check 'all-coalesced cell rescoring with --copy-rate passes' \
+    grep -qxF 'cells/s=1.000e+12 (bytes/s=4.000e+12): passing=1/1' "$geo_base/all-coal.out"
+  check 'all-coalesced cell emits no stderr' test ! -s "$geo_base/all-coal.err"
+
+  # Inverted all-coalesced cell: coalesced argmin slower than spread fails pass=false.
+  coal_bad_dir="$geo_base/all-coal-bad"
+  write_geo_cell "$coal_bad_dir" \
+    $'W_sketch[gpu 64x64x16/4x4 coal-k]|11111111/aaaaaaaa|1.25\nW_sketch[gpu 32x32x16/4x4 coal-n]|22222222/bbbbbbbb|0.50' \
+    $'W_sketch[gpu 64x64x16/4x4 coal-k]|0.5|true\nW_sketch[gpu 32x32x16/4x4 coal-n]|1.25|true'
+  got=0
+  python3 "$geo_fit" "$coal_bad_dir" \
+    >"$geo_base/all-coal-bad.out" 2>"$geo_base/all-coal-bad.err" || got=$?
+  check 'inverted all-coalesced cell exits 0 without crashing' test "$got" = 0
+  check 'inverted all-coalesced cell fails the coalesced slowdown criterion' \
+    grep -qxF "F ${site}: agreement=0.0% spread=1.000 argmin='W_sketch[gpu 64x64x16/4x4 coal-k]'@2.500 admitted_argmin=none pass=false" \
+      "$geo_base/all-coal-bad.out"
+
+  # All-unadmitted cell: both pick sets empty, spread defaults to 1.0 like gh1600_txn_fit.spread_of.
+  unadm_dir="$geo_base/all-unadm"
+  write_geo_cell "$unadm_dir" \
+    $'W_sketch[gpu 64x64x16/4x4]|11111111/aaaaaaaa|0.50\nW_sketch[gpu 64x64x16/4x4]|11111111/aaaaaaaa|0.25\nW_sketch[gpu 64x64x16/4x4]|11111111/aaaaaaaa|0.50\nW_sketch[gpu 32x32x16/4x4]|22222222/bbbbbbbb|1.25' \
+    $'W_sketch[gpu 64x64x16/4x4]|0.5|false\nW_sketch[gpu 32x32x16/4x4]|1.25|false'
+  got=0
+  python3 "$geo_fit" "$unadm_dir" --copy-rate 1e12 \
+    >"$geo_base/all-unadm.out" 2>"$geo_base/all-unadm.err" || got=$?
+  check 'gh1821_geometry_fit handles an all-unadmitted cell without crashing' test "$got" = 0
+  check 'all-unadmitted cell reports empty pick sets and spread=1.000' \
+    grep -qxF "F ${site}: agreement=100.0% spread=1.000 argmin=none admitted_argmin=none pass=true" \
+      "$geo_base/all-unadm.out"
+  check 'all-unadmitted cell rescoring with --copy-rate passes' \
+    grep -qxF 'cells/s=1.000e+12 (bytes/s=4.000e+12): passing=1/1' "$geo_base/all-unadm.out"
+  check 'all-unadmitted cell emits no stderr' test ! -s "$geo_base/all-unadm.err"
+
+  check 'gh1821_geometry_fit.evaluate omits empty pick sets like gh1600_txn_fit.evaluate' \
+    python3 - "$tree/benchmarks" "$coal_dir" "$unadm_dir" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import gh1821_geometry_fit
+
+coal_res = gh1821_geometry_fit.evaluate(gh1821_geometry_fit.load(sys.argv[2], "shipped"), None, 0, 0.10)
+assert len(coal_res) == 1 and sorted(coal_res[0][2]) == ["admitted+coalesced"], coal_res
+unadm_res = gh1821_geometry_fit.evaluate(gh1821_geometry_fit.load(sys.argv[3], "shipped"), None, 0, 0.10)
+assert len(unadm_res) == 1 and unadm_res[0][2] == {} and unadm_res[0][3] == 1.0, unadm_res
+PY
+fi
 finish
