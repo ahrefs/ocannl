@@ -865,6 +865,7 @@ if harness_leg 'comment-only library reach and merge plan'; then
     printf 'let () = ignore Core.H.used\n' >"$repo/comment_ranked/uses_$i.ml"
     : >"$repo/comment_ranked/uses_$i.expected"
   done
+  printf 'let () = ignore Core.H.unused\n' >"$repo/comment_ranked/uses_32.ml"
   cat >"$repo/test/training/dune" <<'DUNE'
 (rule (target fixture.actual) (action (with-stdout-to %{target} (run %{exe:../../t2/gen.exe} train))))
 (rule (alias train-fixture) (action (diff fixture.expected fixture.actual)))
@@ -960,7 +961,8 @@ ML
   affected --referenced-only HEAD
   trailer
   if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] &&
-     grep -qxF "$comment_alias" "$out" && ! grep -q '^affected: comment-only reason:' "$err"; then
+     grep -qxF "$comment_alias" "$out" && ! grep -qxF '@comment_ranked/runtest-uses_32' "$out" &&
+     ! grep -q '^affected: comment-only reason:' "$err"; then
     report 0 'a blank payload line after a literal let in a tagged extension reaches its named definition'
   else report 1 'a blank payload line after a literal let in a tagged extension reaches its named definition' "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
 
@@ -974,7 +976,43 @@ ML
     report 0 'a comment beside a quoted extension keeps the compile-and-scans fallback'
   else report 1 'a comment beside a quoted extension keeps the compile-and-scans fallback' "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
 
+  quote_uncertainty() { # LABEL ASSIGNMENT
+    local label=$1 mutant_label="negative control: $1"
+    git_q commit -qam uncertain-quote || exit 2
+    perl -pi -e 's/\bbefore\b/after/' "$repo/lib/helper.ml"
+    affected HEAD
+    trailer
+    if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] &&
+       grep -qxF "$comment_alias" "$out" && ! grep -q '^affected: comment-only reason:' "$err"; then
+      report 0 "$label"
+    else report 1 "$label" "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
+    if run_affected_mutant "$mutant_label" "$2" '' HEAD; then
+      if ! alias_reader_completed; then
+        report_mutant 2 "$mutant_label" "exit $rc, trailer $verdict; $(head -n 4 "$err")"
+      elif [ "$rc" = 0 ] && [ "$verdict" = ok ] &&
+           grep -qxF "affected: comment-only reason: $comment_reason" "$err"; then
+        report_mutant 0 "$mutant_label"
+      else report_mutant 1 "$mutant_label" "exit $rc, trailer $verdict; $(head -n 4 "$err")"; fi
+    fi
+    git_q reset -q --hard "$comment_head" || exit 2
+  }
+
   git_q reset -q --hard "$comment_head" || exit 2
+  cat >>"$repo/lib/helper.ml" <<'ML'
+let quoted = {é|(*
+before
+*)|é}
+ML
+  quote_uncertainty 'a payload edit under a non-ASCII opener keeps ordinary reach' '        $lex->{uncertain} = 1;'
+
+  # The marker already treats the unterminated payload as code. A nearby edit
+  # outside the span isolates the missing-closer guard.
+  cat >>"$repo/lib/helper.ml" <<'ML'
+(* before *)
+let quoted = {%fixture.payload|unfinished
+ML
+  quote_uncertainty 'a comment edit beside a missing quote closer keeps ordinary reach' '          $lex->{uncertain} = 1 if $lex;'
+
   cat >>"$repo/lib/helper.ml" <<'ML'
 let render' c s = String.make 1 c ^ s
 let quoted = render' '"' "(*
