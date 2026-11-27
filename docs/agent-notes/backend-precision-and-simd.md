@@ -796,9 +796,13 @@ files.
   Positive single-term affine axes `a*i + c` (gh-ocannl-2479) also keep `i` as a cell loop.
   This covers the strided unit-tap axis of a 1×k or k×1 convolution and physical padding shifts.
   The write symbol must be distinct from those of every other axis. Full-range physical bounds
-  and separation must hold even when a guard protects the original access.
-  Guarded nests with a single-term axis and FP8 storage decline. The guard can leave a cell
-  untouched, while a widened accumulator's write-back can change its bits.
+  and separation must hold even when a guard protects the original access. Guarded localized
+  accumulators — from `C_syntax.try_localize_serial_reduce` (covering every
+  `sink_narrow_reduction_loops` path and direct guarded peels) as well as schedule-minted
+  `Unroll ~materialize:true` / `Partition` scopes — write back conditionally through one
+  `ocannl_acc_touched_<id>` flag whenever their scope body has no unconditional update path
+  (gh-ocannl-2500), so a cell no iteration touched keeps its raw bits (E5M2 NaN `0x7d`, CUDA
+  `+inf` `0x7c`) while updated cells still keep single-rounding residency.
   A cell with independent supported positive affine pairs, one per axis (gh-ocannl-2423,
   gh-ocannl-2464), is reparametrized per overlapping axis by owner and residue while preserving
   each cell's original contribution order across windows and interleaved reductions (each

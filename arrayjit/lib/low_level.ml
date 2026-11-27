@@ -13864,15 +13864,14 @@ let validate_lane_bounds ?(site = "Low_level.validate_lane_bounds") ?comp_prec (
    residue and owner so the outer cell loops own all windows and the entire reduction can stay at
    [accum_prec]. The update must be an ordinary accumulation with remappable indices. Coupled affine
    pairs sharing an iterator, other affine forms, concatenation, residue products past the code-size
-   cap and unproved bounds decline. FP8 nests with guards and a single-term axis decline. Injective
-   pairs keep both iterators as outer cell loops after the separation proof; - guards between levels
-   are [pure_index_guard]s; each moves to just inside the innermost (new order) chain loop it
-   mentions, or above the chain if it mentions none -- a pure guard filters tuples, so where it sits
-   below its own loops changes neither which tuples run nor their order. [Set_dynamic] scatters,
-   [Tile_mma], scans, sibling statements and every other leaf are left alone (narrow-float
-   [Set_dynamic] add-scatters are widened by {!widen_narrow_scatters} in {!specialize_proc}). Runs
-   after [rewrite_one_hot_reductions], whose scatter match wants the vocabulary loop innermost as
-   lowered (gh-ocannl-466). *)
+   cap and unproved bounds decline. Injective pairs keep both iterators as outer cell loops after
+   the separation proof; - guards between levels are [pure_index_guard]s; each moves to just inside
+   the innermost (new order) chain loop it mentions, or above the chain if it mentions none -- a
+   pure guard filters tuples, so where it sits below its own loops changes neither which tuples run
+   nor their order. [Set_dynamic] scatters, [Tile_mma], scans, sibling statements and every other
+   leaf are left alone (narrow-float [Set_dynamic] add-scatters are widened by
+   {!widen_narrow_scatters} in {!specialize_proc}). Runs after [rewrite_one_hot_reductions], whose
+   scatter match wants the vocabulary loop innermost as lowered (gh-ocannl-466). *)
 let sink_narrow_reduction_loops (llc : t) : t =
   let only_self_reads d di =
     let rec go (s : scalar_t) =
@@ -14037,16 +14036,11 @@ let sink_narrow_reduction_loops (llc : t) : t =
         | Some (pos, (_, n)) -> (pos, checked n)
         | None -> raise Unsupported
       in
-      (* A guard can leave a cell with no updates, while a localized accumulator still writes it
-         back. The FP8 round trip can change such a cell's bits, e.g. an E5M2 infinity on CUDA. *)
-      let guarded_fp8 =
-        (not (List.is_empty guards)) && Ops.equal_prec (Lazy.force d.Tn.storage_prec) Ops.fp8
-      in
       let pairs_rev, write_syms =
         Array.foldi di ~init:([], []) ~f:(fun axis (pairs, syms) -> function
           | Indexing.Iterator s -> (pairs, s :: syms)
           | Fixed_idx _ -> (pairs, syms)
-          | Affine { symbols = [ (a, i) ]; offset } when a > 0 && not guarded_fp8 ->
+          | Affine { symbols = [ (a, i) ]; offset } when a > 0 ->
               let _, imax = loop_position i in
               ignore (add (mul a imax) offset : int);
               ignore (checked dims.(axis) : int);
