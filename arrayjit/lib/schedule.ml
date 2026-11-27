@@ -2819,8 +2819,8 @@ let apply_privatize ~app ~target ~over ~acc_prec (opt : Low_level.optimized) : L
             match zero_seed_candidate ~allow_workgroup_barriers:true target next with
             | Some (write, repeated) ->
                 let inside =
-                  List.drop_while write.Affine.a_loops ~f:(fun (s, _) ->
-                      not (Indexing.equal_symbol s over))
+                  List.drop_while (Affine.Loop_chain.to_alist write.Affine.a_loops)
+                    ~f:(fun (s, _) -> not (Indexing.equal_symbol s over))
                 in
                 if
                   (not (List.is_empty inside))
@@ -4730,7 +4730,7 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
             List.iter writes ~f:(fun (w : Tn.t Affine.access) ->
                 if w.a_whole then refuse_at "as a whole node (Zero_out)";
                 let left_range s' =
-                  match List.Assoc.find w.a_loops s' ~equal:Indexing.equal_symbol with
+                  match Affine.Loop_chain.find w.a_loops s' with
                   | Some _ as r -> r
                   | None -> find_range outer s'
                 in
@@ -4741,7 +4741,7 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
                 in
                 match
                   Affine.pair_conflict ~left_range ~right_range:site_range
-                    ~dup_left:(fun s' -> List.Assoc.mem w.a_loops s' ~equal:Indexing.equal_symbol)
+                    ~dup_left:(Affine.Loop_chain.mem w.a_loops)
                     ~dup_right:(fun s' -> List.mem site_dup s' ~equal:Indexing.equal_symbol)
                     ~pairs:[ (s, s) ]
                     ~left ~right
@@ -6397,7 +6397,7 @@ let pipeline_violation (opt : Low_level.optimized) : pipeline_violation option =
             if
               List.exists accesses ~f:(fun (a : _ Affine.access) ->
                   Tn.equal a.a_tn tile && (not a.a_write)
-                  && not (List.exists a.a_loops ~f:(fun (s, _) -> Indexing.equal_symbol s rotor)))
+                  && not (Affine.Loop_chain.mem a.a_loops rotor))
             then Some (Read_outside_rotor { tile; rotor })
             else None)
 
@@ -7484,7 +7484,7 @@ let crosscheck_scratch_containment (opt : Low_level.optimized) (chains : Low_lev
                   {
                     a with
                     Affine.a_map = Array.map a.Affine.a_map ~f:(rename_idx m);
-                    a_loops = List.map a.a_loops ~f:(fun (s, b) -> (rename_sym m s, b));
+                    a_loops = Affine.Loop_chain.map_symbols_exn a.a_loops ~f:(rename_sym m);
                     a_val_syms = List.map a.a_val_syms ~f:(rename_sym m);
                   })
           | _ -> a)

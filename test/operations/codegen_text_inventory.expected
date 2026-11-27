@@ -852,6 +852,7 @@ Ll_test.run_routine [through Ll_test.link]
 roots scanned: arrayjit/test, test
 arrayjit/test/test_cross_cse.ml [staged callback; run by @arrayjit/test/runtest-test_cross_cse]
 arrayjit/test/test_vectorized_codegen.ml [staged callback; run by @arrayjit/test/runtest-test_vectorized_codegen]
+test/operations/access_fold.ml [staged callback; run by @test/operations/runtest-access_fold]
 test/operations/accum_max_one_extent.ml [through Ll_test.execute; run by @test/operations/runtest-accum_max_one_extent]
 test/operations/accum_width.ml [staged callback; through Ll_test.execute; run by @test/operations/runtest-accum_width]
 test/operations/affine_extraction.ml [staged callback; run by @test/operations/runtest-affine_extraction]
@@ -995,6 +996,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 # sections but is absent from this kernel-execution list.
 @arrayjit/test/runtest-test_cross_cse
 @arrayjit/test/runtest-test_vectorized_codegen
+@test/operations/runtest-access_fold
 @test/operations/runtest-accum_max_one_extent
 @test/operations/runtest-accum_width
 @test/operations/runtest-affine_extraction

@@ -680,3 +680,85 @@ let () =
   in
   p "a homogeneous operand's annotation does not split a condition"
     (O.equal_key (select_key single) (select_key Ops.int32))
+
+(* gh-ocannl-1628: [iter_buffer_accesses] runs on [Access_fold.structural], [direct_write] and
+   [direct_read], tested through its public liveness and program-order consumers
+   ([buffer_access_spans] and [first_access_positions]). Unlike [evaluation_reads], liveness must
+   over-approximate and touch every buffer a statement may access: both [Where] arms, discarded
+   operands, dead loops, [Local_scope] bodies, [Scan_loop] inits, gather tables and indices, and
+   [Tile_mma] header operands plus fallback. *)
+let () =
+  let c_ = mk "buf_c" and d_ = mk "buf_d" and e_ = mk "buf_e" and f_ = mk "buf_f" in
+  let st_buf = mk "buf_state" in
+  virtualize st_buf;
+  let span_keys code =
+    Option.map (LL.buffer_access_spans ~stmt_serial:true [ code ]) ~f:(fun tbl ->
+        Hashtbl.keys tbl |> Set.of_list (module Tn))
+  in
+  let has_keys code want =
+    Option.equal Set.equal (span_keys code) (Some (Set.of_list (module Tn) want))
+  in
+  let sel = where_ (at c_) (at a) (add (at b) (at d_)) in
+  p "buffer spans touch both arms of a Where select" (has_keys (put sel) [ out; c_; a; b; d_ ]);
+  p "contrast: evaluation_reads charges only the wider arm (3 nodes) while buffer spans hold all 5"
+    (let ev = LL.evaluation_reads ~blends:false ~self:out sel in
+     List.equal Set.equal ev [ Set.of_list (module Tn) [ c_; b; d_ ] ]
+     && Option.value_map (span_keys (put sel)) ~default:false ~f:(fun s -> Set.length s = 5));
+  p "buffer spans touch a projection's discarded operand"
+    (has_keys (put (binop Ops.Arg1 (at a) (at b))) [ out; a; b ]);
+  let i = sym () in
+  p "buffer spans touch a dead loop's body" (has_keys (loop ~upto:(-1) i (put (at a))) [ out; a ]);
+  p "buffer spans enter a Local_scope body"
+    (has_keys (put (scope (LL.Set_local (scope_id, at b)))) [ out; b ]);
+  let cr = carry ~init:(at c_) st_buf in
+  let scan_code =
+    scan ~upto:2 i ~carried:[ cr ] (seq (set_next cr (add (prev cr) (at a))) (put (next cr)))
+  in
+  p "buffer spans touch a Scan_loop's init and body buffers" (has_keys scan_code [ c_; a; out ]);
+  let g = gather ~tn:b ~idcs:[| fixed 0 |] ~dyn_axis:0 ~dyn_value:(at a, single) in
+  p "buffer spans touch both a gather's table and its index node" (has_keys (put g) [ out; b; a ]);
+  p "buffer spans ignore Get_merge_buffer and scope locals"
+    (has_keys (put (add (LL.Get_merge_buffer (a, [| fixed 0 |])) (LL.Get_local scope_id))) [ out ]);
+  let tile =
+    tile_mma
+      ~d:(d_, [| fixed 0 |])
+      ~a:(a, [| fixed 0 |])
+      ~b:(b, [| fixed 0 |])
+      (set_at e_ (fixed 0) (at f_))
+  in
+  p "buffer spans touch Tile_mma's d, a, b header operands and its fallback"
+    (has_keys tile [ d_; a; b; e_; f_ ]);
+  p "buffer spans decline with None on Staged_compilation"
+    (Option.is_none
+       (LL.buffer_access_spans ~stmt_serial:true [ LL.Staged_compilation (fun () -> assert false) ]));
+  let order_of code =
+    LL.first_access_positions code |> Hashtbl.to_alist
+    |> List.sort ~compare:(fun (_, p1) (_, p2) -> Int.compare p1 p2)
+    |> List.map ~f:fst
+  in
+  p "first_access_positions records a statement's write before its reads, left to right"
+    (List.equal Tn.equal (order_of (put (add (at a) (at b)))) [ out; a; b ]);
+  p "first_access_positions records a gather's table before its dynamic index expression"
+    (List.equal Tn.equal (order_of (put g)) [ out; b; a ]);
+  (* Relationship pin: every node that [read_charge] collects at any level (unconditional loads or
+     select arms) must appear in the buffer-access spans of the enclosing statement. *)
+  let rec charge_nodes (c : LL.read_charge) =
+    List.fold c.selects ~init:c.loads ~f:(fun acc s ->
+        List.fold s.arms ~init:acc ~f:(fun acc arm -> Set.union acc (charge_nodes arm)))
+  in
+  let corpus =
+    [
+      add (at a) (at b);
+      sel;
+      binop Ops.Arg2 (at a) (at b);
+      g;
+      where_ (at c_) (scope (LL.Set_local (scope_id, g))) (add (at d_) (at e_));
+      add (at out) (LL.Get_merge_buffer (f_, [| fixed 0 |]));
+    ]
+  in
+  p_all "every node read_charge collects at any level appears in buffer_access_spans" corpus
+    ~f:(fun expr ->
+      let charged = charge_nodes (LL.read_charge ~self:out expr) in
+      match span_keys (put expr) with
+      | None -> false
+      | Some spanned -> Set.is_subset charged ~of_:spanned)

@@ -8,3 +8,8 @@ bind widens an existing range: true
 a symbol no loop binds has no range: true
 an access-validity query ranged by loop_ranges sees the second sibling's out-of-bounds cells: true
 the same query over the first sibling's range alone admits the access (the hull is what decides): true
+Loop_chain.of_bindings refuses a duplicate binder with a typed error: true
+Loop_chain.enter refuses a duplicate binder with a typed error: true
+Loop_chain.map_symbols refuses a rename collision with a typed error: true
+affine_relations raises Duplicate_binder on nested loops rebinding a symbol: true
+sibling loops sharing a symbol still extract as separate single-binder chains: true

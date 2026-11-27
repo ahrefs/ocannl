@@ -352,7 +352,9 @@ files.
   range per symbol, an abstract map so no lookup can keep a first binding and drop the siblings'
   (gh-ocannl-1305: the per-binding list it replaced invited `List.Assoc.find`, the within-nest hole
   of gh-1282); `aligned_chains_shared_symbol.ml` pins the query, `loop_ranges_hull.ml` the hull. An
-  access's own `a_loops` stays a list: it is one enclosing chain, not a routine's loops.
+  access or effect's own `a_loops`/`e_loops` is an `Affine.Loop_chain.t` (gh-ocannl-1628): one
+  outermost-first enclosing chain whose constructor refuses duplicate binders with a typed
+  `Duplicate_binder` refusal, so `Loop_chain.find` is unambiguous without reversing.
 - **Pair equalities compose across axes** (gh-ocannl-2277): `Affine.pair_conflict` unions exact
   unit differences with zero offset and the existing mixed-radix equalities. Each edge holds
   for every collision. The equality classes keep `Left_v`, `Right_v` and `Shared` distinct even
@@ -631,7 +633,8 @@ files.
   build fails at each (82 sites for `Scan_loop`); the ones it cannot flag are the `| _ ->` matches.
   The analyses built on `Access_fold` (next bullet) do not appear among them: descent is owned by
   `Access_fold.fold`'s match, and "what does this statement write" by `Low_level.direct_write`'s,
-  both exhaustive (a probe constructor flagged those two and no migrated walk, gh-ocannl-1451).
+  both exhaustive (a probe constructor flagged those two and no migrated walk, gh-ocannl-1451,
+  gh-ocannl-1628).
   `OCAMLPARAM="_,w=+4" dune build @arrayjit/lib/check` reports every fragile match with the type it
   is over — filter for `Low_level.t` (136 sites at the time) and read them in place: nearly all are
   shape recognizers whose fall-through is the right answer for a new statement kind, and the few
@@ -646,17 +649,22 @@ files.
   context carries the enclosing binders (innermost first, a scan's with no axis, its inits outside
   it). A `Where`'s arms reach the `branches` hook as continuations, so a per-arm algebra lives in a
   hook, not in a second recursion (gh-ocannl-1451). Merge taint, spliced reads, traced-store
-  reconciliation, hosted-init classification, loop bounds, the statement-local symbol census and
-  `trace_node_facts` use it. Two shared walks sit on it (gh-ocannl-1451): `evaluation_reads` is the
-  one fan-in read collector (wider arm, every tied one as its own alternative, or under `~blends`
-  the union of a select `speculable_select` admits; scope bodies charge the statement), used by
-  `trace_node_facts`' `setter_reads` and the guard's replay of inherited computations alike; and
+  reconciliation, hosted-init classification, loop bounds, the statement-local symbol census,
+  `trace_node_facts`, `check_and_store_virtual`'s legality walk and `iter_buffer_accesses` use it
+  (the last three sharing `Access_fold.structural`; gh-ocannl-1628). Two shared walks sit on it
+  (gh-ocannl-1451): `evaluation_reads` is the one fan-in read collector (wider arm, every tied one
+  as its own alternative, or under `~blends` the union of a select `speculable_select` admits; scope
+  bodies charge the statement), used by `trace_node_facts`' `setter_reads` and the guard's replay of
+  inherited computations alike (sharing `Low_level.direct_read` with `iter_buffer_accesses`, so
+  gather-table accounting stays one exhaustive `scalar_t` match); and
   `write_demand`/`fold_statement_positions` is the one statement-position walk (loops, scans,
   guards, sequences; no expressions, no `Tile_mma` fallback), which the sketch demand walks,
   `accumulating_writes`, `serial_accum_widths` and `seed_first_write`'s binders use. A new analysis
   asks one of them before writing its own recursion; one that must refuse unknown writes matches
-  its known ones and refuses whatever else `direct_write` calls a write, as `trace_node_facts` does.
-  Rewriters, affine path construction, `check_and_store_virtual`'s legality walk and cleanup's
+  its known ones and refuses whatever else `direct_write` calls a write, as `trace_node_facts` and
+  `check_and_store_virtual` do (the wildcard is deliberately fail-open on non-writes, so a new
+  non-write effect constructor must still add a refusal arm in `check_and_store_virtual`).
+  Rewriters, affine path construction and cleanup's
   placement-dependent survival checks retain their own semantics; do not infer execution order
   among hoisted sibling scope definitions from scalar source order: an analysis that needs it walks
   the `Emitted` mode (next bullet).
