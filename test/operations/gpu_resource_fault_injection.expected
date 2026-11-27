@@ -2,6 +2,7 @@ merge slab: initial fill commits all four claims: true
 merge slab: failed grow invalidates all four claims: true
 merge slab: retry restores all four claims at grown capacity: true
 merge slab: consumer after retry computes exact values: true
+merge slab: releasing compiled and upload parents leaves zero live working pools: true
 partial-batch link failure hits segment 1 of 2 and frees whole delta: true
 partial-batch control runs and computes exact values: true
 partial-batch control releases cleanly with zero live pool growth: true

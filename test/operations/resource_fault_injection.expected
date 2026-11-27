@@ -71,7 +71,8 @@ every traced fault event carries its point's derived ownership phase: true
 traced events identify the same pool id from delta allocation to finalize free: true
 traced events identify routine and cache-file artifacts: true
 sticky from-host await latches and fails cleanup await persistently: true
-sticky from-host await still frees the unreachable fresh pool exactly once: true
+latched sticky fault raises at a different await seam and clears cleanly: true
+sticky from-host await still frees its unreachable pool and cleared contexts once: true
 sticky init-from-device await latches through cleanup await and frees its fresh pool once: true
 sticky finalize await on cc: repeated retries raise and commit nothing while latched: true
 sticky finalize await on cc: clearing the latch lets retry release exactly once: true
@@ -85,3 +86,4 @@ merge slab holds all four claims after initial fill on cc: true
 failed merge-slab grow invalidates all four claims on cc: true
 merge-slab retry restores all four claims with grown capacity on cc: true
 merge-slab retry consumer computes exact values on cc: true
+merge-slab probe releases all upload and compiled contexts with zero live growth on cc: true

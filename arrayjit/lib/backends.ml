@@ -1127,16 +1127,19 @@ struct
           let dst_ptr = resolve_pool dst.device dst_loc in
           fun () -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr ~size_in_bytes
       | Copy, _ ->
-          fun () ->
-            (* The merge buffer is the device's reserved single-tenant pool; grow it in place when a
-               larger node arrives ([alloc_pool] overwrites the reserved pool-id entry). *)
-            if s.merge_buffer_capacity < size_in_bytes then
-              alloc_pool
-                ?mode:(Option.map tn.Tnode.memory_mode_intent ~f:fst)
-                s ~pool_id:merge_buffer_pool_id ~size_in_bytes
-                ~alignment:(Ops.prec_in_bytes (Lazy.force tn.Tnode.storage_prec));
-            let loc = { pool_id = merge_buffer_pool_id; offset = 0 } in
-            buffer_to_buffer ~dst:(resolve_pool s loc) ~src:src_ptr ~size_in_bytes
+          (* The merge buffer is the device's reserved single-tenant pool; grow it in place on the
+             calling domain so domain-local [Merge_slab_before_allocate] callbacks observe it on
+             worker-domain schedulers ([multidev_cc]). Synchronize queued work on [s] first so no
+             in-flight task reads the old slab before free-first replacement. *)
+          if s.merge_buffer_capacity < size_in_bytes || Option.is_none !(s.merge_buffer) then (
+            await s;
+            alloc_pool
+              ?mode:(Option.map tn.Tnode.memory_mode_intent ~f:fst)
+              s ~pool_id:merge_buffer_pool_id ~size_in_bytes
+              ~alignment:(Ops.prec_in_bytes (Lazy.force tn.Tnode.storage_prec)));
+          let loc = { pool_id = merge_buffer_pool_id; offset = 0 } in
+          let dst_ptr = resolve_pool s loc in
+          fun () -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr ~size_in_bytes
     in
     let description =
       "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ get_name s ^ " src "

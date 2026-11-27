@@ -543,17 +543,21 @@ end = struct
           else (
             set_ctx g.graphs_device.dev.primary_context;
             H.Stream.synchronize g.graphs_device.runner;
-            let execs = Hashtbl.data g.cache in
+            let execs = Hashtbl.to_alist g.cache in
             Hashtbl.clear g.cache;
             Queue.clear g.order;
             execs))
     in
     Backend_impl.attempt_each
-      (List.map execs ~f:(fun exec () ->
+      (List.map execs ~f:(fun (key, exec) () ->
            Resource_fault_injection.hit
              ~artifact:
                (Graph_capture
-                  { device_id = g.graphs_device.device_id; routine = g.routine_name; key = None })
+                  {
+                    device_id = g.graphs_device.device_id;
+                    routine = g.routine_name;
+                    key = Some key;
+                  })
              Graph_exec_before_destroy;
            H.Graph.exec_destroy exec;
            Atomic.incr graph_execs_destroyed))

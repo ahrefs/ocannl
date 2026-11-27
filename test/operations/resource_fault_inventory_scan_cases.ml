@@ -8,7 +8,19 @@ module Scan = Test_scan.Resource_fault_inventory_scan
 
 let points = [ "Point_a"; "Point_b" ]
 let fi_exports = Set.of_list (module String) [ "with_callback"; "hit" ]
-let autotune_exports = Set.of_list (module String) [ "on_candidate_measured"; "tune" ]
+
+let autotune_exports =
+  Scan.mli_exports
+    {|
+val on_candidate_measured : unit -> unit
+module Seam : sig
+  val with_hook : unit -> unit
+end
+module Make (D : sig end) : sig
+  val tune : unit -> unit
+end
+include module type of Make (struct end)
+|}
 
 let existing_files =
   Set.of_list (module String) [ "test/operations/real_test.ml"; "arrayjit/test/other_test.ml" ]
@@ -21,7 +33,7 @@ let valid_doc =
 
 | Seam | Failure mode | Status and acceptance evidence | Remaining leg |
 | --- | --- | --- | --- |
-| Seam A | Fails A | Covered: `test/operations/real_test.ml` hits `Point_a` and `Autotune.on_candidate_measured`. | None. |
+| Seam A | Fails A | Covered: `test/operations/real_test.ml` hits `Point_a`, `Autotune.on_candidate_measured`, `Autotune.tune`, and `Autotune.Seam.with_hook`. | None. |
 | Seam B | Fails B | Covered: `arrayjit/test/other_test.ml` hits `Resource_fault_injection.Point_b` via `Resource_fault_injection.with_callback`. | None. |
 | Seam C | Uncovered | Structural guard only. | Hardware leg pending. |
 |}
@@ -75,7 +87,7 @@ let () =
       | Scan.Covered_without_test _ -> true
       | _ -> false));
 
-  (* 5. Unknown Autotune hook *)
+  (* 5. Unknown Autotune hook (top-level and nested submodule) *)
   let bad_hook =
     valid_doc
     ^ "| Seam G | Bad hook | Covered: `test/operations/real_test.ml` uses \
@@ -84,6 +96,16 @@ let () =
   p "unknown Autotune hook is refused"
     (List.exists (run bad_hook).findings ~f:(function
       | Scan.Unknown_autotune_hook { token = "Autotune.nonexistent_hook"; _ } -> true
+      | _ -> false));
+
+  let bad_nested_hook =
+    valid_doc
+    ^ "| Seam G2 | Bad nested hook | Covered: `test/operations/real_test.ml` uses \
+       `Autotune.Seam.nonexistent_hook`. | None. |\n"
+  in
+  p "unknown nested Autotune submodule hook is refused"
+    (List.exists (run bad_nested_hook).findings ~f:(function
+      | Scan.Unknown_autotune_hook { token = "Autotune.Seam.nonexistent_hook"; _ } -> true
       | _ -> false));
 
   (* 6. Malformed row *)

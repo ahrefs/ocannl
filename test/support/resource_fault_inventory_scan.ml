@@ -17,15 +17,17 @@
       one table data row.
     - {b Qualified fault-injector references}: every backticked token starting with
       [Resource_fault_injection.] or [FI.] in a table row must name a live constructor of
-      [all_of_point] or an exported identifier of [arrayjit/lib/resource_fault_injection.mli].
+      [all_of_point] or a full qualified exported path of
+      [arrayjit/lib/resource_fault_injection.mli].
     - {b Cited repository paths}: every backticked token in a table row containing ['/'] and ending
       in [".ml"], [".mli"], [".md"], or [".sh"] must exist in the repository's [Source_inventory].
     - {b Covered-row test requirement}: every data row whose [Status and acceptance evidence] cell
       starts with ["Covered"] must cite at least one existing [".ml"] test file under ["test/"] or
       ["arrayjit/test/"] in that cell.
     - {b Cited [Autotune.*] hooks}: every backticked token starting with ["Autotune."] in a table
-      row must name a value, module, type, or exception declared in [arrayjit/lib/autotune.mli]
-      (parsed via [Ppxlib.Parse.interface]).
+      row must name a full qualified value, module, type, or exception path (including nested
+      submodules such as [Autotune.Seam.<name>]) declared in [arrayjit/lib/autotune.mli] (parsed via
+      [Ppxlib.Parse.interface]).
 
     Deliberately out of scope: relative Markdown links (enforced by [markdown_links]), prose outside
     the pipe table, bare unbackticked identifiers, and runtime test execution. *)
@@ -68,33 +70,59 @@ let derived_points () =
   List.map Ir.Resource_fault_injection.all_of_point ~f:(fun pt ->
       Sexp.to_string (Ir.Resource_fault_injection.sexp_of_point pt))
 
-(** Collects all value, module, type, and exception names declared in an OCaml [.mli] signature. *)
+(** Collects all value, module, type, and exception paths declared in an OCaml [.mli] signature,
+    retaining nested module qualification (e.g. ["Seam.with_hook"]) and expanding
+    [include module type of F (...)] against module signatures declared in the same [.mli]. *)
 let mli_exports content =
   let lexbuf = Lexing.from_string content in
   let sig_items = Ppxlib.Parse.interface lexbuf in
   let names = Hash_set.create (module String) in
-  let rec visit_sig items =
+  let module_bodies : (string, Ppxlib.module_type) Hashtbl.t = Hashtbl.create (module String) in
+  let add prefix name =
+    let qualified =
+      match prefix with [] -> name | _ -> String.concat ~sep:"." (List.rev (name :: prefix))
+    in
+    Hash_set.add names qualified
+  in
+  let rec module_head_name (me : Ppxlib.module_expr) =
+    match me.pmod_desc with
+    | Pmod_ident { txt = Lident name; _ } -> Some name
+    | Pmod_apply (fn, _) -> module_head_name fn
+    | _ -> None
+  in
+  let rec visit_sig prefix items =
     List.iter items ~f:(fun (item : Ppxlib.signature_item) ->
         match item.psig_desc with
-        | Psig_value vd -> Hash_set.add names vd.pval_name.txt
-        | Psig_type (_, tds) -> List.iter tds ~f:(fun td -> Hash_set.add names td.ptype_name.txt)
-        | Psig_exception te -> Hash_set.add names te.ptyexn_constructor.pext_name.txt
-        | Psig_module md ->
-            Option.iter md.pmd_name.txt ~f:(Hash_set.add names);
-            visit_mty md.pmd_type
+        | Psig_value vd -> add prefix vd.pval_name.txt
+        | Psig_type (_, tds) -> List.iter tds ~f:(fun td -> add prefix td.ptype_name.txt)
+        | Psig_exception te -> add prefix te.ptyexn_constructor.pext_name.txt
+        | Psig_module md -> (
+            match md.pmd_name.txt with
+            | Some mod_name ->
+                add prefix mod_name;
+                if List.is_empty prefix then
+                  Hashtbl.set module_bodies ~key:mod_name ~data:md.pmd_type;
+                visit_mty (mod_name :: prefix) md.pmd_type
+            | None -> visit_mty prefix md.pmd_type)
         | Psig_modtype mtd ->
-            Hash_set.add names mtd.pmtd_name.txt;
-            Option.iter mtd.pmtd_type ~f:visit_mty
-        | Psig_include id -> visit_mty id.pincl_mod
+            add prefix mtd.pmtd_name.txt;
+            Option.iter mtd.pmtd_type ~f:(visit_mty (mtd.pmtd_name.txt :: prefix))
+        | Psig_include id -> visit_mty prefix id.pincl_mod
         | _ -> ())
-  and visit_mty (mty : Ppxlib.module_type) =
+  and visit_mty prefix (mty : Ppxlib.module_type) =
     match mty.pmty_desc with
-    | Pmty_signature items -> visit_sig items
-    | Pmty_functor (_, body) -> visit_mty body
-    | Pmty_with (body, _) -> visit_mty body
+    | Pmty_signature items -> visit_sig prefix items
+    | Pmty_functor (_, body) -> visit_mty prefix body
+    | Pmty_with (body, _) -> visit_mty prefix body
+    | Pmty_typeof me -> (
+        match me.pmod_desc with
+        | Pmod_constraint (_, body) -> visit_mty prefix body
+        | _ ->
+            Option.iter (module_head_name me) ~f:(fun mod_name ->
+                Option.iter (Hashtbl.find module_bodies mod_name) ~f:(visit_mty prefix)))
     | _ -> ()
   in
-  visit_sig sig_items;
+  visit_sig [] sig_items;
   Set.of_list (module String) (Hash_set.to_list names)
 
 let is_separator_cell cell =
@@ -133,11 +161,11 @@ let is_test_source_path tok =
   String.is_suffix tok ~suffix:".ml"
   && (String.is_prefix tok ~prefix:"test/" || String.is_prefix tok ~prefix:"arrayjit/test/")
 
-let head_ident tok =
+let head_path tok =
   let len = String.length tok in
   let stop =
     String.lfindi tok ~f:(fun _ c ->
-        not (Char.is_alphanum c || Char.equal c '_' || Char.equal c '\''))
+        not (Char.is_alphanum c || Char.equal c '_' || Char.equal c '\'' || Char.equal c '.'))
     |> Option.value ~default:len
   in
   String.prefix tok stop
@@ -190,16 +218,16 @@ let check ~points ~fi_exports ~autotune_exports ~file_exists doc =
                          (String.chop_prefix tok ~prefix:"FI.")
                      with
                     | Some rest ->
-                        let member = head_ident rest in
+                        let member = head_path rest in
                         if Set.mem point_set member then Hash_set.add seen_points member
-                        else if not (Set.mem fi_exports member) then
+                        else if String.is_empty member || not (Set.mem fi_exports member) then
                           add (Unknown_fi_member { line = line_no; token = tok })
                     | None -> ());
                     (match String.chop_prefix tok ~prefix:"Autotune." with
                     | Some rest ->
-                        let member = head_ident rest in
-                        if (not (String.is_empty member)) && not (Set.mem autotune_exports member)
-                        then add (Unknown_autotune_hook { line = line_no; token = tok })
+                        let member = head_path rest in
+                        if String.is_empty member || not (Set.mem autotune_exports member) then
+                          add (Unknown_autotune_hook { line = line_no; token = tok })
                     | None -> ());
                     if is_source_path tok && not (file_exists tok) then
                       add (Missing_cited_file { line = line_no; path = tok }))

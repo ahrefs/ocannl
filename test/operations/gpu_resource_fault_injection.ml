@@ -54,6 +54,7 @@ let () =
   Stdio.eprintf "gpu_resource_fault_injection backend: %s (not part of the golden)\n%!" backend;
 
   (* --- 1. Shared leg (cc, Metal, CUDA, HIP): merge-slab invalidate/commit seam --- *)
+  let ac_before_merge = AC.snapshot () in
   let small_n = 16 and large_n = 64 in
   let small_vals = Array.init small_n ~f:(fun i -> Float.of_int (i + 1)) in
   let large_vals = Array.init large_n ~f:(fun i -> Float.of_int (i + 20)) in
@@ -67,8 +68,8 @@ let () =
       ~f:(fun i -> large_vals.(i.(0)))
       ~grad_spec:Tensor.Prohibit_grad ()
   in
-  let m_src = Context.set_values (Context.auto ()) small_t.Tensor.value small_vals in
-  let m_src = Context.set_values m_src large_t.Tensor.value large_vals in
+  let m_src_small = Context.set_values (Context.auto ()) small_t.Tensor.value small_vals in
+  let m_src = Context.set_values m_src_small large_t.Tensor.value large_vals in
   let m_dst = Context.auto () in
   let m_dst =
     Context.copy ~into_merge_buffer:Ir.Backend_intf.Copy ~src:m_src ~dst:m_dst small_t.Tensor.value
@@ -79,6 +80,7 @@ let () =
     && s_before.capacity = small_n * 4
     && s_before.has_writer);
   let seen_merge_artifact = ref None in
+  let callback_state = ref None in
   let grow_failed =
     match
       FI.with_event_callback
@@ -86,6 +88,7 @@ let () =
           match (ev.point, ev.artifact) with
           | FI.Merge_slab_before_allocate, FI.Merge_slab { size_in_bytes; _ } ->
               seen_merge_artifact := Some size_in_bytes;
+              callback_state := Some (Context.merge_slab_state m_dst);
               failwith "gh778 injected merge-slab grow failure"
           | _ -> ())
         ~f:(fun () ->
@@ -96,8 +99,13 @@ let () =
     | exception Failure msg -> String.is_substring msg ~substring:"gh778 injected merge-slab"
   in
   let s_failed = Context.merge_slab_state m_dst in
+  let callback_saw_invalid =
+    match !callback_state with
+    | Some s -> (not s.has_slab) && (not s.has_location) && s.capacity = 0 && not s.has_writer
+    | None -> false
+  in
   p "merge slab: failed grow invalidates all four claims"
-    (grow_failed
+    (grow_failed && callback_saw_invalid
     && Option.equal Int.equal !seen_merge_artifact (Some (large_n * 4))
     && (not s_failed.has_slab) && (not s_failed.has_location) && s_failed.capacity = 0
     && not s_failed.has_writer);
@@ -109,16 +117,23 @@ let () =
     (s_retry.has_slab && s_retry.has_location
     && s_retry.capacity = large_n * 4
     && s_retry.has_writer);
-  let m_dst = Context.set_values m_dst large_t.Tensor.value (Array.create ~len:large_n 2.) in
+  let m_dst_upload = Context.set_values m_dst large_t.Tensor.value (Array.create ~len:large_n 2.) in
   let merge_consume = [%cd large_t =+ large_t.merge] in
-  let m_dst, consume_r = Context.compile ~name:"grfi_merge_consume" m_dst merge_consume Idx.Empty in
-  let m_dst = Context.run m_dst consume_r in
+  let m_dst_compiled, consume_r =
+    Context.compile ~name:"grfi_merge_consume" m_dst_upload merge_consume Idx.Empty
+  in
+  let m_dst_compiled = Context.run m_dst_compiled consume_r in
   p_close "merge slab: consumer after retry computes exact values"
-    (Context.get_values m_dst large_t.Tensor.value)
+    (Context.get_values m_dst_compiled large_t.Tensor.value)
     (Array.map large_vals ~f:(fun v -> v +. 2.))
     ~tol;
-  Context.release m_dst;
+  Context.release m_dst_compiled;
+  Context.release m_dst_upload;
   Context.release m_src;
+  Context.release m_src_small;
+  let ac_after_merge = AC.snapshot () in
+  p "merge slab: releasing compiled and upload parents leaves zero live working pools"
+    (ac_after_merge.AC.live_working_pools = ac_before_merge.AC.live_working_pools);
 
   (* --- 2. Shared leg: partial-batch link cleanup (2-segment routine failing at segment 1) --- *)
   let seg_vals = Array.init 16 ~f:(fun i -> Float.of_int (i - 6)) in
@@ -216,6 +231,8 @@ let () =
   in_leg ~leg:metal_leg
     "metal: exact pool, command-buffer, event, and module teardown counts under release failure \
      and retry" (fun label ->
+      (* Drain earlier sections' command buffers before snapshotting baselines. *)
+      Context.sync ctx0;
       let before_live = count ctx0 "live_pools" in
       let before_alloc = count ctx0 "pools_allocated" in
       let before_freed = count ctx0 "pools_freed" in
@@ -226,13 +243,24 @@ let () =
       let m_x = TDSL.ndarray seg_vals ~label:[ "grfi_metal_teardown_x" ] ~output_dims:[ 16 ] () in
       let%op m_y = relu m_x in
       let m_comp = Train.forward m_y in
-      let m_ctx, m_routine =
-        Context.compile ~name:"grfi_metal_td" (Context.auto ()) m_comp Idx.Empty
+      let compile_uncached () =
+        Ir.Kernel_code_cache.with_cold_caches (fun () ->
+            let ctx, routine =
+              Context.compile ~name:"grfi_metal_td" (Context.auto ()) m_comp Idx.Empty
+            in
+            (ctx, ref (Some routine)))
       in
-      let m_ctx = Context.run m_ctx m_routine in
+      let m_ctx, m_routine_slot = compile_uncached () in
+      let after_compile_ac = AC.snapshot () in
+      let after_run_alloc = count ctx0 "pools_allocated" in
+      let minted = after_run_alloc - before_alloc in
+      let m_ctx = Context.run m_ctx (Option.value_exn !m_routine_slot) in
       Context.sync m_ctx;
       let vals = Context.get_values m_ctx m_y.Tensor.value in
-      let after_run_alloc = count ctx0 "pools_allocated" in
+      let run_live = count ctx0 "live_pools" in
+      let run_cb = count ctx0 "command_buffers_committed" in
+      let run_reaped = count ctx0 "command_buffers_reaped" in
+      let run_ev = count ctx0 "events_signaled" in
       let release_failed =
         match
           FI.with_callback
@@ -243,8 +271,18 @@ let () =
         | () -> false
         | exception Failure msg -> String.is_substring msg ~substring:"gh778 metal finalize"
       in
+      let mid_live = count ctx0 "live_pools" in
       let mid_freed = count ctx0 "pools_freed" in
+      let mid_cb = count ctx0 "command_buffers_committed" in
+      let mid_reaped = count ctx0 "command_buffers_reaped" in
+      let mid_ev = count ctx0 "events_signaled" in
       Context.release m_ctx;
+      let retry_live = count ctx0 "live_pools" in
+      let retry_freed = count ctx0 "pools_freed" in
+      let retry_cb = count ctx0 "command_buffers_committed" in
+      let retry_reaped = count ctx0 "command_buffers_reaped" in
+      let retry_ev = count ctx0 "events_signaled" in
+      (* Second release is idempotent: zero additional command buffers, events, or pool frees. *)
       Context.release m_ctx;
       let after_live = count ctx0 "live_pools" in
       let after_freed = count ctx0 "pools_freed" in
@@ -252,20 +290,40 @@ let () =
       let after_reaped = count ctx0 "command_buffers_reaped" in
       let after_ev = count ctx0 "events_signaled" in
       let after_ac = AC.snapshot () in
-      let minted = after_run_alloc - before_alloc in
+      m_routine_slot := None;
+      Gc_witness.settle ();
+      let after_gc_ac = AC.snapshot () in
+      let mods_loaded = after_compile_ac.AC.modules_loaded - before_ac.AC.modules_loaded in
+      let mods_unloaded = after_gc_ac.AC.modules_unloaded - before_ac.AC.modules_unloaded in
       Stdio.eprintf
         "metal teardown: minted=%d freed=%d live_delta=%d cb=%d reaped=%d ev=%d mods_loaded=%d \
-         (not part of the golden)\n\
+         mods_unloaded=%d (not part of the golden)\n\
          %!"
         minted (after_freed - before_freed) (after_live - before_live) (after_cb - before_cb)
-        (after_reaped - before_reaped) (after_ev - before_ev)
-        (after_ac.AC.modules_loaded - before_ac.AC.modules_loaded);
+        (after_reaped - before_reaped) (after_ev - before_ev) mods_loaded mods_unloaded;
       p label
-        (release_failed && minted >= 1 && mid_freed = before_freed
-        && after_freed - before_freed = minted
-        && after_live = before_live && after_cb > before_cb && after_reaped > before_reaped
-        && after_ev > before_ev
+        (release_failed && minted >= 1
+        && run_live = before_live + minted
+        && run_cb > before_cb
+        && run_reaped - before_reaped = run_cb - before_cb
+        && run_ev > before_ev
+        && run_cb - before_cb - (run_ev - before_ev) = 1
+        (* Each Metal [await] signals and reaps exactly one barrier command buffer. *)
+        && mid_live = before_live + minted
+        && mid_freed = before_freed
+        && mid_cb = run_cb + 1
+        && mid_reaped = run_reaped + 1
+        && mid_ev = run_ev + 1
+        && retry_live = before_live
+        && retry_freed - before_freed = minted
+        && retry_cb = mid_cb + 1
+        && retry_reaped = mid_reaped + 1
+        && retry_ev = mid_ev + 1
+        && after_live = before_live && after_freed = retry_freed && after_cb = retry_cb
+        && after_reaped = retry_reaped && after_ev = retry_ev && mods_loaded = 1
+        && mods_unloaded = 1
         && after_ac.AC.live_working_pools = before_ac.AC.live_working_pools
+        && after_ac.AC.live_constant_pools = before_ac.AC.live_constant_pools
         && Verdict.within label vals (Array.map seg_vals ~f:(Float.max 0.)) ~tol));
 
   (* --- 4. CUDA and HIP leg: graph capture fault injection, merge-grow invalidation, teardown
@@ -288,6 +346,8 @@ let () =
       bindings
   in
 
+  let seg_sentinel = Array.create ~len:16 (-999.) in
+
   (* 4a. Begin / Launch / End / Instantiate failure injection (propagating + driver-shaped
      fallback). *)
   List.iter
@@ -306,6 +366,7 @@ let () =
           let destroyed0 = count ctx0 "graph_execs_destroyed" in
           let name = "grfi_gc_prop_" ^ phase_label in
           let ctx, routine = make_graph_routine ~name seg_comp in
+          let ctx = Context.set_values ctx seg_out.Tensor.value seg_sentinel in
           let saw_event = ref false in
           let failed =
             match
@@ -326,6 +387,7 @@ let () =
           in
           let live_after_fail = count ctx0 "live_graph_execs" in
           let created_after_fail = count ctx0 "graph_execs_created" in
+          let ctx = Context.set_values ctx seg_out.Tensor.value seg_sentinel in
           let ctx = Context.run ctx routine in
           Context.sync ctx;
           let got = Context.get_values ctx seg_out.Tensor.value in
@@ -349,6 +411,7 @@ let () =
           let created0 = count ctx0 "graph_execs_created" in
           let name = "grfi_gc_fb_" ^ phase_label in
           let ctx, routine = make_graph_routine ~name seg_comp in
+          let ctx = Context.set_values ctx seg_out.Tensor.value seg_sentinel in
           let ctx =
             FI.with_callback
               (fun seen ->
@@ -358,7 +421,9 @@ let () =
           in
           Context.sync ctx;
           let got1 = Context.get_values ctx seg_out.Tensor.value in
-          (* Second run stays on the plain fallback path ([broken = true]) without caching. *)
+          (* Overwrite [seg_out] with a sentinel before the second run so passing proves fresh
+             plain-fallback execution rather than stale output from run 1. *)
+          let ctx = Context.set_values ctx seg_out.Tensor.value seg_sentinel in
           let ctx = Context.run ctx routine in
           Context.sync ctx;
           let got2 = Context.get_values ctx seg_out.Tensor.value in
@@ -370,19 +435,38 @@ let () =
             && Verdict.within ~what_ran:"fallback1" label got1 seg_expected ~tol
             && Verdict.within ~what_ran:"fallback2" label got2 seg_expected ~tol)));
 
-  (* 4b. RELAXED capture mode permits GC finalizers mid-capture without aborting capture. *)
+  (* 4b. RELAXED capture mode permits real driver-resource GC finalizers mid-capture without
+     aborting capture. Compile a disposable routine under [with_cold_caches] so its driver module is
+     rooted solely by [dead_slot], then drop [dead_slot] and settle GC inside
+     [Graph_capture_launch], witnessing [Alloc_census.modules_unloaded] advance mid-capture. *)
   in_leg ~leg:gpu_graph_leg
     "gpu graph capture: RELAXED capture survives GC finalizers firing mid-capture" (fun label ->
       let live0 = count ctx0 "live_graph_execs" in
-      let dead_ctx, _ = Context.compile ~name:"grfi_gc_dead" (Context.auto ()) seg_comp Idx.Empty in
-      Context.release dead_ctx;
+      let ac_before_dead = AC.snapshot () in
+      let make_disposable_routine () =
+        Ir.Kernel_code_cache.with_cold_caches (fun () ->
+            let dead_ctx, dead_routine =
+              Context.compile ~name:"grfi_gc_dead" (Context.auto ()) seg_comp Idx.Empty
+            in
+            Context.release dead_ctx;
+            dead_routine)
+      in
+      let dead_slot = ref (Some (make_disposable_routine ())) in
+      let ac_after_dead = AC.snapshot () in
       let ctx, routine = make_graph_routine ~name:"grfi_gc_relaxed" seg_comp in
+      let ctx = Context.set_values ctx seg_out.Tensor.value seg_sentinel in
+      let unloaded_during_capture = ref 0 in
       let settled = ref false in
       let ctx =
         FI.with_callback
           (function
-            | FI.Graph_capture_launch ->
+            | FI.Graph_capture_launch when Option.is_some !dead_slot ->
+                let before_settle = AC.snapshot () in
+                dead_slot := None;
                 Gc_witness.settle ();
+                let after_settle = AC.snapshot () in
+                unloaded_during_capture :=
+                  after_settle.AC.modules_unloaded - before_settle.AC.modules_unloaded;
                 settled := true
             | _ -> ())
           ~f:(fun () -> Context.run ctx routine)
@@ -391,8 +475,17 @@ let () =
       let got = Context.get_values ctx seg_out.Tensor.value in
       let live1 = count ctx0 "live_graph_execs" in
       Context.release ctx;
+      Stdio.eprintf
+        "gpu relaxed capture (%s): dead_mods_loaded=%d unloaded_mid_capture=%d (not part of the \
+         golden)\n\
+         %!"
+        backend
+        (ac_after_dead.AC.modules_loaded - ac_before_dead.AC.modules_loaded)
+        !unloaded_during_capture;
       p label
         (!settled
+        && ac_after_dead.AC.modules_loaded - ac_before_dead.AC.modules_loaded >= 1
+        && !unloaded_during_capture >= 1
         && live1 = live0 + 1
         && count ctx0 "live_graph_execs" = live0
         && Verdict.within label got seg_expected ~tol));
@@ -409,7 +502,9 @@ let () =
       let ctx = Context.run ctx routine in
       Context.sync ctx;
       let live_after_first = count ctx0 "live_graph_execs" in
-      (* Second run replays the cached exec and injects a simulated replay OOM. *)
+      (* Prefill [seg_out] with a sentinel before the replay OOM run so passing proves [run_plain]
+         actually executed rather than reading stale output from run 1. *)
+      let ctx = Context.set_values ctx seg_out.Tensor.value seg_sentinel in
       let ctx =
         FI.with_callback
           (function
@@ -423,7 +518,9 @@ let () =
       let live_after_drop = count ctx0 "live_graph_execs" in
       let destroyed_after_drop = count ctx0 "graph_execs_destroyed" in
       let drops_after_drop = count ctx0 "graph_launch_memory_drops" in
-      (* Third run recaptures cleanly. *)
+      (* Prefill [seg_out] again before the third run so passing proves recapture wrote fresh
+         output. *)
+      let ctx = Context.set_values ctx seg_out.Tensor.value seg_sentinel in
       let ctx = Context.run ctx routine in
       Context.sync ctx;
       let got_recap = Context.get_values ctx seg_out.Tensor.value in
@@ -481,8 +578,8 @@ let () =
              mg_mid =: mg_small.merge + 1.;
              mg_out =: mg_mid + 2.)]
       in
-      let src_ctx = Context.set_values (Context.auto ()) mg_small.Tensor.value mg_s1 in
-      let src_ctx = Context.set_values src_ctx mg_large.Tensor.value mg_big in
+      let src_small = Context.set_values (Context.auto ()) mg_small.Tensor.value mg_s1 in
+      let src_ctx = Context.set_values src_small mg_large.Tensor.value mg_big in
       let dst_ctx =
         Context.copy ~into_merge_buffer:Ir.Backend_intf.Copy ~src:src_ctx ~dst:(Context.auto ())
           mg_small.Tensor.value
@@ -522,6 +619,7 @@ let () =
       Context.release dst_ctx;
       Context.release grower;
       Context.release src_ctx;
+      Context.release src_small;
       let live_final = count ctx0 "live_graph_execs" in
       let destroyed_final = count ctx0 "graph_execs_destroyed" in
       p label
@@ -566,57 +664,124 @@ let () =
         Ll_test.optimize ~materialized:[ b_mid; b_out ] ~static_indices:[ idx_sym ]
           ~name:"grfi_td_two_execs" llc
       in
+      let streams0 = count ctx0 "live_streams" in
       let live0 = count ctx0 "live_graph_execs" in
       let created0 = count ctx0 "graph_execs_created" in
       let destroyed0 = count ctx0 "graph_execs_destroyed" in
       let ev0 = count ctx0 "events_recorded" in
       let ac0 = AC.snapshot () in
-      let td_ctx, td_routine =
-        Context.compile ~name:"grfi_td_two_execs" ~prelowered:pre
-          ~lowered_transform:(two_segments ~static_indices:[ idx_sym ])
-          (Context.auto ()) Ir.Assignments.empty_comp bindings
+      let compile_uncached () =
+        Ir.Kernel_code_cache.with_cold_caches (fun () ->
+            let ctx, routine =
+              Context.compile ~name:"grfi_td_two_execs" ~prelowered:pre
+                ~lowered_transform:(two_segments ~static_indices:[ idx_sym ])
+                (Context.auto ()) Ir.Assignments.empty_comp bindings
+            in
+            (ctx, ref (Some routine)))
       in
-      Idx.find_exn td_routine.Context.bindings idx_sym := 0;
-      let td_ctx = Context.run td_ctx td_routine in
-      Idx.find_exn td_routine.Context.bindings idx_sym := 1;
-      let td_ctx = Context.run td_ctx td_routine in
+      let td_ctx, td_routine_slot = compile_uncached () in
+      let ac_compiled = AC.snapshot () in
+      let minted_working =
+        ac_compiled.AC.working_pools_allocated - ac0.AC.working_pools_allocated
+      in
+      let mods_loaded_delta = ac_compiled.AC.modules_loaded - ac0.AC.modules_loaded in
+      let run_td td_ctx idx_val =
+        let r = Option.value_exn !td_routine_slot in
+        Idx.find_exn r.Context.bindings idx_sym := idx_val;
+        Context.run td_ctx r
+      in
+      let td_ctx = run_td td_ctx 0 in
+      let td_ctx = run_td td_ctx 1 in
       Context.sync td_ctx;
+      let streams_cached = count ctx0 "live_streams" in
       let live_cached = count ctx0 "live_graph_execs" in
       let created_cached = count ctx0 "graph_execs_created" in
-      let destroy_hits = ref 0 in
-      let hook_failed =
+      let ev_cached = count ctx0 "events_recorded" in
+      (* First, fail at [Finalize_before_free]: nothing committed, pools and graphs stay owned,
+         streams and events stay unchanged. *)
+      let pool_fail_raised =
         match
           FI.with_callback
             (function
-              | FI.Graph_exec_before_destroy ->
-                  Int.incr destroy_hits;
-                  if !destroy_hits = 1 then failwith "gh778 injected graph exec destroy failure"
+              | FI.Finalize_before_free -> failwith "gh778 gpu pool finalize failure" | _ -> ())
+            ~f:(fun () -> Context.release td_ctx)
+        with
+        | () -> false
+        | exception Failure msg -> String.is_substring msg ~substring:"gh778 gpu pool finalize"
+      in
+      let streams_after_pool_fail = count ctx0 "live_streams" in
+      let live_after_pool_fail = count ctx0 "live_graph_execs" in
+      let destroyed_after_pool_fail = count ctx0 "graph_execs_destroyed" in
+      let ev_after_pool_fail = count ctx0 "events_recorded" in
+      let ac_after_pool_fail = AC.snapshot () in
+      (* Next, retry release while failing the first [Graph_exec_before_destroy] by key: pools free
+         once, both distinct keys are attempted, the second exec is still destroyed, and streams and
+         events stay unchanged. *)
+      let destroy_keys = ref [] in
+      let hook_failed =
+        match
+          FI.with_event_callback
+            (fun ev ->
+              match (ev.point, ev.artifact) with
+              | FI.Graph_exec_before_destroy, FI.Graph_capture { key = Some k; _ } ->
+                  destroy_keys := k :: !destroy_keys;
+                  if List.length !destroy_keys = 1 then
+                    failwith "gh778 injected graph exec destroy failure"
               | _ -> ())
             ~f:(fun () -> Context.release td_ctx)
         with
         | () -> false
         | exception Failure msg -> String.is_substring msg ~substring:"gh778 injected graph exec"
       in
-      (* Second release must be a complete no-op: pools are already freed and cache already
-         cleared. *)
-      Context.release td_ctx;
-      let live_after = count ctx0 "live_graph_execs" in
-      let destroyed_after = count ctx0 "graph_execs_destroyed" in
-      let ev1 = count ctx0 "events_recorded" in
-      let streams = count ctx0 "live_streams" in
-      let ac1 = AC.snapshot () in
+      let streams_after_exec_fail = count ctx0 "live_streams" in
+      let live_after_exec_fail = count ctx0 "live_graph_execs" in
+      let destroyed_after_exec_fail = count ctx0 "graph_execs_destroyed" in
+      let ev_after_exec_fail = count ctx0 "events_recorded" in
+      let ac_after_exec_fail = AC.snapshot () in
+      (* Second release must be a complete no-op: zero additional pool frees or destroy hits. *)
+      let retry_destroy_hits = ref 0 in
+      FI.with_callback
+        (function FI.Graph_exec_before_destroy -> Int.incr retry_destroy_hits | _ -> ())
+        ~f:(fun () -> Context.release td_ctx);
+      let streams_after_retry = count ctx0 "live_streams" in
+      let live_after_retry = count ctx0 "live_graph_execs" in
+      let destroyed_after_retry = count ctx0 "graph_execs_destroyed" in
+      let ev_after_retry = count ctx0 "events_recorded" in
+      let ac_after_retry = AC.snapshot () in
+      td_routine_slot := None;
+      Gc_witness.settle ();
+      let ac_after_gc = AC.snapshot () in
+      let mods_unloaded_delta = ac_after_gc.AC.modules_unloaded - ac0.AC.modules_unloaded in
+      let distinct_keys =
+        match !destroy_keys with [ k2; k1 ] -> not (String.equal k1 k2) | _ -> false
+      in
       Stdio.eprintf
-        "gpu teardown (%s): streams=%d events_delta=%d execs_created=%d execs_destroyed=%d \
-         destroy_hits=%d working_live_delta=%d mods_loaded_delta=%d (not part of the golden)\n\
+        "gpu teardown (%s): streams=%d->%d events_delta=%d execs_created=%d execs_destroyed=%d \
+         keys=%d minted_working=%d mods_loaded=%d mods_unloaded=%d (not part of the golden)\n\
          %!"
-        backend streams (ev1 - ev0) (created_cached - created0) (destroyed_after - destroyed0)
-        !destroy_hits
-        (ac1.AC.live_working_pools - ac0.AC.live_working_pools)
-        (ac1.AC.modules_loaded - ac0.AC.modules_loaded);
+        backend streams0 streams_after_retry (ev_cached - ev0) (created_cached - created0)
+        (destroyed_after_retry - destroyed0)
+        (List.length !destroy_keys) minted_working mods_loaded_delta mods_unloaded_delta;
       p label
-        (live_cached = live0 + 2
+        (minted_working >= 1 && mods_loaded_delta >= 1
+        && live_cached = live0 + 2
         && created_cached = created0 + 2
-        && hook_failed && !destroy_hits = 2
-        && destroyed_after = destroyed0 + 1
-        && live_after = live0 && streams >= 1 && ev1 > ev0
-        && ac1.AC.live_working_pools = ac0.AC.live_working_pools))
+        && streams_cached = streams0 && ev_cached > ev0 && pool_fail_raised
+        && streams_after_pool_fail = streams0
+        && live_after_pool_fail = live0 + 2
+        && destroyed_after_pool_fail = destroyed0
+        && ev_after_pool_fail = ev_cached
+        && ac_after_pool_fail.AC.live_working_pools = ac_compiled.AC.live_working_pools
+        && ac_after_pool_fail.AC.pools_freed = ac0.AC.pools_freed
+        && hook_failed && distinct_keys
+        && streams_after_exec_fail = streams0
+        && live_after_exec_fail = live0
+        && destroyed_after_exec_fail = destroyed0 + 1
+        && ev_after_exec_fail = ev_cached
+        && ac_after_exec_fail.AC.live_working_pools = ac0.AC.live_working_pools
+        && ac_after_exec_fail.AC.pools_freed - ac0.AC.pools_freed = minted_working
+        && !retry_destroy_hits = 0 && streams_after_retry = streams0 && live_after_retry = live0
+        && destroyed_after_retry = destroyed0 + 1
+        && ev_after_retry = ev_cached
+        && ac_after_retry.AC.pools_freed = ac_after_exec_fail.AC.pools_freed
+        && mods_unloaded_delta >= mods_loaded_delta))
