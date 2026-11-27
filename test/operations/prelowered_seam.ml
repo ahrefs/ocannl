@@ -359,7 +359,7 @@ let phase6 () =
               (Context.auto ()) Ir.Assignments.empty_comp Ir.Indexing.Empty)))
 
 (* gh-ocannl-1877: the frontend must report the first source node the validity hook refuses. Reverse
-   the program while retaining the same registry and node identities. *)
+   the source while retaining the same registry and optimized code. *)
 let frontend_refusal_order () =
   let a = mk "pls_stale_a" in
   let b = mk "pls_stale_b" in
@@ -381,7 +381,7 @@ let frontend_refusal_order () =
         [ (a, b); (b, a) ]
         ~f:(fun (first, second) ->
           let source = program first second in
-          let prelowered = { opt with LL.source; llc = source } in
+          let prelowered = { opt with LL.source } in
           match
             Context.compile ~name ~prelowered ctx Ir.Assignments.empty_comp Ir.Indexing.Empty
           with

@@ -487,12 +487,12 @@ let () =
   List.iter
     (fun v ->
       let keys = [ "ocannl_min"; "ocannl_max" ] in
-      let prelude =
-        String.concat "\n"
-          ("#define __device__\n#define __forceinline__ inline"
-          :: Ir.C_syntax.builtin_definitions v.table ~keys)
-      in
       let source key args =
+        let prelude =
+          String.concat "\n"
+            ("#define __device__\n#define __forceinline__ inline"
+            :: Ir.C_syntax.builtin_definitions v.table ~keys:[ key ])
+        in
         Printf.sprintf "%s\nvoid probe() { (void)%s(%s); }\n" prelude key args
       in
       Verdict.in_leg ~leg:host_guard_leg
