@@ -1790,6 +1790,7 @@ val recompute_pricer :
     registered function invalidates its prices. The memo retains no world tables. *)
 
 val post_virtualization_pipeline :
+  ?retractable_observable_scopes:Set.M(Scope_id).t ->
   Tnode.Placements.t ->
   traced_store ->
   input_scopes:Set.M(Scope_id).t ->
@@ -1798,7 +1799,8 @@ val post_virtualization_pipeline :
   t
 (** gh-ocannl-1011: the passes virtualized code receives in [specialize_proc], in order —
     [cleanup_virtual_llc] (placement commitments; a scope over a node committed non-virtual after
-    the scope was minted retracts to a read), {!simplify_llc} under the static indices' interval
+    the scope was minted, or listed in [retractable_observable_scopes] for a post-final-write
+    observable reader, retracts to a read), {!simplify_llc} under the static indices' interval
     environment, the hosted-constant link-time conversion, {!rewrite_one_hot_reductions},
     {!sink_narrow_reduction_loops}, {!eliminate_common_subexpressions} and
     {!hoist_cross_statement_cse}. One function, so the routine and the flip-candidate pricer's
@@ -1984,13 +1986,15 @@ val specialize_proc :
     (gh-555): sibling calls with hermetic [optimize_ctx] forks (see [copy_optimize_ctx]) produce
     hermetic [optimized] results — the traced store is record-copied per call. *)
 
-val validate_virtualization_decision_coverage : Tnode.Placements.t -> t -> unit
+val validate_virtualization_decision_coverage :
+  ?retractable_observable_scopes:Set.M(Scope_id).t -> Tnode.Placements.t -> t -> unit
 (** The gh-ocannl-805 seam assertion run after virtualization and before cleanup: every
     tensor-buffer read ([Get] / [Get_dynamic]) in a statement cleanup will keep, including reads
     inside a kept inlined [Local_scope] body, must name a node with a placement decision. Reads in a
     virtual candidate's setter are excluded because cleanup drops the whole setter without visiting
-    its right-hand side. Exposed so hand-built-IR tests can inject the otherwise-unreachable
-    negative control directly at this boundary. *)
+    its right-hand side, as are bodies of scopes cleanup will retract (including those in
+    [retractable_observable_scopes]). Exposed so hand-built-IR tests can inject the
+    otherwise-unreachable negative control directly at this boundary. *)
 
 val alpha_digest : ?syms:Indexing.symbol list -> ?tn_token:(Tnode.t -> string) -> t -> string
 (** A structural digest of [llc] that two lowerings of one routine agree on (gh-ocannl-1526): tensor

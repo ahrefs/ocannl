@@ -3349,6 +3349,11 @@ let keeps_observable_scope plc tn =
 let scope_retracts_to_buffer plc tn =
   Tn.Placements.known_non_virtual plc tn && not (keeps_observable_scope plc tn)
 
+let scope_id_retracts_to_buffer ?retractable_observable_scopes plc (id : scope_id) =
+  Tn.Placements.known_non_virtual plc id.tn
+  && ((not (keeps_observable_scope plc id.tn))
+     || Option.exists retractable_observable_scopes ~f:(fun s -> Set.mem s id))
+
 (* gh-ocannl-777: what one replay of a stored computation of [self] touches, for
    [Context.observability]. The statements kept are exactly the ones [instantiate_computations]'
    [loop_proc] keeps -- loops (a dead one replays nothing), [self]'s own setters, scope-local
@@ -4527,7 +4532,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     ~(live_local : Tn.t -> [ `Unread | `Covered | `Uncovered ]) (optim_ctx : optimize_ctx)
     traced_store reverse_node_map static_indices
     ~(footprint_scoped : (Tn.t, Tn.provenance option) Hashtbl.t)
-    ~(footprint_retracted : Tnode.t Hash_set.t) (llc : t) : t * Tnode.t Hash_set.t =
+    ~(footprint_retracted : Tnode.t Hash_set.t) (llc : t) :
+    t * Tnode.t Hash_set.t * Set.M(Scope_id).t =
   let plc = optim_ctx.placements in
   (* gh-ocannl-1620: whether this routine's own writes strictly cover its live reads of the
      routine-local scratch [tn] (vacuously so when it has none). *)
@@ -5557,53 +5563,58 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           ~in_storage_pass:false ~guarded:false ~in_scan:false ~enclosing:[] stmt)
   in
   let newly_materialized = materialize_observable_readers ~stores optim_ctx traced_store in
-  let processed =
-    if List.is_empty newly_materialized then processed
+  let retractable_observable_scopes =
+    if List.is_empty newly_materialized then Set.empty (module Scope_id)
     else
       let retract_set = Set.of_list (module Tnode) newly_materialized in
-      let rec retract_proc (llc : t) : t =
-        match llc with
-        | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _
-          ->
-            llc
-        | Seq (a, b) -> Seq (retract_proc a, retract_proc b)
-        | For_loop ({ body; _ } as fl) -> For_loop { fl with body = retract_proc body }
-        | Scan_loop ({ carried; body; _ } as sl) ->
-            Scan_loop
-              {
-                sl with
-                carried = List.map carried ~f:(fun c -> { c with init = retract_scalar c.init });
-                body = retract_proc body;
-              }
-        | If { cond = c, prec; body } ->
-            If { cond = (retract_scalar c, prec); body = retract_proc body }
-        | Set ({ llsc; _ } as s) -> Set { s with llsc = retract_scalar llsc }
-        | Set_local (id, llsc) -> Set_local (id, retract_scalar llsc)
-        | Set_dynamic ({ dyn_value = v, prec; llsc; _ } as sd) ->
-            Set_dynamic { sd with dyn_value = (retract_scalar v, prec); llsc = retract_scalar llsc }
-        | Set_from_vec ({ arg = a, prec; _ } as sfv) ->
-            Set_from_vec { sfv with arg = (retract_scalar a, prec) }
-        | Tile_mma ({ fallback; _ } as tm) -> Tile_mma { tm with fallback = retract_proc fallback }
-      and retract_scalar (llsc : scalar_t) : scalar_t =
-        match llsc with
-        | Local_scope ({ id; body; orig_indices; _ } as ls) ->
-            if Set.mem retract_set id.tn && Hash_set.mem retractable_observable_scopes id then
-              Get (id.tn, orig_indices)
-            else Local_scope { ls with body = retract_proc body }
-        | Get_dynamic ({ dyn_value = v, prec; _ } as gd) ->
-            Get_dynamic { gd with dyn_value = (retract_scalar v, prec) }
-        | Ternop (op, (a, pa), (b, pb), (c, pc)) ->
-            Ternop (op, (retract_scalar a, pa), (retract_scalar b, pb), (retract_scalar c, pc))
-        | Binop (op, (a, pa), (b, pb)) -> Binop (op, (retract_scalar a, pa), (retract_scalar b, pb))
-        | Unop (op, (a, pa)) -> Unop (op, (retract_scalar a, pa))
-        | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
-            llsc
-      in
-      prologues := List.map !prologues ~f:(fun (placement, nest) -> (placement, retract_proc nest));
-      Hashtbl.map_inplace optim_ctx.computations ~f:(fun comps ->
-          List.map comps ~f:(fun (idcs, body) -> (idcs, retract_proc body)));
-      Array.map processed ~f:retract_proc
+      Hash_set.fold retractable_observable_scopes
+        ~init:(Set.empty (module Scope_id))
+        ~f:(fun acc id -> if Set.mem retract_set id.tn then Set.add acc id else acc)
   in
+  (if not (Set.is_empty retractable_observable_scopes) then
+     (* Stored computations are not walked by [cleanup_virtual_llc], so retract their
+        post-final-write observable scopes here; [processed] and [prologues] (spliced into [result]
+        below) retract in [cleanup_virtual_llc]'s [Local_scope] arm via
+        [retractable_observable_scopes]. *)
+     let rec retract_proc (llc : t) : t =
+       match llc with
+       | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _
+         ->
+           llc
+       | Seq (a, b) -> Seq (retract_proc a, retract_proc b)
+       | For_loop ({ body; _ } as fl) -> For_loop { fl with body = retract_proc body }
+       | Scan_loop ({ carried; body; _ } as sl) ->
+           Scan_loop
+             {
+               sl with
+               carried = List.map carried ~f:(fun c -> { c with init = retract_scalar c.init });
+               body = retract_proc body;
+             }
+       | If { cond = c, prec; body } ->
+           If { cond = (retract_scalar c, prec); body = retract_proc body }
+       | Set ({ llsc; _ } as s) -> Set { s with llsc = retract_scalar llsc }
+       | Set_local (id, llsc) -> Set_local (id, retract_scalar llsc)
+       | Set_dynamic ({ dyn_value = v, prec; llsc; _ } as sd) ->
+           Set_dynamic { sd with dyn_value = (retract_scalar v, prec); llsc = retract_scalar llsc }
+       | Set_from_vec ({ arg = a, prec; _ } as sfv) ->
+           Set_from_vec { sfv with arg = (retract_scalar a, prec) }
+       | Tile_mma ({ fallback; _ } as tm) -> Tile_mma { tm with fallback = retract_proc fallback }
+     and retract_scalar (llsc : scalar_t) : scalar_t =
+       match llsc with
+       | Local_scope ({ id; body; orig_indices; _ } as ls) ->
+           if Set.mem retractable_observable_scopes id then Get (id.tn, orig_indices)
+           else Local_scope { ls with body = retract_proc body }
+       | Get_dynamic ({ dyn_value = v, prec; _ } as gd) ->
+           Get_dynamic { gd with dyn_value = (retract_scalar v, prec) }
+       | Ternop (op, (a, pa), (b, pb), (c, pc)) ->
+           Ternop (op, (retract_scalar a, pa), (retract_scalar b, pb), (retract_scalar c, pc))
+       | Binop (op, (a, pa), (b, pb)) -> Binop (op, (retract_scalar a, pa), (retract_scalar b, pb))
+       | Unop (op, (a, pa)) -> Unop (op, (retract_scalar a, pa))
+       | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
+           llsc
+     in
+     Hashtbl.map_inplace optim_ctx.computations ~f:(fun comps ->
+         List.map comps ~f:(fun (idcs, body) -> (idcs, retract_proc body))));
   let before = Array.map stmts ~f:(fun _ -> []) and after = Array.map stmts ~f:(fun _ -> []) in
   (* Consed in program order, statements and operands left to right; reversed per slot below. *)
   List.iter !prologues ~f:(fun (placement, nest) ->
@@ -5615,7 +5626,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     |> List.concat_mapi ~f:(fun i stmt -> List.rev before.(i) @ [ stmt ] @ List.rev after.(i))
     |> unflat_lines
   in
-  (result, spliced_reads)
+  (result, spliced_reads, retractable_observable_scopes)
 
 (** gh-ocannl-805: the decision-coverage seam between [virtual_llc] and cleanup. Every explicit
     tensor-buffer read that will survive cleanup must already have a placement verdict. Cleanup may
@@ -5636,7 +5647,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     transient merge buffer rather than its tnode's context buffer and therefore carries no placement
     obligation. The match is intentionally exhaustive: a new IR constructor has to state whether and
     where it can contain a surviving read. *)
-let validate_virtualization_decision_coverage (plc : Tn.Placements.t) (llc : t) : unit =
+let validate_virtualization_decision_coverage ?retractable_observable_scopes (plc : Tn.Placements.t)
+    (llc : t) : unit =
   let undecided = ref (Set.empty (module Tn)) in
   let check tn =
     if Option.is_none (Tn.Placements.get plc tn) then undecided := Set.add !undecided tn
@@ -5686,7 +5698,8 @@ let validate_virtualization_decision_coverage (plc : Tn.Placements.t) (llc : t) 
         check tn;
         scalar dyn
     | Local_scope { id; body; _ } ->
-        if not (scope_retracts_to_buffer plc id.tn) then ignore (proc body : bool)
+        if not (scope_id_retracts_to_buffer ?retractable_observable_scopes plc id) then
+          ignore (proc body : bool)
     | Ternop (_, (a, _), (b, _), (c, _)) ->
         scalar a;
         scalar b;
@@ -5806,7 +5819,8 @@ let input_scope_ids (llc : t) : Set.M(Scope_id).t =
   proc llc;
   !acc
 
-let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
+let cleanup_virtual_llc ?retractable_observable_scopes plc ~input_scopes ~static_indices (llc : t) :
+    t =
   let note_scope_local (id : scope_id) provenance =
     if not (keeps_observable_scope plc id.tn) then (
       assert (not (Tn.Placements.known_non_virtual plc id.tn));
@@ -5945,9 +5959,10 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
           Array.for_all orig_indices ~f:(function
             | Indexing.Iterator s -> Set.mem env_dom s
             | _ -> true));
-        if scope_retracts_to_buffer plc id.tn then (
+        if scope_id_retracts_to_buffer ?retractable_observable_scopes plc id then (
           (* gh-ocannl-681: the pass may retract a scope IT minted -- the node was a virtualization
-             candidate at that read site and a later refusal committed it [Never_virtual], so the
+             candidate at that read site and a later refusal committed it [Never_virtual], or
+             [materialize_observable_readers] committed it [On_device] after its final write, so the
              setter that now survives writes the very value the body recomputes -- but never one it
              was handed. See {!scope_target_rejection}. *)
           if Set.mem input_scopes id then
@@ -14694,13 +14709,14 @@ let widen_narrow_scatters ~(accum_prec : Ops.prec -> Ops.prec) ?(static_indices 
    (gh-ocannl-1739, {!describe_operand_precisions}) — as one function, so the flip-candidate
    pricer's synthetic instantiation ({!instantiate_at_synthetic_read}) receives exactly the pipeline
    the emitted code does rather than a remembered subset of it. *)
-let post_virtualization_pipeline plc traced_store ~input_scopes ~static_indices (llc : t) : t =
+let post_virtualization_pipeline ?retractable_observable_scopes plc traced_store ~input_scopes
+    ~static_indices (llc : t) : t =
   describe_operand_precisions @@ hoist_cross_statement_cse @@ eliminate_common_subexpressions
   @@ sink_narrow_reduction_loops
   @@ rewrite_one_hot_reductions ~static_indices
   @@ hosted_constant_inits_to_link_time plc traced_store
   @@ simplify_llc static_indices
-  @@ cleanup_virtual_llc plc ~input_scopes ~static_indices llc
+  @@ cleanup_virtual_llc ?retractable_observable_scopes plc ~input_scopes ~static_indices llc
 
 let rec writes_node (self : Tn.t) (c : t) =
   match c with
@@ -14786,7 +14802,7 @@ let walked_computations ~(ctx : optimize_ctx) ~placements ~traced_store ~reverse
            ~footprint_scoped:(Hashtbl.copy footprint_scoped)
            ~footprint_retracted:(Hash_set.create (module Tnode))
            (unflat_lines stmts)
-          : t * Tnode.t Hash_set.t);
+          : t * Tnode.t Hash_set.t * Set.M(Scope_id).t);
       match Hashtbl.find scratch.computations self with
       | Some computations when not (Tn.Placements.known_non_virtual plc self) ->
           computations_at_reads ~placements:plc ~static_indices ~raw self computations
@@ -14982,7 +14998,7 @@ let%diagn2_sexp specialize_proc ?(blends_value_selects = false) ?(accum_prec = F
      from the ones it mints and only retracts its own. *)
   let input_scopes = input_scope_ids llc in
 
-  let virtual_llc_result, spliced_reads =
+  let virtual_llc_result, spliced_reads, retractable_observable_scopes =
     virtual_llc
       ~elide_stored:(elide_unevaluated_operands static_indices)
       ~decide_where:(where_condition_decided static_indices)
@@ -15001,10 +15017,11 @@ let%diagn2_sexp specialize_proc ?(blends_value_selects = false) ?(accum_prec = F
      the surviving candidates — the state a read is instantiated against, in the routine and in the
      flip-candidate pricer's synthetic read alike. *)
   let walked_placements = Tn.Placements.copy input_ctx.placements in
-  validate_virtualization_decision_coverage input_ctx.placements virtual_llc_result;
+  validate_virtualization_decision_coverage ~retractable_observable_scopes input_ctx.placements
+    virtual_llc_result;
   let llc =
-    post_virtualization_pipeline input_ctx.placements traced_store ~input_scopes ~static_indices
-      virtual_llc_result
+    post_virtualization_pipeline ~retractable_observable_scopes input_ctx.placements traced_store
+      ~input_scopes ~static_indices virtual_llc_result
   in
   let llc =
     widen_narrow_scatters ~accum_prec ~static_indices input_ctx.placements traced_store llc
