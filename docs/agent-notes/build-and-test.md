@@ -5604,8 +5604,16 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   usage error. Every dune step saves combined output under explicit `shell: bash` (pipefail);
   its failure listing repeats the saved host through the same `ci-failed-rules.sh --host` path.
   `ci_matrix.sh` checks the shared save path, probe executable and configuration directory,
-  release profile and log capture using the shared step/command readers. It executes the
-  failure listing against both reachable states: build log alone, and build log plus host.
+  release profile and log capture using the shared step/command readers. Both `ci-env.yml` and
+  `ci.yml` keep the probe nonblocking (`continue-on-error: true`, `id: host-caps`) and follow it
+  with `Verify the host probe saved a host line` (`tools/ci-failed-rules.sh --github --check-host
+  --host "$RUNNER_TEMP/host-caps.txt" --host-probe "$HOST_PROBE_OUTCOME"`, gh-ocannl-2120): the
+  default `success()` condition skips it on an earlier failure while still running after a failed
+  nonblocking probe, emitting `no host line (probe failed)` and a `::warning` annotation while
+  exiting 0 whenever the probe ran without saving a valid `OCANNL host:` line. `List the failed
+  dune rules` forwards `--host-probe` with a `skipped` fallback so triage reads `no host line
+  (probe failed)` separately from `no host line (probe never ran)`; `tools/test-ci-failed-rules.sh`
+  and `ci_matrix.sh` cover all reachable states and mutants.
 
 ### opam and caches in CI
 

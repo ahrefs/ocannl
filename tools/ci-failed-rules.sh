@@ -6,7 +6,8 @@
 # for three scheduled runs in a row, while the failure was a scan rule
 # thousands of lines up. CI's build jobs end red runs with this listing.
 #
-# Usage: tools/ci-failed-rules.sh [--github] [--host FILE] [LOG...]
+# Usage: tools/ci-failed-rules.sh [--github] [--host FILE [--host-probe OUTCOME]] [LOG...]
+#        tools/ci-failed-rules.sh --check-host [--github] --host FILE --host-probe OUTCOME
 #        tools/ci-failed-rules.sh --names [LOG...]
 #   LOG        a build log: dune's own output as `tee` saved it, or a job log
 #              GitHub serves (`gh api .../actions/jobs/<id>/logs`, or
@@ -19,9 +20,25 @@
 #              message led by the entry's `<path>:<lines>` and carrying the
 #              lines quoted under it, on one line; say
 #              so when the log holds none; and say so when LOG is missing,
-#              rather than refusing.
+#              rather than refusing. With --check-host, also emit a `::warning`
+#              annotation when a host probe ran without saving a valid host line.
 #   --host FILE  print FILE (the host-capability line, gh-ocannl-1371) above
 #              the listing when it exists.
+#   --host-probe OUTCOME  GitHub Actions outcome of the host-probe step
+#              (gh-ocannl-2120); requires --host. Fail-closed allowlist:
+#              `success`, `failure`, `skipped`, `cancelled`. Distinguishes a
+#              probe that ran and failed (or exited 0 without saving a valid
+#              host line) -- `no host line (probe failed)` -- from an earlier
+#              failure or cancellation where the probe did not finish (`no host
+#              line (probe never ran)`). A valid saved host file is a single
+#              readable line matching `^OCANNL host: [^ \t\r\n]` (matching
+#              tools/host_caps.ml); individual capability key/value fields are
+#              deliberately not parsed.
+#   --check-host  nonblocking host-probe check mode: requires --host and
+#              --host-probe, takes no LOG arguments, prints nothing when the
+#              probe succeeded with a valid host line or never ran, and prints
+#              `no host line (probe failed)` (plus a `::warning` under --github)
+#              while exiting 0 when the probe ran without saving one.
 #   --names    print only one short name per line, in the listing's order, for
 #              a verdict line that says what failed (gh-ocannl-2005): a
 #              stanza's `name`, else its `target` less a golden-diff rule's
@@ -30,7 +47,8 @@
 #              a locationless error as its message, cut to 80 characters. One
 #              failure is one line: another header in the same file is the same
 #              non-dune entry, and two different places sharing a name keep
-#              both, each led by its directory. Not with --github or --host.
+#              both, each led by its directory. Not with --github, --host,
+#              --host-probe, or --check-host.
 #
 # Prints one entry per dune error header -- `File "<path>", line N, ...:` or
 # `lines N-M` -- in the order dune reported them, a repeated one once:
@@ -92,6 +110,9 @@ set -u
 
 github=0
 host=
+host_probe=
+host_probe_set=0
+check_host=0
 names=0
 while [ $# -gt 0 ]; do
   case $1 in
@@ -100,6 +121,12 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || { echo "ci-failed-rules.sh: --host needs a file" >&2; exit 2; }
       host=$2
       shift ;;
+    --host-probe)
+      [ $# -ge 2 ] || { echo "ci-failed-rules.sh: --host-probe needs an outcome" >&2; exit 2; }
+      host_probe=$2
+      host_probe_set=1
+      shift ;;
+    --check-host) check_host=1 ;;
     --names) names=1 ;;
     -h|--help) sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --) shift; break ;;
@@ -109,13 +136,77 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-if [ "$names" = 1 ] && { [ "$github" = 1 ] || [ -n "$host" ]; }; then
-  echo "ci-failed-rules.sh: --names takes neither --github nor --host" >&2
+if [ "$names" = 1 ] && { [ "$github" = 1 ] || [ -n "$host" ] || [ "$host_probe_set" = 1 ] || [ "$check_host" = 1 ]; }; then
+  echo "ci-failed-rules.sh: --names takes neither --github, --host, --host-probe nor --check-host" >&2
   exit 2
 fi
 
-if [ -n "$host" ] && [ -f "$host" ]; then
-  cat -- "$host"
+if [ "$host_probe_set" = 1 ]; then
+  if [ -z "$host" ]; then
+    echo "ci-failed-rules.sh: --host-probe requires --host" >&2
+    exit 2
+  fi
+  case $host_probe in
+    success|failure|skipped|cancelled) ;;
+    *)
+      echo "ci-failed-rules.sh: invalid --host-probe '$host_probe' (expected success, failure, skipped, or cancelled)" >&2
+      exit 2 ;;
+  esac
+fi
+
+if [ "$check_host" = 1 ]; then
+  if [ -z "$host" ] || [ "$host_probe_set" != 1 ]; then
+    echo "ci-failed-rules.sh: --check-host requires --host and --host-probe" >&2
+    exit 2
+  fi
+  if [ $# -gt 0 ]; then
+    echo "ci-failed-rules.sh: --check-host takes no LOG arguments" >&2
+    exit 2
+  fi
+fi
+
+# A valid saved host file from tools/host_caps.exe is one readable line led by
+# `OCANNL host: ` followed by at least one non-whitespace capability token.
+host_file_valid() {
+  [ -f "$1" ] && [ -r "$1" ] && [ -s "$1" ] &&
+    LC_ALL=C awk 'NR == 1 { ok = /^OCANNL host: [^ \t\r\n]/ } END { exit !(NR == 1 && ok) }' < "$1"
+}
+
+# Single classifier for (--host FILE, --host-probe OUTCOME) shared by
+# --check-host and failure listings: ok, failed, or never-ran.
+classify_host_probe() {
+  case $host_probe in
+    skipped|cancelled) printf '%s\n' never-ran ;;
+    success)
+      if host_file_valid "$host"; then
+        printf '%s\n' ok
+      else
+        printf '%s\n' failed
+      fi ;;
+    failure) printf '%s\n' failed ;;
+  esac
+}
+
+if [ "$check_host" = 1 ]; then
+  if [ "$(classify_host_probe)" = failed ]; then
+    echo "no host line (probe failed)"
+    if [ "$github" = 1 ]; then
+      echo "::warning title=Host probe::no host line (probe failed)"
+    fi
+  fi
+  exit 0
+fi
+
+if [ -n "$host" ]; then
+  if [ "$host_probe_set" = 1 ]; then
+    case $(classify_host_probe) in
+      ok) cat -- "$host" ;;
+      failed) echo "no host line (probe failed)" ;;
+      never-ran) echo "no host line (probe never ran)" ;;
+    esac
+  elif [ -f "$host" ]; then
+    cat -- "$host"
+  fi
 fi
 
 for log in "$@"; do
