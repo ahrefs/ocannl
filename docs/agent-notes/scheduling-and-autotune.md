@@ -1466,23 +1466,34 @@ files.
   BYPASS record, the cleared scope one CHECKED. Run such a claim in a child process with its own
   `OCANNL_TOOL_VERDICT_RECORDS` directory: a forced bypass in the test's own process would be a
   claim the sweep's bypass report reads as bypassed on every night (`UNVERIFIED`).
-- **Dispersion is a fact; on a CPU backend contention is an attribution** (gh-ocannl-1558). The
-  2x-majority rule (`window_result`) sets `dispersed`, and records `spread` (median raw wall over
-  the floor). On GPU backends a dispersed window is still refused (`Refuse_dispersed`). On
-  backends whose facts state `host_load_attributable` (the CPU ones) `time_routine` reads `Utils.Host_load` (machine busy CPU-s from
-  `/proc/stat` or mach ticks, minus this whole process's `Unix.times`, over the wall) from before
-  the calibration to after the window, and refuses a dispersed window only on `Cotenant` (at least a
-  core of foreign load plus a two-tick allowance over the span; a dispersed window shorter than
+- **Dispersion is a fact; on a CPU backend contention is an attribution** (gh-ocannl-1558,
+  gh-ocannl-1640). The 2x-majority rule (`window_result`) sets `dispersed`, and records `spread`
+  (median raw wall over the floor). On GPU backends a dispersed window is still refused
+  (`Refuse_dispersed`). On backends whose facts state `host_load_attributable` (the CPU ones)
+  `time_routine` reads `Utils.Host_load` (machine busy CPU-s from `/proc/stat` on Linux, mach ticks
+  on macOS, or `GetSystemTimes` `(kernel - idle) + user` on Windows, minus this whole process's
+  `Unix.times` on POSIX or `GetProcessTimes` on Windows, over the wall) from before the calibration
+  to after the window, and refuses a dispersed window only on `Cotenant` (at least a core of
+  foreign load plus a two-tick allowance over the span; a dispersed window shorter than
   `Host_load.min_span_s` waits out the rest idle and is charged the padded span's whole foreign
-  load, so padding never dilutes a co-tenant); `Quiet` admits it, and
-  `Unavailable` (Windows, or a counter that went backwards) keeps the refusal. A co-tenant does not
-  refuse a tight window: uniform delay stays a valid reading. Why: a 32-thread cc routine's own
-  spread met the 2x rule on a quiet minix, so no search there cached. Consequences: own-process load
-  in other domains is never a co-tenant; a claim derived from `median <= 2 * minimum` must bypass
-  `dispersed`, not only `contended` (`autotune_timing_modes`' executed legs); the report counts
-  `timings_dispersed` and the cache entry stores `best_spread`. Drive it with
-  `Autotune.host_load_reading` (scripted readings) and `Autotune.on_batch_wall` (scripted clock),
-  as `autotune_dispersion_attribution` does.
+  load, so padding never dilutes a co-tenant); `Quiet` admits it, and `Unavailable` (no platform
+  counter, or a counter that went backwards) keeps the refusal. `Host_load.supported` publishes the
+  compile-time platform predicate so real-counter tests gate on the build rather than on `read`'s
+  success. Config `autotune_log_host_load` (default `false`, `Execution_neutral`, read per timing
+  window) writes one flushed `autotune-host-load:` line per `Attribute_dispersion` window with its
+  verdict, foreign load, bar, tick allowance, span, attribution window, raw busy/own deltas,
+  padding, dispersion, spread, depth, samples, and admission (GPU `Refuse_dispersed` windows emit
+  none). On `minix-amd-linux` (32-thread Zen 5, `slow-autotune_fission_sketch`, 114 windows), 114/114
+  resolved `quiet` with 0 phantom `cotenant` verdicts: 3 of 92 `<50 ms` windows crossed 1.0 foreign
+  core (`1.06–1.37`) from `/proc/stat` tick noise and were saved by the two-tick allowance, while
+  the 22 `50–250 ms` windows stayed in `[-0.22, +0.16]` cores including 1 dispersed padded window
+  (`spread=605.52`, admitted). A co-tenant does not refuse a tight window: uniform delay stays a
+  valid reading. Why: a 32-thread cc routine's own spread met the 2x rule on a quiet minix, so no
+  search there cached. Consequences: own-process load in other domains is never a co-tenant; a
+  claim derived from `median <= 2 * minimum` must bypass `dispersed`, not only `contended`
+  (`autotune_timing_modes`' executed legs); the report counts `timings_dispersed` and the cache
+  entry stores `best_spread`. Drive it with `Autotune.host_load_reading` (scripted readings) and
+  `Autotune.on_batch_wall` (scripted clock), as `autotune_dispersion_attribution` does.
 - **A hopeless window ends early, against what its reading is RANKED by, not against the search's
   best** (gh-ocannl-1527). `Autotune.hopeless_window` cuts a window once 3+ samples have a minimum
   over 4x the reference and are not dispersed (noise only adds time, so the full window could rank
