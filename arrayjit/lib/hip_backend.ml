@@ -5,6 +5,15 @@ module Lazy = Utils.Lazy
 module H = Hip
 open Backend_intf
 
+type timing_phase_probe = {
+  workgroups : int;
+  kernel : H.Module.func;
+  host_ids : Unsigned.uint32 Ctypes.ptr;
+  device_address : Unsigned.size_t;
+  release_host_ids : unit -> unit;
+  mutable reported_unrecognized_phase : bool;
+}
+
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 0]
@@ -37,6 +46,8 @@ module Device_config = struct
     dev : H.Device.t;
     primary_context : H.Context.t;
     set_builtins_in : H.Module.t -> unit;
+    timing_phase_probe : (timing_phase_probe option Lazy.t[@sexp.opaque]);
+    timing_phase_lock : (Stdlib.Mutex.t[@sexp.opaque]);
   }
   [@@deriving sexp_of]
 
@@ -67,18 +78,25 @@ module Slab = struct
      test/operations/buffer_aliasing report the planner INCREASING the training footprint here while
      decreasing it everywhere else (gh-ocannl-542). *)
   let pools : (int * int, buffer_ptr * int) Hashtbl.Poly.t = Hashtbl.Poly.create ()
+  let on_invalidate_merge_slab : (device -> unit) ref = ref (fun _ -> ())
 
   let alloc_pool ?mode:_ (device : device) ~pool_id ~size_in_bytes ~alignment:_ =
     set_ctx device.dev.primary_context;
     let key = (device.device_id, pool_id) in
     let size_in_bytes = max 1 size_in_bytes in
     (* Free-first replacement avoids requiring both merge slabs to fit. Invalidate the complete
-       ownership transaction before the fallible free/allocation sequence. *)
+       ownership transaction (including any cached graphs referencing the old merge slab) before the
+       fallible free/allocation sequence. *)
     Option.iter (Hashtbl.find pools key) ~f:(fun (old, _) ->
-        if Int.equal pool_id merge_buffer_pool_id then
-          invalidate_merge_slab device ~remove_slab_claim:(fun () -> Hashtbl.remove pools key)
+        if Int.equal pool_id merge_buffer_pool_id then (
+          !on_invalidate_merge_slab device;
+          invalidate_merge_slab device ~remove_slab_claim:(fun () -> Hashtbl.remove pools key))
         else Hashtbl.remove pools key;
         H.Deviceptr.mem_free old);
+    if Int.equal pool_id merge_buffer_pool_id then
+      Resource_fault_injection.hit
+        ~artifact:(Merge_slab { device_id = device.device_id; size_in_bytes })
+        Merge_slab_before_allocate;
     let ptr =
       try H.Deviceptr.mem_alloc ~size_in_bytes
       with
@@ -110,6 +128,8 @@ module Slab = struct
         let key = (device.device_id, pool_id) in
         Option.iter (Hashtbl.find pools key) ~f:(fun (ptr, _) -> H.Deviceptr.mem_free ptr);
         Hashtbl.remove pools key)
+
+  let has_pool (device : device) ~pool_id = Hashtbl.mem pools (device.device_id, pool_id)
 
   let resolve_pool (device : device) { pool_id; offset = _ } : buffer_ptr =
     (* Return the slab base. The byte offset is NOT folded into the handle here; callers apply it
@@ -263,8 +283,10 @@ end = struct
   let is_done event = H.Delimited_event.query event.raw
   let will_wait_for context event = H.Delimited_event.wait context.device.runner event.raw
   let sync event = H.Delimited_event.synchronize event.raw
+  let events_recorded = Atomic.make 0
 
   let all_work (device : device) =
+    Atomic.incr events_recorded;
     { device_id = device.device_id; raw = H.Delimited_event.record device.runner }
 
   (* The inline-test harness ([ppx_inline_test]'s runner, which hosts ppx_expect tests) is detected
@@ -345,7 +367,7 @@ end = struct
   (* The merge buffer is the device's reserved single-tenant pool (id [merge_buffer_pool_id]); grow
      it in place when a larger node arrives ([Slab.alloc_pool] overwrites the reserved entry). *)
   let opt_alloc_merge_buffer ~size_in_bytes (device : device) : unit =
-    if device.merge_buffer_capacity < size_in_bytes then
+    if device.merge_buffer_capacity < size_in_bytes || Option.is_none !(device.merge_buffer) then
       Slab.alloc_pool device ~pool_id:merge_buffer_pool_id ~size_in_bytes ~alignment:1
 
   let%track4_sexp finalize_device (device : device) =
@@ -540,6 +562,149 @@ end = struct
       H.Module.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
     else []
 
+  let load_module ~options code =
+    let m = H.Module.load_data_ex code options in
+    Alloc_census.count_module_loaded ();
+    Stdlib.Gc.finalise (fun _ -> Alloc_census.count_module_unloaded ()) m;
+    m
+
+  let timing_phase_period (a : H.Device.attributes) =
+    let arch = List.hd_exn (String.split a.gcn_arch_name ~on:':') in
+    if
+      Stdlib.Sys.unix && String.equal arch "gfx1102" && (not a.integrated) && a.warp_size = 32
+      && a.multiprocessor_count = 16
+    then Some (2 * a.multiprocessor_count)
+    else None
+
+  (* ROCclr can dispatch a blit on the timing queue even for a host copy. Reading probe results
+     through another HIP copy could itself rotate the phase we just read. hipjit does not expose
+     mapped host allocation, so use the runtime's host-memory entry points on the measured
+     platform. *)
+  module Mapped_phase_memory = struct
+    open Ctypes
+
+    exception Unavailable of string
+
+    let check call status =
+      if status <> 0 then
+        raise (Unavailable (Printf.sprintf "%s failed with HIP status %d" call status))
+
+    let allocate workgroups =
+      let malloc =
+        Foreign.foreign "hipHostMalloc" (ptr (ptr void) @-> size_t @-> uint @-> returning int)
+      in
+      let device_pointer =
+        Foreign.foreign "hipHostGetDevicePointer"
+          (ptr (ptr void) @-> ptr void @-> uint @-> returning int)
+      in
+      let free = Foreign.foreign "hipHostFree" (ptr void @-> returning int) in
+      let host = allocate (ptr void) null and device = allocate (ptr void) null in
+      let bytes = Unsigned.Size_t.of_int (workgroups * sizeof uint32_t) in
+      let hip_host_malloc_mapped = Unsigned.UInt.of_int 0x2 in
+      check "hipHostMalloc" (malloc host bytes hip_host_malloc_mapped);
+      let host_address = !@host in
+      let release () = check "hipHostFree" (free host_address) in
+      match
+        check "hipHostGetDevicePointer" (device_pointer device host_address Unsigned.UInt.zero);
+        raw_address_of_ptr !@device |> Nativeint.to_int64 |> Unsigned.Size_t.of_int64
+      with
+      | address -> (from_voidp uint32_t host_address, address, release)
+      | exception exn ->
+          let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+          (try release () with _ -> ());
+          Stdlib.Printexc.raise_with_backtrace exn backtrace
+  end
+
+  let compile_timing_phase_probe ~arch ~workgroups =
+    (* On gfx1102 a 64-thread group uses both SIMDs of its starting pair. The first wave's SIMD id
+       in HW_ID1 (register 23, bits 9:8) tells which pair was assigned. A null result pointer gives
+       the padding dispatch precisely the probe's launch shape. *)
+    let hip_src =
+      {|
+#include <hip/hip_runtime.h>
+extern "C" __global__ void ocannl_timing_phase(unsigned int* ids) {
+    if (ids && threadIdx.x == 0)
+        ids[blockIdx.x] = __builtin_amdgcn_s_getreg((31 << 11) | 23);
+}
+|}
+    in
+    let options = ("--offload-arch=" ^ arch) :: hip_include_options () in
+    let code =
+      Hiprtc.compile_to_code ~hip_src ~name:"ocannl_timing_phase.hip" ~options ~with_debug:false
+    in
+    let run_module = load_module ~options:[] code in
+    let kernel = H.Module.get_function run_module ~name:"ocannl_timing_phase" in
+    let host_ids, device_address, release_host_ids = Mapped_phase_memory.allocate workgroups in
+    {
+      workgroups;
+      kernel;
+      host_ids;
+      device_address;
+      release_host_ids;
+      reported_unrecognized_phase = false;
+    }
+
+  let make_timing_phase_probe dev primary_context =
+    let attrs =
+      Utils.with_device_init_deadline ~backend_name:name (fun () -> H.Device.get_attributes dev)
+    in
+    Option.bind (timing_phase_period attrs) ~f:(fun workgroups ->
+        set_ctx primary_context;
+        match compile_timing_phase_probe ~arch:attrs.gcn_arch_name ~workgroups with
+        | probe -> Some probe
+        | exception
+            (( Mapped_phase_memory.Unavailable _ | Dl.DL_error _ | H.Hip_error _
+             | Hiprtc.Hiprtc_error _ ) as exn) ->
+            (* The probe is optional and hasn't submitted anything. Cache its absence for this
+               runner so a private compilation or pinned memory failure leaves timing usable. *)
+            Stdio.eprintf "hip: timing queue probe unavailable: %s\n%!" (Exn.to_string exn);
+            None)
+
+  let align_timing_queue (device : device) ~await =
+    Stdlib.Mutex.protect device.dev.timing_phase_lock (fun () ->
+        match Lazy.force device.dev.timing_phase_probe with
+        | None -> false
+        | Some ({ workgroups; kernel; host_ids; device_address; _ } as probe) ->
+            set_ctx device.dev.primary_context;
+            let launch count address =
+              H.Stream.launch_kernel kernel ~grid_dim_x:count ~block_dim_x:64 ~shared_mem_bytes:0
+                device.runner [ H.Stream.Size_t address ];
+              await ()
+            in
+            let ids = Ctypes.CArray.from_ptr host_ids workgroups in
+            for i = 0 to workgroups - 1 do
+              Ctypes.CArray.set ids i Unsigned.UInt32.max_int
+            done;
+            launch workgroups device_address;
+            (* One full cycle leaves the phase where it found it. The odd-to-even transition is the
+               distance to the first WGP of the clean phase, with every pair starting even. Pair
+               membership uses the low bit of the SIMD id and ignores its order within a pair. *)
+            let ids = Array.init workgroups ~f:(Ctypes.CArray.get ids) in
+            let odd id = Unsigned.UInt32.to_int id land 0x100 <> 0 in
+            let padding =
+              Array.find_mapi ids ~f:(fun i id ->
+                  Option.some_if ((not (odd id)) && odd ids.((i + workgroups - 1) % workgroups)) i)
+              |> Option.filter ~f:(fun start ->
+                  Array.for_alli ids ~f:(fun i id ->
+                      (not (Unsigned.UInt32.equal id Unsigned.UInt32.max_int))
+                      && Bool.equal (odd id)
+                           ((i + workgroups - start) % workgroups >= workgroups / 2)))
+            in
+            (match padding with
+            | Some pad when pad > 0 -> launch pad Unsigned.Size_t.zero
+            | Some _ -> ()
+            | None ->
+                (* Other dispatch shapes can leave a distribution that the measured rotation does
+                   not explain. Keep the candidate runnable without guessing a pad. *)
+                if not probe.reported_unrecognized_phase then (
+                  probe.reported_unrecognized_phase <- true;
+                  Stdio.eprintf
+                    "hip: %s timing probe saw an unrecognized SIMD-pair phase; some timings may \
+                     retain queue-phase bias\n\
+                     %!"
+                    (get_name device)));
+            true)
+
   (* No runtime linking needed since Threefry is included directly in each kernel *)
   let set_builtins_for_device ~primary_context:_ _kernel_module = assert !initialized
 
@@ -550,6 +715,8 @@ end = struct
      [SharedSignalPool] leak report coming back with graph capture on (gh-ocannl-1370). *)
   type graph_cache = {
     graphs_device : device;
+    routine_name : string;
+    uses_merge_buffer : bool;
     cache : (string, H.Graph.exec) Hashtbl.t;
     order : string Queue.t;
     lock : Stdlib.Mutex.t;
@@ -558,6 +725,8 @@ end = struct
   }
 
   let graph_caches : graph_cache Backend_impl.Weak_registry.t = Backend_impl.Weak_registry.create ()
+  let graph_execs_created = Atomic.make 0
+  let graph_execs_destroyed = Atomic.make 0
 
   let live_graph_execs () =
     List.sum
@@ -567,8 +736,9 @@ end = struct
 
   (* Idempotent, and the routine stays runnable: its next run captures afresh. The stream is
      synchronized first, since a cached exec may still have a launch pending on it; the cache is
-     emptied under its lock, and every exec taken out of it is attempted, the first failure
-     re-raised. *)
+     emptied under its lock, and every exec taken out of it is attempted, with any exec whose
+     destruction raised returned to [g.cache]/[g.order] so a retry release destroys it without
+     double-destroying already-freed handles, and the first failure re-raised. *)
   let destroy_graphs g =
     let execs =
       Stdlib.Mutex.protect g.lock (fun () ->
@@ -576,12 +746,43 @@ end = struct
           else (
             set_ctx g.graphs_device.dev.primary_context;
             H.Stream.synchronize g.graphs_device.runner;
-            let execs = Hashtbl.data g.cache in
+            let execs = Hashtbl.to_alist g.cache in
             Hashtbl.clear g.cache;
             Queue.clear g.order;
             execs))
     in
-    Backend_impl.attempt_each (List.map execs ~f:(fun exec () -> H.Graph.exec_destroy exec))
+    let failed = ref [] in
+    let destroy_one (key, exec) () =
+      try
+        Resource_fault_injection.hit
+          ~artifact:
+            (Graph_capture
+               { device_id = g.graphs_device.device_id; routine = g.routine_name; key = Some key })
+          Graph_exec_before_destroy;
+        H.Graph.exec_destroy exec;
+        Atomic.incr graph_execs_destroyed
+      with exn ->
+        let bt = Stdlib.Printexc.get_raw_backtrace () in
+        failed := (key, exec) :: !failed;
+        Stdlib.Printexc.raise_with_backtrace exn bt
+    in
+    Exn.protect
+      ~f:(fun () -> Backend_impl.attempt_each (List.map execs ~f:destroy_one))
+      ~finally:(fun () ->
+        if not (List.is_empty !failed) then
+          Stdlib.Mutex.protect g.lock (fun () ->
+              List.iter (List.rev !failed) ~f:(fun (key, exec) ->
+                  if not (Hashtbl.mem g.cache key) then (
+                    Hashtbl.set g.cache ~key ~data:exec;
+                    Queue.enqueue g.order key))))
+
+  let () =
+    Slab.on_invalidate_merge_slab :=
+      fun device ->
+        Backend_impl.Weak_registry.live graph_caches
+        |> List.filter ~f:(fun g -> g.uses_merge_buffer && phys_equal g.graphs_device device)
+        |> List.map ~f:(fun g () -> destroy_graphs g)
+        |> Backend_impl.attempt_each
 
   (* gh-ocannl-1036: destroy each device's stream at process exit. A HIP stream that is never
      destroyed makes the ROCm runtime report its 77 signals as leaked on stderr when the process
@@ -618,7 +819,11 @@ end = struct
                              |> List.filter ~f:(fun g -> phys_equal g.graphs_device device)
                              |> List.map ~f:(fun g () -> destroy_graphs g)
                              |> Backend_impl.attempt_each)
-                           ~finally:(fun () -> H.Stream.destroy device.runner));
+                           ~finally:(fun () ->
+                             H.Stream.destroy device.runner;
+                             if Lazy.is_val device.dev.timing_phase_probe then
+                               Option.iter (Lazy.force device.dev.timing_phase_probe)
+                                 ~f:(fun probe -> probe.release_host_ids ())));
                    }))
               : Utils.exit_teardown_outcome list))
 
@@ -639,7 +844,9 @@ end = struct
       let dev = H.Device.get ~ordinal in
       let primary_context : H.Context.t = H.Context.get_primary dev in
       let set_builtins_in = set_builtins_for_device ~primary_context in
-      let dev = { dev; primary_context; set_builtins_in } in
+      let timing_phase_probe = lazy (make_timing_phase_probe dev primary_context) in
+      let timing_phase_lock = Stdlib.Mutex.create () in
+      let dev = { dev; primary_context; set_builtins_in; timing_phase_probe; timing_phase_lock } in
       set_ctx primary_context;
       if Utils.debug_log_from_routines () && not (Hash_set.mem initialized_devices ordinal) then
         Int.of_string_opt @@ Utils.get_global_arg ~arg_name:"hip_printf_fifo_size" ~default:""
@@ -1591,7 +1798,7 @@ end = struct
   let%track3_sexp link prior_context (code : code) ctx_buffers =
     let ctx = ctx_of prior_context in
     set_ctx ctx;
-    let run_module = H.Module.load_data_ex code.code.code (run_options ()) in
+    let run_module = load_module ~options:(run_options ()) code.code.code in
     prior_context.device.dev.set_builtins_in run_module;
     let idx_params = Indexing.bound_symbols code.bindings in
     let lowered_bindings : Indexing.lowered_bindings =
@@ -1615,12 +1822,16 @@ end = struct
     let modules = Hashtbl.create (module Int) in
     let module_of (program : program) =
       Hashtbl.find_or_add modules program.program_id ~default:(fun () ->
-          let run_module = H.Module.load_data_ex program.code (run_options ()) in
+          let run_module = load_module ~options:(run_options ()) program.code in
           prior_context.device.dev.set_builtins_in run_module;
           run_module)
     in
+    let count = Array.length code_batch.kparams_and_names in
     let procs =
       Array.mapi code_batch.kparams_and_names ~f:(fun i (kparams, name, launch) ->
+          Resource_fault_injection.hit
+            ~artifact:(Routine_segment { routine = name; index = i; count })
+            Link_batch_before_segment;
           let program, symbol = code_batch.programs.(i) in
           link_proc ~prior_context ~name ~symbol ~kparams ~launch ~ctx_buffers lowered_bindings
             (module_of program))
@@ -1653,6 +1864,8 @@ end = struct
       let graphs =
         {
           graphs_device = device;
+          routine_name = name;
+          uses_merge_buffer;
           cache = Hashtbl.create (module String);
           order = Queue.create ();
           lock = Stdlib.Mutex.create ();
@@ -1674,39 +1887,62 @@ end = struct
         in
         String.concat ~sep:";" (idx @ merge)
       in
+      let drop_exec_and_run_plain ~key ~message exec =
+        Atomic.incr graph_launch_memory_drops;
+        Stdio.eprintf
+          "hip: launching the graph of %s was refused device memory (%s): dropping its exec and \
+           running its segments plainly this time (gh-ocannl-1872)\n\
+           %!"
+          name message;
+        Hashtbl.remove cache key;
+        Queue.filter_inplace order ~f:(fun k -> not (String.equal k key));
+        H.Stream.synchronize device.runner;
+        H.Graph.exec_destroy exec;
+        Atomic.incr graph_execs_destroyed;
+        run_plain ()
+      in
       (* A graph launch refused device memory is never retried on its exec: on CUDA such a retry was
          accepted with the memory still held and the replay then faulted (gh-ocannl-1872), and HIP
          is held to the same shape. The exec is dropped and destroyed, the segments run plainly this
          time, where each kernel launch backs off, and the next run captures afresh. Called under
          [graphs.lock]. *)
       let launch_graph ~key exec =
-        match H.Graph.launch exec device.runner with
+        let artifact =
+          Resource_fault_injection.Graph_capture
+            { device_id = device.device_id; routine = name; key = Some key }
+        in
+        match
+          Resource_fault_injection.hit ~artifact Graph_capture_replay;
+          H.Graph.launch exec device.runner
+        with
         | () -> ()
         | exception (H.Hip_error { message; _ } as exn) when is_out_of_memory exn ->
-            Atomic.incr graph_launch_memory_drops;
-            Stdio.eprintf
-              "hip: launching the graph of %s was refused device memory (%s): dropping its exec \
-               and running its segments plainly this time (gh-ocannl-1872)\n\
-               %!"
-              name message;
-            Hashtbl.remove cache key;
-            Queue.filter_inplace order ~f:(fun k -> not (String.equal k key));
-            H.Stream.synchronize device.runner;
-            H.Graph.exec_destroy exec;
-            run_plain ()
+            drop_exec_and_run_plain ~key ~message exec
+        | exception Resource_fault_injection.Simulated_graph_replay_oom message ->
+            drop_exec_and_run_plain ~key ~message exec
       in
-      let capture () =
+      let capture ~key () =
+        let artifact =
+          Resource_fault_injection.Graph_capture
+            { device_id = device.device_id; routine = name; key = Some key }
+        in
         (* RELAXED, not THREAD_LOCAL: GC finalizers (module unloads, buffer frees of dead handles)
            can fire at any allocation point on the capturing thread, and stricter modes make the
            runtime reject such "potentially unsafe" calls mid-capture — with the exception then
            escaping [Gc.finalise] at an arbitrary program point. The finalizers only release dead
            handles, so they are genuinely safe to run concurrently with capture. *)
+        Resource_fault_injection.hit ~artifact Graph_capture_begin;
         H.Graph.begin_capture ~mode:H.Graph.RELAXED device.runner;
         let graph =
           try
             let prior = Stdlib.Domain.DLS.get capturing in
             Stdlib.Domain.DLS.set capturing true;
-            Exn.protect ~f:run_plain ~finally:(fun () -> Stdlib.Domain.DLS.set capturing prior);
+            Exn.protect
+              ~f:(fun () ->
+                Resource_fault_injection.hit ~artifact Graph_capture_launch;
+                run_plain ())
+              ~finally:(fun () -> Stdlib.Domain.DLS.set capturing prior);
+            Resource_fault_injection.hit ~artifact Graph_capture_end;
             H.Graph.end_capture device.runner
           with exn ->
             (* Terminate the capture before propagating, else the stream stays in capture mode. *)
@@ -1717,6 +1953,7 @@ end = struct
            first reserve their local memory (gh-ocannl-1872), and HIP is held to the same shape. *)
         Exn.protect
           ~f:(fun () ->
+            Resource_fault_injection.hit ~artifact Graph_capture_instantiate;
             launch_with_memory_backoff ~verb:"instantiating" ~name:("the graph of " ^ name)
               ~scratch:(lazy (Printf.sprintf "a graph of %d kernels" (List.length tasks)))
               (fun () -> H.Graph.instantiate graph))
@@ -1739,14 +1976,16 @@ end = struct
                         match Hashtbl.find cache key with
                         | Some exec -> launch_graph ~key exec
                         | None -> (
-                            match capture () with
+                            match capture ~key () with
                             | exec ->
+                                Atomic.incr graph_execs_created;
                                 if Queue.length order >= max_cached_graphs then (
                                   let victim = Queue.dequeue_exn order in
                                   (* The evicted exec may still have a pending launch on the
                                      stream. *)
                                   H.Stream.synchronize device.runner;
                                   H.Graph.exec_destroy (Hashtbl.find_exn cache victim);
+                                  Atomic.incr graph_execs_destroyed;
                                   Hashtbl.remove cache victim);
                                 Hashtbl.set cache ~key ~data:exec;
                                 Queue.enqueue order key;
@@ -1763,16 +2002,27 @@ end = struct
                                    %!"
                                   name message;
                                 run_plain ()
-                            | exception H.Hip_error { status; message } ->
+                            | exception
+                                ((Resource_fault_injection.Simulated_capture_error _ | H.Hip_error _)
+                                 as exn) ->
                                 (* E.g. capture unsupported on this runtime: fall back to
                                    per-segment launches for this routine (same-stream FIFO supplies
                                    the segment ordering), and re-run outside capture so a genuine
-                                   launch failure surfaces on the plain path. *)
+                                   launch failure surfaces on the plain path. Both real driver
+                                   errors and simulated fault-injection errors flow through this
+                                   single handler. *)
+                                let reason =
+                                  match exn with
+                                  | Resource_fault_injection.Simulated_capture_error msg -> msg
+                                  | H.Hip_error { status; message } ->
+                                      Printf.sprintf "%s: %s" message
+                                        (Sexp.to_string_hum @@ H.sexp_of_result status)
+                                  | _ -> assert false
+                                in
                                 broken := true;
                                 Stdio.eprintf
-                                  "ocannl: disabling HIP graph capture for routine %s (%s: %s)\n%!"
-                                  name message
-                                  (Sexp.to_string_hum @@ H.sexp_of_result status);
+                                  "ocannl: disabling HIP graph capture for routine %s (%s)\n%!" name
+                                  reason;
                                 run_plain ())));
             },
           fun () -> destroy_graphs graphs )
@@ -1782,6 +2032,9 @@ end = struct
       [
         ("live_streams", [%sexp_of: int] @@ H.Stream.get_total_live_streams ());
         ("live_graph_execs", [%sexp_of: int] @@ live_graph_execs ());
+        ("graph_execs_created", [%sexp_of: int] @@ Atomic.get graph_execs_created);
+        ("graph_execs_destroyed", [%sexp_of: int] @@ Atomic.get graph_execs_destroyed);
+        ("events_recorded", [%sexp_of: int] @@ Atomic.get events_recorded);
         (* gh-ocannl-1872: launches refused device memory, retried and given up on. *)
         ("launch_memory_retries", [%sexp_of: int] @@ Atomic.get launch_memory_retries);
         ("launch_memory_refusals", [%sexp_of: int] @@ Atomic.get launch_memory_refusals);
@@ -1839,29 +2092,35 @@ end = struct
   let timing_identity (device : device) =
     try
       let attributes = H.Device.get_attributes device.dev.dev in
+      let queue_phase =
+        Option.map (timing_phase_period attributes) ~f:(fun period ->
+            ("timing_queue_phase", [%sexp_of: int] period))
+        |> Option.to_list
+      in
       Some
         {
           Backend_intf.device_signature =
             Sexp.to_string
               (Sexp.message "device_capabilities"
-                 [
-                   ("name", Sexp.Atom attributes.name);
-                   ("gcn_arch_name", Sexp.Atom attributes.gcn_arch_name);
-                   ("multiprocessor_count", [%sexp_of: int] attributes.multiprocessor_count);
-                   ("clock_rate", [%sexp_of: int] attributes.clock_rate);
-                   ("memory_clock_rate", [%sexp_of: int] attributes.memory_clock_rate);
-                   ("memory_bus_width", [%sexp_of: int] attributes.memory_bus_width);
-                   ("total_global_mem", [%sexp_of: int] attributes.total_global_mem);
-                   ("l2_cache_size", [%sexp_of: int] attributes.l2_cache_size);
-                   ("max_threads_per_block", [%sexp_of: int] attributes.max_threads_per_block);
-                   ( "max_threads_per_multiprocessor",
-                     [%sexp_of: int] attributes.max_threads_per_multiprocessor );
-                   ("shared_mem_per_block", [%sexp_of: int] attributes.shared_mem_per_block);
-                   ( "shared_mem_per_multiprocessor",
-                     [%sexp_of: int] attributes.shared_mem_per_multiprocessor );
-                   ("regs_per_block", [%sexp_of: int] attributes.regs_per_block);
-                   ("warp_size", [%sexp_of: int] attributes.warp_size);
-                 ]);
+                 ([
+                    ("name", Sexp.Atom attributes.name);
+                    ("gcn_arch_name", Sexp.Atom attributes.gcn_arch_name);
+                    ("multiprocessor_count", [%sexp_of: int] attributes.multiprocessor_count);
+                    ("clock_rate", [%sexp_of: int] attributes.clock_rate);
+                    ("memory_clock_rate", [%sexp_of: int] attributes.memory_clock_rate);
+                    ("memory_bus_width", [%sexp_of: int] attributes.memory_bus_width);
+                    ("total_global_mem", [%sexp_of: int] attributes.total_global_mem);
+                    ("l2_cache_size", [%sexp_of: int] attributes.l2_cache_size);
+                    ("max_threads_per_block", [%sexp_of: int] attributes.max_threads_per_block);
+                    ( "max_threads_per_multiprocessor",
+                      [%sexp_of: int] attributes.max_threads_per_multiprocessor );
+                    ("shared_mem_per_block", [%sexp_of: int] attributes.shared_mem_per_block);
+                    ( "shared_mem_per_multiprocessor",
+                      [%sexp_of: int] attributes.shared_mem_per_multiprocessor );
+                    ("regs_per_block", [%sexp_of: int] attributes.regs_per_block);
+                    ("warp_size", [%sexp_of: int] attributes.warp_size);
+                  ]
+                 @ queue_phase));
           toolchain_signature =
             (try
                let major, minor = Hiprtc.version () in
@@ -1887,6 +2146,10 @@ end = struct
          let all_integrated =
            (not (Array.is_empty attrs))
            && Array.for_all attrs ~f:(fun (a : H.Device.attributes) -> a.integrated)
+         in
+         let all_discrete =
+           (not (Array.is_empty attrs))
+           && Array.for_all attrs ~f:(fun (a : H.Device.attributes) -> not a.integrated)
          in
          (* The wavefront the shuffles assume: 32 lanes. *)
          let wave = 32 in
@@ -1998,34 +2261,46 @@ end = struct
            fill_threads = Some (if all_integrated then 384 else 512);
            (* gh-ocannl-1639: unfitted -- no HIP leg measured the ILP cap: the thread-only fill. *)
            fill_chains = None;
-           (* gh-ocannl-1600: the memory-transaction rate, fitted (benchmarks/gh1600_txn_fit.py) on
-              the gh-ocannl-1479 cells on the unified gfx1151 (minix, 2026-10-26, 630016bd): the qkv
-              and outproj kernels carry no excess (a lane's innermost run is one footprint), the
-              weight gradient's agreement rises 50 -> 75% at rates up to 2e11 and falls back above.
-              Only under all_rdna_wave32 (the count groups lanes by the 32-wide simdgroup, which a
-              CDNA wave64 part does not execute) and on the unified class it was fitted on: the
-              discrete class (tuf) stays unset: at its measured gh-ocannl-1479 cells (2026-11-02,
-              ecb13bb8) the per-lane-group count of that time ranked gh-ocannl-1661's partitioned
-              staged tiles, the fastest measured, 1.8-2.6x slow. Since the count takes a block's
-              lane groups together, no candidate at those cells carries excess, so the rate is inert
-              there. With the capacity below it admits the coalesced layouts to model_default.
+           (* gh-ocannl-1600 / gh-ocannl-2280: the memory-transaction rate, fitted
+              (benchmarks/gh1600_txn_fit.py) on the gh-ocannl-1479 cells on the unified gfx1151
+              (minix, 2026-10-26, 630016bd): the qkv and outproj kernels carry no excess (a lane's
+              innermost run is one footprint), the weight gradient's agreement rises 50 -> 75% at
+              rates up to 2e11 and falls back above. Only under all_rdna_wave32 (the count groups
+              lanes by the 32-wide simdgroup, which a CDNA wave64 part does not execute). Since the
+              count takes a block's lane groups together, no candidate at the gh-ocannl-1479 cells
+              on discrete RX 7700S (tuf) carries excess, so 1e11 is inert there while opening
+              model_default's coalesced menu beside the occupancy capacity and copy rate below.
+              Mixed integrated+discrete hosts stay None alongside the staging rates below.
               Overridable by model_transaction_rate. *)
            transaction_rate =
-             (if all_integrated && Lazy.force all_rdna_wave32 then Some 1.0e11 else None);
+             (if (all_integrated || all_discrete) && Lazy.force all_rdna_wave32 then Some 1.0e11
+              else None);
            (* gh-ocannl-1600: the occupancy factor's capacity, physical: 128 KiB of LDS per WGP (the
               unit multiprocessor_count counts) on the RDNA wave32 parts. With it the deep-K
               coalesced leaves rank as measured at the gh-ocannl-1479 outproj cells on minix (argmin
-              1.00x of the fastest at b8 and b256, against 3.6x and 3.3x without). Overridable by
+              1.00x of the fastest at b8 and b256, against 3.6x and 3.3x without) and tuf (keeping
+              64x64x128 coal-k behind 64x64x32 coal-k). Overridable by
               model_workgroup_bytes_per_multiprocessor. *)
            workgroup_bytes_per_multiprocessor =
              (if Lazy.force all_rdna_wave32 then Some 131072 else None);
-           (* gh-ocannl-1821: no staged-copy rate. On the discrete RX 7700S (tuf, ecb13bb8) the term
-              moves the outproj argmin to a 64x64x128 coal-k tile 1.30x / 1.14x slower than the
-              fastest leaf, and would favor the uncoalesced 64x64x8 blocktile measured 4.5x slower
-              there: the deep tiles also need the occupancy factor, and the latter a mechanism the
-              counts do not see. The unified class (minix) admits the coalesced layouts through its
-              capacity and was not re-measured. Overridable by model_staged_copy_rate. *)
-           staged_copy_rate = None;
+           (* gh-ocannl-1821 / gh-ocannl-2280: the staged-copy and partition-guarded staged-idle
+              rates, fitted jointly on the discrete RX 7700S (tuf, five-replicate exclusive gh-1479
+              window, 2026-11-27; benchmarks/gh1600_txn_fit.py --staged-rate sweep --idle-rate
+              sweep) beside the physical occupancy capacity and shared-load rate below. On discrete
+              RDNA3, staging volume orders 64x64x32 coal-k ahead of 32x32x8 (outproj b8/b256 argmin
+              1.001x/1.000x of fastest, pick 0.56x/0.20x of seeded), while 64x64x8/4x4's Workgroup i
+              < 8 partition guard leaves half the block idle across the phase barrier and trails
+              32x32x8 on every cell (1.29x at wgrad b8 with 0 VGPR spills; 2.55x at outproj b8 and
+              2.88x / 4.51x at outproj b256). Across 5e11 B/s copy rate, any idle rate in
+              1.58e11-5.0e11 B/s passes all five cells (3.0e11 is the log-midpoint, keeping
+              shared_load_rate 6.3e11 centered in its plateau). The unified class (minix) and mixed
+              integrated+discrete hosts keep both unset so an integrated GPU is never moved by
+              discrete staging rates. Overridable by model_staged_copy_rate and
+              model_staged_idle_rate. *)
+           staged_copy_rate =
+             (if all_discrete && Lazy.force all_rdna_wave32 then Some 5.0e11 else None);
+           staged_idle_rate =
+             (if all_discrete && Lazy.force all_rdna_wave32 then Some 3.0e11 else None);
            (* gh-ocannl-2262: the register-reuse rate and the fill in wavefronts, fitted together on
               the discrete RX 7700S (tuf, gh-ocannl-1600's M3 rows at ecb13bb8, re-scored by
               EXPLAIN_ONLY listings; benchmarks/gh1600_txn_fit.py --shared-rate). Measured, 2x2

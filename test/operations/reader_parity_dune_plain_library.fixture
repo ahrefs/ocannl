@@ -1,0 +1,8 @@
+(library
+ (name planner)
+ ; ocannl-backend-default: plan = cc,cuda Planner.choose -- shared planner default
+)
+(library
+ (name no_inline_tests)
+ ; ocannl-backend-default: plan -- no inline action
+)

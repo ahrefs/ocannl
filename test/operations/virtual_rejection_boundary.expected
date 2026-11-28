@@ -296,4 +296,22 @@ declared_store_x is virtual in this compilation lineage (decision 99:test-setup)
 declared store: names the virtual decision and store-time reason: true
 committed_store_x is virtual in this compilation lineage (decision 40:scalar-constexpr), but its computation could not be stored for inlining (rejection 10:escaping-index-symbol: store-time inlining check failed). Mark committed_store_x as materialized (e.g. via Train.set_materialized) before compiling the routine that computes it.
 committed store: names the virtual decision and store-time reason: true
+escaping_gather_read_width1: rejected at store time as 9:sibling-escaping-read-index: true
+escaping_gather_read_width1: executed values are the reference: true
+escaping_gather_read_width1: the two placements agree: true
+escaping_gather_read_width2: rejected at store time as 9:sibling-escaping-read-index: true
+escaping_gather_read_width2: executed values are the reference: true
+escaping_gather_read_width2: the two placements agree: true
+virtual_gather_valid: inlined: true
+virtual_gather_valid: executed values are the reference: true
+virtual_gather_valid: the two placements agree: true
+escaping_where_arm: rejected at store time as 9:sibling-escaping-read-index: true
+escaping_where_arm: executed values are the reference: true
+escaping_where_arm: the two placements agree: true
+escaping_scope_embed: rejected at store time as 10:escaping-index-symbol: true
+escaping_scope_embed: executed values are the reference: true
+escaping_scope_embed: the two placements agree: true
+escaping_write_before_read: rejected at store time as 7:sibling-escaping-write-index: true
+escaping_write_before_read: executed values are the reference: true
+escaping_write_before_read: the two placements agree: true
 every phase-table entry is exercised by a row: true

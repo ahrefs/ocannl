@@ -38,7 +38,10 @@ module L = Ll_test
 open Verdict.Claims
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
-let splits_here = Autotune.seeded_split_backend (Context.backend_facts_of_name backend_name)
+
+let splits_here =
+  (Context.backend_facts_of_name backend_name).Ir.Backend_intf.splits_untuned_reductions
+
 let is_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 let is_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 
@@ -476,13 +479,15 @@ let () =
   List.iter r.Autotune.sd_split ~f:(fun (tn, blocks) ->
       Stdio.eprintf "split: %s into %d blocks (not part of the golden)\n" (Ir.Tnode.debug_name tn)
         blocks);
-  Verdict.gated ~when_:splits_here ~on:backend_name
-    "on CUDA and HIP the untuned plan splits the batch-8 bias gradient into 32 blocks"
-    (List.exists r.sd_split ~f:(fun (tn, blocks) -> Ir.Tnode.equal tn g && blocks = 32));
-  Verdict.gated ~when_:splits_here ~on:backend_name
-    "on CUDA and HIP the split routine compiles without falling back to the default"
-    (not r.sd_fell_back);
-  Verdict.gated ~when_:(not splits_here) ~on:backend_name
-    "off CUDA and HIP the untuned plan splits nothing" (List.is_empty r.sd_split);
+  let split_leg = Verdict.leg ~when_:splits_here ~on:backend_name () in
+  Verdict.in_leg ~leg:split_leg
+    "on GPU backends the untuned plan splits the batch-8 bias gradient into 32 blocks" (fun label ->
+      p label (List.exists r.sd_split ~f:(fun (tn, blocks) -> Ir.Tnode.equal tn g && blocks = 32)));
+  Verdict.in_leg ~leg:split_leg
+    "on GPU backends the split routine compiles without falling back to the default" (fun label ->
+      p label (not r.sd_fell_back));
+  let nosplit_leg = Verdict.leg ~when_:(not splits_here) ~on:backend_name () in
+  Verdict.in_leg ~leg:nosplit_leg "on host-pool backends the untuned plan splits nothing"
+    (fun label -> p_empty label ~over:[ r ] r.sd_split);
   p_alli "the untuned plan's bias gradient is the exact sum" (Array.to_list values) ~f:(fun o v ->
       bitwise v exact.(o))

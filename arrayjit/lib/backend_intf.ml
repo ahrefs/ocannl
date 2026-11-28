@@ -547,6 +547,16 @@ type hardware_limits = {
           by [model_default]'s ranking only: the [auto] seeding gate, which weighs a staged sketch
           against an unstaged preset the term was not fitted for, prices neither the term nor the
           tail. Same cache identity as {!field-cache_capacity_bytes}. *)
+  staged_idle_rate : float option; [@sexp.option]
+      (** [Untimed]: how many refused bytes per second a launch's partition-guarded operand staging
+          copies pay for workgroup lanes left idle across the phase barrier (gh-ocannl-2280,
+          {!Ir.Cost_model.staged_idle_copies}): when a [Workgroup] [i < c] guard encloses a staged
+          copy (e.g. a 64x64x8/4x4 blocktile whose 16-thread workgroup axis copies an 8-deep
+          k-tile), the refused lanes' bytes over their fill are added to the compute leg over this
+          rate. A FITTED constant ([benchmarks/gh1600_txn_fit.py --idle-rate]), per device class.
+          Overridable by config [model_staged_idle_rate]; [None] where unmeasured, which adds no
+          term. Read by the leaf ranking ([model_default], [model_explain]); the [auto] seeding gate
+          prices no idle bytes. Same cache identity as {!field-cache_capacity_bytes}. *)
   shared_load_rate : float option; [@sexp.option]
       (** [Untimed]: how many workgroup-memory cells per second a launch's threads load beyond the
           calibration register tile's reuse -- the rate of the ranking score's register-reuse term
@@ -1096,6 +1106,7 @@ let no_hardware_limits =
     transaction_rate = None;
     workgroup_bytes_per_multiprocessor = None;
     staged_copy_rate = None;
+    staged_idle_rate = None;
     shared_load_rate = None;
     fill_lane_width = None;
     mma_peak_f16 = None;
@@ -1155,15 +1166,21 @@ type select_blend_policy = No_blend | Blend_load_free | Blend_serial_loop | Blen
 type backend_facts = {
   grid_execution : grid_execution;
   workgroup_shared_placement : bool;
-      (** A node can be placed in workgroup-shared memory (the shared epilogue placement of
-          [Schedule]'s [Fuse_epilogue]): the premise of [Schedule.may_keep_off_device]. CPU codegen
-          rejects a non-empty [workgroup_shared]. *)
+      (** A node can be placed in hardware workgroup-shared memory (the shared epilogue placement of
+          [Schedule]'s [Fuse_epilogue]): the premise of [Schedule.may_keep_off_device]. CPU backends
+          keep this [false] (their serial barrier-fission lowering of [workgroup_shared] is for
+          emulation/parity, not production shared placement). *)
   seeds_untuned_default : bool;
-      (** The untuned compile seeds its plan ([Autotune.seeded_default], gh-ocannl-1183): the
-          backends that plan's before/after was measured on. Also scopes the seeded plan's numerics
-          gate in [Schedule_cache.codegen_tag] (gh-ocannl-1405) and gates ordered row-owned
-          embedding scatter packets in [Schedule.scatter_packets_enabled] (gh-ocannl-2443,
-          gh-ocannl-2494). *)
+      (** The untuned compile seeds contraction sketches ([Autotune.seeded_default],
+          gh-ocannl-1183). Also scopes the seeded plan's numerics gate in
+          [Schedule_cache.codegen_tag] (gh-ocannl-1405) and gates ordered row-owned embedding
+          scatter packets in [Schedule.scatter_packets_enabled] (gh-ocannl-2443, gh-ocannl-2494). *)
+  sinks_untuned_reductions : bool;
+      (** The untuned compile can interchange plain-cell reductions before GPU mapping
+          ([Autotune.reduction_sink], gh-ocannl-1348 and gh-ocannl-2507). *)
+  splits_untuned_reductions : bool;
+      (** The untuned compile splits long, narrow reductions before fissioning
+          ([Autotune.seeded_split_sites], gh-ocannl-1325, gh-ocannl-1412, gh-ocannl-2506). *)
   queued_timing : queued_timing;
   retries_contended_window : bool;
       (** A queued timing window refused as contended is retried once: the device scheduler's
@@ -1262,9 +1279,9 @@ let binds_hardware_grid facts = equal_grid_execution facts.grid_execution Hardwa
 let renders_on_host_pool facts = equal_grid_execution facts.grid_execution Host_pool
 
 (** The relations between facts no backend may break, as the violations found ([[]] when
-    consistent): workgroup-shared placement, the seeded untuned plan (a GPU sketch), the deep queued
-    policy and the contended-window retry (device-dispatch timing) all presuppose a hardware grid,
-    and a dialect prefixes its node identifiers exactly when its vendor headers are a GPU
+    consistent): workgroup-shared placement, untuned sketch seeding and reduction sinking, the deep
+    queued policy and the contended-window retry (device-dispatch timing) all presuppose a hardware
+    grid, and a dialect prefixes its node identifiers exactly when its vendor headers are a GPU
     toolchain's. *)
 let facts_inconsistencies facts =
   let grid = binds_hardware_grid facts in
@@ -1273,6 +1290,10 @@ let facts_inconsistencies facts =
       ( facts.workgroup_shared_placement && not grid,
         "workgroup_shared_placement without a hardware grid" );
       (facts.seeds_untuned_default && not grid, "seeds_untuned_default without a hardware grid");
+      ( facts.sinks_untuned_reductions && not grid,
+        "sinks_untuned_reductions without a hardware grid" );
+      ( facts.splits_untuned_reductions && not grid,
+        "splits_untuned_reductions without a hardware grid" );
       ( equal_queued_timing facts.queued_timing Queued_deep && not grid,
         "Queued_deep without a hardware grid" );
       ( facts.retries_contended_window && not grid,
@@ -1288,6 +1309,8 @@ let cc_facts =
     grid_execution = Host_pool;
     workgroup_shared_placement = false;
     seeds_untuned_default = false;
+    sinks_untuned_reductions = false;
+    splits_untuned_reductions = false;
     queued_timing = Queued_legacy;
     retries_contended_window = false;
     host_load_attributable = true;
@@ -1302,6 +1325,8 @@ let cuda_facts =
     grid_execution = Hardware_grid;
     workgroup_shared_placement = true;
     seeds_untuned_default = true;
+    sinks_untuned_reductions = true;
+    splits_untuned_reductions = true;
     queued_timing = Queued_deep;
     retries_contended_window = false;
     host_load_attributable = false;
@@ -1316,6 +1341,8 @@ let hip_facts =
     grid_execution = Hardware_grid;
     workgroup_shared_placement = true;
     seeds_untuned_default = true;
+    sinks_untuned_reductions = true;
+    splits_untuned_reductions = true;
     queued_timing = Queued_deep;
     retries_contended_window = false;
     host_load_attributable = false;
@@ -1330,6 +1357,8 @@ let metal_facts =
     grid_execution = Hardware_grid;
     workgroup_shared_placement = true;
     seeds_untuned_default = false;
+    sinks_untuned_reductions = true;
+    splits_untuned_reductions = true;
     queued_timing = Queued_legacy;
     retries_contended_window = true;
     host_load_attributable = false;
@@ -1419,6 +1448,7 @@ let limits_key
        transaction_rate = _;
        workgroup_bytes_per_multiprocessor = _;
        staged_copy_rate = _;
+       staged_idle_rate = _;
        shared_load_rate = _;
        fill_lane_width = _;
        mma_peak_f16 = _;
@@ -1470,6 +1500,7 @@ type untimed_limits = {
   workgroup_capacity : int option;
       (** {!field-hardware_limits.workgroup_bytes_per_multiprocessor}. *)
   copy_rate : float option;  (** {!field-hardware_limits.staged_copy_rate}. *)
+  idle_rate : float option;  (** {!field-hardware_limits.staged_idle_rate}. *)
   shared_rate : float option;  (** {!field-hardware_limits.shared_load_rate}. *)
   lane_width : int option;  (** {!field-hardware_limits.fill_lane_width}. *)
 }
@@ -1491,6 +1522,7 @@ let untimed_limits (l : hardware_limits) : untimed_limits =
     sector_rate = l.transaction_rate;
     workgroup_capacity = l.workgroup_bytes_per_multiprocessor;
     copy_rate = l.staged_copy_rate;
+    idle_rate = l.staged_idle_rate;
     shared_rate = l.shared_load_rate;
     lane_width = l.fill_lane_width;
   }
@@ -1663,6 +1695,9 @@ module type Slab_alloc = sig
   val free_pool : (device -> pool_id:int -> unit) option
   (** Frees the slab for [pool_id] and drops its table entry. [None] for backends that rely on GC.
   *)
+
+  val has_pool : device -> pool_id:int -> bool
+  (** Whether the backend's private pool table currently holds an entry for [(device, pool_id)]. *)
 
   val zero_ranges : device -> (buffer_loc * int) list -> unit
   (** Zero-initializes each [(loc, size_in_bytes)]: [size_in_bytes] at
@@ -2068,6 +2103,10 @@ module type Backend_device_common = sig
   (** Concrete device identity, with best available toolchain metadata. Outer [None] means device
       discovery is unavailable and disables persistent schedule AND placement I/O. Missing toolchain
       metadata alone does not disable persistence. Query lazily, never at initialization. *)
+
+  val align_timing_queue : device -> await:(unit -> unit) -> bool
+  (** Prepare the selected runner for a timing call. [await] supplies the caller's bounded wait for
+      the probe and any padding. Returns [true] when preparation submitted work. *)
 
   val hardware_limits : unit -> hardware_limits
   (** Conservative per-workgroup device limits: on multi-device backends the minimum across the

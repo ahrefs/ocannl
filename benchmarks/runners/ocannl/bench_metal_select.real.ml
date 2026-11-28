@@ -562,8 +562,10 @@ let compare_step ~dry ~step_segments ~calls step =
       let locals_b = count_sub src_b ~sub:(Ir.C_syntax.blend_local_a ^ " =") in
       p "%s control_matches=%b short_has_local=%b serial_loop_locals=%d blend_locals=%d\n" label
         control_matches (has_local src_a) locals_s locals_b;
+      (* The untuned split can move every selected accumulation out of a serial kernel. The
+         serial-only policy may then emit the same selects as the short-circuit control. *)
       Verdict.pass_fail (label ^ " emitted rendering")
-        (control_matches && (not (has_local src_a)) && locals_s > 0 && locals_s < locals_b);
+        (control_matches && (not (has_local src_a)) && locals_s < locals_b);
       if Verdict.any_failed () then failwith (label ^ ": source check failed");
       List.iter arms ~f:(fun (name, (_, src)) ->
           dump_source ~name:"train_step" ~arm:name src;

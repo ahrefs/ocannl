@@ -305,6 +305,8 @@ tools/test-real-dune-registrations.sh	scripts/harness-support.sh
 tools/test-real-dune-registrations.sh	scripts/test-*.sh	declares	--only '^1:'
 tools/test-real-dune-registrations.sh	test/operations/apt_fallback.sh	declares	--only '^1:'
 tools/test-real-dune-registrations.sh	test/operations/ci_matrix.sh	declares	--only '^1:'
+tools/test-real-dune-registrations.sh	test/operations/harness_real_dune_legs.expected
+tools/test-real-dune-registrations.sh	test/operations/harness_real_dune_legs.expected	declares	-
 tools/test-real-dune-registrations.sh	tools/fleet-worker-candidates.sh
 tools/test-real-dune-registrations.sh	tools/harness-skips-ci-shell-dune.txt
 tools/test-real-dune-registrations.sh	tools/opam-env.sh

@@ -512,6 +512,10 @@ val await_within : t -> seconds:float -> bool
     Boundary: on [cc] a routine runs on the calling thread inside {!run}, so the device is idle here
     and nothing bounds {!run} itself. *)
 
+val align_timing_queue : t -> await:(unit -> unit) -> bool
+(** Backend preparation on the selected runner, for [Autotune.time_routine]. [await] must drain the
+    runner or raise. Returns whether preparation submitted work. *)
+
 val failure_classifier :
   t -> Ir.Schedule_outcome.phase -> exn -> Ir.Schedule_outcome.classified_cause option
 (** The backend's own failure classifier, for callers that wrap {!run} / {!sync} in
@@ -1007,6 +1011,13 @@ val probe_link_floor :
 val global_debug_info : t -> Sexp.t
 (** The context's backend's process-wide debug information ([Sexp.message]-shaped, backend-specific:
     e.g. the CUDA and HIP backends' [live_streams] and [live_graph_execs]). *)
+
+type merge_slab_state = { has_slab : bool; has_location : bool; capacity : int; has_writer : bool }
+[@@deriving sexp_of, equal]
+
+val merge_slab_state : t -> merge_slab_state
+(** Inspects the four ownership claims of the context's device's reserved merge slab: private table
+    claim, published location, recorded byte capacity, and active writer marker. *)
 
 val release : t -> unit
 (** Eagerly frees the device buffers this context owns — the pools holding nodes it allocated that

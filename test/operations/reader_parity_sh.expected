@@ -1,0 +1,11 @@
+reader_parity_sh.fixture
+probe_hash closes +0
+probe_comment closes +2
+probe_nested closes +0
+probe_redirect closes +3
+probe_spaced_redirect closes +3
+heredoc 23..24 quoted spliced
+heredoc 27..28 quoted unspliced
+heredoc 31..32 unquoted unspliced
+heredoc 34..35 unquoted unspliced
+heredoc 36..36 quoted unspliced

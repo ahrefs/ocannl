@@ -85,10 +85,11 @@ not-executed -- no claim is about executed values: fixtures, codegen text, host 
 
 Test sources with bitwise equality subjects:
 test/operations/autotune_grid_record.ml -- exact-operands: Ll_test.exact_partials derives the operands' sums exact at f32
-test/operations/autotune_seeded_seed.ml -- not-cc: the value claims hold only where CUDA or HIP seeds or splits; cc skips them
+test/operations/autotune_seeded_seed.ml -- not-cc: the value claims compare real untuned-plan candidates on GPU
 test/operations/bf16_local_scratch.ml -- no-contraction: the kernel moves, converts and zeroes values, and the packed uniform conversion contains no multiply-add
 test/operations/bf16_subnormal_storage.ml -- no-contraction: the legs copy, convert, add or halve; no product feeds an add
 test/operations/branchless_select.ml -- exact-operands: selects, adds and a pool gradient multiplying dyadic weights by one
+test/operations/cc_workgroup_shared_staging.ml -- exact-operands: dyadic small operands whose products and sums stay exact in f32
 test/operations/coalesce_numerics.ml -- not-cc: the executed bitwise claims are gated on a hardware grid, so cc skips them
 test/operations/codegen_text_scan_cases.ml -- not-executed: the bitwise text is fixture prose a codegen-text scan classifies
 test/operations/conv_family_tree.ml -- pinned off
@@ -125,6 +126,7 @@ test/operations/init_prec_follows_param.ml -- same-shape: both sessions execute 
 test/operations/integer_power_domain.ml -- pinned off
 test/operations/issue_calibration.ml -- not-executed: the bitwise claim compares two fill fits computed in OCaml over synthetic sweeps
 test/operations/lane_bounds_static.ml -- no-contraction: Threefry uniform draws and plain addition, no product feeding an add
+test/operations/layer_norm_param_grad_split.ml -- same-shape: on cc seeded_default neither sinks nor splits, so every untuned leg compiles the default plan
 test/operations/lineage_recompile_step.ml -- exact-operands: integer inputs, eighth-step weights and a dyadic rate stay exact for the three steps
 test/operations/masked_persistent_fragment.ml -- not-cc: executed claims need a GPU advertising an f16 tile; cc skips them
 test/operations/matmul_interchange.ml -- exact-operands: positive quarters and eighths with an explicit fma; every gradient sum is exact
@@ -134,6 +136,7 @@ test/operations/model_seeded_anchor.ml -- not-cc: the bitwise claim is gated on 
 test/operations/narrow_constant_rounding.ml -- no-contraction: compared kernels store literals, multiply by a folded constant, or exponentiate; no product feeds an add
 test/operations/narrow_conv_grad_residency.ml -- exact-operands: the dyadic products and all sums onto the incoming values fit the f32 significand.
 test/operations/narrow_grad_residency.ml -- exact-operands: a product of two multiples of 1/8 is representable in f32, so a fused multiply-add rounds where the separate operations do, and the twin's claim against the host shows its additions do not round either
+test/operations/narrow_reduction_split.ml -- same-shape: cc uses the ordinary pipeline with either split setting
 test/operations/narrow_scatter_residency.ml -- pinned off
 test/operations/narrow_storage_compute.ml -- pinned off
 test/operations/nonoverlap_pool_grads.ml -- exact-operands: small integer inputs and a unit loss gradient; every max, product and sum exact
@@ -154,7 +157,7 @@ test/operations/schedule_mma_matmul.ml -- exact-operands: dyadic or derived-exac
 test/operations/schedule_mma_scope_scratch.ml -- not-cc: every device bitwise claim is in a Metal-only leg; on cc it skips
 test/operations/schedule_pack_mma_matmul.ml -- exact-operands: dyadic cycles times integers make every product and sum exact
 test/operations/schedule_pad.ml -- gated: the non-dyadic serial-twin claim reads the kernel flags and the FMA ISA first
-test/operations/schedule_pipelined_matmul.ml -- not-cc: the bitwise legs need shared placement, which the C backends refuse
+test/operations/schedule_pipelined_matmul.ml -- exact-operands: dyadic small operands whose products and sums stay exact in f32
 test/operations/schedule_split_reduce.ml -- pinned off
 test/operations/scheme_strided_residual.ml -- same-shape: check and off build the same graph, so both arms compile the same kernel code and contract alike
 test/operations/scope_collapse_rounding.ml -- pinned off

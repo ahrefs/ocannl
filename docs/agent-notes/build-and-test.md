@@ -31,8 +31,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   of edit, not a subsystem: a config key, a dune stanza, a printed claim, an agent note, a new script
   or source file, an emitted-text pin, or a reference to a library value or type -- test-only edits
   included, since the scans read test sources, goldens and dune files as text (gh-ocannl-1431). The
-  focused aggregates `@metal-codegen` and `@lifecycle` are slices of the Metal-pinned tests and the
-  run/start lifecycle legs, not of the scans. For shell changes the second half of the batch is
+  focused aggregates `@metal-codegen`, `@lifecycle`, and `@routine-logging` select subsystem tests.
+  For a change to logged codegen, run `@routine-logging` on each affected backend (gh-ocannl-2177).
+  `env_var_deps` derives membership from literal Dune action settings, the configuration nearest
+  each run (including literal copies), and settings writes or computed flag prefixes in the test's
+  own OCaml modules. A logged producer reaches the aggregate through its test or golden-diff alias,
+  with the same Dune condition on the listing. The scanner's header specifies the input forms it
+  recognizes. For shell changes the second half of the batch is
   `tools/test-harnesses.sh --affected --since BASE` (gh-ocannl-1929): exactly the harness commands
   `affected --harnesses` prints (gh-ocannl-1900; a harness's `--only` selects its legs), under one
   slot and one footer, the command `prepush` closes with and does not run; `tools/test-harnesses.sh`
@@ -1251,10 +1256,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   at widths 1 and 4 and failed the pinned leg at both widths; the same subject
   exited 1 under `/bin/bash` 3.2 and 0 under Homebrew 5.3.
 - Under Bash 3.2, unsetting a function-local variable can uncover a caller's export
-  (gh-ocannl-2483). Use `env -u` at launch when a fixture needs the variable absent
-  from a child. Leg 125 of `tools/test-test-run-options.sh` supplies an outer record
-  even in ordinary CI. The local probe removes that variable at launch and keeps
-  the receipt link set to check that a link alone creates no receipt.
+  (gh-ocannl-2483, gh-ocannl-2504). Use `env -u` at launch when a fixture needs a variable absent
+  from a child. `tools/test-test-run-common.sh` unsets `FLEET_LEG_RUN_RECORD`,
+  `FLEET_LEG_RECEIPT_LINK`, and `FLEET_LEG_RECEIPT_DIR` at startup so ordinary legs never write
+  into an outer leg's receipt pointer; leg 125 of `tools/test-test-run-options.sh` supplies outer
+  exports for all three even in ordinary CI, clears the unwanted ones with `env -u` at launch, and
+  keeps a supplied `FLEET_LEG_RECEIPT_LINK` on the local probe to check that a link alone creates
+  no receipt.
 - A closed standard descriptor can be reopened before a shell script starts. On Linux,
   uutils `env` 0.10.0 reopened each of fd 0, 1 and 2 on `/dev/null` when the caller closed
   it (gh-ocannl-2401). For a Bash script that must preserve those descriptors, a `/bin/sh`
@@ -1467,6 +1475,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   order with `--shard K/N` (gh-ocannl-2353). `--list [--shard K/N]` prints that same candidate
   selection without launching a member. `tools/test-harness-legs-alone.sh` compares the
   shards with the unsharded fixture and checks that closed stdout makes the listing exit 1.
+  A failed run shows up to 40 lines (512 bytes per line) of captured stdout and stderr near
+  its first harness failure marker, or from the end when there is no marker (gh-ocannl-2389).
+  The fixture pins the compiler error after the Dune directory line amid noisy output,
+  including a UTF-8 character across the byte cap. The failure header names the complete log.
   `tools/harness-legs-alone.sh` uses the `/bin/sh` launcher pattern above (gh-ocannl-2401).
   `ci_matrix.sh` checks the workflow supplies every shard once and leaves siblings running
   after a failure. Run it locally, slot-wrapped,
@@ -1592,11 +1604,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   its leg's number in the selector if it is a new leg -- the job names the check it did not see
   pass. A nested run of a harness copy unsets the record variable with the others.
   `tools/test-real-dune-registrations.sh` enforces both registrations locally and in the merge
-  build: Leg 1 scans every manifest harness for live `harness_real_dune` calls and verifies exact
-  agreement with `real_dune_legs`, Leg 2 runs every discovered leg under
-  `OCANNL_TOOL_HARNESS_NO_DUNE=1` and holds the emitted hidden-dune skips equal to
-  `tools/harness-skips-ci-shell-dune.txt`, and Leg 3 pins dropped, stale, over-selected and
-  unattributed controls (gh-ocannl-2486).
+  build (gh-ocannl-2486). The `shell_scripts_parse` scan uses `Shell_context` to attribute live
+  calls in manifest members to their legs. The `runtest-harness_real_dune_legs` alias checks the
+  resulting `harness_real_dune_legs.expected` table (gh-ocannl-2511). Its paths include every
+  manifest member, including members without real-Dune legs. The toolchain-free harness checks
+  those paths against `--list` and the legs against `real_dune_legs`. It runs each discovered leg
+  separately under `OCANNL_TOOL_HARNESS_NO_DUNE=1` and holds the emitted hidden-dune skips equal to
+  `tools/harness-skips-ci-shell-dune.txt`. Its fixtures exercise the registry and runtime checks.
+- The `runtest-reader_parity_dune` and `runtest-reader_parity_sh` aliases feed the same fixtures to
+  the OCaml readers and `tools/affected-tests.sh --reader-dump`. The shell driver compares their
+  outputs, and Dune diffs one golden per alias. Add changes to their shared contract so either
+  reader changing on its own fails the alias.
 
 - The three gh-ocannl-2140 fixtures separate a response verdict from teardown
   and later publication. `wait_signal_race.py` keeps its five-second cancellation
@@ -1865,7 +1883,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   synchronized copies), with `pid_alive` beside it for one process (gh-ocannl-1383: a cancelled
   sweep unit, orphaned in a group of its own that the sweep's group check never sees, read as a
   survivor while it waited for its reaper; `sweep_harness` asks every "outlived" question through
-  it, and a failure prints the survivor's `ps` row, where `Z` names the misreading): `/proc` where
+  it, and a failure prints the survivor's `ps` row, where `Z` names the misreading; gh-ocannl-2066
+  later caught live `S`-state orphans with `PPID=1` from `tools/sweep-supervisor.sh` installing
+  `$SIG{INT/TERM/HUP}` after `fork()`, fixed by masking those signals across `fork()` with
+  `POSIX::setpgid` in both parent and child, pinned by `sweep_components.sh`'s `supervisor`
+  fixture): `/proc` where
   there is one (fork-free, through the shell's `read`), `ps -A -o pgid=,stat=` on the BSDs and
   macOS, degrading to the bare signal only where neither answers; the signal probe stays FIRST as a
   necessary condition, which makes the predicate a strict narrowing of the `kill -0` it replaced —
@@ -2951,15 +2973,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `.cmi` units. A compiler-reaching library
   sharing a directory is owned by its byte archives instead (gh-ocannl-2248): dune-resolved
   `ocamlfind` supplies the archive paths and dune-resolved `ocamlobjinfo` supplies their defined
-  units. For a shared-directory interface-only `.cmi`, the scan requires one dependency-minimal
-  archive importing the interface. If that importer depends on an archive-bearing library
-  sharing a directory containing the `.cmi`, the dependency could define the unit without
-  importing it (gh-ocannl-2289). A shared-directory import without a `requires` path to the
-  defining library can still credit the importer and produce a false unused finding for the
-  definer. Unresolved ownership refuses the referencing stanza before any
-  unused finding. This preserves `Parsetree` under common without crediting toplevel for its
-  imports. Definitions always take precedence over imported interfaces, including definitions from
-  an importer's co-located dependency outside the reporting scope.
+  units. A shared-directory interface-only `.cmi` needs one known directory and a sole
+  archive-bearing library that imports it. A co-located archive peer could supply the interface
+  without an import (gh-ocannl-2289), without an edge from the importer (gh-ocannl-2339), or
+  while itself importing the interface downstream. A findlib control builds an independent
+  definer and importer in a private prefix and checks Dune's graph, the archive imports and
+  refusal of the referencing stanza. A second scanned directory carrying the same interface name
+  also causes refusal, even if it is private to one library. The typed tree supplies only a unit
+  name. Within one directory, exact archive definitions take precedence, including those from
+  peers outside the reporting scope. OCaml's Makefile puts `parsing/parsetree.mli` in `ocamlcommon_SOURCES`, so the scan
+  attributes `Parsetree` in the Dune-resolved compiler's own `compiler-libs` directory to
+  `compiler-libs.common`. Unresolved ownership refuses the referencing stanza before any unused
+  finding.
   An archive-less package owns no units; a failed query or
   unreadable archive refuses without falling back to directory ownership. Shared local libraries
   refuse because findlib cannot resolve their archives and `@check` does not build them.
@@ -4082,6 +4107,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   otherwise miss. Membership, taint, the buffer destinations and the pin walk all go through
   the one resolver: rules that know different routes are how a file stays listed while its pin
   disappears.
+- **Module aliases exported by support modules are derived too** (gh-ocannl-2178): support modules
+  such as `Ll_builders` and `Lowering_fingerprint` export `module LL = Ir.Low_level`, and `Ll_test`
+  re-exports it through `include Ll_builders`. `Codegen_text_scan.support_module_aliases` derives
+  each library-owned support module's top-level module bindings to a fixed point across `include`s
+  and `open`s, filtered by any sibling `.mli` (keeping `.ml` exports conservatively on an opaque
+  `include` in `.mli`), so `scope_of` resolves aliases reached via `open`/`include` or dotted paths
+  (`Ll_builders.LL.to_doc`) for attribution and `rejections` alike. Nested module aliases inside
+  `module Sub = struct ... end` and local `open struct ... end` stay outside its closed boundary.
 - **Module aliases and literal `let`s resolve by lexical scope** (gh-ocannl-1079), over
   `Lexical_scope`, the model `ll_test_scan` resolves over too: a qualifier or a fragment's name
   reaches the binding in scope where it is spelled. File-wide lookup failed silently both ways:
@@ -4572,6 +4605,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     and scans tier. First-tier readers keep their ordinary
     verification requirements. Delimiter changes that hide or expose code and files with quoted
     forms outside the lexical reader's boundary keep the ordinary reach.
+    The source lexer recognizes ASCII quoted expressions and items (`{%ext|…|}` and
+    `{%%ext tag|…|tag}`, gh-ocannl-2513). It marks even blank lines in their payloads as code
+    and keeps quote contents inside OCaml comments inert. The lexer records quoted continuation
+    lines separately so payload text can contribute names without splitting a definition.
+    The `comment-only library reach and merge plan` harness leg pins a blank payload insertion's
+    named reader and a nearby comment edit's compile-and-scans fallback. The `helper definitions`
+    leg pins a named helper's reference after a payload line that resembles a binding.
     The machine-readable form is the trailer (gh-ocannl-1921): whenever the list is printed, the
     last line of stderr is `affected: verdict=V`, V one of `ok`, `cross-cutting`, `incomplete`
     (a changed path is UNMAPPED, exit 3) or `cross-cutting,incomplete`. A caller reads that line,
@@ -5164,15 +5204,21 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   normal. Each MODULE of a package stand-in is held to its own library as well, since under
   `implicit_transitive_deps false` `cudajit.cuda` does not make `Nvrtc` visible: the scan reads the
   copied sources' parse trees for the stand-in modules they name, and maps each module to the one
-  library its `runtest-<module>` agreement rules gate on (`%{lib-available:…}`), so a new stub
-  module gets its library from its agreement rule (a module with none would stand for the whole
-  package; the census golden lists the map). A hand-written stub interface, which has no installed
+  library its `runtest-<module>` agreement rules gate on (`%{lib-available:…}`). The scan refuses
+  a module with no agreement alias, as pinned by the synthetic `Extra` control (gh-ocannl-2357).
+  The census golden lists the map. A hand-written stub interface, which has no installed
   copy to diff, gets a signature check on its agreement alias instead (`runtest-runtime` for metal's
   `Runtime`, `runtest-hip_ffi` for hipjit's `Hip_ffi`), so it is mapped like the rest. Two
-  consequences for whoever edits the tree. Keep ONE stand-in library per genuine stanza: a library
-  compiling modules of two is held to both, which is why each `typecheck/` compiles its `context`
-  arm in a `<backend>_backend_impl_arm` of its own, and Metal's `metal_math_api_runtime` in a
-  `_stub_check` of its own. And declare only what the genuine stanza declares: a package reached
+  consequences for whoever edits the tree. Keep ONE stand-in library per genuine stanza and per
+  `select` arm (gh-ocannl-2338): a library compiling modules of two stanzas is held to both, and
+  each arm is held only to its genuine stanza's unconditional libraries plus its own `select`
+  condition (never a sibling alternative or another `select` of the same stanza; a non-arm companion
+  helper compiled alongside a single arm shares that arm's condition for the stand-in's library
+  list while its own source stays held to unconditional libraries only), which is why each
+  `typecheck/` compiles its `context` arm in a `<backend>_backend_impl_arm` of its own, Metal's
+  `metal_math_api_runtime` in a `_stub_check` of its own, and multi-select tools (`fp8_soak`,
+  `vendor_idents`) put each arm in its own stand-in library checked against a `.mli` interface. And
+  declare only what the genuine stanza declares: a package reached
   through a backend needs no stand-in of its own (under `implicit_transitive_deps false` its types
   resolve through the backend's hidden include), so a
   library listing one is refused even where nothing uses it. A library the stand-in needs only
@@ -5564,8 +5610,16 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   usage error. Every dune step saves combined output under explicit `shell: bash` (pipefail);
   its failure listing repeats the saved host through the same `ci-failed-rules.sh --host` path.
   `ci_matrix.sh` checks the shared save path, probe executable and configuration directory,
-  release profile and log capture using the shared step/command readers. It executes the
-  failure listing against both reachable states: build log alone, and build log plus host.
+  release profile and log capture using the shared step/command readers. Both `ci-env.yml` and
+  `ci.yml` keep the probe nonblocking (`continue-on-error: true`, `id: host-caps`) and follow it
+  with `Verify the host probe saved a host line` (`tools/ci-failed-rules.sh --github --check-host
+  --host "$RUNNER_TEMP/host-caps.txt" --host-probe "$HOST_PROBE_OUTCOME"`, gh-ocannl-2120): the
+  default `success()` condition skips it on an earlier failure while still running after a failed
+  nonblocking probe, emitting `no host line (probe failed)` and a `::warning` annotation while
+  exiting 0 whenever the probe ran without saving a valid `OCANNL host:` line. `List the failed
+  dune rules` forwards `--host-probe` with a `skipped` fallback so triage reads `no host line
+  (probe failed)` separately from `no host line (probe never ran)`; `tools/test-ci-failed-rules.sh`
+  and `ci_matrix.sh` cover all reachable states and mutants.
 
 ### opam and caches in CI
 
@@ -5836,7 +5890,10 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   earlier UTC day: a hit refreshes its entry's mtime, which the census's 30-day expiry reads, and
   a snapshot nothing re-saves keeps the old ones. Saving every run had left 159 entries, 5.3 of the
   repository's 10.7 GB of caches, most of them pull-request-scoped (staging#1464 first saw the
-  repository over its 10 GB). The job log's `cc census listings:` line says which way it went.
+  repository over its 10 GB). The save decision requires the restored listing step to succeed
+  (gh-ocannl-2121). With a complete baseline, a later failed build can still save. When the
+  decision runs, the `cc census listings:` line records its result. The `census-save` leg of
+  `test/operations/ci_matrix.sh` exercises the workflow condition for early and late failures.
 - `gh-pages-api.yml` runs for pull requests and `workflow_dispatch` as well as pushes to master, but
   only a push deploys; validation runs receive their own concurrency group and exercise the build
   and cache topology without publishing. Both Pages workflows split a push run into `build` and
@@ -6146,10 +6203,12 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `tools/test-run.sh run` writes `FLEET_LEG_RUN_RECORD` into the receipt, registers the finished
   receipt directory through `FLEET_LEG_RECEIPT_LINK` (saving `fleet-leg-command` only for an
   explicit spaced `run --expect-backend cc` request), and unsets the `FLEET_LEG_*` receipt
-  variables for child processes. `tools/owed-run.sh leg-record` prefers `FLEET_LEG_RECEIPT_DIR`
-  (never falling back to `last` when set), so wrappers setting a private `OCANNL_TOOL_TEST_RUNS`
-  publish automatically; it falls back to the worktree's `last` pointers only when
-  `FLEET_LEG_RECEIPT_DIR` is unset. The hook compares the leg's temporary run-record path to
+  variables for child processes. `tools/owed-run.sh leg-record` reads `FLEET_LEG_RECEIPT_DIR`
+  (never falling back to `paths run last` or the worktree's `linux-shell` pointer, gh-ocannl-2504),
+  so wrappers setting a private `OCANNL_TOOL_TEST_RUNS` publish automatically while legs that
+  registered no receipt (such as `dune`, benchmarks, or `repeat`/`fresh`) log `recorded nothing (no
+  receipt registered for this leg)` instead of `record refused`. The hook compares the leg's
+  temporary run-record path to
   `fleet-leg-run-record` and requires the receipt's SHA to match the observed SHA and the current
   checkout, rejecting earlier receipts even for the same head and command. Its requested and
   effective commands must both be allowlisted and cover the same targets. Validly bound, clean,
@@ -6201,7 +6260,7 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `--dune` aliases through `tools/test-run.sh run --expect-backend cc build` and `--harness`
   (`tools/test-harnesses.sh --member`) or `--all-harnesses`, rejects any harness member with 0
   `PASS` checks or an unexpected `SKIP`, and writes an `os=Linux` receipt outside the worktree that `tools/owed-run-report.sh`
-  (`tools/owed-run.sh leg-record`, via `FLEET_LEG_RECEIPT_DIR` or its per-worktree pointer)
+  (`tools/owed-run.sh leg-record`, via `FLEET_LEG_RECEIPT_DIR`)
   publishes as `owed-run: v2 linux-shell ... os=Linux ... targets=...`. A `v2 run` record carries
   no OS attestation and never satisfies `linux:*` needs, and a `linux-shell` record never
   satisfies `runtest` or `train`.
@@ -7350,6 +7409,41 @@ merged whether or not anyone ran it. `tools/owed-run.sh`'s header is the boundar
   `*.verdict-records` copies. Records from a commit predating the records, or with a malformed
   hatched record, refuse the aggregation (exit 2, `post-run-failed`), as the skip aggregator does.
 
+- **Coverage streaks across consecutive sweeps** (gh-ocannl-2424): a single-night skip or bypass
+  can come from a box outage or contended host, while the same coverage gap persisting across
+  several sweeps is coverage that silently stopped. `tools/sweep-streaks.sh` compares chronological
+  saved `*-skip-coverage.txt` and `*-bypass-rates.txt` reports (fail-closed against both
+  aggregators' output grammars, accepting legacy pre-environment skip reports with the environment
+  dimension unjudged; exit 0 clear/not-checked, 1 alert, 2 CLI/I/O error or malformed current
+  report, 3 malformed older historical report under `--up-to STAMP`) and flags trailing streaks of
+  length `>= N` with default **`N = 3` consecutive judged reports** (`--min-streak N` /
+  `OCANNL_TOOL_SWEEP_STREAK_MIN`, integer `>= 2`; single-report and two-report runs stay unreported
+  at the default). Note that `N` counts saved reports in each family, not calendar nights:
+  bypass-rate reports are written by every unscoped sweep (daily, so `N = 3` is ~3 nights), while
+  skip-coverage reports are written only by forced unscoped sweeps (weekly on Sundays, so `N = 3` is
+  ~3 forced sweeps / ~3 weeks at the current cadence), and same-day reruns each write a report and
+  count as one sweep in that family's sequence (not collapsed by UTC date). The four tracked
+  streaks are: (1) a claim `FAIL`-skipped on every box (`every declared box` and `every required
+  sweep box` normalized together so streaks spanning `--unswept-box` adoption do not split), (2) a
+  claim `FAIL`-skipped on every known backend, (3) a unit at 100% bypass (`B == R && C == 0` on
+  exact counts, never the rounded percentage, so `199 of 200 (100%), 1 checked` clears), and (4) a
+  claim listed as `UNVERIFIED` across all units that reached it. Inconclusive reports (`partial`
+  skip reports that still list the claim in `POTENTIAL`, `insufficient`/`unavailable`/`NOT
+  AGGREGATED` reports, or bypass reports where a unit reached no hatched claims or was absent)
+  neither advance nor clear an ongoing streak, whereas positive evidence (`PASS`, a `partial` skip
+  report whose `POTENTIAL` omits the claim, `C > 0` checked on the unit, or a hatched-reaching
+  bypass report whose `UNVERIFIED` set omits the claim) resets the streak; a streak alerts only when
+  the latest report itself is a hit. `tools/sweep.sh` runs `tools/sweep-streaks.sh` after publishing
+  the run's skip and/or bypass reports (checking only the report family or families written by that
+  run, up to `$stamp`), writes `logs/<stamp>-streaks.txt`, and quotes `coverage streaks:` plus each
+  indented `STREAK:` line on stdout (and `sweep: coverage streaks ALERT` on stderr) without failing
+  the sweep; a malformed older historical report (exit 3) prints `coverage streaks: NOT CHECKED --
+  malformed history (...)` and a stderr warning without rewriting the run record to
+  `post-run-failed`, while a malformed report from the current `$stamp` or a broken checker (exit 2)
+  still fails post-run. **Who reads the notice**: the scheduled sweep routine reads the `STREAK:`
+  findings and files or updates **one standing issue per streak** (the way CI-red records are
+  filed), and the **CI-red triage routine** reads those standing issues.
+
 - Floor/native-PTX runtime-refusal signatures have one owner, `tools/environment-refusals.sh`
   (gh-ocannl-2219). It reads only its allowlisted uncaught exceptions/statuses and named runtime
   assertion; the floor still combines that with its collected kernel window and serial recovery.
@@ -8016,7 +8110,7 @@ box.
   `model_issue_rate`, `model_mma_rate`, `model_multiprocessors`, `model_peak_flops`,
   `model_peak_memory_bandwidth`, `model_peak_mma_bf16`, `model_peak_mma_f16`, `model_peak_mma_fp8`,
   `model_peak_mma_tf32`, `model_shared_load_rate`, `model_staged_copy_rate`,
-  `model_transaction_rate`, `model_workgroup_bytes_per_multiprocessor`.
+  `model_staged_idle_rate`, `model_transaction_rate`, `model_workgroup_bytes_per_multiprocessor`.
 - `c_syntax.ml`: `cc_grid_private_bytes_cap`, `schedule_log_declines`.
 - `context.ml`: `debug_fill_fresh_outputs`.
 - `cc_backend.ml`: `cc_backend_arch_flags`, `cc_backend_compiler_command`,

@@ -752,7 +752,8 @@ type grid_serial_reason =
           would race across chunks. *)
   | Grid_local_accessed_outside of string
       (** This local is written grid-variantly (it fails the shared rule) and is also accessed
-          outside the loop body (it fails the privatization rule). *)
+          outside the outermost [Grid] loops binding this symbol (it fails the privatization rule).
+      *)
   | Grid_local_not_covering of string
       (** This local fails the shared rule, and its first access per iteration is not a standalone
           covering write (it fails the privatization rule). *)
@@ -762,7 +763,8 @@ type grid_serial_reason =
           ({!per_chunk_private_bytes_cap}). *)
   | Grid_below_min_updates of { updates : int; floor : int }
       (** The launch's estimated scalar updates ({!grid_update_count}, saturating at [floor]) fall
-          below [floor], the resolved [cc_grid_min_updates]. *)
+          below [floor], the resolved [cc_grid_min_updates] (for a multi-occurrence symbol group,
+          every multi-trip occurrence in the group fell below [floor]). *)
   | Grid_offset_range of { from_ : int; to_ : int }
       (** The loop does not start at 0, which the chunked rendering assumes. *)
 [@@deriving sexp_of, equal]
@@ -1256,8 +1258,9 @@ module type C_syntax_config = sig
       [.z]. *)
 
   val barrier_syntax : string option
-  (** Workgroup barrier statement ([__syncthreads();] / [threadgroup_barrier(...);]); [None] makes
-      [Workgroup_barrier] a compile-time error (serialization cannot implement a barrier). *)
+  (** Workgroup barrier statement ([__syncthreads();] / [threadgroup_barrier(...);]); [None] selects
+      serial barrier-fission lowering ({!Low_level.serialize_workgroup_barriers}) in [compile_proc]
+      instead of emitting a hardware barrier statement. *)
 
   val async_copy : async_copy_syntax option
   (** gh-ocannl-487 phase 2: asynchronous global→workgroup-shared copies (CUDA [cp.async]) for the
@@ -1290,7 +1293,8 @@ module type C_syntax_config = sig
 
   val shared_decl_prefix : string option
   (** Declaration prefix for workgroup-shared placements ([__shared__ ] / [threadgroup ]); [None]
-      makes a non-empty [workgroup_shared] set a compile-time error. *)
+      declares workgroup-shared tiles as plain block-scope (or heap-spilled) arrays under serial
+      barrier-fission lowering ({!Low_level.serialize_workgroup_barriers}, gh-ocannl-678). *)
 
   val compiler_contraction_off : unit -> bool
   (** Whether this backend's kernel compile is pinned so its compiler never contracts a [a * b + c]
@@ -3726,12 +3730,22 @@ module C_syntax (B : C_syntax_config) = struct
 
   let serial_scratch_ident = "ocannl_serial_scratch"
 
+  (* gh-ocannl-678: per-workgroup shared-tile byte poisoning emitted under serial workgroup
+     lowering, harvested into [ident_blacklist] so a tensor labeled [memset] cannot shadow it. *)
+  let shared_poison_line ~ident ~total_bytes =
+    Printf.sprintf "memset(%s, 0xff, %d);" ident total_bytes
+
+  let shared_poison_idents = extract_idents (shared_poison_line ~ident:"?" ~total_bytes:0)
+
   let ident_blacklist =
     B.ident_blacklist
     @ op_syntax_idents ~ternop_syntax:B.ternop_syntax ~binop_syntax:B.binop_syntax
         ~unop_syntax:B.unop_syntax ~vec_unop_syntax:B.vec_unop_syntax
         ~convert_precision:B.convert_precision
     @ (if B.heap_local_arrays then heap_local_idents ~typ:(B.typ_of_prec Ops.single) else [])
+    @ (if Option.is_none B.shared_decl_prefix || Option.is_none B.barrier_syntax then
+         shared_poison_idents
+       else [])
     (* A node declared under a predefined macro is expanded, not declared (gh-ocannl-1338). *)
     @ system_macro_idents
 
@@ -4678,10 +4692,13 @@ module C_syntax (B : C_syntax_config) = struct
             rendering (docs/design/gh-ocannl-164.md), identified by index symbol. Empty unless
             [B.parallel_grid_syntax] renders in parallel. *)
     current_grid_private : Tn.t list Map.M(Indexing.Symbol).t ref;
-        (** Set by [compile_proc] alongside [current_parallel_grid]: per eligible [Grid] loop, the
-            [Local]-placement tnodes privatized to per-chunk block-scope declarations inside that
-            loop's chunk body (gh-ocannl-469: in-kernel packed operand tiles under a pool-parallel
-            Grid). These are excluded from [compile_proc]'s function-scope [local_decls]. *)
+        (** Set by [compile_proc] alongside [current_parallel_grid]: per eligible [Grid] symbol, the
+            [Local]-placement tnodes privatized to per-chunk block-scope declarations inside the
+            outermost [Grid] loops binding that symbol (gh-ocannl-469, gh-ocannl-2324: in-kernel
+            packed operand tiles and masked fragments, including across sibling segments of a
+            [Schedule.Partition] or [full_block_split]). Each loop declares only the subset its own
+            body accesses; all of them are excluded from [compile_proc]'s function-scope
+            [local_decls]. *)
     current_local_ptr_alias : Set.M(Tn).t ref;
         (** Set by [compile_proc] alongside [current_parallel_grid]: [Local]-placement tnodes kept
             at function scope but accessed inside a pool-parallel Grid loop rendered as a
@@ -6296,14 +6313,18 @@ module C_syntax (B : C_syntax_config) = struct
      hazard analysis (mere mention is not enough, e.g. a stencil write [tmp[i]] + read [tmp[i-1]]
      both mention [sym] but reach across iterations). Distinct iterations then touch disjoint cells
      of one function-scope array. - Privatization rule: ALL of the node's accesses in the kernel sit
-     inside this loop's body, and its first access per iteration is a standalone covering write -- a
+     inside the outermost [Grid] loops binding [sym] (gh-ocannl-2324: [Schedule.Partition] and
+     [full_block_split] copy a [Grid] loop body without renaming its symbol), and in each such loop
+     body accessing the node, its first access per iteration is a standalone covering write -- a
      whole-array rewrite that completes before any other access to it executes (the write-dominance
-     check of [first_access_standalone_covering]) -- so no value flows between iterations and each
-     chunk can own a block-scope copy. This is what in-kernel packing [Stage] tiles satisfy
-     (gh-ocannl-469): the pack nest fully rewrites the tile before the micro-kernel reads it. The
-     combined per-chunk footprint of every privatized local is capped by
-     [per_chunk_private_bytes_cap], checked once the whole footprint is known, so a decline states
-     it (gh-ocannl-1668).
+     check of [first_access_standalone_covering]) -- so no value flows between iterations or across
+     sibling loops and each chunk can own a block-scope copy. This is what in-kernel packing [Stage]
+     tiles and statement-site masked fragments satisfy (gh-ocannl-469, gh-ocannl-2324). Locals in
+     [force_privatize] were privatized by a sibling loop binding [sym] and therefore have no
+     function-scope declaration: they must pass the privatization rule here too instead of taking
+     the shared rule. The combined per-chunk footprint of every privatized local in this loop is
+     capped by [per_chunk_private_bytes_cap], checked once the whole footprint is known, so a
+     decline states it (gh-ocannl-1668).
 
      Under [`Dispatch] (the blocks extension), a block cannot refer to a declaration with an array
      type at all -- even read-only -- but it captures pointers by value, so every non-privatized
@@ -6311,10 +6332,11 @@ module C_syntax (B : C_syntax_config) = struct
      ([current_local_ptr_alias]). [Set_local] scope locals must have their declaration within the
      loop body (block scope = per-chunk storage). Opaque statements and barriers disqualify.
 
-     Returns [Ok (privatized, ptr_aliased, private_bytes)] when the loop can render in parallel, and
-     otherwise the first rule that failed. *)
+     Returns [Ok (privatized, ptr_aliased, shared, private_bytes)] when the loop can render in
+     parallel, and otherwise the first rule that failed. *)
   let parallel_grid_safe ctx ~sym ~grid_range ~(global_counts : int Hashtbl.M(Int).t)
-      (body : Low_level.t) : (Tn.t list * Tn.t list * int, grid_serial_reason) Result.t =
+      ~(group_counts : int Hashtbl.M(Int).t) ~(force_privatize : Set.M(Tn).t) (body : Low_level.t) :
+      (Tn.t list * Tn.t list * Set.M(Tn).t * int, grid_serial_reason) Result.t =
     let mentions_comp = Indexing.axis_index_mentions_symbol sym in
     let loop_ident = Indexing.symbol_ident sym in
     let locals : grid_local_info Hashtbl.M(Int).t = Hashtbl.create (module Int) in
@@ -6352,7 +6374,7 @@ module C_syntax (B : C_syntax_config) = struct
             escaped_scope := true));
     if not !ok then Error (if !opaque then Grid_opaque_body else Grid_scope_local_escapes)
     else
-      let privatized = ref [] and ptr_aliased = ref [] in
+      let privatized = ref [] and ptr_aliased = ref [] and shared = ref (Set.empty (module Tn)) in
       let failed = ref None in
       let private_bytes = ref 0 in
       (* The box environment for the affine conflict query: the Grid loop itself plus every loop
@@ -6394,56 +6416,61 @@ module C_syntax (B : C_syntax_config) = struct
                ([Same_thread]) or be disjoint outright — which also admits patterns the agreement
                rule could only decline (constant-offset or strided-disjoint cells). *)
             let shared_ok =
-              (not info.gl_written)
-              ||
-              (* The coordinate view (gh-ocannl-1162): a vector store's run is stated to the view,
-                 never written into the map as a placeholder. *)
-              let dims = Lazy.force info.gl_tn.Tn.dims in
-              let interp (kind, idcs) =
-                match kind with
-                | `Whole -> None
-                | `Exact -> Some (Affine.view ~dims idcs)
-                | `Vec length ->
-                    if Array.is_empty idcs then None
-                    else Some (Affine.view ~range ~vec:(Affine.Run length) ~dims idcs)
-              in
-              let witness = ref "" in
-              let q =
-                List.for_all info.gl_accs ~f:(fun (wx, kx, mx) ->
-                    List.for_all info.gl_accs ~f:(fun (wy, ky, my) ->
-                        (not (wx || wy))
-                        ||
-                        match (interp (kx, mx), interp (ky, my)) with
-                        | Some l, Some r -> (
-                            match
-                              Affine.pair_conflict ~left_range:range ~right_range:range
-                                ~dup_left:dup ~dup_right:dup
-                                ~pairs:[ (sym, sym) ]
-                                ~left:l ~right:r
-                            with
-                            | Affine.Disjoint | Affine.Same_thread -> true
-                            | Affine.Cross_thread wit ->
-                                witness := wit;
-                                false)
-                        | _ ->
-                            witness := "statically unknown cells (whole-node or dynamic access)";
-                            false))
-              in
-              Affine.crosscheck ~site:"cc pool-parallel shared rule"
-                ~context:(Tn.debug_name info.gl_tn ^ " under Grid loop " ^ loop_ident)
-                ~procedural_safe:procedural_shared_ok ~query_safe:q ~witness:!witness;
-              q
+              (not (Set.mem force_privatize info.gl_tn))
+              && ((not info.gl_written)
+                 ||
+                 (* The coordinate view (gh-ocannl-1162): a vector store's run is stated to the
+                    view, never written into the map as a placeholder. *)
+                 let dims = Lazy.force info.gl_tn.Tn.dims in
+                 let interp (kind, idcs) =
+                   match kind with
+                   | `Whole -> None
+                   | `Exact -> Some (Affine.view ~dims idcs)
+                   | `Vec length ->
+                       if Array.is_empty idcs then None
+                       else Some (Affine.view ~range ~vec:(Affine.Run length) ~dims idcs)
+                 in
+                 let witness = ref "" in
+                 let q =
+                   List.for_all info.gl_accs ~f:(fun (wx, kx, mx) ->
+                       List.for_all info.gl_accs ~f:(fun (wy, ky, my) ->
+                           (not (wx || wy))
+                           ||
+                           match (interp (kx, mx), interp (ky, my)) with
+                           | Some l, Some r -> (
+                               match
+                                 Affine.pair_conflict ~left_range:range ~right_range:range
+                                   ~dup_left:dup ~dup_right:dup
+                                   ~pairs:[ (sym, sym) ]
+                                   ~left:l ~right:r
+                               with
+                               | Affine.Disjoint | Affine.Same_thread -> true
+                               | Affine.Cross_thread wit ->
+                                   witness := wit;
+                                   false)
+                           | _ ->
+                               witness := "statically unknown cells (whole-node or dynamic access)";
+                               false))
+                 in
+                 Affine.crosscheck ~site:"cc pool-parallel shared rule"
+                   ~context:(Tn.debug_name info.gl_tn ^ " under Grid loop " ^ loop_ident)
+                   ~procedural_safe:procedural_shared_ok ~query_safe:q ~witness:!witness;
+                 q)
             in
             if shared_ok then (
+              shared := Set.add !shared info.gl_tn;
               (match B.parallel_grid_syntax with
               | `Dispatch -> ptr_aliased := info.gl_tn :: !ptr_aliased
               | `Openmp | `None -> ());
               true)
             else
               let all_inside =
-                match Hashtbl.find global_counts info.gl_tn.Tn.uid with
-                | Some total -> total = info.gl_count
-                | None -> false
+                match
+                  ( Hashtbl.find global_counts info.gl_tn.Tn.uid,
+                    Hashtbl.find group_counts info.gl_tn.Tn.uid )
+                with
+                | Some total, Some in_group -> total = in_group
+                | _ -> false
               in
               if not all_inside then (
                 failed :=
@@ -6470,15 +6497,24 @@ module C_syntax (B : C_syntax_config) = struct
       | Some why -> Error why
       | None when !private_bytes > cap ->
           Error (Grid_private_over_cap { private_bytes = !private_bytes; cap })
-      | None -> Ok (List.rev !privatized, !ptr_aliased, !private_bytes)
+      | None -> Ok (List.rev !privatized, !ptr_aliased, !shared, !private_bytes)
 
-  (* The outermost [Grid] loops safe to render in parallel, with each loop's privatized locals and
+  (* The outermost [Grid] loops safe to render in parallel, with each symbol's privatized locals and
      (under [`Dispatch]) the pointer-aliased function-scope locals. Nested [Grid] loops render
      serially inside a chunk (still correct: write coverage holds per grid index). Runtime kernel
      logging writes to a shared FILE, so parallel rendering is skipped under
      [debug_log_from_routines]. Every outermost [Grid] loop of two or more iterations the pool gate
      reaches is recorded in the Grid census, with the rule that kept it serial if one did
-     (gh-ocannl-1668). *)
+     (gh-ocannl-1668).
+
+     All outermost [Grid] loops binding one index symbol are judged as one unit (gh-ocannl-2324):
+     [Schedule.Partition] and [full_block_split] duplicate a [Grid] loop body without renaming its
+     symbol, and a privatized local is omitted from function-scope declarations, so either every
+     occurrence binding the symbol renders on the pool (each declaring its own chunk-private copy)
+     or none does. Soundness and per-chunk footprint checks hold per occurrence; the launch floor
+     holds for the group when at least one multi-trip occurrence reaches [cc_grid_min_updates], so a
+     smaller sibling (e.g. a non-epilogue [k_full] segment or an asymmetric [full_block_split] copy)
+     cannot serialize a sibling that clears the floor. *)
   let collect_parallel_grid ctx (llc : Low_level.t) :
       Set.M(Indexing.Symbol).t * Tn.t list Map.M(Indexing.Symbol).t * Set.M(Tn).t =
     let empty =
@@ -6503,8 +6539,8 @@ module C_syntax (B : C_syntax_config) = struct
             :: !(ctx.grid_census)
       in
       (* Whole-kernel access counts per local, so [parallel_grid_safe] can tell when a local's
-         accesses all sit inside one loop's body (the privatization rule). Same traversal, so the
-         counts are comparable by construction. *)
+         accesses all sit inside the outermost [Grid] loops binding one symbol (the privatization
+         rule). Same traversal, so the counts are comparable by construction. *)
       let global_counts : int Hashtbl.M(Int).t = Hashtbl.create (module Int) in
       iter_local_accesses llc
         ~access:(fun ~write:_ ~kind:_ tn _ ->
@@ -6514,34 +6550,112 @@ module C_syntax (B : C_syntax_config) = struct
       let privs = ref (Map.empty (module Indexing.Symbol)) in
       let aliases = ref (Set.empty (module Tn)) in
       let floor = grid_min_updates () in
-      let rec go ~repeated (llc : Low_level.t) =
+      let occs_rev = ref [] in
+      let next_id = ref 0 in
+      let rec collect_occs ~repeated (llc : Low_level.t) =
         match llc with
-        | Low_level.For_loop { axis = Grid; index; from_; to_; body; _ } -> (
-            if from_ <> 0 && to_ > from_ then
-              record ~repeated index (Grid_serial (Grid_offset_range { from_; to_ }))
-            else if from_ = 0 && to_ >= 1 then
-              match
-                (parallel_grid_safe ctx) ~sym:index ~grid_range:(from_, to_) ~global_counts body
-              with
-              | Ok _ when floor > 0 && grid_update_count ~cap:floor llc < floor ->
-                  record ~repeated index
-                    (Grid_serial
-                       (Grid_below_min_updates { updates = grid_update_count ~cap:floor llc; floor }))
-              | Ok (privatized, ptr_aliased, private_bytes) ->
-                  record ~repeated index (Grid_pool { private_bytes });
-                  syms := Set.add !syms index;
-                  if not (List.is_empty privatized) then
-                    privs := Map.set !privs ~key:index ~data:privatized;
-                  aliases := List.fold ptr_aliased ~init:!aliases ~f:Set.add
-              | Error why -> record ~repeated index (Grid_serial why))
-        | For_loop { from_; to_; body; _ } -> go ~repeated:(repeated || to_ > from_) body
-        | If { body; _ } -> go ~repeated body
+        | Low_level.For_loop { axis = Grid; index; from_; to_; body; _ } ->
+            let id = !next_id in
+            Int.incr next_id;
+            occs_rev := (id, llc, index, from_, to_, body, repeated) :: !occs_rev
+        | For_loop { from_; to_; body; _ } -> collect_occs ~repeated:(repeated || to_ > from_) body
+        | If { body; _ } -> collect_occs ~repeated body
         | Seq (a, b) ->
-            go ~repeated a;
-            go ~repeated b
+            collect_occs ~repeated a;
+            collect_occs ~repeated b
         | _ -> ()
       in
-      go ~repeated:false llc;
+      collect_occs ~repeated:false llc;
+      let occs = List.rev !occs_rev in
+      let site_by_occ = Array.create ~len:!next_id None in
+      let group_order_rev = ref [] in
+      let groups = Hashtbl.create (module Indexing.Symbol) in
+      List.iter occs ~f:(fun ((_, _, index, _, _, _, _) as occ) ->
+          if not (Hashtbl.mem groups index) then group_order_rev := index :: !group_order_rev;
+          Hashtbl.add_multi groups ~key:index ~data:occ);
+      List.iter (List.rev !group_order_rev) ~f:(fun sym ->
+          let group_occs = List.rev (Hashtbl.find_exn groups sym) in
+          if List.exists group_occs ~f:(fun (_, _, _, from_, to_, _, _) -> to_ > from_) then (
+            let group_counts : int Hashtbl.M(Int).t = Hashtbl.create (module Int) in
+            List.iter group_occs ~f:(fun (_, _, _, _, _, body, _) ->
+                iter_local_accesses body
+                  ~access:(fun ~write:_ ~kind:_ tn _ ->
+                    if (is_local ctx) tn then Hashtbl.incr group_counts tn.Tn.uid)
+                  ~on_stmt:(fun _ -> ()));
+            let eval_occ ~force_privatize (_, _, _, from_, to_, body, _) =
+              if from_ <> 0 || to_ < from_ then Error (Grid_offset_range { from_; to_ })
+              else
+                (parallel_grid_safe ctx) ~sym ~grid_range:(from_, to_) ~global_counts ~group_counts
+                  ~force_privatize body
+            in
+            let results =
+              List.map group_occs ~f:(fun occ ->
+                  (occ, eval_occ ~force_privatize:(Set.empty (module Tn)) occ))
+            in
+            (* Cross-occurrence consistency: any local privatized by one occurrence leaves
+               function-scope declarations, so every sibling occurrence accessing it must also
+               privatize it (standalone covering write, counted in its chunk footprint). *)
+            let results =
+              if List.for_all results ~f:(fun (_, r) -> Result.is_ok r) then
+                let group_priv =
+                  List.fold results
+                    ~init:(Set.empty (module Tn))
+                    ~f:(fun acc (_, r) ->
+                      match r with
+                      | Ok (priv, _, _, _) -> List.fold priv ~init:acc ~f:Set.add
+                      | Error _ -> acc)
+                in
+                if Set.is_empty group_priv then results
+                else
+                  List.map results ~f:(fun (occ, r) ->
+                      match r with
+                      | Ok (_, _, shared, _) when not (Set.is_empty (Set.inter shared group_priv))
+                        ->
+                          (occ, eval_occ ~force_privatize:group_priv occ)
+                      | _ -> (occ, r))
+              else results
+            in
+            match
+              List.find_map results ~f:(fun (_, r) ->
+                  match r with Error why -> Some why | Ok _ -> None)
+            with
+            | None ->
+                let max_updates =
+                  if floor <= 0 then 0
+                  else
+                    List.fold group_occs ~init:0 ~f:(fun acc (_, stmt, _, from_, to_, _, _) ->
+                        if to_ > from_ then Int.max acc (grid_update_count ~cap:floor stmt) else acc)
+                in
+                if floor > 0 && max_updates < floor then
+                  List.iter results ~f:(fun ((id, stmt, _, from_, to_, _, _), _) ->
+                      if to_ > from_ then
+                        let updates = grid_update_count ~cap:floor stmt in
+                        site_by_occ.(id) <-
+                          Some (Grid_serial (Grid_below_min_updates { updates; floor })))
+                else (
+                  syms := Set.add !syms sym;
+                  let seen_priv = Hash_set.create (module Int) in
+                  let merged_priv_rev = ref [] in
+                  List.iter results ~f:(fun ((id, _, _, from_, to_, _, _), r) ->
+                      match r with
+                      | Ok (priv, ptr_aliased, _, private_bytes) ->
+                          List.iter priv ~f:(fun tn ->
+                              if not (Hash_set.mem seen_priv tn.Tn.uid) then (
+                                Hash_set.add seen_priv tn.Tn.uid;
+                                merged_priv_rev := tn :: !merged_priv_rev));
+                          aliases := List.fold ptr_aliased ~init:!aliases ~f:Set.add;
+                          if to_ > from_ then site_by_occ.(id) <- Some (Grid_pool { private_bytes })
+                      | Error _ -> assert false);
+                  let merged_priv = List.rev !merged_priv_rev in
+                  if not (List.is_empty merged_priv) then
+                    privs := Map.set !privs ~key:sym ~data:merged_priv)
+            | Some first_why ->
+                List.iter results ~f:(fun ((id, _, _, from_, to_, _, _), r) ->
+                    if to_ > from_ then
+                      let why = match r with Error why -> why | Ok _ -> first_why in
+                      site_by_occ.(id) <- Some (Grid_serial why))));
+      List.iter occs ~f:(fun (id, _, index, _, _, _, repeated) ->
+          Option.iter site_by_occ.(id) ~f:(record ~repeated index));
       (!syms, !privs, !aliases))
 
   (* gh-ocannl-1669: which of the [Local] arrays one scope declares go on the heap, given the bytes
@@ -6550,8 +6664,9 @@ module C_syntax (B : C_syntax_config) = struct
      an allocation per call would cost the most against -- in order of size, then of [tns], until
      the next would overflow the budget; that one and every larger array take the heap. Empty on a
      backend without [heap_local_arrays]. *)
-  let heap_locals ~budget (tns : Tn.t list) : Set.M(Tn).t =
-    let bytes tn = Tn.num_elems tn * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec) in
+  let heap_locals
+      ?(bytes = fun tn -> Tn.num_elems tn * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec))
+      ~budget (tns : Tn.t list) : Set.M(Tn).t =
     if not B.heap_local_arrays then Set.empty (module Tn)
     else
       List.mapi tns ~f:(fun k tn -> (bytes tn, k, tn))
@@ -7762,8 +7877,9 @@ module C_syntax (B : C_syntax_config) = struct
         | Some s -> string s
         | None ->
             invalid_arg
-              "C_syntax.pp_ll: Workgroup_barrier not supported by this backend (serialization \
-               cannot implement a barrier)")
+              "C_syntax.pp_ll: unexpected Workgroup_barrier on a backend without barrier_syntax \
+               (Low_level.serialize_workgroup_barriers must eliminate every barrier before \
+               rendering)")
     | Tile_mma { d; a; b; ta; tb; m; n; k; ldd; lda; ldb; lane; tile; fallback } -> (
         (* Cooperative tile-MMA (docs/design/tensorize-mma.md §4). Backends with an [mma_syntax]
            hook emit the intrinsic sequence on every lane; everywhere else (including per-call
@@ -8596,11 +8712,22 @@ module C_syntax (B : C_syntax_config) = struct
                (Printf.sprintf "const %s%s = %s + %d <= %d ? %s + %d : %d;" it hi lo grain extent lo
                   grain extent)
         in
-        (* Locals privatized to this loop (see [parallel_grid_safe]): block-scope arrays inside the
-           chunk body, one copy per chunk -- iterations rewrite them wholly before reading, so
-           per-chunk storage matches the serial semantics. Past the chunk's stack budget they are
-           heap arrays, one allocation per chunk, freed when the chunk ends (gh-ocannl-1669). *)
-        let privatized = Option.value ~default:[] (Map.find !(ctx.current_grid_private) i) in
+        (* Locals privatized to this loop's symbol (see [parallel_grid_safe]): block-scope arrays
+           inside the chunk body, one copy per chunk -- iterations rewrite them wholly before
+           reading, so per-chunk storage matches the serial semantics. Filtered to the locals this
+           occurrence's body actually accesses (exact when sibling copies of a symbol differ, e.g.
+           [full_block_split]). Past the chunk's stack budget they are heap arrays, one allocation
+           per chunk, freed when the chunk ends (gh-ocannl-1669). *)
+        let privatized =
+          match Map.find !(ctx.current_grid_private) i with
+          | None -> []
+          | Some all_priv ->
+              let body_locals = Hash_set.create (module Int) in
+              iter_local_accesses loop.body
+                ~access:(fun ~write:_ ~kind:_ tn _ -> Hash_set.add body_locals tn.Tn.uid)
+                ~on_stmt:(fun _ -> ());
+              List.filter all_priv ~f:(fun tn -> Hash_set.mem body_locals tn.Tn.uid)
+        in
         let heap = heap_locals ~budget:chunk_stack_locals_bytes privatized in
         let decls =
           let zero_init tn =
@@ -10729,7 +10856,7 @@ module C_syntax (B : C_syntax_config) = struct
   let compile_proc_units ?(avoid = []) ~name idx_params
       (Low_level.
          {
-           traced_store;
+           traced_store = _;
            llc;
            merge_node;
            optimize_ctx;
@@ -10745,14 +10872,15 @@ module C_syntax (B : C_syntax_config) = struct
          } as proc) :
       (string * kparam_source) list * PPrint.document list * string list * Low_level.launch_dims =
     let open PPrint in
-    (if not (Set.is_empty workgroup_shared) then
-       match B.shared_decl_prefix with
-       | Some _ -> ()
-       | None ->
-           (* The local-declaration pass below would silently emit workgroup-shared nodes as
-              per-thread stack arrays -- wrong sharing semantics. *)
-           invalid_arg
-             "C_syntax.compile_proc: workgroup-shared placement not supported by this backend");
+    (* gh-ocannl-678: backends without hardware workgroups/shared memory lower workgroup-shared
+       staging and explicit barriers to serial loop-fissioned C code rather than rejecting at
+       compile. Bare CPU [Tile_mma] schedules (including hoisted CPU register tiles in
+       [simdgroup_fragments] with no shared storage and no explicit barrier) stay on the CPU
+       fork-join path. *)
+    let serial_workgroup_staging =
+      (Option.is_none B.shared_decl_prefix || Option.is_none B.barrier_syntax)
+      && ((not (Set.is_empty workgroup_shared)) || Low_level.contains_explicit_barrier llc)
+    in
     (* gh-ocannl-686: the routine name reaches the emitted [void <name>(] verbatim, so it must
        already be a legal, non-reserved identifier. Mangling it HERE would leave the caller's symbol
        lookup and artifact names pointing at the pre-mangling spelling, so the caller owns the
@@ -10788,12 +10916,15 @@ module C_syntax (B : C_syntax_config) = struct
        constructs, and a [?prelowered] routine that never went through [optimize]. *)
     Low_level.validate_operand_precisions ~site:"C_syntax.compile_proc" llc;
     (* gh-ocannl-1238: with this backend's shuffle width, so the validator sees the barriers the
-       warp-shuffle and lane all-reduce renderings insert, not only the IR's own. *)
+       warp-shuffle and lane all-reduce renderings insert, not only the IR's own. Under
+       [serial_workgroup_staging], the hoisted grid/workgroup launch runs every top-level statement
+       per workgroup thread, so GPU write-coverage validation ([~fork_join:false]) applies. *)
     Low_level.validate_parallel_classified ~warp_size:B.warp_size
       ~reassociable:Online_softmax.reassociable_local
         (* gh-ocannl-1458: a backend binding no hardware [Grid] index renders each [Grid] loop as a
            joined pool dispatch (or a serial loop), so code outside [Grid] loops runs once. *)
-      ~fork_join:(Option.is_none (B.hardware_index ~kind:`Grid ~slot:0))
+      ~fork_join:
+        (Option.is_none (B.hardware_index ~kind:`Grid ~slot:0) && not serial_workgroup_staging)
       optimize_ctx.Low_level.placements llc;
     (* gh-ocannl-1887: past the gates, which judge what the caller built, and ahead of the render
        context, so that every analysis below reads the tree that renders. *)
@@ -10816,25 +10947,11 @@ module C_syntax (B : C_syntax_config) = struct
       llc;
     if !(scope_order_oracles_enabled ()) then
       scope_order_oracles () := (name, (oracle, llc)) :: !(scope_order_oracles ());
-    (* Launch-extent guards (construct-then-fold, axis-types proposal §2), only for kinds this
-       backend binds in hardware -- the serial fallback iterates the true extent. *)
-    let llc =
-      Low_level.guard_annotated_extents
-        ~should_guard:(fun kind -> Option.is_some (B.hardware_index ~kind ~slot:0))
-        llc
-    in
-    let launch = Low_level.launch_dims llc in
-    let ctx = create_render_ctx ~name { proc with llc } in
-    (refuse_unseparated_thread_write ctx)
-      ~site:"C_syntax.compile_proc: the hardware binding of the kernel's Grid/Workgroup axes"
-      ~deferred:!(ctx.current_deferred_lanes);
     (* gh-487 sanity: the rotation renders off the rotor loop's serial counter; a schedule that
        later retyped the rotor to a hardware axis would otherwise silently freeze the buffer
-       selection at copy 0 ([serial_loop_stack] only tracks serial loops). Typed for the same reason
-       as the read-position check in [pp_pipelined_rotation]: both say "this renderer cannot express
-       that pipelined tile", and a candidate composing its way into one is a decline, not a fatal
-       that ends the search around it. Like that one, the decline is [Schedule.pipeline_violation]'s
-       own typed reason. *)
+       selection at copy 0 ([serial_loop_stack] only tracks serial loops). Checked before serial
+       workgroup lowering eliminates hardware axes, so a non-Serial rotor still declines identically
+       on CPU and GPU. *)
     (if not (Map.is_empty pipelined) then
        let check_rotor index axis =
          Map.iteri pipelined ~f:(fun ~key:tn ~data:{ Low_level.pt_rotor; _ } ->
@@ -10860,6 +10977,37 @@ module C_syntax (B : C_syntax_config) = struct
          | _ -> ()
        in
        scan llc);
+    let proc, launch, grid_loops, minted_bound_names =
+      if serial_workgroup_staging then
+        let launch = Low_level.launch_dims llc in
+        let scope_prec = scope_prec_in ~accum_scope_ids in
+        let { Low_level.sw_proc; sw_grid_loops; sw_minted_tns } =
+          Low_level.serialize_workgroup_barriers ~scope_prec
+            ~set_local_value_prec:(fun id value ->
+              set_local_value_prec ~scope_prec:(scope_prec id) id value)
+            ~reassociable:Online_softmax.reassociable_local { proc with llc }
+        in
+        (sw_proc, launch, sw_grid_loops, List.map sw_minted_tns ~f:get_ident)
+      else
+        (* Launch-extent guards (construct-then-fold, axis-types proposal §2), only for kinds this
+           backend binds in hardware -- the serial fallback iterates the true extent. *)
+        let llc =
+          Low_level.guard_annotated_extents
+            ~should_guard:(fun kind -> Option.is_some (B.hardware_index ~kind ~slot:0))
+            llc
+        in
+        let launch = Low_level.launch_dims llc in
+        ({ proc with llc }, launch, [], [])
+    in
+    let { Low_level.traced_store; llc; optimize_ctx; workgroup_shared; _ } = proc in
+    let ctx = create_render_ctx ~name proc in
+    if not (List.is_empty grid_loops) then
+      ctx.current_loop_ranges :=
+        List.fold grid_loops ~init:!(ctx.current_loop_ranges) ~f:(fun env (sym, ext) ->
+            Affine.Loop_ranges.bind env sym (0, ext - 1));
+    (refuse_unseparated_thread_write ctx)
+      ~site:"C_syntax.compile_proc: the hardware binding of the kernel's Grid/Workgroup axes"
+      ~deferred:!(ctx.current_deferred_lanes);
     let ptr_params, params =
       derive_kparams ~llc ~traced_store ~placements:optimize_ctx.Low_level.placements
         ~alias_candidates:optimize_ctx.Low_level.alias_candidates ~merge_node ~idx_params
@@ -10963,19 +11111,38 @@ module C_syntax (B : C_syntax_config) = struct
        part to the next exactly as through a single rendering. Not under routine logging, whose
        [log_file] is a local of the kernel's own frame. *)
     let outlined_groups =
-      match B.outline_part_weight () with
-      | Some part when part > 0 && not (Utils.debug_log_from_routines ()) ->
-          Kernel_outline.groups ~part (Low_level.flat_lines [ llc ])
-      | _ -> None
+      if serial_workgroup_staging then None
+      else
+        match B.outline_part_weight () with
+        | Some part when part > 0 && not (Utils.debug_log_from_routines ()) ->
+            Kernel_outline.groups ~part (Low_level.flat_lines [ llc ])
+        | _ -> None
+    in
+    let shared_total_elems tn =
+      Tn.num_elems tn
+      *
+      match Map.find !(ctx.current_pipelined) tn with
+      | Some { Low_level.pt_depth; _ } -> pt_depth
+      | None -> 1
     in
     (* Render before declarations so accepted marked-fragment regions can suppress their otherwise
        dead scalar local arrays. Declining/debug paths leave the set empty and keep the arrays. *)
-    let main_logic_doc, part_docs =
-      match outlined_groups with
-      | None -> ((compile_main ctx) llc, [])
-      | Some groups ->
-          ( empty,
-            List.map groups ~f:(fun group -> (compile_main ctx) (Low_level.unflat_lines group)) )
+    let raw_main_doc, part_docs =
+      if serial_workgroup_staging then (
+        let saved_stack = !(ctx.serial_loop_stack) in
+        ctx.serial_loop_stack := List.rev_map grid_loops ~f:fst @ saved_stack;
+        let wg_doc =
+          Exn.protect
+            ~f:(fun () -> (pp_ll ctx) ~in_loop:(not (List.is_empty grid_loops)) llc)
+            ~finally:(fun () -> ctx.serial_loop_stack := saved_stack)
+        in
+        (wg_doc, []))
+      else
+        match outlined_groups with
+        | None -> ((compile_main ctx) llc, [])
+        | Some groups ->
+            ( empty,
+              List.map groups ~f:(fun group -> (compile_main ctx) (Low_level.unflat_lines group)) )
     in
     ctx.volatility_requested := B.volatile_serial_accumulation;
     if !(ctx.volatility_census_enabled) then
@@ -11014,13 +11181,52 @@ module C_syntax (B : C_syntax_config) = struct
                  && not (Set.mem !(ctx.unscoped_simdgroup_fragments) tn)))
             (tn, Hashtbl.find_exn traced_store tn))
     in
+    let main_logic_doc =
+      if serial_workgroup_staging then
+        (* Poison every declared workgroup-shared tile with 0xFF bytes (quiet NaN for every float
+           format, non-zero sentinel for integers) on entry to each workgroup: derived from
+           [declared] so the poisoned set cannot drift from the declared set (gh-ocannl-678). *)
+        let poison_docs =
+          List.filter_map declared ~f:(fun (tn, _) ->
+              if Set.mem workgroup_shared tn then
+                let total_bytes =
+                  shared_total_elems tn * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)
+                in
+                Some (string (shared_poison_line ~ident:(get_ident tn) ~total_bytes))
+              else None)
+        in
+        let inner_doc =
+          match poison_docs with
+          | [] -> raw_main_doc
+          | _ -> separate hardline poison_docs ^^ hardline ^^ raw_main_doc
+        in
+        List.fold_right grid_loops ~init:inner_doc ~f:(fun (sym, ext) body ->
+            group
+              (string ("for (" ^ B.loop_index_type)
+              ^^ pp_symbol sym ^^ string " = 0; " ^^ pp_symbol sym ^^ string " <= "
+              ^^ PPrint.OCaml.int (ext - 1)
+              ^^ string "; ++" ^^ pp_symbol sym ^^ string ") " ^^ lbrace
+              ^^ nest 2 (hardline ^^ body)
+              ^^ hardline ^^ rbrace))
+      else raw_main_doc
+    in
     let private_arrays =
       List.filter_map declared ~f:(fun (tn, _) ->
           Option.some_if (not (Set.mem workgroup_shared tn)) tn)
     in
-    (* gh-ocannl-1669: the thread-private ones past the function scope's stack budget are heap
-       arrays, freed after the main logic. *)
-    let heap = heap_locals ~budget:routine_stack_locals_bytes private_arrays in
+    (* gh-ocannl-1669: the function-scope arrays past the stack budget are heap arrays, freed after
+       the main logic. On backends without [shared_decl_prefix], workgroup-shared tiles are plain
+       function-scope arrays too and share the same stack budget. *)
+    let heap =
+      match B.shared_decl_prefix with
+      | Some _ -> heap_locals ~budget:routine_stack_locals_bytes private_arrays
+      | None ->
+          let bytes tn =
+            (if Set.mem workgroup_shared tn then shared_total_elems tn else Tn.num_elems tn)
+            * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)
+          in
+          heap_locals ~bytes ~budget:routine_stack_locals_bytes (List.map declared ~f:fst)
+    in
     (* A single private array left in a CUDA depot can still cost a copy per resident thread. Once
        the combined frame exceeds the budget, give all of its arrays device slices. *)
     let scratch_frame =
@@ -11055,36 +11261,63 @@ module C_syntax (B : C_syntax_config) = struct
            (fun (tn, node) ->
              let is_shared = Set.mem workgroup_shared tn in
              if is_shared then
-               (* Workgroup-shared placement (axis-types proposal §3): one tile per workgroup
-                  instead of one per thread. [= {0}] is not allowed for shared declarations, so
-                  zero-initialization stays as explicit [Zero_out] code (never elided for shared
-                  nodes; see [zero_out_loop_redundant]); shared placements otherwise keep the
-                  backend's default layout (no [aligned_local_attr]).
+               let total_elems = shared_total_elems tn in
+               let typ = B.typ_of_prec @@ Lazy.force tn.storage_prec in
+               match B.shared_decl_prefix with
+               | Some prefix ->
+                   (* Workgroup-shared placement (axis-types proposal §3): one tile per workgroup
+                      instead of one per thread. [= {0}] is not allowed for shared declarations, so
+                      zero-initialization stays as explicit [Zero_out] code (never elided for shared
+                      nodes; see [zero_out_loop_redundant]); shared placements otherwise keep the
+                      backend's default layout (no [aligned_local_attr]).
 
-                  A [Swizzle_b128] tile is the exception: its layout contract is stated in 16-byte
-                  units, and the warp-cooperative loads that consume it ([ldmatrix], gh-ocannl-481
-                  item 3) require every row-group address to be 16-byte aligned. Row starts are
-                  16-byte multiples by the [Stage] validation, so aligning the base is what makes
-                  all of them aligned. The GNU attribute spelling is understood by every compiler
-                  that has a shared address space here (nvcc, hipcc, MSL's clang). *)
-               (match (swizzle_of ctx) tn with
-                 | Some Low_level.Swizzle_b128 -> string "__attribute__((aligned(16))) "
-                 | Some Low_level.Swizzle_elem | None -> empty)
-               ^^ string (Option.value_exn ~here:[%here] B.shared_decl_prefix)
-               ^^ string (B.typ_of_prec @@ Lazy.force tn.storage_prec)
-               ^^ space
-               ^^ string (get_ident tn)
-               (* A pipelined tile is [pt_depth] rotating copies (gh-487); the accesses select the
-                  copy via [pp_pipelined_rotation]. [Schedule.check_hardware_limits] accounts the
-                  same multiplier. *)
-               ^^ brackets
-                    (OCaml.int
-                       (Tn.num_elems tn
-                       *
-                       match Map.find !(ctx.current_pipelined) tn with
-                       | Some { Low_level.pt_depth; _ } -> pt_depth
-                       | None -> 1))
-               ^^ semi ^^ hardline
+                      A [Swizzle_b128] tile or any rank >= 2 shared array whose non-power-of-two
+                      minor dim is a 16-byte multiple (bank-padded tiles such as 12/36/68 f32 as
+                      well as unpadded non-power-of-two 16B-multiple tiles such as 12/24/48 f32,
+                      gh-ocannl-1842) is the exception: row starts must stay 16-byte aligned for
+                      [ldmatrix] (gh-ocannl-481 item 3) and 128-bit [LDS.128] loads, whereas nvcc
+                      drops to element alignment on non-power-of-two shared arrays without the
+                      attribute. The GNU attribute spelling is understood by every compiler that has
+                      a shared address space here (nvcc, hipcc, MSL's clang). *)
+                   (match (swizzle_of ctx) tn with
+                     | Some Low_level.Swizzle_b128 -> string "__attribute__((aligned(16))) "
+                     | Some Low_level.Swizzle_elem -> empty
+                     | None ->
+                         let dims = Lazy.force tn.Tn.dims in
+                         let n = Array.length dims in
+                         if
+                           n >= 2
+                           &&
+                           let c = dims.(n - 1) in
+                           c > 0
+                           && c land (c - 1) <> 0
+                           && c * Ops.prec_in_bytes (Lazy.force tn.storage_prec) % 16 = 0
+                         then string "__attribute__((aligned(16))) "
+                         else empty)
+                   ^^ string prefix ^^ string typ ^^ space
+                   ^^ string (get_ident tn)
+                   (* A pipelined tile is [pt_depth] rotating copies (gh-487); the accesses select
+                      the copy via [pp_pipelined_rotation]. [Schedule.check_hardware_limits]
+                      accounts the same multiplier. *)
+                   ^^ brackets (OCaml.int total_elems)
+                   ^^ semi ^^ hardline
+               | None ->
+                   (* gh-ocannl-678: serial barrier-fission rendering on backends without a shared
+                      address space declares one plain block-scope (or heap-spilled) array per
+                      shared tile, poisoned on entry to each workgroup. *)
+                   if Set.mem heap tn then
+                     separate_map hardline string
+                       (heap_local_lines ~typ ~ident:(get_ident tn) ~elems:total_elems
+                          ~zero_init:false)
+                     ^^ hardline
+                   else
+                     (match (swizzle_of ctx) tn with
+                       | Some Low_level.Swizzle_b128 -> string "__attribute__((aligned(16))) "
+                       | Some Low_level.Swizzle_elem | None -> empty)
+                     ^^ string typ ^^ space
+                     ^^ string (get_ident tn)
+                     ^^ brackets (OCaml.int total_elems)
+                     ^^ semi ^^ hardline
              else
                let typ = local_array_type ctx tn in
                outlined_locals := (typ, get_ident tn) :: !outlined_locals;
@@ -11227,7 +11460,7 @@ module C_syntax (B : C_syntax_config) = struct
             ^^ hardline ^^ func_doc;
           ]
     in
-    (params, units, List.init (List.length part_docs) ~f:part_name, launch)
+    (params, units, List.init (List.length part_docs) ~f:part_name @ minted_bound_names, launch)
 
   let compile_proc ~name idx_params proc =
     let params, units, _, launch = compile_proc_units ~name idx_params proc in

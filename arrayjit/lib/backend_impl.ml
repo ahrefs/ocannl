@@ -155,16 +155,28 @@ module Make_slab (Device_types : Device_types) (Raw : No_device_buffer_and_copyi
 
   let alloc_pool ?mode:_ device ~pool_id ~size_in_bytes ~alignment:_ =
     let key = (device.device_id, pool_id) in
+    let old =
+      with_pools (fun () ->
+          (* The reserved merge pool is the only id replaced in place. Invalidate its complete
+             ownership transaction before the fallible free/allocation sequence: growth must not
+             require old+new bytes to fit simultaneously, and failure must leave no stale claim. *)
+          let old = Hashtbl.find pools key in
+          Option.iter old ~f:(fun _ ->
+              if Int.equal pool_id merge_buffer_pool_id then
+                invalidate_merge_slab device ~remove_slab_claim:(fun () -> Hashtbl.remove pools key)
+              else Hashtbl.remove pools key);
+          old)
+    in
+    (* Release [pools_mutex] before freeing, firing fault-injection callbacks, or allocating: a
+       callback may inspect [has_pool] / [Context.merge_slab_state] at the fault boundary without
+       re-entering the non-reentrant mutex. *)
+    Option.iter old ~f:(fun old -> Option.iter Raw.free_pool_raw ~f:(fun memfree -> memfree old));
+    if Int.equal pool_id merge_buffer_pool_id then
+      Resource_fault_injection.hit
+        ~artifact:(Merge_slab { device_id = device.device_id; size_in_bytes })
+        Merge_slab_before_allocate;
+    let ptr = Raw.alloc_pool_raw ~size_in_bytes in
     with_pools (fun () ->
-        (* The reserved merge pool is the only id replaced in place. Invalidate its complete
-           ownership transaction before the fallible free/allocation sequence: growth must not
-           require old+new bytes to fit simultaneously, and failure must leave no stale claim. *)
-        Option.iter (Hashtbl.find pools key) ~f:(fun old ->
-            if Int.equal pool_id merge_buffer_pool_id then
-              invalidate_merge_slab device ~remove_slab_claim:(fun () -> Hashtbl.remove pools key)
-            else Hashtbl.remove pools key;
-            Option.iter Raw.free_pool_raw ~f:(fun memfree -> memfree old));
-        let ptr = Raw.alloc_pool_raw ~size_in_bytes in
         if Int.equal pool_id merge_buffer_pool_id then
           commit_merge_slab device ~size_in_bytes ~install_slab_claim:(fun () ->
               Hashtbl.set pools ~key ~data:ptr)
@@ -183,6 +195,9 @@ module Make_slab (Device_types : Device_types) (Raw : No_device_buffer_and_copyi
             Option.iter (Hashtbl.find pools key) ~f:(fun ptr ->
                 Option.iter Raw.free_pool_raw ~f:(fun memfree -> memfree ptr));
             Hashtbl.remove pools key))
+
+  let has_pool device ~pool_id =
+    with_pools (fun () -> Hashtbl.mem pools (device.device_id, pool_id))
 
   let zero_ranges device ranges =
     List.iter ranges ~f:(fun ({ pool_id; offset }, size_in_bytes) ->
@@ -260,6 +275,7 @@ struct
   let get_name device = [%string "%{name}:%{device.ordinal#Int}:%{device.device_id#Int}"]
   let classify_failure _phase _exn = None
   let bounded_await = None
+  let align_timing_queue _device ~await:_ = false
   let thread_scratch_limit _device = None
 
   let make_context ?(ctx_buffers = Map.empty (module Tnode)) ?optimize_ctx device =

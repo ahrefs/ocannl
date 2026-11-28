@@ -7340,6 +7340,8 @@ let leg_gate_allowed_paths =
       "Ir.Backend_intf.select_blend_policy";
       "Ir.Backend_intf.simd_reduce_lanes_for";
       "Ir.Backend_intf.simd_vector";
+      "Ir.Backend_intf.sinks_untuned_reductions";
+      "Ir.Backend_intf.splits_untuned_reductions";
       "Ir.Backend_intf.supports_f64";
       "Ir.Backend_intf.with_select_blend";
       "Ir.Cuda_like_config.cuda_fast_math";

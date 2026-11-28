@@ -1,0 +1,36 @@
+# Named substitutions end before a trailing command. Both readers project
+# the close relative to its opener. The blank commands delimit the cases.
+probe_hash="$(printf '%s' foo\ #)"; :
+:
+probe_comment="$(# )
+  printf '%s' value
+)"; :
+:
+probe_nested="$(printf '%s' "$(echo word)"#)"; :
+:
+probe_redirect="$(case y in
+  x) >esac ;;
+  y) printf '%s' reached ;;
+esac)"; :
+:
+probe_spaced_redirect="$(case y in
+  x) > esac ;;
+  y) printf '%s' reached ;;
+esac)"; :
+:
+printf '%s' "double\
+quote" <<'DOUBLE'
+double heredoc
+DOUBLE
+printf '%s' 'single\
+quote' <<'SINGLE'
+single heredoc
+SINGLE
+: # A comment backslash does not swallow the next opener. \
+cat <<COMMENT
+comment heredoc
+COMMENT
+cat <<FIRST <<'SECOND'
+first heredoc
+FIRST
+SECOND

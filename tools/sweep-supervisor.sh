@@ -72,6 +72,12 @@ sq() { printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")"; }
 # systemd-inhibit gained it in v257 and Ubuntu 24.04's 255 rejects it; with pipes
 # for stdio there is no terminal to start a polkit agent on, so a denial is
 # immediate anyway.
+# INT, TERM and HUP are blocked across fork() and unblocked only after the child
+# is in its own process group (POSIX::setpgid in both child and parent) and the
+# handlers are installed: without the mask, a cancellation arriving between
+# fork() and `$SIG{TERM} = ...` kills the supervisor on SIG_DFL and orphans the
+# child in its own group (gh-ocannl-2066); without parent-side setpgid, a signal
+# pending across fork() could run `$reap` before the child calls setpgid(0, 0).
 capped_perl='
   use POSIX ();
   use Fcntl ();
@@ -79,27 +85,51 @@ capped_perl='
   if (@ARGV && $ARGV[0] eq "--hold") { shift; $why = shift; }
   my $cap = shift;
   my $life = defined $why ? hold_sleep($why) : undef;
+  my $sigmask = POSIX::SigSet->new(POSIX::SIGINT(), POSIX::SIGTERM(), POSIX::SIGHUP());
+  my $oldmask = POSIX::SigSet->new();
+  POSIX::sigprocmask(POSIX::SIG_BLOCK(), $sigmask, $oldmask) or die "sigprocmask: $!";
   my $pid = fork();
-  die "fork: $!" unless defined $pid;
-  if (!$pid) { setpgrp(0, 0); exec @ARGV; exit 127 }
+  if (!defined $pid) {
+    POSIX::sigprocmask(POSIX::SIG_SETMASK(), $oldmask);
+    die "fork: $!";
+  }
+  if (!$pid) {
+    POSIX::setpgid(0, 0);
+    POSIX::sigprocmask(POSIX::SIG_SETMASK(), $oldmask);
+    exec @ARGV;
+    POSIX::_exit(127);
+  }
+  POSIX::setpgid($pid, $pid);
   my $reap = sub {
     my $code = shift;
+    alarm 0;
+    $SIG{ALRM} = $SIG{INT} = $SIG{TERM} = $SIG{HUP} = "IGNORE";
     kill "TERM", -$pid;
+    my $reaped = 0;
     for (1 .. 100) {
-      waitpid($pid, POSIX::WNOHANG());
-      last unless kill 0, -$pid;
+      if (!$reaped) {
+        my $w = waitpid($pid, POSIX::WNOHANG());
+        $reaped = 1 if $w == $pid || ($w < 0 && $! == POSIX::ECHILD());
+      }
+      last if $reaped && !kill 0, -$pid;
       select undef, undef, undef, 0.1;
     }
-    kill "KILL", -$pid;
-    waitpid($pid, 0);
+    if (!$reaped || kill 0, -$pid) {
+      kill "KILL", -$pid;
+      if (!$reaped) {
+        1 while waitpid($pid, 0) < 0 && $! == POSIX::EINTR();
+      }
+    }
     exit $code;
   };
   $SIG{ALRM} = sub { $reap->(142) };
   $SIG{INT} = sub { $reap->(130) };
   $SIG{TERM} = sub { $reap->(143) };
   $SIG{HUP} = sub { $reap->(129) };
+  POSIX::sigprocmask(POSIX::SIG_SETMASK(), $oldmask) or die "sigprocmask: $!";
   alarm $cap;
-  waitpid($pid, 0);
+  my $r;
+  do { $r = waitpid($pid, 0) } while $r < 0 && $! == POSIX::EINTR();
   my $st = $?;
   alarm 0;
   exit($st & 127 ? 128 + ($st & 127) : $st >> 8);

@@ -1916,6 +1916,151 @@ let raise_every_row = Array.mem Stdlib.Sys.argv "--raise-every-row" ~equal:Strin
 let case label row =
   case label (if raise_every_row then fun () -> failwith "injected by --raise-every-row" else row)
 
+(* gh-ocannl-1628: [check_and_store_virtual] runs on [Access_fold] with [Access_fold.structural],
+   and checks [Get_dynamic]'s static coordinates for escaping non-static symbols. Under a width-1
+   enclosing loop (exempt from [147:enclosing-repetition-loop]), missing the gather's static-axis
+   check inlined the gather outside [k], leaving [k] unbound. *)
+let row_escaping_gather_read_width1 () =
+  let tbl = mk ~dims:[| n; 2 |] "egw1_tbl"
+  and idx = mk "egw1_idx"
+  and x = mk "egw1_x"
+  and out = mk "egw1_out" in
+  materialize tbl;
+  materialize idx;
+  materialize out;
+  let k = sym () and s = sym () and t = sym () in
+  let llc =
+    seq
+      (loop ~from_:1 ~upto:1 k
+         (loop_n s n
+            (set x
+               [| iter s |]
+               (gather ~tn:tbl
+                  ~idcs:[| fixed 0; iter k |]
+                  ~dyn_axis:0
+                  ~dyn_value:(get idx [| iter s |], single)))))
+      (loop_n t n (set out [| iter t |] (get x [| iter t |])))
+  in
+  row ~label:"escaping_gather_read_width1" ~llc ~cand:x ~out
+    ~seed:[ (tbl, [| 10.; 100.; 20.; 200.; 30.; 300.; 40.; 400. |]); (idx, [| 2.; 0.; 3.; 1. |]) ]
+    ~expected:[| 300.; 100.; 400.; 200. |]
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "9:sibling-escaping-read-index"))
+
+(* Same gather escape under a width-2 enclosing loop: previously fell through to
+   [147:enclosing-repetition-loop] because the walk missed [Get_dynamic.idcs]. *)
+let row_escaping_gather_read_width2 () =
+  let tbl = mk ~dims:[| n; 2 |] "egw2_tbl"
+  and idx = mk "egw2_idx"
+  and x = mk "egw2_x"
+  and out = mk "egw2_out" in
+  materialize tbl;
+  materialize idx;
+  materialize out;
+  let k = sym () and s = sym () and t = sym () in
+  let llc =
+    seq (zero x)
+      (seq
+         (loop_n k 2
+            (loop_n s n
+               (set x
+                  [| iter s |]
+                  (add
+                     (get x [| iter s |])
+                     (gather ~tn:tbl
+                        ~idcs:[| fixed 0; iter k |]
+                        ~dyn_axis:0
+                        ~dyn_value:(get idx [| iter s |], single))))))
+         (loop_n t n (set out [| iter t |] (get x [| iter t |]))))
+  in
+  row ~label:"escaping_gather_read_width2" ~llc ~cand:x ~out
+    ~seed:[ (tbl, [| 10.; 100.; 20.; 200.; 30.; 300.; 40.; 400. |]); (idx, [| 2.; 0.; 3.; 1. |]) ]
+    ~expected:[| 330.; 110.; 440.; 220. |]
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "9:sibling-escaping-read-index"))
+
+(* Control for the gather check: a gather whose static coordinates mention no escaping symbol still
+   inlines and matches the materialized baseline cell for cell. *)
+let row_virtual_gather_valid () =
+  let tbl = mk ~dims:[| n; 2 |] "vgv_tbl"
+  and idx = mk "vgv_idx"
+  and x = mk "vgv_x"
+  and out = mk "vgv_out" in
+  materialize tbl;
+  materialize idx;
+  materialize out;
+  let s = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n s n
+         (set x
+            [| iter s |]
+            (gather ~tn:tbl
+               ~idcs:[| fixed 0; fixed 1 |]
+               ~dyn_axis:0
+               ~dyn_value:(get idx [| iter s |], single))))
+      (loop_n t n (set out [| iter t |] (get x [| iter t |])))
+  in
+  row ~label:"virtual_gather_valid" ~llc ~cand:x ~out
+    ~seed:[ (tbl, [| 10.; 100.; 20.; 200.; 30.; 300.; 40.; 400. |]); (idx, [| 2.; 0.; 3.; 1. |]) ]
+    ~expected:[| 300.; 100.; 400.; 200. |] ~verdict:Accepted
+
+(* gh-ocannl-1628 policy controls for [check_and_store_virtual] on [Access_fold.structural]: gated
+   arms, [Local_scope] bodies, and pre-order write-before-read precedence. *)
+let row_escaping_where_arm () =
+  let flag = mk ~dims:[| 1 |] "ewa_flag"
+  and b = mk ~dims:[| 2 |] "ewa_b"
+  and x = mk "ewa_x"
+  and out = mk "ewa_out" in
+  materialize flag;
+  materialize b;
+  materialize out;
+  let k = sym () and s = sym () and t = sym () in
+  let llc =
+    seq
+      (loop ~from_:1 ~upto:1 k
+         (loop_n s n
+            (set x [| iter s |] (where_ (get flag [| fixed 0 |]) (tick s) (get b [| iter k |])))))
+      (loop_n t n (set out [| iter t |] (get x [| iter t |])))
+  in
+  row ~label:"escaping_where_arm" ~llc ~cand:x ~out
+    ~seed:[ (flag, [| 1. |]); (b, [| 5.; 50. |]) ]
+    ~expected:[| 1.; 2.; 3.; 4. |]
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "9:sibling-escaping-read-index"))
+
+let row_escaping_scope_embed () =
+  let st = mk ~dims:[| 1 |] "ese_st" and x = mk "ese_x" and out = mk "ese_out" in
+  virtualize st;
+  materialize out;
+  let k = sym () and s = sym () and t = sym () in
+  let llc =
+    seq
+      (loop ~from_:1 ~upto:1 k
+         (loop_n s n (set x [| iter s |] (add (tick s) (scope st (embed k))))))
+      (loop_n t n (set out [| iter t |] (get x [| iter t |])))
+  in
+  row ~label:"escaping_scope_embed" ~llc ~cand:x ~out ~seed:[] ~expected:[| 2.; 3.; 4.; 5. |]
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "10:escaping-index-symbol"))
+
+let row_escaping_write_before_read () =
+  let side = mk ~dims:[| 2 |] "ewr_side"
+  and b = mk ~dims:[| 2 |] "ewr_b"
+  and x = mk "ewr_x"
+  and out = mk "ewr_out" in
+  materialize side;
+  materialize b;
+  materialize out;
+  let k = sym () and s = sym () and t = sym () in
+  let llc =
+    seq
+      (loop ~from_:1 ~upto:1 k
+         (loop_n s n
+            (seq (set x [| iter s |] (tick s)) (set side [| iter k |] (get b [| iter k |])))))
+      (loop_n t n (set out [| iter t |] (get x [| iter t |])))
+  in
+  row ~label:"escaping_write_before_read" ~llc ~cand:x ~out
+    ~seed:[ (side, blank 2); (b, [| 5.; 50. |]) ]
+    ~expected:[| 1.; 2.; 3.; 4. |]
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "7:sibling-escaping-write-index"))
+
 let () =
   case "row_visit_cap" row_visit_cap;
   case "row_guarded_enclosing" row_guarded_enclosing;
@@ -1996,6 +2141,12 @@ let () =
   case "row_constexpr_guarded_setter ~flag_value:1." (fun () ->
       row_constexpr_guarded_setter ~flag_value:1.);
   case "virtual_store_refusal" virtual_store_refusal;
+  case "row_escaping_gather_read_width1" row_escaping_gather_read_width1;
+  case "row_escaping_gather_read_width2" row_escaping_gather_read_width2;
+  case "row_virtual_gather_valid" row_virtual_gather_valid;
+  case "row_escaping_where_arm" row_escaping_where_arm;
+  case "row_escaping_scope_embed" row_escaping_scope_embed;
+  case "row_escaping_write_before_read" row_escaping_write_before_read;
   p_all "every phase-table entry is exercised by a row" phase_table ~f:(fun (site, _) ->
       Hash_set.mem exercised site);
   Stdio.printf "%!"

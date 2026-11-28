@@ -76,6 +76,7 @@ let full =
     transaction_rate = Some 2e11;
     workgroup_bytes_per_multiprocessor = Some 131072;
     staged_copy_rate = Some 1e12;
+    staged_idle_rate = Some 1e12;
     shared_load_rate = Some 1e13;
     fill_lane_width = Some 32;
     mma_peak_f16 =
@@ -146,6 +147,7 @@ let toggles : (string * (BI.hardware_limits -> BI.hardware_limits)) list =
     ( "workgroup_bytes_per_multiprocessor",
       fun l -> { l with workgroup_bytes_per_multiprocessor = Some 1 } );
     ("staged_copy_rate", fun l -> { l with staged_copy_rate = Some 1. });
+    ("staged_idle_rate", fun l -> { l with staged_idle_rate = Some 1. });
     ("shared_load_rate", fun l -> { l with shared_load_rate = Some 1. });
     ("fill_lane_width", fun l -> { l with fill_lane_width = Some 64 });
     ( "mma_peak_f16",
@@ -255,6 +257,7 @@ let () =
          "multiprocessors";
          "shared_load_rate";
          "staged_copy_rate";
+         "staged_idle_rate";
          "transaction_rate";
          "workgroup_bytes_per_multiprocessor";
        ]);
@@ -308,6 +311,7 @@ let presets =
         transaction_rate = Some 2e11;
         workgroup_bytes_per_multiprocessor = Some 65536;
         staged_copy_rate = Some 1e12;
+        staged_idle_rate = Some 1e12;
         shared_load_rate = Some 1e13;
         fill_lane_width = Some 32;
         codegen_tag = Some "graph-capture/no-device-debug";
@@ -335,6 +339,7 @@ let () =
           transaction_rate = None;
           workgroup_bytes_per_multiprocessor = None;
           staged_copy_rate = None;
+          staged_idle_rate = None;
           shared_load_rate = None;
           fill_lane_width = None;
           mma_peak_f16 = None;

@@ -188,6 +188,8 @@
   base
   hipjit.hip
   hipjit.hiprtc
+  ctypes
+  ctypes.foreign
   utils
   ir
   builtins_cc

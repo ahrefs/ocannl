@@ -27,6 +27,8 @@
  (libraries
   base
   hipjit_stub
+  ctypes
+  ctypes.foreign
   utils
   ir
   builtins_cc

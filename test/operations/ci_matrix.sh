@@ -15,6 +15,9 @@
 # fail-fast disabled, and checks an unconditional step with a direct env
 # binding and command.
 # Expressions, extra axes, and alternate command forms are outside that grammar.
+# The census check reads the named steps in the build job and evaluates their
+# single-line if conditions with explicit job status and baseline outcome.
+# The census check excludes workflow scheduling and cache actions.
 # The shard-balance job's closed guard is the first uncancelled scheduled attempt.
 # Named legs are independent; shared readers/setup run before each selected leg.
 # The renamed-gate fixture reads only top-level literal `harness_leg_run 'name'
@@ -62,14 +65,20 @@ def gh_format(template, *args):
                   lambda m: m[0][0] if m[1] is None else str(args[int(m[1])]), template)
 
 
-def expression(value, event, windows=False, compiler='', *, expected_sha='', sha=''):
+def expression(value, event, windows=False, compiler='', *, expected_sha='', sha='',
+               job_status='success', runner_os='', suite='', census_baseline=''):
     # This is the workflow's small expression vocabulary, not a second matrix.
     # Parse and whitelist the translated AST so a new operator fails loudly.
     value = value.removeprefix('${{').removesuffix('}}').strip()
-    tokens = re.findall(r"'(?:[^']*)'|github\.(?:event_name|sha)|inputs\.[a-z_]+|fromJSON|format|&&|\|\||!=|==|!|[(),]|\s+", value)
+    tokens = re.findall(
+        r"'(?:[^']*)'|github\.(?:event_name|sha)|inputs\.[a-z_]+"
+        r"|runner\.os|matrix\.suite|steps\.census-baseline\.outcome"
+        r"|cancelled\(\)|fromJSON|format|&&|\|\||!=|==|!|[(),]|\s+", value)
     assert ''.join(tokens) == value, value
     mapping = {'github.event_name': 'event', 'inputs.windows_only': 'windows',
                'inputs.ocaml_compiler': 'compiler', 'inputs.expected_sha': 'expected_sha', 'github.sha': 'sha',
+               'runner.os': 'runner_os', 'matrix.suite': 'suite',
+               'steps.census-baseline.outcome': 'census_baseline', 'cancelled()': 'cancelled',
                '&&': ' and ', '||': ' or ', '!': ' not '}
     translated = ''.join(mapping.get(token, token) for token in tokens).strip()
     tree = ast.parse(translated, mode='eval')
@@ -79,9 +88,13 @@ def expression(value, event, windows=False, compiler='', *, expected_sha='', sha
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             assert isinstance(node.func, ast.Name) and node.func.id in ('fromJSON', 'format')
+    # Actions supplies a success() check when no explicit status check is present.
+    if job_status != 'success' and 'cancelled()' not in tokens:
+        return False
     return eval(compile(tree, '<workflow expression>', 'eval'), {'__builtins__': {}},
                 dict(event=event, windows=windows, compiler=compiler, expected_sha=expected_sha, sha=sha,
-                     fromJSON=json.loads, format=gh_format))
+                     runner_os=runner_os, suite=suite, census_baseline=census_baseline,
+                     cancelled=job_status == 'cancelled', fromJSON=json.loads, format=gh_format))
 
 
 def unfiltered_triggers(text, events, absent=()):
@@ -875,20 +888,35 @@ elif leg == 'step-order':
 
 
 elif leg == 'host-evidence':
-    # Host evidence (gh-ocannl-1948): pin the shared save path, program and
-    # configuration directory, not identical command text. ci-env builds from the
-    # root then runs from test/config: --release and --root cannot be combined.
+    # Host evidence (gh-ocannl-1948, gh-ocannl-2120): pin the shared save path,
+    # program, configuration directory, nonblocking probe verification, and
+    # outcome-aware failure listing, not identical build-command text. ci-env
+    # builds from the root then runs from test/config: --release and --root
+    # cannot be combined.
     # The shared readers cover direct commands in the current inline/literal dialect.
     def host_evidence(main, clean):
         name = "Print the host's capabilities"
-        probe = workflow_step(main, name)
-        clean_probe = workflow_step(clean, name)
+        verify_name = 'Verify the host probe saved a host line'
+        listing_name = 'List the failed dune rules'
+        main_job = job_block(main, 'run')
+        clean_job = job_block(clean, 'clean-room')
+        probe = workflow_step(main_job, name)
+        clean_probe = workflow_step(clean_job, name)
+        verify = workflow_step(main_job, verify_name)
+        verify_win = workflow_step(main_job, verify_name + ' (Windows)')
+        clean_verify = workflow_step(clean_job, verify_name)
+        listing = workflow_step(main_job, listing_name)
+        listing_win = workflow_step(main_job, listing_name + ' (Windows)')
+        clean_listing = workflow_step(clean_job, listing_name)
         main_args = shlex.split(workflow_script(probe))
         target, = [arg for arg in main_args if arg.endswith('/host_caps.exe')]
         save, = [arg for arg in main_args if arg.startswith('--save=')]
         assert '      working-directory: test/config\n' in probe, 'matrix probe configuration moved'
         assert '      continue-on-error: true\n' in probe and \
                '      continue-on-error: true\n' in clean_probe, 'host probe error policy drifted'
+        assert re.findall(r'^      id: (.+)$', probe, re.M) == ['host-caps'] and \
+               re.findall(r'^      id: (.+)$', clean_probe, re.M) == ['host-caps'], \
+            'host probe step id missing or drifted'
         commands = dune_commands(clean_probe)
         assert commands and all(command[:2] == ['dune', 'build'] and '--release' in command and
                                 '--root' not in command and target in command for command in commands), \
@@ -900,10 +928,53 @@ elif leg == 'host-evidence':
         assert launch[:3] == ['cd', 'test/config', '&&'], 'host probe configuration directory drifted'
         executable = '../../_build/default/' + target.removeprefix('./')
         assert launch[3:] == ['opam', 'exec', '--', executable, save], 'host launch or save path drifted'
-        listing = workflow_step(main, 'List the failed dune rules')
-        clean_listing = workflow_step(clean, 'List the failed dune rules')
+        # Probe verification follows the probe immediately and stays gated on default success(),
+        # so it runs after the continue-on-error probe and skips on an earlier failure.
+        clean_steps = workflow_steps(clean, 'clean-room')
+        main_steps = workflow_steps(main, 'run')
+        clean_probe_idx = next(i for i, s in enumerate(clean_steps) if ('- name: ' + name + '\n') in s)
+        clean_verify_idx = next(i for i, s in enumerate(clean_steps) if ('- name: ' + verify_name + '\n') in s)
+        assert clean_verify_idx == clean_probe_idx + 1, 'ci-env host verification must immediately follow probe'
+        main_probe_idx = next(i for i, s in enumerate(main_steps) if ('- name: ' + name + '\n') in s)
+        main_verify_idx = next(i for i, s in enumerate(main_steps) if ('- name: ' + verify_name + '\n') in s)
+        main_verify_win_idx = next(i for i, s in enumerate(main_steps) if ('- name: ' + verify_name + ' (Windows)\n') in s)
+        assert (main_verify_idx, main_verify_win_idx) == (main_probe_idx + 1, main_probe_idx + 2), \
+            'matrix host verification must immediately follow probe'
+        assert not re.search(r'^      if:', clean_verify, re.M), \
+            'ci-env host verification must rely on default success() so early failures skip it'
+        for step, expected_os in ((verify, 'Linux'), (verify_win, 'Windows')):
+            conds = re.findall(r'^      if: (.+)$', step, re.M)
+            assert len(conds) == 1, 'matrix host verification needs a single-line if'
+            other_os = 'Windows' if expected_os == 'Linux' else 'Linux'
+            assert expression(conds[0], 'workflow_dispatch', job_status='success', runner_os=expected_os), \
+                'host verification must run after probe on ' + expected_os
+            assert not expression(conds[0], 'workflow_dispatch', job_status='success', runner_os=other_os), \
+                'host verification must stay scoped to ' + expected_os
+            assert not expression(conds[0], 'workflow_dispatch', job_status='failure', runner_os=expected_os), \
+                'host verification must skip after an earlier failure'
+            assert not expression(conds[0], 'workflow_dispatch', job_status='cancelled', runner_os=expected_os), \
+                'host verification must skip when cancelled'
+        assert '        HOST_PROBE_OUTCOME: ${{ steps.host-caps.outcome }}\n' in clean_verify, \
+            'host verification must pass exact host-caps outcome without fallback'
+        verify_cmd = shlex.split(workflow_script(clean_verify))
+        assert '--github' in verify_cmd and '--check-host' in verify_cmd and \
+               '--host' in verify_cmd and '--host-probe' in verify_cmd, \
+            'host verification command flags drifted'
+        assert "      if: ${{ runner.os != 'Windows' }}\n" + clean_verify.rstrip() == verify.rstrip(), \
+            'host verification steps drifted between ci.yml and ci-env.yml'
+        win_shell = "      shell: 'C:\\Progra~1\\Git\\bin\\bash.exe --noprofile --norc -eo pipefail {0}'\n"
+        assert verify.replace("runner.os != 'Windows'", "runner.os == 'Windows'").replace(
+            '      shell: bash\n', win_shell).rstrip() == verify_win.rstrip(), \
+            'Windows host verification drifted'
+        assert "        HOST_PROBE_OUTCOME: ${{ steps.host-caps.outcome || 'skipped' }}\n" in clean_listing, \
+            'host failure listing must pass host-caps outcome with skipped fallback'
+        assert '--host-probe "$HOST_PROBE_OUTCOME"' in workflow_script(clean_listing), \
+            'host failure listing must forward --host-probe'
         assert clean_listing.replace('failure() }}', "failure() && runner.os != 'Windows' }}").rstrip() == listing.rstrip(), \
             'host failure listings drifted'
+        assert listing.replace("runner.os != 'Windows'", "runner.os == 'Windows'").replace(
+            '      shell: bash\n', win_shell).rstrip() == listing_win.rstrip(), \
+            'Windows host failure listing drifted'
         for step in workflow_steps(clean, 'clean-room'):
             if dune_commands(step):
                 assert '      shell: bash\n' in step, 'dune log pipe needs bash pipefail'
@@ -913,13 +984,29 @@ elif leg == 'host-evidence':
 
 
     host_evidence(source, env_source)
-    print('PASS ci-env preserves the host probe contract, release builds and failure listing')
+    print('PASS ci-env and ci.yml preserve the host probe contract, verification, release builds and failure listing')
+    clean_probe_step = workflow_step(job_block(env_source, 'clean-room'), "Print the host's capabilities")
+    clean_listing_step = workflow_step(job_block(env_source, 'clean-room'), 'List the failed dune rules')
     for label, mutant, reason in (
-        ('host save path drift', env_source.replace('/host-caps.txt', '/lost-host.txt', 1), 'host launch or save path'),
+        ('host save path drift', env_source.replace(
+            clean_probe_step, clean_probe_step.replace('/host-caps.txt', '/lost-host.txt'), 1), 'host launch or save path'),
         ('host probe dev profile', env_source.replace('dune build --release ./tools/host_caps.exe',
                                                      'dune build ./tools/host_caps.exe', 1), 'release build'),
         ('host probe wrong configuration', env_source.replace('cd test/config &&', 'cd test &&', 1), 'configuration directory'),
-        ('failure listing loses host', env_source.replace('--host "$RUNNER_TEMP/host-caps.txt" ', '', 1), 'failure listings'),
+        ('host probe loses id', env_source.replace('      id: host-caps\n', '', 1), 'step id'),
+        ('ci-env verification runs on always()', env_source.replace(
+            '    - name: Verify the host probe saved a host line\n',
+            '    - name: Verify the host probe saved a host line\n      if: always()\n', 1), 'default success()'),
+        ('ci-env verification hides miswired id with skipped fallback', env_source.replace(
+            '        HOST_PROBE_OUTCOME: ${{ steps.host-caps.outcome }}\n',
+            "        HOST_PROBE_OUTCOME: ${{ steps.host-caps.outcome || 'skipped' }}\n", 1), 'exact host-caps outcome'),
+        ('ci-env verification loses --github', env_source.replace('--github --check-host', '--check-host', 1),
+         'command flags drifted'),
+        ('failure listing loses host', env_source.replace(
+            clean_listing_step, clean_listing_step.replace('--host "$RUNNER_TEMP/host-caps.txt" ', '', 1), 1), 'failure listings'),
+        ('failure listing loses --host-probe', env_source.replace(
+            clean_listing_step, clean_listing_step.replace(' --host-probe "$HOST_PROBE_OUTCOME"', '', 1), 1),
+         'forward --host-probe'),
         ('build log loses pipefail', env_source.replace('      shell: bash\n      run: opam exec -- dune build',
                                                        '      run: opam exec -- dune build', 1), 'bash pipefail'),
         ('a fourth build omits logging', env_source.replace('    - name: Smoke test',
@@ -928,25 +1015,95 @@ elif leg == 'host-evidence':
     ):
         assert mutant != env_source, label
         rejects_order(lambda text: host_evidence(source, text), mutant, label, reason)
+    win_verify_step = workflow_step(job_block(source, 'run'), 'Verify the host probe saved a host line (Windows)')
+    win_listing_step = workflow_step(job_block(source, 'run'), 'List the failed dune rules (Windows)')
+    for label, mutant, reason in (
+        ('ci.yml verification runs on failure', source.replace(
+            "      if: ${{ runner.os != 'Windows' }}\n",
+            "      if: ${{ !cancelled() && runner.os != 'Windows' }}\n", 1), 'earlier failure'),
+        ('ci.yml Windows verification drifts', source.replace(
+            win_verify_step, win_verify_step.replace('--github --check-host', '--check-host', 1), 1),
+         'Windows host verification drifted'),
+        ('ci.yml Windows failure listing drifts', source.replace(
+            win_listing_step, win_listing_step.replace(' --host-probe "$HOST_PROBE_OUTCOME"', '', 1), 1),
+         'Windows host failure listing drifted'),
+    ):
+        assert mutant != source, label
+        rejects_order(lambda text: host_evidence(text, env_source), mutant, label, reason)
 
 
-    # Execute the actual failure block in ci-env's reachable states: an early
-    # failure has a build log but no host; a failure after the probe has both.
-    listing = workflow_script(workflow_step(env_source, 'List the failed dune rules'))
+    # Execute the actual extracted probe, verification and failure-listing steps
+    # across all reachable host-probe states:
+    # 1. probe succeeded with a saved host line
+    # 2. probe failed (e.g. gh-ocannl-1948 dune arg failure) -- nonblocking ::warning + failure record
+    # 3. probe exited 0 without saving a valid host line -- nonblocking ::warning + failure record
+    # 4. probe never ran (earlier build failure) -- no ::warning, distinct never-ran record
+    # 5. miswired empty outcome -- fail closed (exit 2)
+    probe_script = workflow_script(workflow_step(env_source, "Print the host's capabilities"))
+    verify_script = workflow_script(workflow_step(env_source, 'Verify the host probe saved a host line'))
+    listing_script = workflow_script(workflow_step(env_source, 'List the failed dune rules'))
     host_line = 'OCANNL host: cpu=fixture\n'
-    for saved_host in (False, True):
-        fixture = Path(sys.argv[2]) / ('host-evidence-%s' % saved_host)
+    warn_line = '::warning title=Host probe::no host line (probe failed)'
+
+    # End-to-end simulation of gh-ocannl-1948: dune fails inside the ci-env probe step.
+    sim = Path(sys.argv[2]) / 'host-evidence-sim-1948'
+    sim_bin = sim / 'bin'
+    sim_bin.mkdir(parents=True)
+    stub_opam = sim_bin / 'opam'
+    stub_opam.write_text('#!/bin/sh\necho "Error: dune arg parse failure" >&2\nexit 1\n')
+    stub_opam.chmod(0o755)
+    (sim / 'host-caps.txt').write_text(host_line)  # stale file must be cleared
+    sim_env = dict(os.environ, RUNNER_TEMP=str(sim),
+                   PATH=str(sim_bin) + os.pathsep + os.environ.get('PATH', ''))
+    probe_run = subprocess.run(['bash', '-eo', 'pipefail', '-c', probe_script.replace('${{ runner.temp }}', str(sim))],
+                               cwd=root, env=sim_env, capture_output=True, text=True)
+    assert probe_run.returncode != 0 and not (sim / 'host-caps.txt').exists(), (probe_run.returncode, probe_run.stdout, probe_run.stderr)
+    sim_verify = subprocess.run(['bash', '-eo', 'pipefail', '-c', verify_script], cwd=root,
+                                env=dict(os.environ, RUNNER_TEMP=str(sim), HOST_PROBE_OUTCOME='failure'),
+                                capture_output=True, text=True)
+    assert sim_verify.returncode == 0 and 'no host line (probe failed)' in sim_verify.stdout and warn_line in sim_verify.stdout, \
+        (sim_verify.returncode, sim_verify.stdout, sim_verify.stderr)
+    sim_list = subprocess.run(['bash', '-eo', 'pipefail', '-c', listing_script], cwd=root,
+                              env=dict(os.environ, RUNNER_TEMP=str(sim), HOST_PROBE_OUTCOME='failure'),
+                              capture_output=True, text=True)
+    assert sim_list.returncode == 1 and sim_list.stdout.startswith('no host line (probe failed)\n') and \
+           'dune arg parse failure' in sim_list.stdout, (sim_list.returncode, sim_list.stdout, sim_list.stderr)
+
+    for case, outcome, file_content, want_warn, want_prefix in (
+        ('probe-succeeded', 'success', host_line, False, host_line),
+        ('probe-failed-no-file', 'failure', None, True, 'no host line (probe failed)\n'),
+        ('probe-failed-stale-file', 'failure', host_line, True, 'no host line (probe failed)\n'),
+        ('probe-exit0-no-file', 'success', None, True, 'no host line (probe failed)\n'),
+        ('probe-exit0-empty-file', 'success', '', True, 'no host line (probe failed)\n'),
+        ('probe-never-ran', 'skipped', None, False, 'no host line (probe never ran)\n'),
+        ('probe-never-ran-stale', 'skipped', host_line, False, 'no host line (probe never ran)\n'),
+    ):
+        fixture = Path(sys.argv[2]) / ('host-evidence-' + case)
         fixture.mkdir()
         (fixture / 'dune-build.log').write_text('File "fixture.ml", line 1, characters 0-1:\nError: fixture build failure\n')
-        if saved_host:
-            (fixture / 'host-caps.txt').write_text(host_line)
-        listed = subprocess.run(['bash', '-eo', 'pipefail', '-c', listing], cwd=root,
-                                env=dict(os.environ, RUNNER_TEMP=str(fixture)),
-                                capture_output=True, text=True)
+        if file_content is not None:
+            (fixture / 'host-caps.txt').write_text(file_content)
+        env = dict(os.environ, RUNNER_TEMP=str(fixture), HOST_PROBE_OUTCOME=outcome)
+        checked = subprocess.run(['bash', '-eo', 'pipefail', '-c', verify_script], cwd=root,
+                                 env=env, capture_output=True, text=True)
+        assert checked.returncode == 0, (case, checked.returncode, checked.stdout, checked.stderr)
+        if want_warn:
+            assert warn_line in checked.stdout and 'no host line (probe failed)' in checked.stdout, (case, checked.stdout)
+        else:
+            assert checked.stdout == '', (case, checked.stdout)
+        listed = subprocess.run(['bash', '-eo', 'pipefail', '-c', listing_script], cwd=root,
+                                env=env, capture_output=True, text=True)
         assert listed.returncode == 1 and 'fixture build failure' in listed.stdout, \
-            (listed.returncode, listed.stdout, listed.stderr)
-        assert listed.stdout.startswith(host_line) == saved_host, listed.stdout
-    print('PASS ci-env failure listing reports the build failure with and without saved host evidence')
+            (case, listed.returncode, listed.stdout, listed.stderr)
+        assert listed.stdout.startswith(want_prefix), (case, listed.stdout)
+        assert '::warning' not in listed.stdout, (case, listed.stdout)
+
+    # Miswired empty outcome fails closed on the verification step.
+    bad_env = dict(os.environ, RUNNER_TEMP=str(sim), HOST_PROBE_OUTCOME='')
+    miswired = subprocess.run(['bash', '-eo', 'pipefail', '-c', verify_script], cwd=root,
+                              env=bad_env, capture_output=True, text=True)
+    assert miswired.returncode == 2, (miswired.returncode, miswired.stdout, miswired.stderr)
+    print('PASS ci-env and ci.yml host verification and failure listing cover succeeded, failed, and never-ran separately')
 
 
 
@@ -1113,6 +1270,41 @@ sys.exit(int(os.environ['OPAM_RC' if name == 'opam' else 'DPKG_RC']))
         else:
             raise AssertionError('accepted broken provides case: ' + name)
     print('PASS the three depext scripts are identical apart from their resolver flags')
+
+
+elif leg == 'census-save':
+    job = job_block(source, 'run')
+    decision = workflow_step(job, 'Decide whether to save the cc census listings')
+    baseline = workflow_step(job, 'List the restored cc census listings')
+    assert re.findall(r'^      id: (.+)$', baseline, re.M) == ['census-baseline'], \
+        'census-baseline must identify the baseline listing step'
+    assert job.index(baseline) < job.index(decision), 'census save must follow the baseline listing'
+
+    def condition(step, label):
+        conditions = re.findall(r'^      if: (.+)$', step, re.M)
+        assert len(conditions) == 1, label + ' needs a single-line if'
+        return conditions[0]
+
+    context = dict(runner_os='Linux', suite='main')
+    baseline_if = condition(baseline, 'census baseline')
+    assert expression(baseline_if, 'workflow_dispatch', **context), \
+        'census baseline must run after successful setup'
+    assert not expression(baseline_if, 'workflow_dispatch', job_status='failure', **context), \
+        'census baseline must skip after an early setup failure'
+    decision_if = condition(decision, 'census save')
+    for case, status, outcome, expected in (
+            ('setup fails before cache initialization', 'failure', 'skipped', False),
+            ('baseline listing fails', 'failure', 'failure', False),
+            ('build fails after baseline listing', 'failure', 'success', True),
+            ('build succeeds after baseline listing', 'success', 'success', True),
+            ('run is cancelled after baseline listing', 'cancelled', 'success', False),
+    ):
+        actual = expression(decision_if, 'workflow_dispatch', job_status=status,
+                            census_baseline=outcome, **context)
+        assert actual is expected, '%s: expected census save decision to %s' % (
+            case, 'run' if expected else 'skip')
+
+    print('PASS census decision requires a successful baseline and still runs after later failures')
 
 
 elif leg == 'weigh':
@@ -1549,6 +1741,7 @@ harness_leg_run 'workflow-readers' run_contract
 harness_leg_run 'step-order' run_contract
 harness_leg_run 'host-evidence' run_contract
 harness_leg_run 'depexts' run_contract
+harness_leg_run 'census-save' run_contract
 harness_leg_run 'weigh' run_contract
 harness_leg_run 'dispatch-guard' run_contract
 harness_leg_run 'disk-watchdog' run_contract

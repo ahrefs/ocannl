@@ -730,9 +730,24 @@ jobs:
     # report, with its rule named, and this step only loses its line. The
     # command is one line that bash and PowerShell read alike.
     - name: Print the host's capabilities
+      id: host-caps
       continue-on-error: true
       working-directory: test/config
       run: opam exec -- dune exec --root ../.. ./tools/host_caps.exe -- "--save=${{ runner.temp }}/host-caps.txt"
+    # Nonblocking probe verification (gh-ocannl-2120): default success() skips
+    # on an earlier failure while running after the continue-on-error probe.
+    - name: Verify the host probe saved a host line
+      if: ${{ runner.os != 'Windows' }}
+      shell: bash
+      env:
+        HOST_PROBE_OUTCOME: ${{ steps.host-caps.outcome }}
+      run: tools/ci-failed-rules.sh --github --check-host --host "$RUNNER_TEMP/host-caps.txt" --host-probe "$HOST_PROBE_OUTCOME"
+    - name: Verify the host probe saved a host line (Windows)
+      if: ${{ runner.os == 'Windows' }}
+      shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -eo pipefail {0}'
+      env:
+        HOST_PROBE_OUTCOME: ${{ steps.host-caps.outcome }}
+      run: tools/ci-failed-rules.sh --github --check-host --host "$RUNNER_TEMP/host-caps.txt" --host-probe "$HOST_PROBE_OUTCOME"
     # cc_march_census's two aarch64 columns skip without an aarch64 cross gcc,
     # and until gh-ocannl-1120 no runner had one: gh-ocannl-1112's bf16 spill reached
     # master unseen. The script stages gcc 13, the runner's own
@@ -800,6 +815,7 @@ jobs:
     # The entry files the restore brought, which the save decision compares
     # the directory against after the build.
     - name: List the restored cc census listings
+      id: census-baseline
       if: runner.os == 'Linux' && matrix.suite == 'main'
       shell: bash
       run: |
@@ -957,10 +973,11 @@ jobs:
     # Pull-request entries are visible only to their own PR, so a PR saves
     # only what it added. Any finished build, red or green: every entry is
     # whole (published through Utils.Atomic_file) and only ever the listing
-    # its key names.
+    # its key names. The comparison needs a complete baseline, which an
+    # early failure can prevent the job from recording.
     - name: Decide whether to save the cc census listings
       id: census-save
-      if: ${{ !cancelled() && runner.os == 'Linux' && matrix.suite == 'main' }}
+      if: ${{ !cancelled() && runner.os == 'Linux' && matrix.suite == 'main' && steps.census-baseline.outcome == 'success' }}
       shell: bash
       env:
         MATCHED: ${{ steps.census-restore.outputs.cache-matched-key }}
@@ -1130,14 +1147,18 @@ jobs:
     - name: List the failed dune rules
       if: ${{ failure() && runner.os != 'Windows' }}
       shell: bash
+      env:
+        HOST_PROBE_OUTCOME: ${{ steps.host-caps.outcome || 'skipped' }}
       run: |
-        tools/ci-failed-rules.sh --github --host "$RUNNER_TEMP/host-caps.txt" "$RUNNER_TEMP/dune-build.log"
+        tools/ci-failed-rules.sh --github --host "$RUNNER_TEMP/host-caps.txt" --host-probe "$HOST_PROBE_OUTCOME" "$RUNNER_TEMP/dune-build.log"
         exit 1
     - name: List the failed dune rules (Windows)
       if: ${{ failure() && runner.os == 'Windows' }}
       shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -eo pipefail {0}'
+      env:
+        HOST_PROBE_OUTCOME: ${{ steps.host-caps.outcome || 'skipped' }}
       run: |
-        tools/ci-failed-rules.sh --github --host "$RUNNER_TEMP/host-caps.txt" "$RUNNER_TEMP/dune-build.log"
+        tools/ci-failed-rules.sh --github --host "$RUNNER_TEMP/host-caps.txt" --host-probe "$HOST_PROBE_OUTCOME" "$RUNNER_TEMP/dune-build.log"
         exit 1
 
   # The scheduled first attempt has both shards. Rerunning failed jobs can contain just one.

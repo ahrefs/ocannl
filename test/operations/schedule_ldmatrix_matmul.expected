@@ -1,20 +1,20 @@
 bf16 ldmatrix operands have bf16-exact partial sums: true
 fp8 ldmatrix operands have f32-exact partial sums: true
-bf_ab staged ldmatrix parity (GPU) or clean rejection (CPU): true
+bf_ab staged ldmatrix parity (GPU and CPU): true
 bf_ab ldmatrix structure and census as expected: true
-bf_ta staged ldmatrix parity (GPU) or clean rejection (CPU): true
+bf_ta staged ldmatrix parity (GPU and CPU): true
 bf_ta ldmatrix structure and census as expected: true
-bf_tb staged ldmatrix parity (GPU) or clean rejection (CPU): true
+bf_tb staged ldmatrix parity (GPU and CPU): true
 bf_tb ldmatrix structure and census as expected: true
-bf_sketch staged ldmatrix parity (GPU) or clean rejection (CPU): true
+bf_sketch staged ldmatrix parity (GPU and CPU): true
 bf_sketch ldmatrix structure and census as expected: true
-f8_a staged ldmatrix parity (GPU) or clean rejection (CPU): true
+f8_a staged ldmatrix parity (GPU and CPU): true
 f8_a ldmatrix structure and census as expected: true
-f8_b staged ldmatrix parity (GPU) or clean rejection (CPU): true
+f8_b staged ldmatrix parity (GPU and CPU): true
 f8_b ldmatrix structure and census as expected: true
-f8_b_gather staged ldmatrix parity (GPU) or clean rejection (CPU): true
+f8_b_gather staged ldmatrix parity (GPU and CPU): true
 f8_b_gather ldmatrix structure and census as expected: true
-f8_a_gather staged ldmatrix parity (GPU) or clean rejection (CPU): true
+f8_a_gather staged ldmatrix parity (GPU and CPU): true
 f8_a_gather ldmatrix structure and census as expected: true
-f16_decline staged ldmatrix parity (GPU) or clean rejection (CPU): true
+f16_decline staged ldmatrix parity (GPU and CPU): true
 f16_decline ldmatrix structure and census as expected: true

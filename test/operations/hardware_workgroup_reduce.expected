@@ -1,3 +1,3 @@
 serial reduction correct: true
-workgroup reduction parity (GPU) or clean rejection (CPU): true
-shared tile and barrier rendered (GPU) or rejected (CPU): true
+workgroup reduction parity (GPU and CPU): true
+shared tile and barrier rendered (GPU): true

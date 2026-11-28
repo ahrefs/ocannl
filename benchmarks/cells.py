@@ -12,11 +12,18 @@ interleaved) are its two front ends:
   A driver hands a cell BENCH_*/OMP_* values only as a stated part of its treatment
   (`assignment_problem` says which names may be stated).
 - The resolved configuration (`config_records.parse_config_records`, gh-ocannl-1566;
-  `treatment_problems`, `consistency_problems`). Every cell runs with `pins(backend)` -- the
-  backend, `--ocannl_no_config_file=true` and `--ocannl_log_config_json=true` -- and the records in
-  its stderr are read back: a setting from the environment or a config file (a profile picked there
-  included), a commandline source naming no argument of the cell, or a backend other than the
-  pinned one, fails the cell.
+  `treatment_problems`, `consistency_check`, `consistency_problems`, `consistency_notes`). Every
+  cell runs with `pins(backend)` -- the backend, `--ocannl_no_config_file=true` and
+  `--ocannl_log_config_json=true` -- and the records in its stderr are read back: a setting from
+  the environment or a config file (a profile picked there included), a commandline source naming
+  no argument of the cell, or a backend other than the pinned one, fails the cell. Within an arm,
+  comparing resolved configuration across clean cells splits by key class (gh-ocannl-2408, read
+  from `Utils.config_key_classification` via `test/operations/digest_completeness.expected`): any
+  key resolved to two different values fails the run whatever its class; a key read in only some
+  cells of the arm (every reading cell agreeing on one value) is informational (`consistency_notes`)
+  when classified `execution-neutral` (`Utils.Execution_neutral`, e.g. `ocannl_autotune_log`), and
+  remains a refusal naming its class and fix for every result-changing class and any unclassified
+  key (fail-closed).
 - Supervision (`run_in_group`). Each process is a group under `cell_group` with a cap, killed as a
   group on expiry; a group not proven gone stops the run.
 - The visiting order (`design_orders`): `bin/bench_design.ml`'s spread mirrored rotation, line for
@@ -66,6 +73,7 @@ co-tenants, thermal and device state) is the operator's, through an exclusive me
 """
 
 import argparse
+import functools
 import hashlib
 import json
 import math
@@ -79,6 +87,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import MappingProxyType
 
 import cell_group
 import config_records
@@ -240,26 +249,136 @@ def treatment_problems(config, backend, argv):
     return problems
 
 
-def consistency_problems(records):
-    """Settings the successful cells of one arm did not resolve identically: to two values, or read
-    in some cells and not in others (a cell that took a path reading one more setting ran a
-    treatment its siblings did not)."""
-    problems = []
+# `Utils.config_key_classification` as printed and pinned by `test/operations/digest_completeness`
+# (gh-ocannl-2408). Reading that checked-in golden avoids restating the classification in Python and
+# needs no OCaml build.
+#
+# Reader boundary (fail-closed allowlist): reads only the classification groups in
+# `digest_completeness.expected` before its closing Verdict line (`_CLASS_END_PREFIX`). Recognised
+# group headers are the closed set of `digest_completeness.ml`'s `class_name` spellings; recognised
+# members are two-space-indented `<key>` or `<key> [read at codegen]` lines. Does NOT read the
+# preamble prose, the closing Verdict claims or the synthetic-controls tail, and refuses any
+# unrecognised `<class> -- <reason>` header, stray indented line, empty group, duplicate key or
+# incomplete classification with `ValueError` rather than silently misclassifying a key as neutral.
+CONFIG_CLASSIFICATION_PATH = ROOT / "test" / "operations" / "digest_completeness.expected"
+EXECUTION_NEUTRAL_CLASS = "execution-neutral"
+_CLASS_HEADER_RE = re.compile(
+    r"^(aggregate|code-borne \(digest\)|keyed: [a-z0-9_]+|search-shaping"
+    r"|placement-shaping|untimed-model|execution-neutral) -- .+$"
+)
+_CLASS_KEY_RE = re.compile(r"^  ([a-z0-9_]+)(?: \[read at codegen\])?$")
+_CLASS_END_PREFIX = "every scanned root meets its source-count floor:"
+
+
+@functools.lru_cache(maxsize=None)
+def _load_config_key_classes(path):
+    classes = {}
+    current = None
+    group_count = 0
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if line.startswith(_CLASS_END_PREFIX):
+            break
+        if not line:
+            if current is not None and group_count == 0:
+                raise ValueError(f"{path}:{lineno}: empty classification group for {current!r}")
+            current = None
+            group_count = 0
+            continue
+        if current is not None:
+            m = _CLASS_KEY_RE.fullmatch(line)
+            if not m:
+                raise ValueError(f"{path}:{lineno}: unexpected line under {current!r}: {line!r}")
+            key = m.group(1)
+            if key in classes:
+                raise ValueError(f"{path}:{lineno}: duplicate classified config key {key!r}")
+            classes[key] = current
+            group_count += 1
+            continue
+        m = _CLASS_HEADER_RE.fullmatch(line)
+        if m:
+            current = m.group(1)
+            group_count = 0
+        elif " -- " in line:
+            raise ValueError(f"{path}:{lineno}: unrecognised config key class header: {line!r}")
+        elif line.startswith("  "):
+            raise ValueError(
+                f"{path}:{lineno}: unexpected indented line outside a class group: {line!r}")
+    if current is not None and group_count == 0:
+        raise ValueError(f"{path}: empty classification group for {current!r}")
+    if (not classes or EXECUTION_NEUTRAL_CLASS not in classes.values()
+            or all(c == EXECUTION_NEUTRAL_CLASS for c in classes.values())):
+        raise ValueError(f"{path}: incomplete config key classification")
+    return MappingProxyType(classes)
+
+
+def config_key_classes(path=CONFIG_CLASSIFICATION_PATH):
+    """`{key: class_name}` from `Utils.config_key_classification` (via `digest_completeness.expected`)."""
+    return _load_config_key_classes(Path(path))
+
+
+def consistency_check(records, *, key_classes=None):
+    """`(problems, notes)` for configuration consistency across the clean cells of each arm
+    (gh-ocannl-2408).
+
+    - A key resolved to two or more distinct values within one arm is always a refusal (`problems`),
+      whatever its class.
+    - A key read in only some cells of an arm (every reading cell agreeing on one value) is judged
+      by `Utils.config_key_classification` (`config_key_classes()`, or `key_classes` when given):
+      - `execution-neutral` keys change nothing a kernel computes or how a schedule is chosen, so
+        they are listed in `notes` (informational, not a refusal).
+      - Every other class and any unclassified key (fail-closed) stays a refusal in `problems`,
+        naming the key's class and the fix.
+    """
+    problems, notes = [], []
     arms = {}
     for rec in records:
         if rec["config"] is not None:
             arms.setdefault(rec["arm"], []).append(rec)
+    classes = key_classes
     for arm, recs in arms.items():
         for key in sorted({k for r in recs for k in r["config"]}):
             values = {}
             for r in recs:
                 entry = r["config"].get(key)
                 values.setdefault(None if entry is None else entry["value"], []).append(r["cell"])
-            if len(values) > 1:
-                problems.append(f"arm {arm}: ocannl_{key} resolved differently -- " + "; ".join(
-                    ("not read" if v is None else repr(v)) + " in cell(s) "
-                    + ", ".join(map(str, cells)) for v, cells in values.items()))
-    return problems
+            if len(values) <= 1:
+                continue
+            detail = "; ".join(
+                ("not read" if v is None else repr(v)) + " in cell(s) "
+                + ", ".join(map(str, cells_)) for v, cells_ in values.items())
+            resolved = [v for v in values if v is not None]
+            if len(resolved) > 1:
+                problems.append(f"arm {arm}: ocannl_{key} resolved differently -- {detail}")
+                continue
+            if classes is None:
+                classes = config_key_classes()
+            cls = classes.get(key)
+            if cls == EXECUTION_NEUTRAL_CLASS:
+                notes.append(f"arm {arm}: ocannl_{key} ({cls}) read in some cells only -- {detail}")
+            elif cls is not None:
+                problems.append(
+                    f"arm {arm}: ocannl_{key} ({cls}) read in some cells only -- {detail} "
+                    "(check why the arm's cells took different paths, or reclassify as "
+                    "Execution_neutral in Utils.config_key_classification if it changes no result)")
+            else:
+                problems.append(
+                    f"arm {arm}: ocannl_{key} (unclassified) read in some cells only -- {detail} "
+                    "(check why the arm's cells took different paths, or classify in "
+                    "Utils.config_key_classification and refresh "
+                    "test/operations/digest_completeness.expected)")
+    return problems, notes
+
+
+def consistency_problems(records, *, key_classes=None):
+    """Refusal lines of `consistency_check`: settings resolved to two values within an arm, or
+    non-`execution-neutral` (or unclassified) settings read in only some cells of an arm."""
+    return consistency_check(records, key_classes=key_classes)[0]
+
+
+def consistency_notes(records, *, key_classes=None):
+    """Informational lines of `consistency_check`: `execution-neutral` settings read in only some
+    cells of an arm (every reading cell agreeing on one value)."""
+    return consistency_check(records, key_classes=key_classes)[1]
 
 
 def pins(backend):
@@ -649,8 +768,9 @@ def timed_results_problems(results, nothing):
 
 def run_level_problems(manifest, records):
     """The faults of a run that no single cell carries: a kernel compiler that could not be
-    identified, and an arm whose clean cells resolved a setting two ways. A driver re-judging a
-    finished run (`read_run`) applies these beside its per-cell checks, as the front end did."""
+    identified, and any arm whose clean cells fail `consistency_problems` (see `consistency_check`).
+    A driver re-judging a finished run (`read_run`) applies these beside its per-cell checks, as the
+    front end did."""
     problems = [f"arm {arm}: the kernel compiler could not be identified: {c['error']}"
                 for arm, c in manifest.get("kernel_compilers", {}).items() if "error" in c]
     return problems + consistency_problems([r for r in records if r["ok"]])

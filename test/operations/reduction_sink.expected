@@ -2,6 +2,7 @@ a bias-shaped reduction sinks q then r below o, and nothing else: true
 a two-loop bias reduction sinks its one reduction loop below o: true
 a reduction already innermost gets no interchange: true
 an accumulator a reduction loop's affine index also moves is left alone: true
+a plain-cell gradient sinks beside an overlapping-window input gradient: true
 an overwrite (no self-read) is not an accumulation and is left alone: true
 the optimizer has already sunk the bf16 accumulator: no chain, even at storage precision: true
 a bf16 accumulator its backend widens to f32 is left alone: true
@@ -9,13 +10,20 @@ the same bf16 accumulator kept at its storage precision is sunk (the control): t
 admitted, the widened bf16 accumulator is sunk by the chain it gets at its storage precision: true
 schedule_op_lines prints one line per op, a node as its label#id and never its record: true
 structural: for cuda the untuned plan sinks a segment with the seeding off, seeding none: true
+structural: the untuned Metal plan sinks a segment without sketching or splitting: true
+structural: Metal still only sinks with sketching and narrow admission requested: true
+structural control: Metal with the sink and split off derives no plan: true
 structural control: for cuda with the sink off nothing is sunk: true
 structural control: for cc no plan is derived: true
-on CUDA/HIP the untuned compile sinks a segment with the seeding off: true
-on CUDA/HIP the sunk routine compiles without falling back to the default: true
-on CUDA/HIP the default renders some accumulation against its cell: true
-on CUDA/HIP the sunk routine renders fewer accumulations against their cells: true
-off CUDA/HIP nothing is sunk: true
+structural: an inactive Metal schedule ignores a malformed sink flag: true
+structural: the Metal model compares sketches against the sunk plan when enabled: true
+structural: the Metal model admits the same sketches with the sink on and off: true
+structural control: the sketch-seeding restriction excludes an ordinary Metal sketch: true
+the untuned GPU compile sinks a segment with the seeding off: true
+the sunk routine compiles without falling back to the default: true
+the default renders some accumulation against its cell: true
+the sunk routine renders fewer accumulations against their cells: true
+the backend without the sink compiles without sinking: true
 with the seeding off nothing is seeded: true
 the bias gradient is not trivially zero: true
 the fixture is order-sensitive: a reversed f32 reduction differs from it in some cell: true

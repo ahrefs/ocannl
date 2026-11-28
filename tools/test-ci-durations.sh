@@ -96,6 +96,17 @@ Ubuntu [success] jobs=6 missing=1 unusable=2 unpaired=1
   rest: 2 2.0 6.0 10.0
   share: 2 50.0 65.0 80.0
 EXPECTED
+cat >"$TMP/expected-default" <<'EXPECTED'
+lukstafi/ocannl-staging  ci.yml  branch=master  event=any  runs=8
+
+job [conclusion]                                         n      min   median      max
+Ubuntu [cancelled]                                       1      5.0      5.0      5.0
+Ubuntu [skipped]                                         1     10.0     10.0     10.0
+Ubuntu [success]                                         6      0.0     10.0     20.0
+macOS [cancelled]                                        1      5.0      5.0      5.0
+macOS [skipped]                                          1     10.0     10.0     10.0
+macOS [success]                                          6      0.0     10.0     20.0
+EXPECTED
 printf '%s\n' 'api --method GET repos/lukstafi/ocannl-staging/actions/workflows/ci.yml/runs -f status=completed -f branch=master -f per_page=8 -f page=1 --jq .workflow_runs[].id' >"$TMP/calls"
 for id in 1 2 3 4 5 6 7 8; do
   printf '%s\n' "api --paginate --method GET repos/lukstafi/ocannl-staging/actions/runs/$id/jobs -f per_page=100 --jq .jobs[]" >>"$TMP/calls"
@@ -106,7 +117,7 @@ run_subject() {
   mkdir -p "$TMP/runs/$label"
   : >"$TMP/runs/$label/calls"
   PATH="$TMP/bin:$PATH" FAKE_CALLS="$TMP/runs/$label/calls" FIXTURES="$TMP" \
-    bash "$subject" --branch master -n 8 "$@" >"$TMP/runs/$label/stdout" 2>"$TMP/runs/$label/stderr" || rc=$?
+    "${BASH:-bash}" "$subject" --branch master -n 8 "$@" >"$TMP/runs/$label/stdout" 2>"$TMP/runs/$label/stderr" || rc=$?
   printf '%s\n' "$rc" >"$TMP/runs/$label/rc"
 }
 # Print evidence before cleanup, including a signal exit with empty stderr.
@@ -140,6 +151,12 @@ if [ "$(cat "$TMP/runs/jobs/rc")" = 0 ] \
   && grep -qE '^Ubuntu \[success\] +6 +0.0 +10.0 +20.0$' "$TMP/runs/jobs/stdout"; then
   report 0 "whole-job aggregation retains zero and conclusion grouping"
 else report 1 "whole-job aggregation" "$(subject_detail jobs)"; fi
+run_subject "$HERE/ci-durations.sh" default
+if [ "$(cat "$TMP/runs/default/rc")" = 0 ] \
+  && cmp -s "$TMP/expected-default" "$TMP/runs/default/stdout" \
+  && cmp -s "$TMP/calls" "$TMP/runs/default/calls" && [ ! -s "$TMP/runs/default/stderr" ]; then
+  report 0 "selector-free default invocation aggregates all jobs without --job or --step"
+else report 1 "selector-free default invocation" "$(subject_detail default "$TMP/expected-default")"; fi
 run_subject "$HERE/ci-durations.sh" invalid --step '['
 if [ "$(cat "$TMP/runs/invalid/rc")" != 0 ] && [ ! -s "$TMP/runs/invalid/calls" ] \
   && grep -q 'unterminated character set' "$TMP/runs/invalid/stderr"; then

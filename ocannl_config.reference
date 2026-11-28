@@ -414,18 +414,18 @@
 # about 2.4e-6 relative on gpt2_mini_train's losses). On gpt2_mini_train at batch 256 the split took
 # the CUDA step from 543 to 391 ms (RTX 5070 Ti); on HIP it was 1.42x slower until the split's
 # first pass ran its block loop outside the cell loops (gh-ocannl-1412), after which the HIP step
-# went from about 940 to 630 ms (gfx1151, unified memory). Ignored where
-# gpu_default_sketch_min_reduction is ignored too, except that it does not need the sketch seeding
-# on. 0 disables the split. At 1024 (gh-ocannl-1414), gpt2_mini_train at batch 256 splits its 26
-# bias and layer-norm parameter gradients and its loss sum (32768 rows each), as at 4096; at
-# batch 8 and at seq 512 x batch 2 (1024 rows) the same gradients, two loops wide there, plus the
-# vocabulary-wide softmax reductions, which took those steps from 15.2 to 12.6 ms and from 19.9 to
-# 15.9 ms. A 4096 threshold leaves the 1024-row steps unsplit.
+# went from about 940 to 630 ms (gfx1151, unified memory). Applies on CUDA, HIP and Metal
+# (gh-ocannl-2506); ignored on CPU backends and when automatic scheduling or fission is off. Does
+# not need sketch seeding on. 0 disables the split. At 1024 (gh-ocannl-1414), gpt2_mini_train at
+# batch 256 splits its 26 bias and layer-norm parameter gradients and its loss sum (32768 rows
+# each), as at 4096; at batch 8 and at seq 512 x batch 2 (1024 rows) the same gradients, two loops
+# wide there, plus the vocabulary-wide softmax reductions, which took those steps from 15.2 to
+# 12.6 ms and from 19.9 to 15.9 ms. A 4096 threshold leaves the 1024-row steps unsplit.
 #gpu_default_split_reduce_min_serial=1024
 
-# If true, the recipes' untuned compiles (the same ones gpu_default_sketch_min_reduction applies
-# to) sink the reduction loops of each CUDA or HIP fission segment no sketch takes below their
-# write loops before the default preset maps it (gh-ocannl-1348). Backprop lowers a reduction into
+# If true, the recipes' untuned compiles sink eligible reduction loops below their write loops
+# before the default preset maps the segment (gh-ocannl-1348). This applies to unseeded segments on
+# CUDA and HIP and to plain-cell reductions on Metal (gh-ocannl-2507). Backprop lowers a reduction into
 # a small output -- a bias or layer-norm parameter gradient, reduced over the batch -- with its
 # reduction loops outermost, so the preset maps the output loop to hardware below them and every
 # thread reads and writes its device-memory cell once per reduction step; sunk, the accumulator
@@ -433,10 +433,9 @@
 # unchanged: only accumulations whose output cell is one tuple of write-loop values are sunk, so
 # every cell keeps its summation order, and one whose accumulator would be wider than its storage is
 # left alone (such a site of lowered code arrives already sunk, on every backend, by the
-# optimizer's narrow-target sink, gh-ocannl-2362: see bf16_arithmetic). Ignored where
-# gpu_default_sketch_min_reduction is: on a budgeted compile, on Metal
-# and the CPU backends. Independent of the threshold: with the
-# seeding disabled (0) the sink still applies, to every segment.
+# optimizer's narrow-target sink, gh-ocannl-2362: see bf16_arithmetic). Ignored on budgeted
+# compiles, on CPU backends and when automatic scheduling or fission is off. Independent of the
+# sketch threshold: with seeding disabled, eligible segments can still sink.
 #gpu_default_reduction_sink=true
 
 # If true, the untuned CUDA/HIP default's reduction sink (above) also takes the sites whose
@@ -1439,6 +1438,15 @@
 # this rate on both schedules so it can compare an unstaged preset with a staged sketch.
 # Unset/empty uses the backend's value. Same cache identity as model_cache_capacity.
 #model_staged_copy_rate=
+
+# gh-ocannl-2280: overrides the backend's advisory staged-idle rate, in refused bytes/s, of the
+# ranking score: when a Workgroup i < c partition guard encloses a staged operand copy (e.g. a
+# 64x64x8/4x4 blocktile copying an 8-deep k-tile across a 16-thread axis), the refused workgroup
+# lanes' bytes over their launch fill are added to the compute leg over this rate. Fit it with
+# `benchmarks/gh1600_txn_fit.py --idle-rate`. `none`: no term. Unset/empty uses the backend's
+# value. Read by model_default's ranking and model_explain, not the auto seeding gate. Same cache
+# identity as model_cache_capacity.
+#model_staged_idle_rate=
 
 # gh-ocannl-2262: overrides the backend's advisory shared-load rate of the ranking score, in
 # workgroup-memory cells per second. Per k-step a thread of an rm x rn register tile reads rm + rn

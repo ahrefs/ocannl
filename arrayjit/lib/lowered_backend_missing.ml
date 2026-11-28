@@ -36,6 +36,7 @@ struct
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
   let free_pool = None
+  let has_pool _device ~pool_id:_ = false
 
   let zero_ranges _device _ranges =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
@@ -99,6 +100,7 @@ struct
   let backend_facts = Config.backend_facts
   let classify_failure _phase _exn = None
   let bounded_await = None
+  let align_timing_queue _device ~await:_ = false
 
   let get_debug_info _device =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"

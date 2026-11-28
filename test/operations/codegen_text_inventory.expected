@@ -535,6 +535,8 @@ test/operations/scope_collapse_rounding.ml [run by @test/operations/runtest-scop
 test/operations/select_blend_override.ml [run by @test/operations/runtest-select_blend_override; also pins text this scan cannot name: computed fragment]
 test/operations/simplify_rng_operands.ml [run by @test/operations/runtest-simplify_rng_operands]
 test/operations/source_tokens_joined.ml [renders generated text in memory; run by @test/operations/runtest-source_tokens_joined]
+test/operations/stage_copy_partition.ml [run by @test/operations/runtest-stage_copy_partition]
+    "__attribute__((aligned(16)))"
 test/operations/test_bounds_folded_gather.ml [run by @test/operations/runtest-test_bounds_folded_gather]
     "!= 0 ?"
     "!= 0.0 ?"
@@ -777,6 +779,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-select_blend_override
 @test/operations/runtest-simplify_rng_operands
 @test/operations/runtest-source_tokens_joined
+@test/operations/runtest-stage_copy_partition
 @test/operations/runtest-test_bounds_folded_gather
 @test/operations/runtest-test_ident_blacklist
 @test/operations/runtest-test_log_stmt_format
@@ -862,9 +865,11 @@ Ll_test.run_routine [through Ll_test.link]
 roots scanned: arrayjit/test, test
 arrayjit/test/test_cross_cse.ml [staged callback; run by @arrayjit/test/runtest-test_cross_cse]
 arrayjit/test/test_vectorized_codegen.ml [staged callback; run by @arrayjit/test/runtest-test_vectorized_codegen]
+test/operations/access_fold.ml [staged callback; run by @test/operations/runtest-access_fold]
 test/operations/accum_max_one_extent.ml [through Ll_test.execute; run by @test/operations/runtest-accum_max_one_extent]
 test/operations/accum_width.ml [staged callback; through Ll_test.execute; run by @test/operations/runtest-accum_width]
 test/operations/affine_extraction.ml [staged callback; run by @test/operations/runtest-affine_extraction]
+test/operations/autotune_grid_record.ml [through Ll_test.link; through Ll_test.run; run by @test/operations/runtest-autotune_grid_record]
 test/operations/autotune_nothing_timed.ml [prelowered compile; run by @test/operations/runtest-autotune_nothing_timed]
 test/operations/autotune_timing_modes.ml [through Ll_test.link; run by @test/operations/runtest-autotune_timing_modes]
 test/operations/back_to_back_runs.ml [prelowered compile; run by @test/operations/runtest-back_to_back_runs]
@@ -880,6 +885,7 @@ test/operations/capture_pass_side_effects.ml [through Ll_test.execute; through L
 test/operations/cc_half_excess_precision.ml [through Ll_test.execute; run by @test/operations/runtest-cc_half_excess_precision]
 test/operations/cc_kernel_outline.ml [through Ll_test.execute; run by @test/operations/runtest-cc_kernel_outline]
 test/operations/cc_march_census.ml [through Ll_test.link; run by @test/operations/runtest-cc_march_census-emission, @test/operations/runtest-cc_march_census-emission-outlined, @test/operations/runtest-cc_march_census-w16_native_foreign, @test/operations/runtest-cc_march_census-w16_native_host, @test/operations/runtest-cc_march_census-w16_wide_foreign, @test/operations/runtest-cc_march_census-w16_wide_host, @test/operations/runtest-cc_march_census-w32_native_foreign, @test/operations/runtest-cc_march_census-w32_native_host, @test/operations/runtest-cc_march_census-w32_wide_foreign, @test/operations/runtest-cc_march_census-w32_wide_host, @test/operations/runtest-cc_march_census-w64_native_foreign, @test/operations/runtest-cc_march_census-w64_native_host, @test/operations/runtest-cc_march_census-w64_wide_foreign, @test/operations/runtest-cc_march_census-w64_wide_host]
+test/operations/cc_workgroup_shared_staging.ml [prelowered compile; run by @test/operations/runtest-cc_workgroup_shared_staging]
 test/operations/codegen_fma_precision.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-codegen_fma_precision]
 test/operations/compile_failure_declines.ml [staged callback; prelowered compile; run by @test/operations/runtest-compile_failure_declines]
 test/operations/context_handle_refusals.ml [through Ll_test.link; run by @test/operations/runtest-context_handle_refusals]
@@ -901,6 +907,7 @@ test/operations/gather_table_placement.ml [through Ll_test.execute; run by @test
 test/operations/gpu_lane_reduction.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-gpu_lane_reduction]
 test/operations/gpu_packed_prec.ml [through Ll_test.execute; run by @test/operations/runtest-gpu_packed_prec]
 test/operations/gpu_parallel_prefix.ml [through Ll_test.execute; run by @test/operations/runtest-gpu_parallel_prefix]
+test/operations/gpu_resource_fault_injection.ml [prelowered compile; run by @test/operations/runtest-gpu_resource_fault_injection]
 test/operations/gpu_serial_lanes.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-gpu_serial_lanes]
 test/operations/gpu_small_leading_axis.ml [through Ll_test.execute; run by @test/operations/runtest-gpu_small_leading_axis]
 test/operations/half_float_power.ml [through Ll_test.execute; run by @test/operations/runtest-half_float_power]
@@ -1003,9 +1010,11 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 # sections but is absent from this kernel-execution list.
 @arrayjit/test/runtest-test_cross_cse
 @arrayjit/test/runtest-test_vectorized_codegen
+@test/operations/runtest-access_fold
 @test/operations/runtest-accum_max_one_extent
 @test/operations/runtest-accum_width
 @test/operations/runtest-affine_extraction
+@test/operations/runtest-autotune_grid_record
 @test/operations/runtest-autotune_nothing_timed
 @test/operations/runtest-autotune_timing_modes
 @test/operations/runtest-back_to_back_runs
@@ -1037,6 +1046,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-cc_march_census-w64_native_host
 @test/operations/runtest-cc_march_census-w64_wide_foreign
 @test/operations/runtest-cc_march_census-w64_wide_host
+@test/operations/runtest-cc_workgroup_shared_staging
 @test/operations/runtest-codegen_fma_precision
 @test/operations/runtest-compile_failure_declines
 @test/operations/runtest-context_handle_refusals
@@ -1061,6 +1071,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-gpu_lane_reduction
 @test/operations/runtest-gpu_packed_prec
 @test/operations/runtest-gpu_parallel_prefix
+@test/operations/runtest-gpu_resource_fault_injection
 @test/operations/runtest-gpu_serial_lanes
 @test/operations/runtest-gpu_small_leading_axis
 @test/operations/runtest-half_float_power
@@ -1276,6 +1287,9 @@ no source hides a route to generated text behind an open: true
 no test source reads build_files/ itself: generated code is read through Test_utils.Generated: true
 no test source reads a kernel's statements after its Main logic banner unexempted: they are read through Test_utils.Generated.main_logic: true
 every after-marker exemption still names a file reading after the banner: true
+live support aliases attribute an emitter call through an opened Ll_test LL alias: true
+live support aliases refuse opening an emitter alias imported from Ll_builders: true
+live support aliases keep Winner_fixture's .mli-hidden LL alias out of scope: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:a59159ac0fd0f431da9519f8016e6762] every scanned root
@@ -1296,4 +1310,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:7b848f96a84cc15bb6e1027465d08502] Test_utils.Generated
   [scanner-refusal:968edb53fac5a4cfadb338c2a0873278] Test_utils.Generated.main_logic
   [scanner-refusal:65ac789025a090533ae12a66e44fab25] every after-marker exemption
+  [scanner-refusal:ede9d4d135607a80167d420fbbfbbd57] Ll_test
+  [scanner-refusal:feb6a35da6fc5be9e0f1f066c82d6160] Ll_builders
+  [scanner-refusal:89659ed1bd4316a75b179801ae387bb5] Winner_fixture's
 End of synthetic controls.

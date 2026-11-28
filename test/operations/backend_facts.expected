@@ -5,7 +5,9 @@ on cc, codegen_capabilities.select_blend reports Blend_truth at f32 and f64 and 
 under with_select_blend ~blend:false, codegen_capabilities.select_blend answers None: true
 grid_execution alone moves the GPU and CPU search-shaping key reads: true
 workgroup_shared_placement alone moves whether a node may be kept off the device: true
-seeds_untuned_default alone moves whether the seeded plan's keys are read: true
+the sketch and seeded-singles keys follow the sketch seeding fact: true
+sinks_untuned_reductions alone moves whether the untuned sink key is read: true
+splits_untuned_reductions alone moves whether the untuned split key is read: true
 queued_timing alone moves the queued batch depth cap: true
 retries_contended_window alone moves the contended-window retry: true
 host_load_attributable alone moves the dispersion policy: true

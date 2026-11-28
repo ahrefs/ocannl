@@ -841,6 +841,16 @@ files.
   `lowered_nest_order`'s narrow legs and `narrow_grad_residency` (a bf16 dense layer's three
   gradients onto nonzero incoming values equal an f32 twin's exact sums narrowed once on the default,
   the privatized preset and the seeded CUDA/HIP default, whose shipped `acc` tiles are f32).
+- In the gh-ocannl-2422 LeNet comparison, affine-window sinking changed which gradients shared
+  a Metal kernel (gh-ocannl-2507). The conv2 bias went from 16 lanes to one thread. The weight
+  gradient moved from 2,400 active lanes in its own launch to 2,400 of the 75,264 lanes in the
+  combined launch with the input gradient. The input gradient's 14×14 owner grid scans 5×5
+  candidate taps per cell for a 10×10 valid output, so only 2,500 of the 4,900 owner/tap pairs
+  reach the channel loop. The Metal schedule-time sink keeps affine-window writes on the preset.
+- In the same `cifar_resnet` comparison, all six input gradients that gained a new launch geometry
+  were standalone both before and after the affine-window rewrite. Each gained spatial lanes
+  alongside batch and channel ownership. The LeNet companion effects depend on the fission
+  outcome, so tap size and padding alone give an incomplete profitability test.
 - **What forces one of the two RMW forms**, i.e. the declines a property test must be able to
   provoke: `debug_log_from_routines` (the per-step `Set` trace names the source assignment and the
   node's cell each step; a localized scope's steps would log a codegen-minted local instead —
@@ -1480,12 +1490,14 @@ files.
   describes them. A new site calls the predicate rather than restating a conjunct; a loop change
   is a change to that function, which `mma_format_arm_tables` counts device-free.
 - **Maintainer-approved default-on numerics gate for the untuned GPU split**
-  (gh-ocannl-1325, CUDA and HIP since gh-ocannl-1412,
+  (gh-ocannl-1325, CUDA and HIP since gh-ocannl-1412, Metal since gh-ocannl-2506,
   `gpu_default_split_reduce_min_serial`). It reassociates the long, narrow reductions of a training
   step (bias and layer-norm parameter gradients, the loss sum) into a deterministic tree over
   blocks chosen from the routine alone, and ships ON by default in the exact regime rather than
   in the `approximate` payload: within ~2.4e-6 relative on gpt2_mini_train b256's losses, for
-  543 → 391 ms on CUDA; on HIP (minix, b256) within ~2.2e-6 relative as well. gh-ocannl-1414 lowered the default threshold to 1024 (the wave coordinator
+  543 → 391 ms on CUDA; on HIP (minix, b256) within ~2.2e-6 relative as well; on Metal (M4 Max,
+  bf16 b8 `gpt2_mini_train`) within `1.9e-4` abs across 6 step losses (bf16 activations), for
+  45.58 → 39.83 ms synced / 36.93 → 30.31 ms queued. gh-ocannl-1414 lowered the default threshold to 1024 (the wave coordinator
   approved it on the measurement), which extends it to the batch-8 and long-sequence steps' 1024-row
   reductions: within ~1.1e-6 relative on their losses, for 15.2 → 12.6 ms at b8. The `reproducible` profile pins it at 0. The precedent the decision rests
   on: the default GPU plan's cooperative all-reduces (gh-ocannl-1124) and, under the default
@@ -1495,7 +1507,10 @@ files.
   and `reproducible` pins it off. It lets the analytic model rank legal tensorized matmuls on
   seeded CUDA/HIP, where the matrix instruction can round an f32-accumulating narrow product
   differently from the scalar blocktile. The CUDA/HIP codegen tag hashes the disabled setting
-  and keeps existing cache keys at the default.
+  and keeps existing cache keys at the default. The untuned default (`Autotune.seeded_default`)
+  keeps `Autotune.scalar_blocktile` only after exclusive CUDA and HIP (unified and discrete)
+  measurements showed net regressions on `gpt2_mini_train` under current single-warp GPU MMA
+  sketches (gh-ocannl-2360; measurements in `docs/agent-notes/scheduling-and-autotune.md`).
 - **The `approximate` profile is the one word for the numerics-changing regime** (gh-ocannl-719):
   the `performance` payload plus `tf32_matmuls=true`, `cc_backend_fast_math=true`,
   `cc_backend_fp_contract=fast` and `tune_inline_flips=2`, contract "results differ from the exact

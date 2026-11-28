@@ -1,11 +1,11 @@
 the prefill of the targets differs from the serial twin's result in every cell: true
-swizzled SMEM matmul parity (GPU) or clean rejection (CPU): true
-tile accesses XOR-swizzled (GPU) or rejected (CPU): true
-b128-swizzled SMEM matmul parity (GPU) or clean rejection (CPU): true
-tile accesses b128-swizzled (GPU) or rejected (CPU): true
-pad_stride SMEM matmul parity (GPU) or clean rejection (CPU): true
-pad_stride widens the tile stride (GPU) or rejected (CPU): true
-swizzled staged+tensorized parity (GPU) or clean rejection (CPU): true
+swizzled SMEM matmul parity (GPU and CPU): true
+tile accesses XOR-swizzled (GPU): true
+b128-swizzled SMEM matmul parity (GPU and CPU): true
+tile accesses b128-swizzled (GPU): true
+pad_stride SMEM matmul parity (GPU and CPU): true
+pad_stride widens the tile stride (GPU): true
+swizzled staged+tensorized parity (GPU and CPU): true
 swizzled operands decline the MMA intrinsics to the lane-0 fallback: true
 swizzle requires shared staging: true
 swizzle requires at least two tile axes: true

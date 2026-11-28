@@ -1,11 +1,11 @@
 the prefill of the accumulator differs from the serial twin's result in every cell: true
-SMEM matmul parity (GPU) or clean rejection (CPU): true
-shared tiles, barriers, no edge guards (GPU) or rejected (CPU): true
+SMEM matmul parity (GPU and CPU): true
+shared tiles, barriers, no edge guards (GPU): true
 structural: the SMEM schedule places two tiles in workgroup-shared memory: true
 structural: it inserts barriers: true
 structural: no guard survives over the tile copies: true
 structural: every tile store is partitioned across both Workgroup loops: true
-broadcast staging values correct (GPU) or clean rejection (CPU): true
+broadcast staging values correct (GPU and CPU): true
 broadcast load is partitioned under the workgroup axis: true
 structural: the broadcast schedule places one tile in workgroup-shared memory: true
 structural: the broadcast load is not guarded: true

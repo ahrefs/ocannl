@@ -1242,9 +1242,10 @@ let () =
      stall over twice that base, so it is retried. The clean retry's fit puts the crossing at 12,
      which is sampled there. Against 14 that sample fits a fixed term just under the target, a
      crossing of one launch, and a settle at depth 1 the singles contradict. The rescue below the
-     shallowest over-target batch (12) reads within the target at 11. Every batch is under two
-     target-sized batches, so every probe takes all twelve minima, and the seven probes before the
-     sampled crossing spend ~898 ms: the wall budget ends nothing early. *)
+     shallowest over-target batch (12) tries depth 9, which reads 144 ms from the default branch.
+     The probe at depth 10 already read 9.5 ms and remains usable. Before rescue, every batch is
+     under two target-sized batches, so every probe takes all twelve minima, and the seven probes
+     before the sampled crossing spend ~898 ms: the wall budget ends nothing early. *)
   let longest_clean d =
     match d with
     | 1 -> 2.5
@@ -1277,6 +1278,35 @@ let () =
     device "a confirmation stall that spends the budget" ~launch_ms:2.5 (fun d ->
         match d with 1 -> 2.5 | 4 -> 10. | 5 -> 320. | d -> 2.5 *. Float.of_int d)
   in
+  (* The depth-32 confirmation stalls twice, leaving depth 26 at 10.3 ms as the shallowest
+     over-target probe. A rescue near that crossing still reads over target under shared-device
+     noise (10.15 ms at depth 25), though depth 20 has ample headroom. The control has genuinely
+     over-target work at every batched depth. *)
+  let rescue_device what shallower_wall =
+    device what ~launch_ms:0.392 (function
+      | 1 -> 0.392
+      | 26 -> 10.3
+      | d when d < 26 -> shallower_wall d
+      | _ -> 24.)
+  in
+  let noisy_rescue =
+    rescue_device "mild overshoot on a shared device" (fun d -> 0.15 +. (0.4 *. Float.of_int d))
+  and over_target_rescue = rescue_device "every batched depth over target" (fun _ -> 10.125) in
+  let rescued_at (c : synthetic_call) =
+    match List.last c.probes with
+    | Some { role = Rescue_probe; depth; min_ms; _ } ->
+        Stdio.eprintf "  (not part of the golden) rescue at depth %d read %g ms\n%!" depth min_ms;
+        Some depth
+    | _ -> None
+  in
+  p "a mildly overshot probe leaves enough headroom for the rescue to time queued work"
+    (Option.equal Int.equal (rescued_at noisy_rescue) (Some 20)
+    && noisy_rescue.settled_depth = 20
+    && Option.is_some (Autotune.admitted_timing_ms noisy_rescue.reading));
+  p "a rescue that measures genuinely over-target work still refuses the candidate"
+    (Option.is_some (rescued_at over_target_rescue)
+    && over_target_rescue.reading.unbatched
+    && Option.is_none (Autotune.admitted_timing_ms over_target_rescue.reading));
   let every_device =
     [
       ("slow, unresolved fits", slow);
@@ -1297,12 +1327,14 @@ let () =
       ("microsecond, exhausted wall budget", micro_wall_stopped);
       ("the longest calibration path", longest);
       ("a confirmation stall that spends the budget", stall_at_budget);
+      ("mild overshoot on a shared device", noisy_rescue);
+      ("every batched depth over target", over_target_rescue);
     ]
   in
   let is_rescue (pr : Autotune.calibration_probe) =
     match pr.role with Rescue_probe -> true | _ -> false
   in
-  (* The rescue is exempt: it is charged to no budget, because its depth bounds its own wall. *)
+  (* The calibration reserves its last probe for the rescue, even after the wall budget is spent. *)
   Verdict.p_all
     "no calibration probe but the rescue starts once the probes' wall has reached the budget"
     every_device ~f:(fun (what, c) ->
@@ -1425,13 +1457,14 @@ let () =
          Crossing_probe;
          Rescue_probe;
        ]);
-  p "the longest calibration path's rescue probes rescue_depth and times the candidate there"
+  p "when the last rescue probe misses, the deepest in-target batch already measured is timed"
     (match List.split_n longest.probes (List.length longest.probes - 1) with
     | earlier, [ ({ role = Rescue_probe; _ } as rescue) ] ->
         Option.equal Int.equal
           (Autotune.rescue_depth ~observed:(List.map earlier ~f:(fun pr -> (pr.depth, pr.min_ms))))
           (Some rescue.depth)
-        && longest.settled_depth = rescue.depth
+        && Float.(rescue.min_ms > Autotune.queued_batch_ms)
+        && longest.settled_depth = 10
         && Option.is_some (Autotune.admitted_timing_ms longest.reading)
     | _ -> false);
   (* [time_routine]'s documented queued maximum, over every synthetic device in this file: a warmup
@@ -1549,14 +1582,15 @@ let () =
       | 8 -> 3.5
       | d -> 0.625 *. Float.of_int d)
   in
-  (* Negative control 1: persistent >2x stall on confirmation must still retry once and fall back to
-     [Cap_unresolved] -> [refused_unbatched], never settling at depth 20. *)
+  (* Negative control 1: persistent >2x stall on confirmation must still retry once. The shallower
+     depths also read over target, so this device ends at [Cap_unresolved] ->
+     [refused_unbatched]. *)
   let persistent_confirm_stall =
     device "persistent >2x stall on confirmation" ~launch_ms:0.5 (function
       | 1 -> 0.5
       | 20 -> 10.125
       | 25 -> 25.0
-      | 19 -> 10.5
+      | d when d < 20 -> 10.0625
       | d -> 0.5 *. Float.of_int d)
   in
   (* Negative control 2: stalled upper batch in crossing interpolation (per-launch ratio 5.125 >
@@ -1703,15 +1737,15 @@ let () =
    configured, and a nest heavy enough to be interesting would run as a single work item there. *)
 let counter_node = Ll_test.node_factory ~first_id:9900 ~dims:[| 1 |] () "gh755_counter"
 
-let counter_routine () =
+let counter_routine ?(name = "gh755_counter") () =
   Ll_test.materialize counter_node;
   let idx = Ll_test.fixed 0 in
   let bump =
     Ll_test.set_at counter_node idx
       (Ll_test.add (Ll_test.get counter_node [| idx |]) (Ll_test.c 1.))
   in
-  let o = Ll_test.optimize ~materialized:[ counter_node ] ~name:"gh755_counter" bump in
-  let ctx, routine = Ll_test.link ~name:"gh755_counter" o in
+  let o = Ll_test.optimize ~materialized:[ counter_node ] ~name bump in
+  let ctx, routine = Ll_test.link ~name o in
   (o, ctx, routine)
 
 type reading = {
@@ -2274,3 +2308,36 @@ let () =
   Verdict.p_all "the key's objective spelling round-trips through the mode"
     [ Autotune.Isolated; Autotune.Queued ] ~f:(fun m ->
       Poly.equal (Autotune.timing_of_setting (Autotune.timing_string m)) m)
+
+let () =
+  let _, ctx, routine = counter_routine ~name:"gh2509_alignment_counter" () in
+  let ctx = Context.set_values ctx counter_node [| 0. |] in
+  let events = ref [] in
+  let record event = events := event :: !events in
+  let module Driver = struct
+    include Autotune.Context_driver
+
+    let align_timing_queue _ctx ~await =
+      record `Align;
+      await ();
+      true
+
+    let run ?timing ctx routine =
+      record `Run;
+      Context.run ?timing ctx routine
+
+    let await_within ctx ~seconds =
+      record `Await;
+      Context.await_within ctx ~seconds
+  end in
+  let module Timing = Autotune.Make (Driver) in
+  let clock ~depth ~ordinal:_ _ = Float.of_int depth in
+  Autotune.Seam.with_value Autotune.on_batch_wall clock (fun () ->
+      ignore
+        (Timing.time_routine ~repeats:1 ~timing:Autotune.Isolated ctx routine
+          : Autotune.timing_result));
+  let trace = List.rev !events in
+  p "time_routine aligns the timing queue once and drains it before warmup"
+    (Poly.equal (List.take trace 3) [ `Align; `Await; `Run ]
+    && List.count trace ~f:(Poly.equal `Align) = 1);
+  Context.release ctx

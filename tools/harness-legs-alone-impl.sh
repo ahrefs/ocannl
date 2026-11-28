@@ -33,6 +33,12 @@
 # each skip is charged to the leg it came from, OCANNL_TOOL_HARNESS_SKIP_LEGS). Each finding says
 # whether the full run passed: "passes in the full run" names an
 # order-dependent leg; a red full run is reported first and on its own.
+# Failure excerpts read the captured stdout and stderr, starting up to five
+# lines before the first FAIL, aborted or --only marker at the start of a
+# line. Without a marker they show the tail. Diagnostics within this window
+# are copied without interpreting their format, up to 40 lines and 512
+# bytes per line, ending before any split UTF-8 character. The log path on
+# the failure header points to the full output.
 #
 # With no HARNESS, discover candidates from the paths in tools/test-harnesses.sh
 # --list. The pre-filter looks for literal harness_leg or harness_leg_run
@@ -204,8 +210,25 @@ member() { # LOG SCRIPT [ARG...] -- one run; rc in $rc
     baseline=$after
   fi
 }
-excerpt() { # LOG -- the lines a finding is read from
-  grep -E '^(FAIL  |      |SKIP  |aborted |--only )' "$1" | head -20 | sed 's/^/        /'
+excerpt() { # LOG
+  local first start end
+  first=$(LC_ALL=C grep -anm 1 -E '^(FAIL  |aborted |--only )' "$1" | cut -d: -f1)
+  {
+    if [ -n "$first" ]; then
+      start=$((first > 5 ? first - 5 : 1))
+      end=$((start + 39))
+      sed -n "${start},${end}p;${end}q" "$1"
+    else
+      tail -n 40 "$1"
+    fi
+  } | perl -C0 -lne '
+    if (length > 512) {
+      $_ = substr($_, 0, 512);
+      # Drop an incomplete two-, three- or four-byte UTF-8 character at the cut.
+      s/(?:[\xC2-\xDF]|[\xE0-\xEF][\x80-\xBF]{0,1}|[\xF0-\xF4][\x80-\xBF]{0,2})\z//;
+    }
+    print "        $_";
+  '
 }
 findings=0 red=0 checked=0 bad_listing=0
 baseline=$(checkout_state)

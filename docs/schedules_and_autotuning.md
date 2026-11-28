@@ -328,6 +328,11 @@ the retained procedural analyses alongside the affine engine and raises on diver
   loops first (`Autotune.reduction_sink`, gh-ocannl-1348; `gpu_default_reduction_sink`), so a
   bias or layer-norm parameter gradient reduced over the batch keeps its accumulator in a register
   rather than in its device cell; each cell keeps its summation order.
+  Metal uses the same plain-cell sink (gh-ocannl-2507) and untuned split-reduce prelude
+  (`gpu_default_split_reduce_min_serial`, gh-ocannl-2506). Its search gains the sunk/split plan as
+  a floor and retains the ordinary coarse and fine singles. With model scheduling enabled, that
+  plan is the model's incumbent and searched prelude, and the existing Metal sketch family still
+  competes.
   A site whose accumulator is wider than its storage (a bf16 gradient on CUDA, an f16 one on CUDA
   and HIP under the default `fp16_arithmetic`, fp8) is seeded in every profile (gh-ocannl-2195): a
   seeded contraction computes the default's result, since its private tile is wide exactly where

@@ -60,7 +60,7 @@ let access_cells ?(fixed = fun (_ : Idx.symbol) -> false) (a : Tn.t Affine.acces
   else if concat then (node_cells, true)
   else
     let domain =
-      List.filter_map a.a_loops ~f:(fun (s, (lo, hi)) ->
+      List.filter_map (Affine.Loop_chain.to_alist a.a_loops) ~f:(fun (s, (lo, hi)) ->
           if fixed s then None else Some (s, hi - lo + 1))
     in
     let box = List.fold domain ~init:1 ~f:(fun acc (_, w) -> acc * w) in
@@ -69,7 +69,7 @@ let access_cells ?(fixed = fun (_ : Idx.symbol) -> false) (a : Tn.t Affine.acces
       | `Exact f -> (box / max 1 f, not uninterpretable)
       | `At_least f -> (box / max 1 f, false)
     in
-    let range s = List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol in
+    let range s = Affine.Loop_chain.find a.a_loops s in
     match a.a_dyn_axis with
     | Some _ ->
         (* The data picks a value of the coordinate the view marks unknown — the dynamic axis with
@@ -735,10 +735,12 @@ let access_cells_floor (a : Tn.t Affine.access) : int * bool =
   else if a.a_guarded || a.a_gated || a.a_whole then (0, false)
   else
     let dims = Lazy.force a.a_tn.Tn.dims in
-    let range s = List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol in
+    let range s = Affine.Loop_chain.find a.a_loops s in
     let run = if a.a_vec_last && a.a_vec_len > 1 then Some a.a_vec_len else None in
     let v = Affine.view ?dyn_axis:a.a_dyn_axis ~dims a.a_map in
-    let domain = List.map a.a_loops ~f:(fun (s, (lo, hi)) -> (s, hi - lo + 1)) in
+    let domain =
+      List.map (Affine.Loop_chain.to_alist a.a_loops) ~f:(fun (s, (lo, hi)) -> (s, hi - lo + 1))
+    in
     (min (Tn.num_elems a.a_tn) (Affine.image_cardinality_lb ~range ?run ~domain v), false)
 
 let floor_flops ~open_placement (code : Low_level.t) : int * bool =
@@ -841,8 +843,7 @@ let floor_flops ~open_placement (code : Low_level.t) : int * bool =
 
 (* An enclosing dead loop makes an access never execute; the per-access filter complements the
    node-granular [dead] set (which covers whole-node fallbacks whose loop context is coarser). *)
-let under_dead_loop (a : Tn.t Affine.access) =
-  List.exists a.a_loops ~f:(fun (_, (lo, hi)) -> hi < lo)
+let under_dead_loop (a : Tn.t Affine.access) = not (Affine.loops_live a.a_loops)
 
 let completion_floor ?(open_placement = fun _ -> false) (code : Low_level.t) : floor =
   let flops, flops_exact = floor_flops ~open_placement code in
@@ -1002,10 +1003,11 @@ let serial_reread_factors ~is_serial ~is_global ~capacity ~nest_bytes
     Hashtbl.find_or_add footprints s ~default:(fun () ->
         let per_node = Hashtbl.create (module Tn) in
         List.iter reads ~f:(fun (b : Tn.t Affine.access) ->
-            match List.findi b.a_loops ~f:(fun _ (s', _) -> Idx.equal_symbol s s') with
+            let loops = Affine.Loop_chain.to_alist b.a_loops in
+            match List.findi loops ~f:(fun _ (s', _) -> Idx.equal_symbol s s') with
             | None -> ()
             | Some (depth, _) ->
-                let held = List.take b.a_loops (depth + 1) in
+                let held = List.take loops (depth + 1) in
                 let fixed v = List.exists held ~f:(fun (h, _) -> Idx.equal_symbol h v) in
                 let cells = fst (access_cells ~fixed b) in
                 Hashtbl.update per_node b.a_tn ~f:(fun prev ->
@@ -1030,7 +1032,7 @@ let serial_reread_factors ~is_serial ~is_global ~capacity ~nest_bytes
               List.exists terms ~f:(fun (c, s') -> c <> 0 && Idx.equal_symbol s s')
           | Affine.Unknown _ -> true)
       in
-      List.fold a.a_loops ~init:1 ~f:(fun factor (s, (lo, hi)) ->
+      List.fold (Affine.Loop_chain.to_alist a.a_loops) ~init:1 ~f:(fun factor (s, (lo, hi)) ->
           let w = hi - lo + 1 in
           if w > 1 && is_serial s && (not (mentions s)) && footprint s > capacity then factor * w
           else factor)
@@ -1056,7 +1058,9 @@ let reuse_traffic ?cache_capacity_bytes ?max_resident_threads ~is_global (code :
         Hashtbl.set scratch ~key:a.a_tn ~data:();
         scratch_order := a.a_tn :: !scratch_order);
       if (not a.a_write) && is_global a.a_tn then (
-        let grid = List.filter a.a_loops ~f:(fun (s, _) -> is_grid s) in
+        let grid =
+          List.filter (Affine.Loop_chain.to_alist a.a_loops) ~f:(fun (s, _) -> is_grid s)
+        in
         let blocks = List.fold grid ~init:1 ~f:(fun acc (_, r) -> acc * width r) in
         let per_block = min (Tn.num_elems a.a_tn) (fst (access_cells ~fixed:is_grid a)) in
         let w = Ops.prec_in_bytes (Lazy.force a.a_tn.Tn.storage_prec) in
@@ -1298,6 +1302,7 @@ type shared_load_context = { sl_blocks : int; sl_threads : int; sl_loads : float
 
 type operand_census = {
   oc_staged : staged_copy_context list;
+  oc_idle : staged_copy_context list;
   oc_direct : staged_copy_context list;
   oc_shared : shared_load_context list;
 }
@@ -1311,7 +1316,7 @@ let operand_census ?is_global ?(shared = false) ~is_staged (code : Low_level.t) 
     | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> has_tile_mma body
     | _ -> false
   in
-  if has_tile_mma code then { oc_staged = []; oc_direct = []; oc_shared = [] }
+  if has_tile_mma code then { oc_staged = []; oc_idle = []; oc_direct = []; oc_shared = [] }
   else
     let tally () =
       let tbl = Hashtbl.Poly.create () and order = ref [] in
@@ -1330,6 +1335,7 @@ let operand_census ?is_global ?(shared = false) ~is_staged (code : Low_level.t) 
       (add, contexts)
     in
     let add_staged, staged = tally () in
+    let add_idle, idle = tally () in
     let direct = Option.map is_global ~f:(fun is_global -> (is_global, tally ())) in
     let shared_tally = if shared then Some (tally ()) else None in
     let fresh () = Hash_set.Poly.create () in
@@ -1357,30 +1363,35 @@ let operand_census ?is_global ?(shared = false) ~is_staged (code : Low_level.t) 
     let bytes scale tn =
       Float.of_int scale *. Float.of_int (Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec))
     in
-    (* The iterations an [i < c] guard admits, as (index, admitted), where [i] is an enclosing
-       loop's index from 0 -- at most what the enclosing guards already admit of it ([env] maps each
-       such index to that count, its extent where unguarded); [None] for any other guard. *)
+    (* The iterations an [i < c] guard admits, as (index, admitted, is_workgroup), where [i] is an
+       enclosing loop's index from 0 -- at most what the enclosing guards already admit of it ([env]
+       maps each such index to (count, is_workgroup), its extent where unguarded); [None] for any
+       other guard. *)
     let rec admitted env (cond : Low_level.scalar_t) =
       match cond with
       | Low_level.Binop (Ops.Cmplt, (Embed_index (Idx.Iterator s), _), (Constant c, _)) -> (
           match List.Assoc.find env s ~equal:Idx.equal_symbol with
-          | Some current when Float.is_integer c ->
-              Some [ (s, Int.clamp_exn (Float.to_int c) ~min:0 ~max:current) ]
+          | Some (current, is_wg) when Float.is_integer c ->
+              Some [ (s, Int.clamp_exn (Float.to_int c) ~min:0 ~max:current, is_wg) ]
           | _ -> None)
       | Binop (Ops.And, (a, _), (b, _)) -> (
           match Option.map2 (admitted env a) (admitted env b) ~f:( @ ) with
           (* One index bounded twice in one conjunction: taken. *)
           | Some fs
-            when List.contains_dup fs ~compare:(fun (s1, _) (s2, _) -> Idx.compare_symbol s1 s2) ->
+            when List.contains_dup fs ~compare:(fun (s1, _, _) (s2, _, _) ->
+                     Idx.compare_symbol s1 s2) ->
               None
           | r -> r)
       | _ -> None
     in
-    let rec go ~ctx ~scale ~env ~guards ~localized ~seen (c : Low_level.t) =
+    (* [wg_scale] tracks [scale] without shrinking for [Workgroup] [i < c] guards (gh-ocannl-2280):
+       [Serial] and [Grid] bounds shrink both, while a [Workgroup] partition guard leaves [wg_scale
+       - scale] workgroup lanes idle across the phase barrier. *)
+    let rec go ~ctx ~scale ~wg_scale ~env ~guards ~localized ~seen (c : Low_level.t) =
       match c with
       | Low_level.Seq (a, b) ->
-          go ~ctx ~scale ~env ~guards ~localized ~seen a;
-          go ~ctx ~scale ~env ~guards ~localized ~seen b
+          go ~ctx ~scale ~wg_scale ~env ~guards ~localized ~seen a;
+          go ~ctx ~scale ~wg_scale ~env ~guards ~localized ~seen b
       | For_loop { index; from_; to_; body; axis } ->
           let extent = max 0 (to_ - from_ + 1) in
           let hardware = Low_level.hardware_kind_of_axis axis in
@@ -1390,7 +1401,8 @@ let operand_census ?is_global ?(shared = false) ~is_staged (code : Low_level.t) 
             | Some `Workgroup -> { ctx with pc_threads = ctx.pc_threads * extent }
             | None -> ctx
           in
-          let env = if from_ = 0 then (index, extent) :: env else env in
+          let is_wg = match hardware with Some `Workgroup -> true | _ -> false in
+          let env = if from_ = 0 then (index, (extent, is_wg)) :: env else env in
           let localized =
             match (direct, localized, hardware) with
             | Some _, None, None -> (
@@ -1407,40 +1419,52 @@ let operand_census ?is_global ?(shared = false) ~is_staged (code : Low_level.t) 
                 | _ -> None)
             | _ -> localized
           in
-          go ~ctx ~scale:(scale * extent) ~env ~guards ~localized ~seen:(fresh ()) body
+          go ~ctx ~scale:(scale * extent) ~wg_scale:(wg_scale * extent) ~env ~guards ~localized
+            ~seen:(fresh ()) body
       | Scan_loop { from_; to_; body; carried; _ } ->
-          List.iter carried ~f:(fun c -> reads ~ctx ~scale ~env ~guards ~seen [ c.Low_level.init ]);
-          go ~ctx
-            ~scale:(scale * max 0 (to_ - from_ + 1))
-            ~env ~guards ~localized ~seen:(fresh ()) body
+          let extent = max 0 (to_ - from_ + 1) in
+          List.iter carried ~f:(fun c ->
+              reads ~ctx ~scale ~wg_scale ~env ~guards ~seen [ c.Low_level.init ]);
+          go ~ctx ~scale:(scale * extent) ~wg_scale:(wg_scale * extent) ~env ~guards ~localized
+            ~seen:(fresh ()) body
       | If { cond = (cond, _) as condition; body } -> (
-          reads ~ctx ~scale ~env ~guards ~seen [ cond ];
+          reads ~ctx ~scale ~wg_scale ~env ~guards ~seen [ cond ];
           (* [scale] carries each guarded index's count as [env] has it -- its extent, or what an
              enclosing guard admits of it -- so replacing that count with the new one is exact, and
-             nested guards on one index compose as their minimum. *)
+             nested guards on one index compose as their minimum. [wg_scale] shrinks only for
+             non-[Workgroup] bounds. *)
           let guards = condition :: guards in
           match admitted env cond with
           | Some bounds ->
-              let scale, env =
-                List.fold bounds ~init:(scale, env) ~f:(fun (scale, env) (s, n) ->
-                    let current = List.Assoc.find_exn env s ~equal:Idx.equal_symbol in
-                    ( (if current > 0 then scale / current * n else scale),
-                      List.Assoc.add env s n ~equal:Idx.equal_symbol ))
+              let scale, wg_scale, env =
+                List.fold bounds ~init:(scale, wg_scale, env)
+                  ~f:(fun (scale, wg_scale, env) (s, n, is_wg) ->
+                    let current, _ = List.Assoc.find_exn env s ~equal:Idx.equal_symbol in
+                    let next_scale = if current > 0 then scale / current * n else scale in
+                    let next_wg_scale =
+                      if is_wg then wg_scale
+                      else if current > 0 then wg_scale / current * n
+                      else wg_scale
+                    in
+                    ( next_scale,
+                      next_wg_scale,
+                      List.Assoc.add env s (n, is_wg) ~equal:Idx.equal_symbol ))
               in
-              go ~ctx ~scale ~env ~guards ~localized ~seen body
-          | None -> go ~ctx ~scale ~env ~guards ~localized ~seen body)
+              go ~ctx ~scale ~wg_scale ~env ~guards ~localized ~seen body
+          | None -> go ~ctx ~scale ~wg_scale ~env ~guards ~localized ~seen body)
       | Set { tn; llsc; _ } -> (
           match if is_staged tn then staging_guards llsc else None with
           | Some staged_guards ->
               add_staged ctx (bytes scale tn);
-              reads ~ctx ~scale ~env ~guards ~seen staged_guards
-          | None -> reads ~ctx ~scale ~env ~guards ~seen ?self:localized [ llsc ])
+              if wg_scale > scale then add_idle ctx (bytes (wg_scale - scale) tn);
+              reads ~ctx ~scale ~wg_scale ~env ~guards ~seen staged_guards
+          | None -> reads ~ctx ~scale ~wg_scale ~env ~guards ~seen ?self:localized [ llsc ])
       | Set_local (_, llsc) | Set_from_vec { arg = llsc, _; _ } ->
-          reads ~ctx ~scale ~env ~guards ~seen [ llsc ]
+          reads ~ctx ~scale ~wg_scale ~env ~guards ~seen [ llsc ]
       | Set_dynamic { dyn_value = index, _; llsc; _ } ->
-          reads ~ctx ~scale ~env ~guards ~seen [ index; llsc ]
+          reads ~ctx ~scale ~wg_scale ~env ~guards ~seen [ index; llsc ]
       | _ -> ()
-    and reads ~ctx ~scale ~env ~guards ~seen ?self roots =
+    and reads ~ctx ~scale ~wg_scale ~env ~guards ~seen ?self roots =
       if Option.is_some direct || Option.is_some shared_tally then
         let add_direct =
           match direct with
@@ -1471,16 +1495,17 @@ let operand_census ?is_global ?(shared = false) ~is_staged (code : Low_level.t) 
               let emitted = Lazy.force emitted in
               if not (Hash_set.mem emitted id) then (
                 Hash_set.add emitted id;
-                go ~ctx ~scale ~env ~guards ~localized:None ~seen:(fresh ()) body)
+                go ~ctx ~scale ~wg_scale ~env ~guards ~localized:None ~seen:(fresh ()) body)
           | _ -> ());
           Access.Continue ()
         in
         let hooks = { (Access.hooks ()) with scalar } in
         List.iter roots ~f:(fun sc -> Access.fold_scalar ~policy:scalar_policy ~hooks ~init:() sc)
     in
-    go ~ctx:top_ctx ~scale:1 ~env:[] ~guards:[] ~localized:None ~seen:(fresh ()) code;
+    go ~ctx:top_ctx ~scale:1 ~wg_scale:1 ~env:[] ~guards:[] ~localized:None ~seen:(fresh ()) code;
     {
       oc_staged = staged ();
+      oc_idle = idle ();
       oc_direct = Option.value_map direct ~default:[] ~f:(fun (_, (_, contexts)) -> contexts ());
       oc_shared =
         Option.value_map shared_tally ~default:[] ~f:(fun (_, contexts) ->
@@ -1494,6 +1519,7 @@ let operand_deliveries ?is_global ~is_staged code =
 
 let shared_loads ~is_staged code = (operand_census ~shared:true ~is_staged code).oc_shared
 let staged_copies ~is_staged code = fst (operand_deliveries ~is_staged code)
+let staged_idle_copies ~is_staged code = (operand_census ~is_staged code).oc_idle
 
 (* The staged bytes as the compute leg divides them by the copy rate: each context's over its own
    fill under a fill model, as counted without one. *)
@@ -1694,7 +1720,9 @@ let memory_transactions ?(sector = transaction_sector_bytes) ~lane_width ~is_glo
            group's footprint stays within [transaction_tile_bytes]. *)
         let inner =
           if not known then []
-          else List.rev a.a_loops |> List.take_while ~f:(fun (s, _) -> not (Hashtbl.mem hw s))
+          else
+            List.rev (Affine.Loop_chain.to_alist a.a_loops)
+            |> List.take_while ~f:(fun (s, _) -> not (Hashtbl.mem hw s))
         in
         let run0 = if a.a_vec_last then max 1 a.a_vec_len else 1 in
         let folded, run =
@@ -1723,7 +1751,7 @@ let memory_transactions ?(sector = transaction_sector_bytes) ~lane_width ~is_glo
         in
         let in_tile s = is_folded s || List.exists tile ~f:(fun (s', _) -> Idx.equal_symbol s s') in
         let blocks = ref 1 and threads = ref 1 and serial = ref 1 and lanes = ref [] in
-        List.iter a.a_loops ~f:(fun (s, r) ->
+        List.iter (Affine.Loop_chain.to_alist a.a_loops) ~f:(fun (s, r) ->
             match Hashtbl.find hw s with
             | Some (`Grid, _) -> blocks := !blocks * width r
             | Some (`Workgroup, slot) ->
@@ -1761,9 +1789,7 @@ let memory_transactions ?(sector = transaction_sector_bytes) ~lane_width ~is_glo
           in
           List.fold symbols ~init:sector ~f:(fun g s ->
               let varies =
-                match List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol with
-                | Some r -> width r > 1
-                | None -> true
+                match Affine.Loop_chain.find a.a_loops s with Some r -> width r > 1 | None -> true
               in
               if varies && not (is_lane s || in_tile s) then gcd g (Int.abs (flat_stride s * elt))
               else g)
@@ -1782,9 +1808,7 @@ let memory_transactions ?(sector = transaction_sector_bytes) ~lane_width ~is_glo
                 match List.Assoc.find pt s ~equal:Idx.equal_symbol with
                 | Some v -> v
                 | None -> (
-                    match List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol with
-                    | Some (lo, _) -> lo
-                    | None -> 0))
+                    match Affine.Loop_chain.find a.a_loops s with Some (lo, _) -> lo | None -> 0))
           in
           Array.foldi view ~init:0 ~f:(fun i acc -> function
             | Affine.Unknown _ -> acc
@@ -1888,9 +1912,9 @@ let ranking_mma_terms ?(mma_flops = 0) ?(device_gathers = 0) ?launch (s : summar
 
 let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?(mma_flops = 0) ?(device_gathers = 0) ?device_gather_rate
-    ?launch ?(transactions = []) ?transaction_rate ?(staged_copies = []) ?(direct_loads = [])
-    ?staged_copy_rate ?(shared_loads = []) ?shared_load_rate ?occupancy (s : summary)
-    (r : reuse option) : float option * float option =
+    ?launch ?(transactions = []) ?transaction_rate ?(staged_copies = []) ?(idle_copies = [])
+    ?(direct_loads = []) ?staged_copy_rate ?staged_idle_rate ?(shared_loads = []) ?shared_load_rate
+    ?occupancy (s : summary) (r : reuse option) : float option * float option =
   let total = Float.of_int (total_bytes s) in
   let memory =
     Option.map peak_memory_bandwidth ~f:(fun ceiling ->
@@ -1953,6 +1977,16 @@ let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
               if Float.(bytes > 0.) then leg +. (bytes /. rate) else leg
           | _ -> leg
         in
+        (* gh-ocannl-2280: workgroup lanes left idle behind a partition guard on a staged copy, each
+           context's refused bytes over its own fill, at [staged_idle_rate] -- nothing without a
+           positive rate or guarded copies. *)
+        let with_staged_idle leg =
+          match staged_idle_rate with
+          | Some rate when Float.(rate > 0.) ->
+              let bytes = filled_staged_bytes ?fill_model:(Option.map launch ~f:fst) idle_copies in
+              if Float.(bytes > 0.) then leg +. (bytes /. rate) else leg
+          | _ -> leg
+        in
         (* gh-ocannl-2262: the shared loads beyond the calibration tile's reuse
            ({!excess_shared_loads}), each context's over its own fill, at the fitted shared-load
            rate -- nothing without a rate or without an excess. *)
@@ -1968,7 +2002,8 @@ let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
         let with_occupancy leg =
           match occupancy with Some o when Float.(o > 0. && o < 1.) -> leg /. o | _ -> leg
         in
-        with_occupancy @@ with_shared_loads @@ with_operand_deliveries @@ with_transactions
+        with_occupancy @@ with_shared_loads @@ with_staged_idle @@ with_operand_deliveries
+        @@ with_transactions
         @@
         match launch with
         | Some (fm, contexts) ->
@@ -2003,13 +2038,14 @@ let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
 
 let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
-    ?transactions ?transaction_rate ?staged_copies ?direct_loads ?staged_copy_rate ?shared_loads
-    ?shared_load_rate ?occupancy (s : summary) (r : reuse option) : float option =
+    ?transactions ?transaction_rate ?staged_copies ?idle_copies ?direct_loads ?staged_copy_rate
+    ?staged_idle_rate ?shared_loads ?shared_load_rate ?occupancy (s : summary) (r : reuse option) :
+    float option =
   let compute, memory =
     ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
       ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
-      ?transactions ?transaction_rate ?staged_copies ?direct_loads ?staged_copy_rate ?shared_loads
-      ?shared_load_rate ?occupancy s r
+      ?transactions ?transaction_rate ?staged_copies ?idle_copies ?direct_loads ?staged_copy_rate
+      ?staged_idle_rate ?shared_loads ?shared_load_rate ?occupancy s r
   in
   match List.filter_opt [ compute; memory ] with
   | [] -> None
@@ -2017,13 +2053,16 @@ let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes 
 
 let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?fill_model
-    ?transaction_rate ?lane_width ?max_resident_threads ?staged_copy_rate ?shared_load_rate
-    ?is_staged ?is_private ~is_global (code : Low_level.t) : float option =
+    ?transaction_rate ?lane_width ?max_resident_threads ?staged_copy_rate ?staged_idle_rate
+    ?shared_load_rate ?is_staged ?is_private ~is_global (code : Low_level.t) : float option =
   let s = analyze code in
-  let staged_copies =
-    match (staged_copy_rate, is_staged) with
-    | Some _, Some is_staged -> staged_copies ~is_staged code
-    | _ -> []
+  let staged_copies, idle_copies =
+    match is_staged with
+    | Some is_staged when Option.is_some staged_copy_rate || Option.is_some staged_idle_rate ->
+        let c = operand_census ~is_staged code in
+        ( (if Option.is_some staged_copy_rate then c.oc_staged else []),
+          if Option.is_some staged_idle_rate then c.oc_idle else [] )
+    | _ -> ([], [])
   in
   let contexts = lazy (launch_contexts ?is_private code) in
   let launch = Option.map fill_model ~f:(fun fm -> (fm, Lazy.force contexts)) in
@@ -2045,8 +2084,8 @@ let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
   in
   ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
-    ~transactions ?transaction_rate ~staged_copies ?staged_copy_rate ~shared_loads ?shared_load_rate
-    s r
+    ~transactions ?transaction_rate ~staged_copies ~idle_copies ?staged_copy_rate ?staged_idle_rate
+    ~shared_loads ?shared_load_rate s r
 
 (* {2 Tile-MMA operand loads — gh-ocannl-1254}
 

@@ -375,7 +375,7 @@ class Gh1180DriverTest(StubRunTest):
         jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
         proc = self.run_tool([box_gate.BASH, str(shell_driver_path("gh1180_tie_ab.sh")), "summary", str(out)])
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-        self.assertIn("ocannl_late_setting resolved differently", proc.stdout)
+        self.assertIn("ocannl_late_setting (unclassified) read in some cells only", proc.stdout)
 
     def test_a_two_mode_arm_is_read_in_modes(self):
         # gh-ocannl-2308's reading on the driver's own table: a clean twelve-round run whose saved
@@ -844,6 +844,9 @@ class DriverTreeTest(StubRunTest):
         bench.mkdir(parents=True)
         (self.root / "scripts").mkdir()
         shutil.copy2(HERE.parent / "scripts/process-group.sh", self.root / "scripts/process-group.sh")
+        (self.root / "test/operations").mkdir(parents=True)
+        shutil.copy2(HERE.parent / "test/operations/digest_completeness.expected",
+                     self.root / "test/operations/digest_completeness.expected")
         for f in [*HERE.glob("*.py"), *HERE.glob("*.sh")]:
             shutil.copy2(f, bench / f.name)
         env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
@@ -1373,6 +1376,178 @@ class Gh2195AbDriverTest(StubRunTest):
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("stopping before cold tuned training searches", proc.stdout)
         self.assertFalse((raw / "search_false").exists())
+
+
+class ConsistencyCheckTest(unittest.TestCase):
+    """gh-ocannl-2408: within-arm configuration consistency splits one-sided reads by
+    `Utils.config_key_classification` (read from `test/operations/digest_completeness.expected`):
+    two distinct resolved values always refuse; a one-sided `execution-neutral` read is
+    informational; a one-sided result-changing or unclassified read refuses and names the fix."""
+
+    @staticmethod
+    def _entry(value, source="default", origin=None):
+        return {"value": value, "source": source, "layer": source, "profile": None,
+                "origin": origin}
+
+    def _report_run(self, arm_configs):
+        """Write a saved two-cell `base` arm + two-cell `head` arm run and run `bin_cells.py report`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            orders = cells.design_orders(2, 2)
+            arms = [{"label": "base", "args": [], "env": {}},
+                    {"label": "head", "args": [], "env": {}}]
+            manifest = {
+                "bench": "bench_gpt.exe", "backend": "cc", "rounds": 2, "commit": "n/a (fixture)",
+                "executable": None, "executable_sha256": None, "host": "fixture",
+                "system": "fixture", "cpu": "fixture", "common_args": [], "common_env": {},
+                "arms": arms, "reader": "record", "metrics": ["step_ms.p50"], "stated_files": {},
+                "pins": cells.pins("cc"), "cleared": [], "runtime_controls": {},
+                "environment_values": {}, "environment_names": [], "cell_timeout_s": 1800.0,
+                "orders": orders,
+            }
+            (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
+            base_cfg = {
+                "backend": self._entry("cc", "commandline", "--ocannl_backend=cc"),
+                "no_config_file": self._entry("true", "commandline", "--ocannl_no_config_file=true"),
+                "log_config_json": self._entry("true", "commandline",
+                                               "--ocannl_log_config_json=true"),
+            }
+            records = []
+            seen = {"base": 0, "head": 0}
+            for rnd, order in enumerate(orders):
+                for pos, i in enumerate(order):
+                    arm = arms[i]["label"]
+                    k = seen[arm]
+                    seen[arm] += 1
+                    extra = arm_configs.get((arm, k), {})
+                    records.append({
+                        "cell": len(records), "round": rnd, "position": pos, "arm": arm,
+                        "argv": ["bench_gpt.exe", *cells.pins("cc")], "env": {}, "status": 0,
+                        "wall_s": 1.0, "results": [["step_ms.p50", 0.01, "unchecked", ""]],
+                        "config": {**base_cfg, **extra}, "problems": [], "refused": False,
+                        "ok": True,
+                    })
+            (run_dir / "cells.jsonl").write_text(
+                "".join(json.dumps(r) + "\n" for r in records))
+            return subprocess.run(
+                [sys.executable, str(HERE / "bin_cells.py"), "report", str(run_dir)],
+                text=True, capture_output=True, timeout=60)
+
+    def test_config_key_classes_loads_the_checked_in_classification(self):
+        import orchestrate
+        classes = cells.config_key_classes()
+        ref_keys, _ = orchestrate.config_reference()
+        self.assertEqual(set(classes), set(ref_keys))
+        self.assertEqual(classes["autotune_log"], "execution-neutral")
+        self.assertEqual(classes["autotune_timing"], "keyed: timing")
+        self.assertEqual(classes["backend"], "keyed: backend")
+        self.assertEqual(classes["fp_contract"], "code-borne (digest)")
+        self.assertEqual(classes["autotune_rounds"], "search-shaping")
+        self.assertEqual(classes["tune_ship_arm"], "placement-shaping")
+        self.assertEqual(classes["model_default_schedule"], "untimed-model")
+        self.assertEqual(classes["profile"], "aggregate")
+
+    def test_config_key_classes_refuses_malformed_or_unknown_headers(self):
+        bad_inputs = {
+            "unknown_class": "mystery-class -- why\n  foo\n\nexecution-neutral -- why\n  bar\n",
+            "empty_group": "aggregate -- why\n\nexecution-neutral -- why\n  bar\n",
+            "duplicate_key": (
+                "aggregate -- why\n  foo\n\nexecution-neutral -- why\n  foo\n"),
+            "stray_indent": "  orphan_key\n\nexecution-neutral -- why\n  bar\n",
+            "unexpected_member": (
+                "aggregate -- why\n  foo extra\n\nexecution-neutral -- why\n  bar\n"),
+            "no_neutral": "aggregate -- why\n  profile\n",
+            "only_neutral": "execution-neutral -- why\n  autotune_log\n",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, text in bad_inputs.items():
+                with self.subTest(case=name):
+                    p = Path(tmp) / f"{name}.expected"
+                    p.write_text(text)
+                    with self.assertRaises(ValueError):
+                        cells.config_key_classes(p)
+
+    def test_read_in_one_execution_neutral_key_is_informational(self):
+        # Replays the cc gpt2_mini_train failure (gh-ocannl-2408): cell 0 read autotune_log as
+        # 'false' while cell 1 never consulted it.
+        records = [
+            {"arm": "base", "cell": 0, "config": {
+                "backend": {"value": "cc"}, "autotune_log": {"value": "false"}}},
+            {"arm": "base", "cell": 1, "config": {"backend": {"value": "cc"}}},
+        ]
+        problems, notes = cells.consistency_check(records)
+        self.assertEqual(problems, [])
+        self.assertEqual(notes, [
+            "arm base: ocannl_autotune_log (execution-neutral) read in some cells only -- "
+            "'false' in cell(s) 0; not read in cell(s) 1"])
+        # End-to-end replay through bin_cells.py report: clean exit 0, informational section shown.
+        proc = self._report_run({("base", 0): {"autotune_log": self._entry("false")}})
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("- every cell clean", proc.stdout)
+        self.assertIn("Execution-neutral settings read in only some cells of an arm (informational;",
+                      proc.stdout)
+        self.assertIn("- arm base: ocannl_autotune_log (execution-neutral) read in some cells only "
+                      "-- 'false' in cell(s) 0; not read in cell(s) 3", proc.stdout)
+
+    def test_execution_neutral_key_with_two_different_values_stays_a_refusal(self):
+        for records, want_detail in (
+            ([{"arm": "a", "cell": 0, "config": {"autotune_log": {"value": "false"}}},
+              {"arm": "a", "cell": 1, "config": {"autotune_log": {"value": "true"}}}],
+             "'false' in cell(s) 0; 'true' in cell(s) 1"),
+            ([{"arm": "a", "cell": 0, "config": {"autotune_log": {"value": "false"}}},
+              {"arm": "a", "cell": 1, "config": {"autotune_log": {"value": "true"}}},
+              {"arm": "a", "cell": 2, "config": {}}],
+             "'false' in cell(s) 0; 'true' in cell(s) 1; not read in cell(s) 2"),
+        ):
+            with self.subTest(detail=want_detail):
+                problems, notes = cells.consistency_check(records)
+                self.assertEqual(notes, [])
+                self.assertEqual(problems, [
+                    f"arm a: ocannl_autotune_log resolved differently -- {want_detail}"])
+
+    def test_read_in_one_result_changing_key_is_refused_naming_the_fix(self):
+        cases = (
+            ("autotune_timing", "queued", "keyed: timing"),
+            ("fp_contract", "true", "code-borne (digest)"),
+            ("autotune_rounds", "2", "search-shaping"),
+            ("tune_ship_arm", "A", "placement-shaping"),
+            ("model_default_schedule", "true", "untimed-model"),
+            ("profile", "exact", "aggregate"),
+        )
+        for key, value, cls in cases:
+            with self.subTest(key=key):
+                records = [
+                    {"arm": "base", "cell": 0, "config": {key: {"value": value}}},
+                    {"arm": "base", "cell": 1, "config": {}},
+                ]
+                problems, notes = cells.consistency_check(records)
+                self.assertEqual(notes, [])
+                self.assertEqual(len(problems), 1)
+                self.assertIn(f"arm base: ocannl_{key} ({cls}) read in some cells only -- "
+                              f"{value!r} in cell(s) 0; not read in cell(s) 1", problems[0])
+                self.assertIn("check why the arm's cells took different paths", problems[0])
+                self.assertIn("Utils.config_key_classification", problems[0])
+        proc = self._report_run({("base", 0): {"autotune_timing": self._entry("queued")}})
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertNotIn("- every cell clean", proc.stdout)
+        self.assertIn("ocannl_autotune_timing (keyed: timing) read in some cells only -- "
+                      "'queued' in cell(s) 0; not read in cell(s) 3", proc.stdout)
+        self.assertIn("check why the arm's cells took different paths", proc.stdout)
+
+    def test_read_in_one_unclassified_key_fails_closed_naming_the_fix(self):
+        records = [
+            {"arm": "a", "cell": 0, "config": {}},
+            {"arm": "a", "cell": 1, "config": {"future_unclassified_key": {"value": "1"}}},
+        ]
+        problems, notes = cells.consistency_check(records)
+        self.assertEqual(notes, [])
+        self.assertEqual(len(problems), 1)
+        self.assertIn(
+            "arm a: ocannl_future_unclassified_key (unclassified) read in some cells only -- "
+            "not read in cell(s) 0; '1' in cell(s) 1", problems[0])
+        self.assertIn("Utils.config_key_classification", problems[0])
+        self.assertIn("test/operations/digest_completeness.expected", problems[0])
 
 
 if __name__ == "__main__":

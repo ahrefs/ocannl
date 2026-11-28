@@ -64,15 +64,23 @@ let raw_entries =
         "[scanner-refusal:e654ceab66220252a649c7bb36aa0e49] object directory";
         "[scanner-refusal:4bb6aa436016609d636df4dbb21c88fd] unreadable typed tree";
         "[scanner-refusal:1705a50114bbcfdc7d549777efcf1348] no single library";
+        "[scanner-refusal:3f1d076365e378b925ddb2d0e2a10505] shared-directory findlib fixture";
+        "[scanner-refusal:8cda105643bd96c09dc8261c3b932999] shared-directory findlib fixture";
+        "[scanner-refusal:fabd0f74da554892c9472b380dd864cb] co-located interface with";
+        "[scanner-refusal:ff089c8ce0d0f584240e2b63b6d20faf] shared-directory fixture stanzas";
+        "[scanner-refusal:12eb34f55ce2d30bbcca2c13c584516c] interface's possible definer";
         "[scanner-refusal:1262ba0367f56ab63b0ef45185bb1257] control stanza must";
         "[scanner-refusal:1c8850699d8f9fec6290b9542a410741] an unreadable archive";
         "[scanner-refusal:e25a1cf286ceb521ee4eb7746aad5229] archive tool producing";
         "[scanner-refusal:ff2924c3a9869dd3bc7f7d72acd8ead1] malformed archive interface";
         "[scanner-refusal:f684c2c391ba5d7246a2468a4d4584ca] failed archive query";
         "[scanner-refusal:38b0123ae5353ab2b03e006a018d2bc6] shared local library";
-        "[scanner-refusal:8321fb2ab306d6d7f47b17136d308f5d] unique dependency-minimal archive";
-        "[scanner-refusal:9444a57b2ad4731e29ce408670e73e59] cyclic interface-only owners";
         "[scanner-refusal:afa29a41b9bcf5f2edb420167b2557b1] consumer-only interface import";
+        "[scanner-refusal:af4e3d44d44af611e87c6c3fbba6db59] downstream importer could";
+        "[scanner-refusal:238e4af10feb723d7bd9328dab4222b6] another directory cannot";
+        "[scanner-refusal:6d3939107d94def89d4eb5d59ebcff14] leaves ownership unresolved";
+        "[scanner-refusal:66109474577b0481b9b58c8b76e13d7f] compiler-libs.common";
+        "[scanner-refusal:b41831879e1d43e58af207034cdb4ecf] compiler-libs.common";
         "[scanner-refusal:e465b31053262fa064a9c23ff3892b2c] dependency's archive definition";
         "[scanner-refusal:52ed7f2b3e43e26453e5f6c31ebb5965] co-located archive-less dependency";
         "[scanner-refusal:ffa4bc91bdd9e0c6519d47ab6e078f3c] csexp reader refuses";
@@ -101,7 +109,7 @@ let raw_entries =
         "[scanner-refusal:69ce705759093b5f97c6cc8e0413a500] description dune refuses";
         "[scanner-refusal:8c24881b343b90be6f9574bf281e5045] or multiple libraries";
         "[scanner-refusal:80993f82fb1569705822b50a7436584e] rejects another refusal";
-        "[scanner-refusal:351ce2a461cb37393c61069ee2649d96] unused_compiler_deps";
+        "[scanner-refusal:b0838acc6eaf79cf95f6a2045fe2af6c] unused_compiler_deps";
         "[scanner-refusal:36778054d93aa08eac389989017aed7a] DUNE_SOURCEROOT";
         "[scanner-refusal:044e249871007719b6bc46d149189c1d] synthetic tool calls";
         "[scanner-refusal:22c08112ff7b660af6dab49542313b14] compiler-libs.common";
@@ -190,6 +198,12 @@ let raw_entries =
         "[scanner-refusal:acf79e9d5f580995dafd055521de641f] Context.run";
       ] );
     ("provenance_tag_inventory.ml", []);
+    ( "resource_fault_inventory_scan.ml",
+      [
+        "[scanner-refusal:c85bb67d5d4a65e371321bd39eff4686] derived fault-injection point";
+        "[scanner-refusal:32d44718d7ebdf4c4f7d6d2d289ff1cd] inventory table row";
+        "[scanner-refusal:6cd996e65b0a28170b37d4a74708cfee] every fault-injection point";
+      ] );
     ( "open_node_scan.ml",
       [
         "[scanner-refusal:d7ba33c928dde8cf6b59d769ad3a0b85] does not parse";
@@ -427,7 +441,7 @@ let raw_entries =
         "[scanner-refusal:ec6cead6a475041460ddead2715a32a1] copies it into";
         "[scanner-refusal:b420bc79cbc7a037b600c9d47c9b2525] arrayjit/vendor_stubs/";
         "[scanner-refusal:047374463fd606fe95cf257ebf928364] arrayjit/vendor_stubs/";
-        "[scanner-refusal:518629fae55a4ef4b29ab72b3a71d8ce] each module's agreement";
+        "[scanner-refusal:01d2620700383180c6db86cc19d41665] each module's agreement";
         "[scanner-refusal:f4e3a8ac36957f5a6f54cd735b3c2092] package stand-in declared";
         "[scanner-refusal:6cd3c184704a37f8cb97e98efd6a0a87] beside unrelated sources";
         "[scanner-refusal:90b26d38400dc5a37ed715269ba3cfbe] every vendor-gated select";
@@ -544,6 +558,9 @@ let raw_entries =
         "[scanner-refusal:7b848f96a84cc15bb6e1027465d08502] Test_utils.Generated";
         "[scanner-refusal:968edb53fac5a4cfadb338c2a0873278] Test_utils.Generated.main_logic";
         "[scanner-refusal:65ac789025a090533ae12a66e44fab25] every after-marker exemption";
+        "[scanner-refusal:ede9d4d135607a80167d420fbbfbbd57] Ll_test";
+        "[scanner-refusal:feb6a35da6fc5be9e0f1f066c82d6160] Ll_builders";
+        "[scanner-refusal:89659ed1bd4316a75b179801ae387bb5] Winner_fixture's";
       ] );
     ( "config_dep_completeness.ml",
       [
@@ -680,6 +697,8 @@ let raw_entries =
     ( "env_var_deps.ml",
       [
         "[scanner-refusal:57263e03b8b032365fbd586bbd2705a3] stderr from Verdict-linked";
+        "[scanner-refusal:66c453388bca08273e82b6529a4283ff] checked for routine";
+        "[scanner-refusal:4a2e7dbd5e2a44e0801d49680a223d0a] routine logging reader";
         "[scanner-refusal:2b65edf20e36d983c1a016b72c2aadd1] plugged-in check receives";
         "[scanner-refusal:35bab4283cd8b87d51ca3476cb0e971e] source_tree";
         "[scanner-refusal:51b4c42723bc3fa6bfc678d091151ed9] source_tree";
@@ -726,6 +745,8 @@ let raw_entries =
         "[scanner-refusal:a06dccc27afe2153a7700609691d3c8d] attaches a rule";
         "[scanner-refusal:7f157a5478f43aa3d2da34c9975976a9] inventories the repository";
         "[scanner-refusal:91751d43d8939e1da724e6f0bcbe8f09] inventories the repository";
+        "[scanner-refusal:844fda27df3329b5f303f5b62e050a0c] @routine-logging lists";
+        "[scanner-refusal:5f04af5ddded0f7ca69bdb28bd844c41] @routine-logging lists";
         "[scanner-refusal:f16784d0b1f52de5e30378cb771ada5c] alias does not";
         "[scanner-refusal:4012b24c7623acd977522e8f2eacf2bb] attaches a rule";
         "[scanner-refusal:ba5d90fc4bcec944ebd169329c706968] goldens on the";
@@ -786,6 +807,13 @@ let raw_entries =
         "[scanner-refusal:d2a4a4c55f9409ff2a808631d0753f27] family stanza passes";
         "[scanner-refusal:d53b323fdb52eefd4e3968dbadf05e65] with instrumentation-capable libraries";
         "[scanner-refusal:da4ac19271accffacfcd9a6bbe210e22] member listed passes";
+        "[scanner-refusal:938f1b98b1f9b81d9669feaaffe6ce23] debug_log_from_routines";
+        "[scanner-refusal:2378dc0320ae24e5d9d5ece8a8a1cf71] routine-logging alias lists";
+        "[scanner-refusal:75578148b70ab96aa4cbbedcc87ab05f] test outside routine-logging";
+        "[scanner-refusal:949c50e7248e0cf1d74d465a6fcd76a2] without joining routine-logging";
+        "[scanner-refusal:6338ab5898b52f4ad97f34a9b1656e74] missing routine-logging member";
+        "[scanner-refusal:81424c48c43937e31a411d9f070c649d] missing routine-logging member";
+        "[scanner-refusal:1eee2ad70f47864f76e2f9d4fd5838e2] logging reader exception";
         "[scanner-refusal:bb441071afd26790b8593e48298b3afb] local declaration remains";
         "[scanner-refusal:823899fe97c22285dae0552d086d404b] passes without resolving";
         "[scanner-refusal:3f9f68401bac53be0cbb38ce715e460d] executable whose RUNNER";
@@ -1026,6 +1054,11 @@ let raw_entries =
         "[scanner-refusal:2a0fdaf225cc691ffc63804ceb591d29] production test-run is";
         "[scanner-refusal:fd1b281d075e1e22e4fe44bc8642e4c7] duplicate harness";
         "[scanner-refusal:523d1f69c7bf5fef964dbf38dc8de10c] comment mentioning support";
+        "[scanner-refusal:a48a6f670d78b54474bb65d5fcb18df5] real-Dune discovery";
+        "[scanner-refusal:47b05fb7e20317a656356f55a1eae51b] real-Dune discovery";
+        "[scanner-refusal:8571c9a75c93d8eb2ac6cfad83067cc8] unread harness manifest";
+        "[scanner-refusal:866e42eecb81b99a6c1bcf55a84b4020] real-Dune manifest reads";
+        "[scanner-refusal:b83b170fbabf212570a39f460686a130] real-Dune manifest refuses";
         "[scanner-refusal:ac074b168e19f7f99423326fcdea5669] shebang";
         "[scanner-refusal:8743bc48ff2a3da0c15e40f654ad6ff7] shebang";
         "[scanner-refusal:3184b30e46c2d310e18bbae7c1c8ae9e] shared harness contract";
@@ -1454,6 +1487,12 @@ let raw_direct_evidence =
       "backend-default reader naming an undefined default is refused: true" );
     ( "env_var_deps.ml:afd2f461af706b40bf4582f1b0a30b01",
       "backend-default reader whose backends do not overlap the default is refused: true" );
+    ( "env_var_deps.ml:66c453388bca08273e82b6529a4283ff",
+      "a source that cannot be checked for routine logging fails the scan: true" );
+    ( "env_var_deps.ml:844fda27df3329b5f303f5b62e050a0c",
+      "a false flag does not qualify a listed routine-logging member: true" );
+    ( "env_var_deps.ml:5f04af5ddded0f7ca69bdb28bd844c41",
+      "a backend condition cannot narrow a logging test's alias: true" );
   ]
 
 (** Direct failures no control executes, each with the reason none does: a refusal the scanner can
@@ -1467,9 +1506,15 @@ let raw_catalogue_only : (string * string) list =
   [
     ( "explicit_library_deps.ml:79b83d87bc35a637a45c0dd6dc7479cf",
       "decided by the argument vector its own dune rule writes" );
+    ( "unused_compiler_deps.ml:3f1d076365e378b925ddb2d0e2a10505",
+      "a tool failure while compiling the check's private findlib control" );
+    ( "unused_compiler_deps.ml:8cda105643bd96c09dc8261c3b932999",
+      "a tool failure while describing the check's private findlib control" );
+    ( "unused_compiler_deps.ml:ff089c8ce0d0f584240e2b63b6d20faf",
+      "a defect in the check's own generated findlib control Dune file" );
     ( "unused_compiler_deps.ml:1262ba0367f56ab63b0ef45185bb1257",
       "a defect in the check's own synthetic control text, not a malformed tree" );
-    ( "unused_compiler_deps.ml:351ce2a461cb37393c61069ee2649d96",
+    ( "unused_compiler_deps.ml:b0838acc6eaf79cf95f6a2045fe2af6c",
       "decided by the argument vector its own dune rule writes" );
     ( "unused_compiler_deps.ml:36778054d93aa08eac389989017aed7a",
       "decided by dune, which sets DUNE_SOURCEROOT for every action; unset only outside the rule" );

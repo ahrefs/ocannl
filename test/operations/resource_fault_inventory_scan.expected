@@ -1,0 +1,7 @@
+every fault-injection point, cited test file, and cited hook resolves: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:c85bb67d5d4a65e371321bd39eff4686] derived fault-injection point
+  [scanner-refusal:32d44718d7ebdf4c4f7d6d2d289ff1cd] inventory table row
+  [scanner-refusal:6cd996e65b0a28170b37d4a74708cfee] every fault-injection point
+End of synthetic controls.

@@ -61,6 +61,7 @@ let lo : Autotune.sketch_params =
     sk_depth = 1;
     sk_pack_prec = None;
     sk_tile = None;
+    sk_no_bank_pad = false;
   }
 
 let hi : Autotune.sketch_params =
@@ -85,6 +86,7 @@ let hi : Autotune.sketch_params =
     sk_depth = 2;
     sk_pack_prec = Some Ir.Ops.single;
     sk_tile = Some { Ir.Register_tile.rm = 4; rn = 2; lanes = 4 };
+    sk_no_bank_pad = true;
   }
 
 (* The record's fields as the derived s-expression lists them, in declaration order. *)

@@ -615,4 +615,330 @@ let () =
     (SC.cache_file ~dir:resource_cache_dir ~key:cache_key)
     ~data:"not a schedule cache entry";
   p "corrupt cache replay is an honest miss"
-    (Option.is_none (SC.lookup ~dir:resource_cache_dir ~key:(Some cache_key)))
+    (Option.is_none (SC.lookup ~dir:resource_cache_dir ~key:(Some cache_key)));
+
+  (* gh-ocannl-778: every fault event names both its ownership phase and its concrete artifact
+     identity. Capture an uninjected compile/run/release + cache store/lookup trace and verify exact
+     phase classification and matching pool/routine/cache-file artifacts. *)
+  let traced = ref [] in
+  let trace_comp = comp in
+  FI.with_event_callback
+    (fun ev -> traced := ev :: !traced)
+    ~f:(fun () ->
+      let ctx, routine =
+        Context.compile ~name:"rfi_trace" (Context.cpu ()) trace_comp Ir.Indexing.Empty
+      in
+      let ctx = Context.run ctx routine in
+      ignore (Context.get_values ctx y.Tensor.value : float array);
+      Context.release ctx;
+      SC.store ~dir:resource_cache_dir ~key:(Some "gh778-trace") (cache_entry "traced" 1.);
+      ignore (SC.lookup ~dir:resource_cache_dir ~key:(Some "gh778-trace") : SC.entry option));
+  let traced = List.rev !traced in
+  p_all "every traced fault event carries its point's derived ownership phase" traced ~f:(fun ev ->
+      FI.equal_ownership_phase ev.phase (FI.phase_of_point ev.point));
+  let working_allocated_pools =
+    List.filter_map traced ~f:(fun ev ->
+        match (ev.point, ev.artifact) with
+        | FI.Delta_pool_allocated, FI.Pool { pool_id; constant = Some false; _ } -> Some pool_id
+        | _ -> None)
+  in
+  let finalized_pools =
+    List.filter_map traced ~f:(fun ev ->
+        match (ev.point, ev.artifact) with
+        | FI.Finalize_before_free, FI.Pool { pool_id; _ } -> Some pool_id
+        | _ -> None)
+  in
+  let saw_routine_artifact =
+    List.exists traced ~f:(fun ev ->
+        match (ev.point, ev.artifact) with
+        | FI.Link_after_delta, FI.Routine { name } -> String.equal name "rfi_trace"
+        | _ -> false)
+  in
+  let saw_cache_file_artifact =
+    List.exists traced ~f:(fun ev ->
+        match (ev.point, ev.artifact) with
+        | FI.Schedule_cache_before_commit, FI.Cache_file { path } ->
+            String.is_substring path ~substring:resource_cache_dir
+        | _ -> false)
+  in
+  p "traced events identify the same pool id from delta allocation to finalize free"
+    ((not (List.is_empty working_allocated_pools))
+    && List.equal Int.equal working_allocated_pools finalized_pools);
+  p "traced events identify routine and cache-file artifacts"
+    (saw_routine_artifact && saw_cache_file_artifact);
+
+  (* gh-ocannl-778: sticky asynchronous failures are the baseline acceptance path for
+     synchronization cleanup (matching persistent worker/stream errors); one-shot exceptions above
+     remain as negative controls. *)
+  let latched_target = Context.from_host (Context.cpu ()) x.Tensor.value nd in
+  let before = AC.snapshot () in
+  let ( sticky_raised,
+        sticky_hits,
+        sticky_triggered,
+        cross_seam_raised,
+        before_cross,
+        after_cross,
+        after_clear_release_ok,
+        after_clear_upload_ok ) =
+    FI.with_sticky_async_fault ~trigger:FI.From_host_before_await (fun fault ->
+        let raised =
+          match Context.from_host (Context.cpu ()) x.Tensor.value nd with
+          | _ -> false
+          | exception Failure msg -> String.is_substring msg ~substring:"sticky async"
+        in
+        (* While latched on [From_host_before_await], a DIFFERENT async await seam
+           ([Finalize_before_await]) must also raise the sticky exception and commit nothing. *)
+        let before_cross = AC.snapshot () in
+        let cross_seam_raised =
+          match Context.release latched_target with
+          | () -> false
+          | exception Failure msg -> String.is_substring msg ~substring:"sticky async"
+        in
+        let after_cross = AC.snapshot () in
+        let hits = FI.sticky_fault_hits fault in
+        let triggered = FI.sticky_fault_triggered fault in
+        FI.clear_sticky_fault fault;
+        let after_clear_release_ok =
+          match Context.release latched_target with () -> true | exception _ -> false
+        in
+        let after_clear_upload_ok =
+          match Context.from_host (Context.cpu ()) x.Tensor.value nd with
+          | fresh ->
+              Context.release fresh;
+              true
+          | exception _ -> false
+        in
+        ( raised,
+          hits,
+          triggered,
+          cross_seam_raised,
+          before_cross,
+          after_cross,
+          after_clear_release_ok,
+          after_clear_upload_ok ))
+  in
+  let after = AC.snapshot () in
+  p "sticky from-host await latches and fails cleanup await persistently"
+    (sticky_raised && sticky_triggered
+    && List.exists sticky_hits ~f:(fun ev -> FI.equal_point ev.point FI.From_host_before_await)
+    && List.exists sticky_hits ~f:(fun ev ->
+        FI.equal_point ev.point FI.Transfer_cleanup_before_await));
+  p "latched sticky fault raises at a different await seam and clears cleanly"
+    (cross_seam_raised
+    && pools_freed before_cross after_cross = 0
+    && live_working_delta before_cross after_cross = 0
+    && List.exists sticky_hits ~f:(fun ev -> FI.equal_point ev.point FI.Finalize_before_await)
+    && after_clear_release_ok && after_clear_upload_ok);
+  p "sticky from-host await still frees its unreachable pool and cleared contexts once"
+    (working_allocated before after = 2
+    && pools_freed before after = 3
+    && live_working_delta before after = -1);
+
+  let sticky_src = Context.from_host (Context.cpu ()) x.Tensor.value nd in
+  let before = AC.snapshot () in
+  let sticky_copy_raised, sticky_copy_hits =
+    FI.with_sticky_async_fault ~trigger:FI.Init_from_device_before_await (fun fault ->
+        let raised =
+          match Context.copy x.Tensor.value ~src:sticky_src ~dst:(Context.cpu ()) with
+          | _ -> false
+          | exception Failure msg -> String.is_substring msg ~substring:"sticky async"
+        in
+        (raised, FI.sticky_fault_hits fault))
+  in
+  let after = AC.snapshot () in
+  p "sticky init-from-device await latches through cleanup await and frees its fresh pool once"
+    (sticky_copy_raised
+    && List.exists sticky_copy_hits ~f:(fun ev ->
+        FI.equal_point ev.point FI.Transfer_cleanup_before_await)
+    && working_allocated before after = 1
+    && pools_freed before after = 1
+    && live_working_delta before after = 0);
+  Context.release sticky_src;
+
+  (* Sticky finalize await: repeated releases fail while latched and commit nothing; once cleared,
+     retry frees the pool once. Also verified on [multidev_cc] on the calling domain. *)
+  List.iter
+    [ ("cc", fun () -> Context.cpu ()); ("multidev_cc", fun () -> Context.cpu ~threads:2 ()) ]
+    ~f:(fun (label, mk_root) ->
+      let ctx = Context.from_host (mk_root ()) x.Tensor.value nd in
+      let before = AC.snapshot () in
+      let first_failed, second_failed, still_latched, after_latched =
+        FI.with_sticky_async_fault ~trigger:FI.Finalize_before_await (fun fault ->
+            let try_release () =
+              match Context.release ctx with
+              | () -> false
+              | exception Failure msg -> String.is_substring msg ~substring:"sticky async"
+            in
+            let r1 = try_release () in
+            let r2 = try_release () in
+            let snap = AC.snapshot () in
+            let latched = FI.sticky_fault_triggered fault in
+            FI.clear_sticky_fault fault;
+            Context.release ctx;
+            (r1, r2, latched, snap))
+      in
+      let after_clear = AC.snapshot () in
+      pf "sticky finalize await on %s: repeated retries raise and commit nothing while latched"
+        label
+        (first_failed && second_failed && still_latched
+        && pools_freed before after_latched = 0
+        && live_working_delta before after_latched = 0
+        && contexts_released before after_latched = 0);
+      pf "sticky finalize await on %s: clearing the latch lets retry release exactly once" label
+        (pools_freed before after_clear = 1
+        && live_working_delta before after_clear = -1
+        && contexts_released before after_clear = 1));
+
+  (* gh-ocannl-778: partial-batch link cleanup on a 2-segment fissioned routine. Failing at segment
+     index 1 (after segment 0 linked) must unwind the entire delta cleanly; uninjected retry runs
+     and computes the exact reference. *)
+  let seg_a = TDSL.ndarray values ~label:[ "rfi_seg_a" ] ~output_dims:[ 4 ] () in
+  let%op seg_mid = relu seg_a in
+  Train.set_materialized seg_mid.Tensor.value;
+  let%op seg_out = seg_mid + 1. in
+  Train.set_materialized seg_out.Tensor.value;
+  let seg_comp = Train.forward seg_out in
+  let two_segments (o : Ir.Low_level.optimized) =
+    let stmts =
+      List.filter (Ir.Low_level.flat_lines [ o.llc ]) ~f:(function
+        | Ir.Low_level.Comment _ | Ir.Low_level.Noop -> false
+        | _ -> true)
+    in
+    let n = List.length stmts in
+    let first = Int.max 1 (n / 2) in
+    let _, tuples =
+      Ir.Schedule.fission_segmented
+        ~replay:([ (`Solo, first); (`Solo, n - first) ], fun _ _ -> None)
+        ~preset:(fun _ -> [])
+        ~zero_sched:(fun _ -> [])
+        ~static_indices:[] o
+    in
+    List.map tuples ~f:(fun (_, _, _, post) -> post)
+  in
+  let seg_hits = ref [] in
+  let before = AC.snapshot () in
+  let partial_batch_failed =
+    match
+      FI.with_event_callback
+        (fun ev ->
+          match (ev.point, ev.artifact) with
+          | FI.Link_batch_before_segment, FI.Routine_segment { index; count; _ } ->
+              seg_hits := (index, count) :: !seg_hits;
+              if index = 1 then failwith "gh778 injected partial-batch failure"
+          | _ -> ())
+        ~f:(fun () ->
+          Context.compile ~name:"rfi_partial_batch" ~lowered_transform:two_segments (Context.cpu ())
+            seg_comp Ir.Indexing.Empty)
+    with
+    | _ -> false
+    | exception Failure msg -> String.is_substring msg ~substring:"gh778 injected partial-batch"
+  in
+  let after = AC.snapshot () in
+  p "partial-batch link failure fired on segment 1 of 2"
+    (partial_batch_failed
+    && List.equal
+         (fun (a1, b1) (a2, b2) -> a1 = a2 && b1 = b2)
+         (List.rev !seg_hits)
+         [ (0, 2); (1, 2) ]);
+  p "partial-batch link failure freed the whole delta with zero live growth"
+    (working_allocated before after >= 1
+    && live_working_delta before after = 0
+    && live_constant_delta before after = 0);
+  let before = AC.snapshot () in
+  let seg_ctx, seg_routine =
+    Context.compile ~name:"rfi_partial_batch_ok" ~lowered_transform:two_segments (Context.cpu ())
+      seg_comp Ir.Indexing.Empty
+  in
+  let seg_ctx = Context.run seg_ctx seg_routine in
+  p_close "partial-batch control links and computes exact values"
+    (Context.get_values seg_ctx seg_out.Tensor.value)
+    (Array.map expected ~f:(fun v -> v +. 1.))
+    ~tol;
+  Context.release seg_ctx;
+  let after = AC.snapshot () in
+  p "partial-batch control releases cleanly with zero live growth"
+    (live_working_delta before after = 0 && live_constant_delta before after = 0);
+
+  (* gh-ocannl-778: centralized merge-slab invalidate/commit seam on cc. *)
+  let before_merge = AC.snapshot () in
+  let small_vals = Array.init 4 ~f:(fun i -> Float.of_int (i + 1)) in
+  let large_vals = Array.init 16 ~f:(fun i -> Float.of_int (i + 10)) in
+  let small_t =
+    Operation.init ~mutable_:true ~l:"rfi_merge_small" ~prec:Ir.Ops.single ~o:[ 4 ]
+      ~f:(fun i -> small_vals.(i.(0)))
+      ~grad_spec:Tensor.Prohibit_grad ()
+  in
+  let large_t =
+    Operation.init ~mutable_:true ~l:"rfi_merge_large" ~prec:Ir.Ops.single ~o:[ 16 ]
+      ~f:(fun i -> large_vals.(i.(0)))
+      ~grad_spec:Tensor.Prohibit_grad ()
+  in
+  let m_src_small = Context.set_values (Context.cpu ()) small_t.Tensor.value small_vals in
+  let m_src = Context.set_values m_src_small large_t.Tensor.value large_vals in
+  let m_dst = Context.cpu () in
+  let m_dst =
+    Context.copy ~into_merge_buffer:Ir.Backend_intf.Copy ~src:m_src ~dst:m_dst small_t.Tensor.value
+  in
+  let before_grow = Context.merge_slab_state m_dst in
+  p "merge slab holds all four claims after initial fill on cc"
+    (before_grow.has_slab && before_grow.has_location
+    && before_grow.capacity = 4 * 4
+    && before_grow.has_writer);
+  let merge_hit_size = ref None in
+  let callback_state = ref None in
+  let grow_failed =
+    match
+      FI.with_event_callback
+        (fun ev ->
+          match (ev.point, ev.artifact) with
+          | FI.Merge_slab_before_allocate, FI.Merge_slab { size_in_bytes; _ } ->
+              merge_hit_size := Some size_in_bytes;
+              (* Inspecting [merge_slab_state] inside the callback must not re-enter [pools_mutex]
+                 and must already observe all four claims invalidated. *)
+              callback_state := Some (Context.merge_slab_state m_dst);
+              failwith "gh778 injected merge-slab allocation failure"
+          | _ -> ())
+        ~f:(fun () ->
+          Context.copy ~into_merge_buffer:Ir.Backend_intf.Copy ~src:m_src ~dst:m_dst
+            large_t.Tensor.value)
+    with
+    | _ -> false
+    | exception Failure msg -> String.is_substring msg ~substring:"gh778 injected merge-slab"
+  in
+  let after_failed_grow = Context.merge_slab_state m_dst in
+  let callback_saw_invalid =
+    match !callback_state with
+    | Some s -> (not s.has_slab) && (not s.has_location) && s.capacity = 0 && not s.has_writer
+    | None -> false
+  in
+  p "failed merge-slab grow invalidates all four claims on cc"
+    (grow_failed && callback_saw_invalid
+    && Option.equal Int.equal !merge_hit_size (Some (16 * 4))
+    && (not after_failed_grow.has_slab)
+    && (not after_failed_grow.has_location)
+    && after_failed_grow.capacity = 0 && not after_failed_grow.has_writer);
+  let m_dst =
+    Context.copy ~into_merge_buffer:Ir.Backend_intf.Copy ~src:m_src ~dst:m_dst large_t.Tensor.value
+  in
+  let after_retry_grow = Context.merge_slab_state m_dst in
+  p "merge-slab retry restores all four claims with grown capacity on cc"
+    (after_retry_grow.has_slab && after_retry_grow.has_location
+    && after_retry_grow.capacity = 16 * 4
+    && after_retry_grow.has_writer);
+  let m_dst_upload = Context.set_values m_dst large_t.Tensor.value (Array.create ~len:16 1.) in
+  let merge_consume = [%cd large_t =+ large_t.merge] in
+  let m_dst_compiled, consume_r =
+    Context.compile ~name:"rfi_merge_consume" m_dst_upload merge_consume Ir.Indexing.Empty
+  in
+  let m_dst_compiled = Context.run m_dst_compiled consume_r in
+  p_close "merge-slab retry consumer computes exact values on cc"
+    (Context.get_values m_dst_compiled large_t.Tensor.value)
+    (Array.map large_vals ~f:(fun v -> v +. 1.))
+    ~tol;
+  Context.release m_dst_compiled;
+  Context.release m_dst_upload;
+  Context.release m_src;
+  Context.release m_src_small;
+  let after_merge = AC.snapshot () in
+  p "merge-slab probe releases all upload and compiled contexts with zero live growth on cc"
+    (live_working_delta before_merge after_merge = 0)

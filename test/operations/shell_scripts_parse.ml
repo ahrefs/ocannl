@@ -18,6 +18,11 @@
    does execute is its own literal fixtures: {!Errexit_execution_controls} runs them under bash to
    measure the errexit scans against the shell. No repository script is ever run.
 
+   {!Real_dune_legs} attributes literal real-Dune calls in manifest members and their sourced
+   siblings. The analysis follows named calls through the shared shell structure and reads only
+   literal runner registrations and inline leg gates. Computed commands and eval are outside that
+   boundary.
+
    {1 How the scripts are found}
 
    By the rule's `(glob_files_rec ../../*.sh)` dependency, not by `git ls-files`. The glob is what
@@ -664,7 +669,7 @@ module Shell_lexer = struct
     pos + token_length <= String.length text
     && String.equal (String.sub text ~pos ~len:token_length) token
 
-  let literal_shell_word word =
+  let decode_shell_word ~dynamic word =
     let decoded = Buffer.create (String.length word) in
     let digit_value character =
       if Char.between character ~low:'0' ~high:'9' then
@@ -769,6 +774,7 @@ module Shell_lexer = struct
             else if Char.equal character '\\' then loop (index + 1) `Double true
             else if Char.equal character '"' then loop (index + 1) `None false
             else (
+              if Char.equal character '$' || Char.equal character '`' then dynamic ();
               Buffer.add_char decoded character;
               loop (index + 1) `Double false)
         | `Ansi_c ->
@@ -788,10 +794,19 @@ module Shell_lexer = struct
             else if List.mem [ ';'; '&'; '|' ] character ~equal:Char.equal then
               Buffer.contents decoded
             else (
+              if List.mem [ '$'; '`'; '*'; '?'; '['; '{'; '~' ] character ~equal:Char.equal then
+                dynamic ();
               Buffer.add_char decoded character;
               loop (index + 1) `None false)
     in
     loop 0 `None false
+
+  let literal_shell_word word = decode_shell_word ~dynamic:ignore word
+
+  let static_shell_word word =
+    let literal = ref true in
+    let decoded = decode_shell_word ~dynamic:(fun () -> literal := false) word in
+    Option.some_if !literal decoded
 
   let is_named_errexit word = String.equal (literal_shell_word word) "errexit"
 
@@ -1004,7 +1019,18 @@ module Shell_lexer = struct
     in
     loop index `None false 1
 
-  and skip_parameter_expansion line index =
+  and skip_parameter_expansion ?(substitution = fun _ _ -> ()) ?(backtick = fun _ _ -> ()) line
+      index =
+    let skip_substitution start =
+      let finish = skip_command_substitution line (start + 2) in
+      substitution start finish;
+      finish
+    in
+    let skip_backticks start =
+      let finish = skip_backtick line (start + 1) in
+      backtick start finish;
+      finish
+    in
     let rec loop index quote escaped depth =
       if index >= String.length line then index
       else
@@ -1022,37 +1048,42 @@ module Shell_lexer = struct
             if escaped then loop (index + 1) `Double false depth
             else if Char.equal character '\\' then loop (index + 1) `Double true depth
             else if starts_at line ~pos:index "$(" then
-              loop (skip_command_substitution line (index + 2)) `Double false depth
+              loop (skip_substitution index) `Double false depth
             else if starts_at line ~pos:index "${" then
-              loop (skip_parameter_expansion line (index + 2)) `Double false depth
-            else if Char.equal character '`' then loop (index + 1) `Backtick_double false depth
+              loop
+                (skip_parameter_expansion ~substitution ~backtick line (index + 2))
+                `Double false depth
+            else if Char.equal character '`' then loop (skip_backticks index) `Double false depth
             else if Char.equal character '"' then loop (index + 1) `None false depth
             else loop (index + 1) `Double false depth
-        | (`Backtick_none | `Backtick_double) as backtick ->
-            if escaped then loop (index + 1) backtick false depth
-            else if Char.equal character '\\' then loop (index + 1) backtick true depth
-            else if Char.equal character '`' then
-              loop (index + 1)
-                (match backtick with `Backtick_double -> `Double | `Backtick_none -> `None)
-                false depth
-            else loop (index + 1) backtick false depth
         | `None ->
             if escaped then loop (index + 1) `None false depth
             else if Char.equal character '\\' then loop (index + 1) `None true depth
             else if starts_at line ~pos:index "$(" then
-              loop (skip_command_substitution line (index + 2)) `None false depth
+              loop (skip_substitution index) `None false depth
             else if starts_at line ~pos:index "${" then
-              loop (skip_parameter_expansion line (index + 2)) `None false depth
+              loop
+                (skip_parameter_expansion ~substitution ~backtick line (index + 2))
+                `None false depth
             else if starts_at line ~pos:index "$'" then loop (index + 2) `Ansi_c false depth
             else if Char.equal character '\'' then loop (index + 1) `Single false depth
             else if Char.equal character '"' then loop (index + 1) `Double false depth
-            else if Char.equal character '`' then loop (index + 1) `Backtick_none false depth
+            else if Char.equal character '`' then loop (skip_backticks index) `None false depth
             else if Char.equal character '{' then loop (index + 1) `None false (depth + 1)
             else if Char.equal character '}' then
               if depth = 1 then index + 1 else loop (index + 1) `None false (depth - 1)
             else loop (index + 1) `None false depth
     in
     loop index `None false 1
+
+  and skip_backtick text start =
+    let length = String.length text in
+    let rec loop index =
+      if index >= length then length
+      else
+        match text.[index] with '\\' -> loop (index + 2) | '`' -> index + 1 | _ -> loop (index + 1)
+    in
+    loop start
 
   (** Whether an unquoted [#] at [index] starts a comment: only at the start of a word, so [foo#bar]
       is one word and [foo\ #bar] too (the space is escaped when an odd run of backslashes precedes
@@ -1166,7 +1197,39 @@ module Shell_lexer = struct
     in
     loop 0 0 `None false 0 []
 
-  let shell_words command =
+  let assignment_prefix word =
+    let word = literal_shell_word word in
+    match String.lsplit2 word ~on:'=' with
+    | Some (name, _) when not (String.is_empty name) ->
+        let name = if String.is_suffix name ~suffix:"+" then String.drop_suffix name 1 else name in
+        (not (String.is_empty name))
+        && (Char.is_alpha name.[0] || Char.equal name.[0] '_')
+        && String.for_all (String.drop_prefix name 1) ~f:(fun character ->
+            Char.is_alphanum character || Char.equal character '_')
+    | _ -> false
+
+  let variable_descriptor word =
+    Option.bind (String.chop_prefix word ~prefix:"{") ~f:(fun rest ->
+        match String.lsplit2 rest ~on:'}' with
+        | Some (name, following) when assignment_prefix (name ^ "=") -> Some following
+        | _ -> None)
+
+  let redirection_operator_end text start =
+    List.find_map [ "&>>"; "<<<"; "<<-"; "<<"; ">>"; ">&"; "<&"; ">|"; "<>"; "&>"; "<"; ">" ]
+      ~f:(fun op -> Option.some_if (starts_at text ~pos:start op) (start + String.length op))
+
+  (** Whether a raw redirection has its target attached to the operator. *)
+  let redirection_prefix word =
+    let word = Option.value (variable_descriptor word) ~default:word in
+    let rec skip_descriptor index =
+      if index < String.length word && Char.is_digit word.[index] then skip_descriptor (index + 1)
+      else index
+    in
+    Option.map
+      (redirection_operator_end word (skip_descriptor 0))
+      ~f:(fun finish -> finish < String.length word)
+
+  let shell_words ?(split_redirections = false) command =
     let current = Buffer.create (String.length command) in
     let finish words =
       if Buffer.length current = 0 then words
@@ -1222,6 +1285,27 @@ module Shell_lexer = struct
               Buffer.add_char current character;
               loop (index + 1) `None true words)
             else if Char.is_whitespace character then loop (index + 1) `None false (finish words)
+            else if
+              split_redirections
+              && (starts_at command ~pos:index "<(" || starts_at command ~pos:index ">(")
+            then (
+              let finish = skip_command_substitution command (index + 2) in
+              Buffer.add_substring current command ~pos:index ~len:(finish - index);
+              loop finish `None false words)
+            else if
+              split_redirections
+              && (Char.equal character '<' || Char.equal character '>'
+                || starts_at command ~pos:index "&>")
+            then (
+              let previous = Buffer.contents current in
+              let descriptor =
+                String.for_all previous ~f:Char.is_digit
+                || Option.value_map (variable_descriptor previous) ~default:false ~f:String.is_empty
+              in
+              let words = if descriptor then words else finish words in
+              let stop = Option.value_exn (redirection_operator_end command index) in
+              Buffer.add_substring current command ~pos:index ~len:(stop - index);
+              loop stop `None false (finish words))
             else if starts_at command ~pos:index "$(" then (
               let finish = skip_command_substitution command (index + 2) in
               Buffer.add_substring current command ~pos:index ~len:(finish - index);
@@ -1247,58 +1331,6 @@ module Shell_lexer = struct
               loop (index + 1) `None false words)
     in
     loop 0 `None false []
-
-  let assignment_prefix word =
-    let word = literal_shell_word word in
-    match String.lsplit2 word ~on:'=' with
-    | Some (name, _) when not (String.is_empty name) ->
-        let name = if String.is_suffix name ~suffix:"+" then String.drop_suffix name 1 else name in
-        (not (String.is_empty name))
-        && (Char.is_alpha name.[0] || Char.equal name.[0] '_')
-        && String.for_all (String.drop_prefix name 1) ~f:(fun character ->
-            Char.is_alphanum character || Char.equal character '_')
-    | _ -> false
-
-  (** [Some attached] when [word] is a redirection, [attached] telling whether its target is in the
-      same word. Descriptors are a digit run or bash's variable form [{fd}]; [<<-] is an operator
-      whose target follows (the generic reading would take its [-] for an attached target). Both
-      arms and the errexit gate read redirections through this one function. *)
-  let redirection_prefix word =
-    let word =
-      match String.chop_prefix word ~prefix:"{" with
-      | Some rest -> (
-          match String.lsplit2 rest ~on:'}' with
-          | Some (name, operator)
-            when assignment_prefix (name ^ "=")
-                 && List.exists [ "<"; ">" ] ~f:(fun prefix -> String.is_prefix operator ~prefix) ->
-              operator
-          | _ -> word)
-      | None -> word
-    in
-    if String.equal word "<<-" then Some false
-    else
-      let rec skip_descriptor index =
-        if index < String.length word && Char.is_digit word.[index] then skip_descriptor (index + 1)
-        else index
-      in
-      let operator = if String.is_prefix word ~prefix:"&>" then 0 else skip_descriptor 0 in
-      if
-        operator >= String.length word
-        || not
-             (List.mem [ '<'; '>' ] word.[operator] ~equal:Char.equal
-             || Char.equal word.[operator] '&'
-                && operator + 1 < String.length word
-                && Char.equal word.[operator + 1] '>')
-      then None
-      else
-        let rec skip_operator index =
-          if
-            index < String.length word
-            && List.mem [ '<'; '>'; '&'; '|' ] word.[index] ~equal:Char.equal
-          then skip_operator (index + 1)
-          else index
-        in
-        Some (skip_operator operator < String.length word)
 
   (** The errexit effect of one simple command (see {!options_errexit}), read through what can stand
       in front of the builtin: redirections, assignments, [!], [time] ([-p], [--]), and the
@@ -1442,7 +1474,8 @@ module Shell_lexer = struct
 
       Preserve physical start numbers and newline bytes inside quotes. A closing quote followed by
       code must remain visible to the statement scanner, not disappear with its data. *)
-  let numbered_spliced_lines ?(refuse = fun _line _reason -> ()) text =
+  let numbered_spliced_lines ?(refuse = fun _line _reason -> ())
+      ?(heredoc = fun ~opener:_ ~opener_end:_ ~first:_ ~last:_ ~quoted:_ _ -> ()) text =
     let length = String.length text in
     let current = Buffer.create length in
     let lines = ref [] and first = ref 1 and number = ref 1 in
@@ -1545,20 +1578,21 @@ module Shell_lexer = struct
       let finish = word start `None in
       (finish, Buffer.contents decoded, !quoted)
     in
-    let rec skip_bodies index = function
+    let rec skip_bodies ~opener_end index = function
       | [] -> index
-      | (delimiter, strip_tabs, quoted) :: rest ->
-          let rec body index =
-            if index >= length then (
+      | (delimiter, strip_tabs, quoted, opener) :: rest ->
+          let first = !number in
+          let rec body cursor =
+            if cursor >= length then (
               refuse !number (Refusals.fail "unterminated outer heredoc");
-              index)
+              cursor)
             else
               let finish =
-                match String.index_from text index '\n' with
+                match String.index_from text cursor '\n' with
                 | Some finish -> finish
                 | None -> length
               in
-              let line = String.sub text ~pos:index ~len:(finish - index) in
+              let line = String.sub text ~pos:cursor ~len:(finish - cursor) in
               let line = if strip_tabs then String.lstrip ~drop:(Char.equal '\t') line else line in
               (* Unquoted bodies remove escaped newlines before delimiter recognition. Refuse that
                  form rather than guess which later physical lines remain shell code. *)
@@ -1572,14 +1606,19 @@ module Shell_lexer = struct
                 && Int.rem (backslashes (String.length line - 1) 0) 2 = 1
               then refuse !number (Refusals.fail "continued unquoted heredoc body");
               let next = if finish < length then finish + 1 else finish in
+              let last = !number in
               if finish < length then Int.incr number;
-              if String.equal line delimiter then skip_bodies next rest else body next
+              if String.equal line delimiter then (
+                heredoc ~opener ~opener_end ~first ~last ~quoted
+                  (String.sub text ~pos:index ~len:(cursor - index));
+                skip_bodies ~opener_end next rest)
+              else body next
           in
           body index
     in
     let rec loop index quote =
       if index >= length then (
-        ignore (skip_bodies index (List.rev !heredocs));
+        ignore (skip_bodies ~opener_end:!number index (List.rev !heredocs));
         if Buffer.length current > 0 then lines := (!first, Buffer.contents current) :: !lines;
         List.rev !lines)
       else
@@ -1615,7 +1654,7 @@ module Shell_lexer = struct
             if Char.equal c '\n' then (
               emit ();
               Int.incr number;
-              let next = skip_bodies (index + 1) (List.rev !heredocs) in
+              let next = skip_bodies ~opener_end:(!number - 1) (index + 1) (List.rev !heredocs) in
               heredocs := [];
               if Buffer.length current = 0 then first := !number;
               loop next `None)
@@ -1642,11 +1681,54 @@ module Shell_lexer = struct
               let finish, word, quoted = delimiter (index + if strip_tabs then 3 else 2) in
               if String.contains word '\n' then
                 refuse !number (Refusals.fail "multiline heredoc delimiter");
-              heredocs := (word, strip_tabs, quoted) :: !heredocs;
+              let opener = (!first, Buffer.length current) in
+              heredocs := (word, strip_tabs, quoted, opener) :: !heredocs;
               take finish `None)
             else take (index + 1) `None
     in
     loop 0 `None
+
+  type expansion =
+    | Substitution of string
+    | Backtick of string
+    | Heredoc of { body : string; quoted : bool }
+
+  let command_substitution text index finish =
+    if
+      finish > index + 2
+      && Char.equal text.[finish - 1] ')'
+      && not (starts_at text ~pos:index "$((")
+    then Some (Substitution (String.sub text ~pos:(index + 2) ~len:(finish - index - 3)))
+    else None
+
+  let backtick text index finish =
+    let stop = if Char.equal text.[finish - 1] '`' then finish - 1 else finish in
+    Backtick (String.sub text ~pos:(index + 1) ~len:(Int.max 0 (stop - index - 1)))
+
+  (* In unquoted heredoc data only escapes and expansions have shell syntax. Quote marks are
+     data. *)
+  let heredoc_expansions ~first text =
+    let length = String.length text in
+    let rec loop index line acc =
+      let advance finish expansion =
+        let next_line =
+          line
+          + String.count (String.sub text ~pos:index ~len:(finish - index)) ~f:(Char.equal '\n')
+        in
+        let acc = Option.value_map expansion ~default:acc ~f:(fun e -> (line, e) :: acc) in
+        loop finish next_line acc
+      in
+      if index >= length then List.rev acc
+      else if Char.equal text.[index] '\\' then advance (Int.min length (index + 2)) None
+      else if starts_at text ~pos:index "$(" then
+        let finish = skip_command_substitution text (index + 2) in
+        advance finish (command_substitution text index finish)
+      else if Char.equal text.[index] '`' then
+        let finish = skip_backtick text (index + 1) in
+        advance finish (Some (backtick text index finish))
+      else loop (index + 1) (if Char.equal text.[index] '\n' then line + 1 else line) acc
+    in
+    loop 0 first []
 end
 
 (** The execution context the two errexit checks judge a statement in (gh-ocannl-1220).
@@ -1783,6 +1865,7 @@ module Shell_context = struct
         (** A simple command's text, or what precedes a compound's opener ([!], [time], a function
             head). *)
     compound : compound option;
+    expansions : (int * L.expansion) list;
   }
 
   and compound = { kind : kind; branches : branch list }
@@ -1842,13 +1925,15 @@ module Shell_context = struct
     mutable statements : statement list;  (** Of the open branch, latest first. *)
     mutable branches : branch list;  (** Closed, latest first. *)
     mutable falls_through : bool;  (** The next arm is entered by fall-through. *)
+    mutable header_expansions : (int * L.expansion) list;
     outer : operand list * connector list * int option * string;
         (** The enclosing statement so far, and the text before the opener. *)
+    outer_expansions : (int * L.expansion) list;
   }
 
   (** The compound tree of a script's logical lines (see the module header), with a refusal for each
       structural mismatch. *)
-  let structure ~refuse lines =
+  let structure ~refuse ~heredocs lines =
     let buffer = Buffer.create 4096 in
     let starts =
       Array.of_list_map lines ~f:(fun (number, line) ->
@@ -1869,9 +1954,15 @@ module Shell_context = struct
       if Array.is_empty starts then 1 else search 0 (Array.length starts)
     in
     let sub start finish = String.sub text ~pos:start ~len:(finish - start) in
+    let heredocs =
+      List.filter_map heredocs ~f:(fun ((line, column), body) ->
+          Array.find_map starts ~f:(fun (offset, number) ->
+              Option.some_if (number = line) (offset + column, body)))
+      |> Hashtbl.of_alist_exn (module Int)
+    in
     let ids = ref 0 in
     let operands = ref [] and connectors = ref [] and operand_start = ref 0 in
-    let statement_start = ref None and closed = ref None in
+    let statement_start = ref None and closed = ref None and expansions = ref [] in
     let new_frame kind ~at ~phase ~open_branch ~prefix =
       {
         kind;
@@ -1881,18 +1972,28 @@ module Shell_context = struct
         statements = [];
         branches = [];
         falls_through = false;
+        header_expansions = [];
         outer = (!operands, !connectors, Some (Option.value !statement_start ~default:at), prefix);
+        outer_expansions = !expansions;
       }
     in
     let frames =
       ref [ new_frame None ~at:0 ~phase:Commands ~open_branch:(Some (false, false)) ~prefix:"" ]
     in
     let top () = List.hd_exn !frames in
+    let note_expansion line payload =
+      let frame = top () in
+      match frame.phase with
+      | Commands -> expansions := (line, payload) :: !expansions
+      | Header _ | Pattern _ ->
+          frame.header_expansions <- (line, payload) :: frame.header_expansions
+    in
     let close_operand finish =
+      let expansions = List.rev !expansions in
       let operand =
         match !closed with
-        | Some (compound, prefix) -> { text = prefix; compound = Some compound }
-        | None -> { text = String.strip (sub !operand_start finish); compound = None }
+        | Some (compound, prefix) -> { text = prefix; compound = Some compound; expansions }
+        | None -> { text = String.strip (sub !operand_start finish); compound = None; expansions }
       in
       closed := None;
       operands := operand :: !operands
@@ -1900,7 +2001,7 @@ module Shell_context = struct
     let end_statement ?(async = false) finish next =
       close_operand finish;
       (match (!connectors, !operands) with
-      | [], [ { text = ""; compound = None } ] -> ()
+      | [], [ { text = ""; compound = None; expansions = [] } ] -> ()
       | _ ->
           Int.incr ids;
           let frame = top () in
@@ -1914,12 +2015,14 @@ module Shell_context = struct
             }
             :: frame.statements);
       operands := [];
+      expansions := [];
       connectors := [];
       statement_start := None;
       operand_start := next
     in
     let connect finish connector next =
       close_operand finish;
+      expansions := [];
       connectors := connector :: !connectors;
       operand_start := next
     in
@@ -1939,6 +2042,7 @@ module Shell_context = struct
       let prefix = String.strip (sub !operand_start at) in
       frames := new_frame (Some kind) ~at ~phase ~open_branch ~prefix :: !frames;
       operands := [];
+      expansions := [];
       connectors := [];
       statement_start := None;
       closed := None;
@@ -1951,6 +2055,7 @@ module Shell_context = struct
       frames := List.tl_exn !frames;
       let outer_operands, outer_connectors, outer_start, prefix = frame.outer in
       operands := outer_operands;
+      expansions := frame.header_expansions @ frame.outer_expansions;
       connectors := outer_connectors;
       statement_start := outer_start;
       closed :=
@@ -1978,6 +2083,26 @@ module Shell_context = struct
     (* The last index that a word continues past -- an escaped character, a substitution's closer --
        so the character after it starts no word: [foo\ #bar] and [$(x)#y] hold no comment. *)
     let glued_at = ref (-1) in
+    let note_substitution index finish =
+      Option.iter (L.command_substitution text index finish) ~f:(note_expansion (line_of index))
+    in
+    let note_backtick index finish =
+      note_expansion (line_of index) (L.backtick text index finish)
+    in
+    let finish_substitution index =
+      let finish = L.skip_command_substitution text (index + 2) in
+      note_substitution index finish;
+      finish
+    in
+    let finish_backtick index =
+      let finish = L.skip_backtick text (index + 1) in
+      note_backtick index finish;
+      finish
+    in
+    let finish_parameter index =
+      L.skip_parameter_expansion ~substitution:note_substitution ~backtick:note_backtick text
+        (index + 2)
+    in
     let rec loop index quote escaped parens dbracket =
       if index < length then
         let c = text.[index] in
@@ -1994,19 +2119,10 @@ module Shell_context = struct
         | `Double ->
             if escaped then continue (index + 1)
             else if Char.equal c '\\' then continue ~escaped:true (index + 1)
-            else if starts_at index "$(" then
-              continue (L.skip_command_substitution text (index + 2))
-            else if starts_at index "${" then continue (L.skip_parameter_expansion text (index + 2))
-            else if Char.equal c '`' then continue ~quote:`Backtick_double (index + 1)
+            else if starts_at index "$(" then continue (finish_substitution index)
+            else if starts_at index "${" then continue (finish_parameter index)
+            else if Char.equal c '`' then continue (finish_backtick index)
             else continue ?quote:(Option.some_if (Char.equal c '"') `None) (index + 1)
-        | (`Backtick_none | `Backtick_double) as backtick ->
-            if escaped then continue (index + 1)
-            else if Char.equal c '\\' then continue ~escaped:true (index + 1)
-            else if Char.equal c '`' then
-              continue
-                ~quote:(match backtick with `Backtick_double -> `Double | `Backtick_none -> `None)
-                (index + 1)
-            else continue (index + 1)
         | `None -> (
             let frame = top () in
             let word_start =
@@ -2034,11 +2150,11 @@ module Shell_context = struct
                 continue finish
               in
               if starts_at index "$'" then continue ~quote:`Ansi_c (index + 2)
-              else if starts_at index "$(" then glued (L.skip_command_substitution text (index + 2))
-              else if starts_at index "${" then glued (L.skip_parameter_expansion text (index + 2))
+              else if starts_at index "$(" then glued (finish_substitution index)
+              else if starts_at index "${" then glued (finish_parameter index)
               else if Char.equal c '\'' then continue ~quote:`Single (index + 1)
               else if Char.equal c '"' then continue ~quote:`Double (index + 1)
-              else if Char.equal c '`' then continue ~quote:`Backtick_none (index + 1)
+              else if Char.equal c '`' then glued (finish_backtick index)
               else if dbracket then
                 if word_start && starts_at index "]]" && word_ends_at (index + 2) then
                   continue ~dbracket:false (index + 2)
@@ -2078,7 +2194,7 @@ module Shell_context = struct
                   | (`Group | `No)
                     when index > 0 && List.mem [ '<'; '>' ] text.[index - 1] ~equal:Char.equal ->
                       (* A process substitution holds a command list, read as a [$()] body is. *)
-                      let finish = L.skip_command_substitution text (index + 1) in
+                      let finish = finish_substitution (index - 1) in
                       glued_at := finish - 1;
                       continue finish
                   | `Group | `No -> continue ~parens:1 (index + 1)
@@ -2188,6 +2304,9 @@ module Shell_context = struct
                   misfit ()
               | _ -> None
             in
+            if Char.equal c '<' then
+              Option.iter (Hashtbl.find heredocs index) ~f:(fun (line, payload) ->
+                  note_expansion line payload);
             if escaped then (
               glued_at := index;
               continue (index + 1))
@@ -2302,6 +2421,12 @@ module Shell_context = struct
             | None -> List.map (L.shell_words operand.text) ~f:L.literal_shell_word
             | Some compound -> List.concat_map compound.branches ~f:command_words))
 
+  let definition_name text =
+    match drop_pipeline_prefix (L.shell_words text) with
+    | [ head ] | [ "function"; head ] | [ head; "()" ] | [ "function"; head; "()" ] ->
+        Some (Option.value (String.chop_suffix head ~suffix:"()") ~default:head)
+    | _ -> None
+
   (** The functions [branch] defines anywhere, by name. *)
   let rec definitions (branch : branch) =
     List.concat_map branch.statements ~f:(fun statement ->
@@ -2310,13 +2435,10 @@ module Shell_context = struct
             | None -> []
             | Some compound ->
                 let own =
-                  match (compound.kind, drop_pipeline_prefix (L.shell_words operand.text)) with
-                  | ( Function _,
-                      ([ head ] | [ "function"; head ] | [ head; "()" ] | [ "function"; head; "()" ])
-                    ) ->
-                      [
-                        (Option.value (String.chop_suffix head ~suffix:"()") ~default:head, compound);
-                      ]
+                  match compound.kind with
+                  | Function _ ->
+                      Option.to_list
+                        (Option.map (definition_name operand.text) ~f:(fun n -> (n, compound)))
                   | _ -> []
                 in
                 own @ List.concat_map compound.branches ~f:definitions))
@@ -2325,7 +2447,7 @@ module Shell_context = struct
 
   (** The words of a simple command from its command name on, as written (not decoded), past what
       can stand in front of it: [!], [time] ([-p], [--]), assignments and redirections. *)
-  let command_argv text =
+  let command_argv ?(split_redirections = false) text =
     (* Only an assignment as written: a quoted [ 'X=1' ] is the command it names, not a prefix. *)
     let syntactic_assignment word =
       match String.lsplit2 word ~on:'=' with
@@ -2354,7 +2476,16 @@ module Shell_context = struct
           | None -> word :: rest)
       | [] -> []
     in
-    drop (L.shell_words text)
+    let rec without_redirections = function
+      | [] -> []
+      | word :: rest -> (
+          match L.redirection_prefix word with
+          | Some true -> without_redirections rest
+          | Some false -> without_redirections (List.drop rest 1)
+          | None -> word :: without_redirections rest)
+    in
+    let words = L.shell_words ~split_redirections text in
+    drop (if split_redirections then without_redirections words else words)
 
   (** The command name a simple command runs, past what can stand in front of it ({!command_argv}).
       [command] and [builtin] are names of their own: neither runs a function. *)
@@ -2630,15 +2761,17 @@ module Shell_context = struct
             make the whole file read with errexit on from its first line. *)
   }
 
-  let read text =
-    let lexical = ref [] and refusals = ref [] in
+  let parse ?(quoted_heredocs = false) text =
+    let lexical = ref [] and refusals = ref [] and heredocs = ref [] in
     let lines =
-      L.numbered_spliced_lines text ~refuse:(fun line reason ->
-          lexical := (line, reason) :: !lexical)
+      L.numbered_spliced_lines text
+        ~refuse:(fun line reason -> lexical := (line, reason) :: !lexical)
+        ~heredoc:(fun ~opener ~opener_end:_ ~first ~last:_ ~quoted body ->
+          if quoted_heredocs || not quoted then
+            heredocs := (opener, (first, L.Heredoc { body; quoted })) :: !heredocs)
     in
     let refuse line reason = refusals := (line, reason) :: !refusals in
-    let top = structure ~refuse lines in
-    let judgements, enables_errexit, leaking = judge top in
+    let top = structure ~refuse ~heredocs:!heredocs lines in
     let structure_refusals =
       List.dedup_and_sort !refusals ~compare:(fun (line, reason) (line', reason') ->
           match Int.compare line line' with
@@ -2648,8 +2781,13 @@ module Shell_context = struct
               else by_message
           | order -> order)
     in
+    (top, List.rev !lexical, structure_refusals)
+
+  let read text =
+    let top, lexical, structure_refusals = parse text in
+    let judgements, enables_errexit, leaking = judge top in
     let refusals = if enables_errexit then structure_refusals else [] in
-    { top; structure_refusals; judgements; lexical = List.rev !lexical; refusals; leaking }
+    { top; structure_refusals; judgements; lexical; refusals; leaking }
 
   (** The note that makes the whole-file reading visible in the golden (gh-ocannl-1266): a file read
       this way loses every [set +e] in it silently otherwise. *)
@@ -4721,7 +4859,424 @@ module Harness_contract = struct
          (compliant "# harness-support.sh\nharness_args \"$@\"\nharness_scratch example\nfinish\n"))
 end
 
-let () =
+(** Static real-Dune leg discovery reads literal runner calls and the successful branch of a literal
+    [if harness_leg] gate. It follows named functions and sourced sibling scripts only.
+    Substitutions are read in their enclosing operand's scope. Quoted heredocs are data. Backticks
+    naming the probe are refused, and computed commands and [eval] are outside the reader. *)
+module Real_dune_legs = struct
+  module C = Shell_context
+  module L = Shell_lexer
+
+  let probe = "harness_real_dune"
+  let source = "test/operations/shell_scripts_parse.ml"
+
+  type owner = Top | Function of string | Leg of string
+  type site = { path : string; line : int }
+  type call = { owner : owner; name : string; site : site }
+
+  let diagnostic (site, message) =
+    Refusals.fail "%s:%d: real-Dune discovery: %s" site.path site.line message
+
+  type script = {
+    calls : call list;
+    registrations : (string * string) list;
+    sources : string list;
+    issues : (site * string) list;
+    uncertain_gates : site list;
+    incomplete : (site * string) list;
+    mentions_probe : bool;
+  }
+
+  let command text =
+    let rec unwrap = function
+      | "command" :: ("-v" | "-V") :: _ -> None
+      | "command" :: "-p" :: args -> unwrap args
+      | ("command" | "builtin" | "exec") :: "--" :: args | ("command" | "builtin" | "exec") :: args
+        ->
+          unwrap args
+      | word :: args -> Option.map (L.static_shell_word word) ~f:(fun name -> (name, args))
+      | [] -> None
+    in
+    unwrap (C.command_argv ~split_redirections:true text)
+
+  let label word =
+    Option.filter (L.static_shell_word word) ~f:(fun name ->
+        not
+          (String.is_empty name
+          || String.exists name ~f:(List.mem [ '\t'; '\r'; '\n' ] ~equal:Char.equal)))
+
+  let sibling_script word =
+    let name = Stdlib.Filename.basename (L.literal_shell_word word) in
+    Option.some_if
+      (String.is_suffix name ~suffix:".sh"
+      && (not (String.equal name "harness-support.sh"))
+      && String.for_all name ~f:(fun c ->
+          Char.is_alphanum c || List.mem [ '_'; '-'; '.' ] c ~equal:Char.equal))
+      name
+
+  let collect ~path text =
+    let calls = ref []
+    and registrations = ref []
+    and sources = ref []
+    and issues = ref []
+    and uncertain_gates = ref []
+    and incomplete = ref [] in
+    let parse ~first text =
+      let top, lexical, structural = C.parse ~quoted_heredocs:true text in
+      List.iter (lexical @ structural) ~f:(fun (line, (reason : Refusals.refusal)) ->
+          incomplete := ({ path; line = first + line - 1 }, reason.message) :: !incomplete);
+      top
+    in
+    let rec branch ~first owner (node : C.branch) =
+      List.iter node.statements ~f:(fun (stmt : C.statement) ->
+          let site = { path; line = first + stmt.line - 1 } in
+          List.iter stmt.operands ~f:(fun (operand : C.operand) ->
+              List.iter operand.expansions ~f:(fun (line, body) -> expansion ~first owner line body);
+              match operand.compound with
+              | None -> Option.iter (command operand.text) ~f:(record owner site)
+              | Some { kind = Function _; branches } ->
+                  Option.iter (C.definition_name operand.text) ~f:(fun name ->
+                      List.iter branches ~f:(branch ~first (Function name)))
+              | Some { kind = If; branches } -> conditional ~first owner site branches
+              | Some { branches; _ } -> List.iter branches ~f:(branch ~first owner)))
+    and expansion ~first owner line = function
+      | L.Substitution body ->
+          let first = first + line - 1 in
+          branch ~first owner (parse ~first body)
+      | L.Backtick body ->
+          if String.is_substring body ~substring:probe then
+            issues :=
+              ({ path; line = first + line - 1 }, "live backtick mentions harness_real_dune")
+              :: !issues
+      | L.Heredoc { quoted = false; body } ->
+          List.iter (L.heredoc_expansions ~first:line body) ~f:(fun (line, body) ->
+              expansion ~first owner line body)
+      | L.Heredoc { quoted = true; _ } -> ()
+    and record owner site (name, args) =
+      calls := { owner; name; site } :: !calls;
+      match (name, args) with
+      | ("harness_leg_run" | "harness_leg_run_errexit"), name :: fn :: _ -> (
+          match (label name, L.static_shell_word fn) with
+          | Some name, Some fn -> registrations := (name, fn) :: !registrations
+          | _ -> uncertain_gates := site :: !uncertain_gates)
+      | ("harness_leg_run" | "harness_leg_run_errexit"), _ ->
+          uncertain_gates := site :: !uncertain_gates
+      | ("." | "source"), file :: _ ->
+          Option.iter (sibling_script file) ~f:(fun p -> sources := p :: !sources)
+      | _ -> ()
+    and conditional ~first owner site = function
+      | condition :: success :: rest when condition.C.condition ->
+          let leg =
+            match condition.C.statements with
+            | [ { async = false; operands = [ { text; compound = None; _ } ]; _ } ] -> (
+                match L.shell_words text with
+                | [ "harness_leg"; word ] ->
+                    let leg = label word in
+                    if Option.is_none leg then uncertain_gates := site :: !uncertain_gates;
+                    leg
+                | _ -> None)
+            | _ -> None
+          in
+          branch ~first owner condition;
+          branch ~first (Option.value_map leg ~default:owner ~f:(fun name -> Leg name)) success;
+          conditional ~first owner site rest
+      | branches -> List.iter branches ~f:(branch ~first owner)
+    in
+    branch ~first:1 Top (parse ~first:1 text);
+    {
+      calls = List.rev !calls;
+      registrations = List.rev !registrations;
+      sources = List.rev !sources;
+      issues = List.rev !issues;
+      uncertain_gates = List.rev !uncertain_gates;
+      incomplete = List.rev !incomplete;
+      mentions_probe = String.is_substring text ~substring:probe;
+    }
+
+  let discover ~lookup path =
+    let loaded = Hash_set.create (module String) in
+    let rec load path =
+      if Hash_set.mem loaded path then []
+      else (
+        Hash_set.add loaded path;
+        match lookup path with
+        | None -> []
+        | Some text ->
+            let script = collect ~path text in
+            let beside name =
+              Test_scan.Dune_stanza_scan.in_subdir (Stdlib.Filename.dirname path) name
+            in
+            script :: List.concat_map script.sources ~f:(fun name -> load (beside name)))
+    in
+    let scripts = load path in
+    let calls = List.concat_map scripts ~f:(fun script -> script.calls) in
+    let functions = Hashtbl.create (module String) in
+    let inline_legs = Hashtbl.create (module String) in
+    let top = ref [] in
+    List.iter calls ~f:(fun call ->
+        match call.owner with
+        | Top -> top := call :: !top
+        | Function name -> Hashtbl.add_multi functions ~key:name ~data:call
+        | Leg name -> Hashtbl.add_multi inline_legs ~key:name ~data:call);
+    let registered =
+      List.concat_map scripts ~f:(fun script -> script.registrations)
+      |> List.fold
+           ~init:(Map.empty (module String))
+           ~f:(fun map (leg, fn) -> Map.add_multi map ~key:leg ~data:fn)
+    in
+    let reaching initial =
+      let seen = Hash_set.create (module String) in
+      let rec walk acc calls =
+        List.fold calls ~init:acc ~f:(fun acc call ->
+            if String.equal call.name probe then call :: acc
+            else if Hash_set.mem seen call.name then acc
+            else (
+              Hash_set.add seen call.name;
+              walk acc (Hashtbl.find_multi functions call.name)))
+      in
+      walk [] initial
+    in
+    let used = Hash_set.Poly.create () in
+    let gate_names = Set.of_list (module String) (Map.keys registered @ Hashtbl.keys inline_legs) in
+    let legs =
+      Set.to_list gate_names
+      |> List.filter ~f:(fun leg ->
+          let starters =
+            Hashtbl.find_multi inline_legs leg
+            @ List.concat_map (Map.find_multi registered leg) ~f:(Hashtbl.find_multi functions)
+          in
+          let reached = reaching starters in
+          List.iter reached ~f:(Hash_set.add used);
+          not (List.is_empty reached))
+    in
+    let issues = List.concat_map scripts ~f:(fun script -> script.issues) in
+    let probe_calls = List.filter calls ~f:(fun call -> String.equal call.name probe) in
+    let top_calls = reaching !top in
+    let live = not (List.is_empty probe_calls && List.is_empty issues) in
+    let issues =
+      List.concat_map scripts ~f:(fun script ->
+          (if live || script.mentions_probe then script.incomplete else [])
+          @
+          if live then
+            List.map script.uncertain_gates ~f:(fun site -> (site, "non-literal harness leg gate"))
+          else [])
+      @ issues
+    in
+    let issues =
+      List.filter_map probe_calls ~f:(fun call ->
+          Option.some_if
+            (not (Poly.equal call.owner Top || Hash_set.mem used call))
+            (call.site, "call outside a recognised leg"))
+      @ List.map top_calls ~f:(fun call -> (call.site, "call reachable outside a recognised leg"))
+      @ issues
+    in
+    (legs, List.dedup_and_sort issues ~compare:Poly.compare)
+
+  let controls () =
+    let cases =
+      [
+        ( "redirection in a quoted substitution",
+          "leg() { found=\"$(</dev/null harness_real_dune)\"; }\nharness_leg_run '1: probe' leg\n",
+          [ "1: probe" ],
+          [] );
+        ( "attached redirection",
+          "leg() { if harness_real_dune>/dev/null; then :; fi; }\n\
+           harness_leg_run '1: attached' leg\n",
+          [ "1: attached" ],
+          [] );
+        ( "literal elif gate",
+          "if false; then :; elif harness_leg '1: elif'; then harness_real_dune; fi\n",
+          [ "1: elif" ],
+          [] );
+        ( "substitution inside a parameter expansion",
+          "leg() { found=\"${value:-$(harness_real_dune)}\"; }\nharness_leg_run '1: probe' leg\n",
+          [ "1: probe" ],
+          [] );
+        ( "inline success branch",
+          "if harness_leg '2: inline'; then harness_real_dune; else :; fi\n",
+          [ "2: inline" ],
+          [] );
+        ( "inline else branch",
+          "if harness_leg '2: inline'; then :; else harness_real_dune; fi\n",
+          [],
+          [ "call reachable outside a recognised leg" ] );
+        ( "unquoted heredoc expansion",
+          "leg() {\ncat <<END\n$(harness_real_dune)\nEND\n}\nharness_leg_run '3: hidden' leg\n",
+          [ "3: hidden" ],
+          [] );
+        ( "quoted heredoc data",
+          "leg() {\ncat <<'END'\n$(harness_real_dune)\nEND\n}\nharness_leg_run '3: hidden' leg\n",
+          [],
+          [] );
+        ("comment mention", "# harness_real_dune\n:\n", [], []);
+        ( "quoted string argument",
+          "leg() { echo \"harness_real_dune\" >/dev/null; }\nharness_leg_run '1: data' leg\n",
+          [],
+          [] );
+        ( "orphan function",
+          "orphan() { harness_real_dune; }\n",
+          [],
+          [ "call outside a recognised leg" ] );
+        ( "live backticks",
+          "leg() { echo `harness_real_dune`; }\nharness_leg_run '4: backtick' leg\n",
+          [],
+          [ "live backtick mentions harness_real_dune" ] );
+        ( "dynamic gate",
+          "leg() { harness_real_dune; }\nharness_leg_run \"$name\" leg\n",
+          [],
+          [ "call outside a recognised leg"; "non-literal harness leg gate" ] );
+        ( "sourced helper",
+          ". \"$here/real-helper.sh\"\n\
+           leg() { found=$(indirect); }\n\
+           harness_leg_run '5: sourced' leg\n",
+          [ "5: sourced" ],
+          [] );
+      ]
+    in
+    List.iter cases ~f:(fun (name, text, expected, expected_issues) ->
+        let lookup = function
+          | "tools/test-fixture.sh" -> Some text
+          | "tools/real-helper.sh" ->
+              Some "indirect() { helper; }\nhelper() { harness_real_dune; }\n"
+          | _ -> None
+        in
+        let legs, issues = discover ~lookup "tools/test-fixture.sh" in
+        let formats = List.map expected_issues ~f:(fun _ -> "%s:%d: real-Dune discovery: %s") in
+        Verdict.pf "real-Dune discovery %s" name
+          (List.equal String.equal legs expected
+          && List.equal String.equal (List.map issues ~f:snd) expected_issues
+          && Refusals.check_failures ~source ~formats (List.map issues ~f:diagnostic)))
+
+  (* The manifest's quoted data is the root set, so a sourced sibling that happens to have a
+     test-*.sh name is still read only where a manifest member sources it. *)
+  let manifest_roots ~lookup =
+    let path = "tools/test-harnesses.sh" in
+    let unread details = Error (Refusals.fail "%s: unread harness manifest: %s" path details) in
+    let refuse () = unread "expected manifest() to contain one literal HARNESS_LIST heredoc" in
+    match lookup path with
+    | None -> refuse ()
+    | Some text -> (
+        let tree, _, _ = C.parse ~quoted_heredocs:true text in
+        match
+          List.filter (C.definitions tree) ~f:(fun (name, _) -> String.equal name "manifest")
+        with
+        | [ (_, { branches = [ { statements = [ { operands = [ operand ]; _ } ]; _ } ]; _ }) ]
+          when List.equal String.equal (L.shell_words operand.text) [ "cat"; "<<'HARNESS_LIST'" ]
+          -> (
+            match operand.expansions with
+            | [ (_, L.Heredoc { body; quoted = true }) ] ->
+                String.split_lines body
+                |> List.map ~f:(fun line ->
+                    match
+                      String.split_on_chars line ~on:[ ' '; '\t' ]
+                      |> List.filter ~f:(Fn.non String.is_empty)
+                    with
+                    | [ ("shell" | "toolchain" | "promotion"); member ]
+                      when Option.is_some (lookup member) ->
+                        Ok member
+                    | _ -> unread (Printf.sprintf "unexpected row %S" line))
+                |> Result.all
+                |> Result.map ~f:(List.dedup_and_sort ~compare:String.compare)
+            | _ -> refuse ())
+        | _ -> refuse ())
+
+  let manifest_controls () =
+    let lookup text = function
+      | "tools/test-harnesses.sh" -> Some text
+      | "tools/test-fixture.sh" -> Some ":\n"
+      | _ -> None
+    in
+    let manifest row = "manifest() {\ncat <<'HARNESS_LIST'\n" ^ row ^ "\nHARNESS_LIST\n}\n" in
+    Verdict.p "real-Dune manifest reads its literal members"
+      (Result.equal (List.equal String.equal) Poly.equal
+         (manifest_roots ~lookup:(lookup (manifest "shell tools/test-fixture.sh")))
+         (Ok [ "tools/test-fixture.sh" ]));
+    List.iter
+      [
+        ( "dynamic form",
+          "manifest() { printf '%s' \"$members\"; }\n",
+          "expected manifest() to contain one literal HARNESS_LIST heredoc" );
+        ( "unread row",
+          manifest "unknown tools/test-fixture.sh",
+          {|unexpected row "unknown tools/test-fixture.sh"|} );
+      ]
+      ~f:(fun (name, text, details) ->
+        let refuses =
+          match manifest_roots ~lookup:(lookup text) with
+          | Ok _ -> false
+          | Error issue ->
+              Refusals.check_failures ~source
+                ~formats:[ "%s: unread harness manifest: %s" ]
+                [ issue ]
+              && String.equal issue.message
+                   ("tools/test-harnesses.sh: unread harness manifest: " ^ details)
+        in
+        Verdict.pf "real-Dune manifest refuses %s" name refuses)
+
+  let write output scripts =
+    let files = Hashtbl.of_alist_exn (module String) scripts in
+    let texts = Hashtbl.create (module String) in
+    let lookup rel =
+      Option.map (Hashtbl.find files rel) ~f:(fun path ->
+          Hashtbl.find_or_add texts rel ~default:(fun () -> In_channel.read_all path))
+    in
+    let members =
+      match manifest_roots ~lookup with
+      | Ok members -> members
+      | Error issue ->
+          Verdict.fail issue.message;
+          []
+    in
+    let rows =
+      List.concat_map members ~f:(fun rel ->
+          let legs, issues = discover ~lookup rel in
+          List.iter issues ~f:(fun issue -> Verdict.fail (diagnostic issue).message);
+          match legs with
+          | [] -> [ rel ^ "\n" ]
+          | legs -> List.map legs ~f:(fun leg -> rel ^ "\t" ^ leg ^ "\n"))
+    in
+    Out_channel.write_all output ~data:(String.concat rows)
+end
+
+(* The fixture's probe_* assignments name substitution boundaries. Heredoc reports cover the paired
+   readers' logical continuation handling before the body and its closing delimiter. *)
+let dump_shell_fixture path =
+  let module L = Shell_lexer in
+  let text = In_channel.read_all path in
+  printf "%s\n" (Stdlib.Filename.basename path);
+  ignore
+    (List.fold (String.split ~on:'\n' text) ~init:0 ~f:(fun line_start line ->
+         (match String.lsplit2 line ~on:'=' with
+         | Some (name, rhs) when String.is_prefix name ~prefix:"probe_" ->
+             let rhs_start = line_start + String.length name + 1 in
+             let start = if String.is_prefix rhs ~prefix:"\"" then rhs_start + 1 else rhs_start in
+             if not (L.starts_at text ~pos:start "$(") then printf "%s has no substitution\n" name
+             else
+               let finish = L.skip_command_substitution text (start + 2) in
+               if L.starts_at text ~pos:finish "; " || L.starts_at text ~pos:finish "\"; " then
+                 let width =
+                   String.count
+                     (String.sub text ~pos:start ~len:(finish - start))
+                     ~f:(Char.equal '\n')
+                 in
+                 printf "%s closes +%d\n" name width
+               else printf "%s closed before its trailing command\n" name
+         | _ -> ());
+         line_start + String.length line + 1)
+      : int);
+  let heredocs = ref [] in
+  let lines =
+    L.numbered_spliced_lines text ~heredoc:(fun ~opener ~opener_end ~first ~last ~quoted _ ->
+        heredocs := (opener, opener_end, first, last, quoted) :: !heredocs)
+  in
+  List.iter (List.rev !heredocs) ~f:(fun ((line, column), opener_end, first, last, quoted) ->
+      let opener = List.Assoc.find_exn lines line ~equal:Int.equal in
+      let spliced = opener_end > line && not (String.contains (String.prefix opener column) '\n') in
+      printf "heredoc %d..%d %s %s\n" first last
+        (if quoted then "quoted" else "unquoted")
+        (if spliced then "spliced" else "unspliced"))
+
+let scan_shell_scripts () =
   if Array.length argv < 2 then (
     eprintf "Usage: %s <workspace_root> <ocannl_config and shell scripts...>\n" argv.(0);
     Stdlib.exit 1);
@@ -4745,10 +5300,17 @@ let () =
   Errexit_and_list.controls ();
   Errexit_execution_controls.controls ();
   Harness_contract.controls ();
+  Real_dune_legs.controls ();
+  Real_dune_legs.manifest_controls ();
   Trap_order.controls ();
   (* The floor below counts the repository's trap commands, not the fixtures'. *)
   Trap_order.trap_sites := 0;
   let base = base_dir argv.(1) in
+  let output, paths =
+    match List.drop (Array.to_list argv) 2 with
+    | "--discovery-output" :: output :: paths -> (Some output, paths)
+    | paths -> (None, paths)
+  in
   (* Reported repository-relative, opened as dune handed them over: the working directory is deep in
      the build tree and the paths arrive relative to it. *)
   (* A `.sh` file is in scope by its name; anything else the globs hand over is in scope only if it
@@ -4760,13 +5322,14 @@ let () =
     || Shebang.mentions_a_shell (Option.value ~default:"" (first_line_of path))
   in
   let scripts =
-    Array.to_list argv |> Fn.flip List.drop 2
+    paths
     |> List.filter ~f:(fun path -> (not (Stdlib.Sys.is_directory path)) && in_scope path)
     |> List.map ~f:(fun path -> (repo_relative base path, path))
     (* The `*.sh` glob and the two directory globs overlap, so the same script arrives twice; one
        entry per repository-relative path, which is also what the golden is keyed by. *)
     |> List.dedup_and_sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
   in
+  Option.iter output ~f:(fun output -> Real_dune_legs.write output scripts);
   List.iter scripts ~f:(fun (rel, path) ->
       let text = In_channel.read_all path in
       (if Harness_contract.member rel text then
@@ -4834,3 +5397,10 @@ let () =
   Verdict.p_empty "the scan reached the session hook and the suite runner" ~over:must_be_scanned
     missing;
   Test_scan.Refusal_control_manifest.print "shell_scripts_parse.ml"
+
+let () =
+  match Array.to_list argv with
+  | _ :: "--reader-dump" :: (_ :: _ as paths) ->
+      Stdlib.set_binary_mode_out Stdlib.stdout true;
+      List.iter paths ~f:dump_shell_fixture
+  | _ -> scan_shell_scripts ()

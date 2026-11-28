@@ -12,3 +12,29 @@ restrict: staged matmul matches the serial twin: true
 restrict: exactly the two copies are guarded: true
 restrict: each guard is the representative t == 0: true
 restrict: every tile store sits under both Workgroup loops, indexed by one: true
+trans: the serial twin has a nonzero cell: true
+trans_unpadded: every tile store is partitioned across both Workgroup loops: true
+trans_unpadded: non-transposed A maps slot 0 with unit stride on its source minor axis: true
+trans_unpadded: unpadded transposed W declines source-minor remapping: true
+trans_unpadded: executed output matches the serial twin: true
+trans_padded: every tile store is partitioned across both Workgroup loops: true
+trans_padded: non-transposed A maps slot 0 with unit stride on its source minor axis: true
+trans_padded: bank-padded transposed W maps slot 0 with unit stride on its source minor axis: true
+trans_padded: executed output matches the serial twin: true
+trans_padded: emitted padded shared tile carries aligned(16): true
+wg3d: 64x64x8/4x4 launches a 3D (8, 2, 16) workgroup: true
+wg3d: no idle-lane guard survives over the tile copies: true
+wg3d: every tile store is partitioned across all three Workgroup loops: true
+wg3d: A maps slot 0 with unit stride on its source minor axis: true
+wg3d: transposed W maps slot 0 with unit stride on its source minor axis: true
+wg3d: staged tiles carry +4 f32 bank-padded minor dims (12 and 68): true
+wg3d: executed 64x64x8/4x4 matches the serial twin: true
+wg3d: emitted padded shared tiles carry aligned(16): true
+fallback: 32 KiB cap sets sk_no_bank_pad on 64x64x64 f32: true
+fallback: 48 KiB cap enables bank padding on 64x64x64 f32: true
+fallback: 32 KiB schedule fits in 32768 B: true
+fallback: 48 KiB schedule allocates 34816 B padded tiles: true
+fallback: 32 KiB unpadded transposed W declines source-minor remapping: true
+fallback: 48 KiB padded transposed W maps slot 0 with unit stride on K: true
+divfirst: fallback slot 0 divides outer 32-trip loop with zero idle-lane guards: true
+divfirst: tile store is partitioned across both Workgroup loops: true

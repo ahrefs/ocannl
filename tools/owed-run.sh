@@ -35,13 +35,16 @@
 #     `targets`, a comma-separated canonical list of `harnesses`, `member:<MEMBER>` and/or
 #     `@<DIR>/runtest-<NAME>`.
 # Refused otherwise, nothing published.
-# `leg-record` (invoked by `tools/owed-run-report.sh`, gh-ocannl-2359, gh-ocannl-2468) prefers
-# `FLEET_LEG_RECEIPT_DIR` (never falling back to `last` when set) and falls back to the
-# worktree's `linux-shell` pointer or `tools/test-run.sh paths run last` only when unset. A
-# validly bound, clean, exit-0 receipt for this leg and observed SHA whose backend is not `cc` or
-# whose recorded request is not a FULL/TRAIN command logs `ineligible leg` instead of `record
-# refused`; broken bindings, stale receipts, wrong heads, and dirty/failed runs log `record
-# refused`.
+# `leg-record` (invoked by `tools/owed-run-report.sh`, gh-ocannl-2359, gh-ocannl-2468,
+# gh-ocannl-2504) reads `FLEET_LEG_RECEIPT_DIR` (supplied by the fleet from
+# `FLEET_LEG_RECEIPT_LINK`) and never falls back to `tools/test-run.sh paths run last` or the
+# worktree's `linux-shell` pointer. When `FLEET_LEG_RECEIPT_DIR` is unset, it logs `recorded
+# nothing (no receipt registered for this leg)` and exits 0 (assuming the fleet reports an
+# unresolvable `FLEET_LEG_RECEIPT_LINK` itself rather than leaving `FLEET_LEG_RECEIPT_DIR`
+# unset). A validly bound, clean, exit-0 receipt for this leg and observed SHA whose backend is
+# not `cc` or whose recorded request is not a FULL/TRAIN command logs `ineligible leg` instead of
+# `record refused`; malformed or missing `FLEET_LEG_RECEIPT_DIR` values, broken bindings, stale
+# receipts, wrong heads, and dirty/failed runs log `record refused`.
 #
 # What `check HEAD NEED...` admits (exit 0, one `owed-run: admitted ...` line per record it
 # used), as a fail-closed allowlist. NEED is `runtest` (the full suite), `train` (every `train-`
@@ -729,23 +732,7 @@ case $verb in
         fi
       fi
     else
-      linux_cand=
-      if ptr=$(linux_shell_last_pointer 2>/dev/null) && [ -r "$ptr" ]; then
-        cand=$(sed -n 1p "$ptr" 2>/dev/null)
-        if [ -n "$cand" ] && [ -d "$cand" ] && [ "$(cat "$cand/kind" 2>/dev/null)" = linux-shell ] &&
-           cmp -s "$cand/fleet-leg-run-record" <(printf '%s\n' "$1"); then
-          linux_cand=$cand
-        fi
-      fi
-      if [ -n "$linux_cand" ]; then
-        if ! ( export GIT_TERMINAL_PROMPT=0; record_linux_shell "$linux_cand" 0 "$1" "$3" ) </dev/null 2>&1; then
-          printf '%s\n' "$me: recorded nothing (record refused)"
-        fi
-      else
-        if ! ( export GIT_TERMINAL_PROMPT=0; record_run last 0 "$1" "$3" ) </dev/null 2>&1; then
-          printf '%s\n' "$me: recorded nothing (record refused)"
-        fi
-      fi
+      printf '%s\n' "$me: recorded nothing (no receipt registered for this leg)"
     fi ;;
   add)
     [ $# = 1 ] || die "add: one LINE"

@@ -321,13 +321,15 @@ than described: `test/operations/provenance_tag_inventory.expected` groups the c
 function raising them, and lists every file that names one — the checklist for a change to pipeline
 order, which is what decides whether a code can fire. The exit codes:
 
-- `4:lhs-idcs-differ` — Inconsistent index patterns between accesses.
+- `4:lhs-idcs-differ` — Inconsistent index patterns between accesses (including a self-gather
+  `Get_dynamic` of the candidate).
 - `5:index-not-groundable` — Symbol coverage/groundability failure (a non-static symbol is neither
   bound from a bare iterator position nor pinned by an injective affine map).
 - **6** — Retired (was: non-traced loop encountered; the `trace_it` flag is gone).
 - `7:sibling-escaping-write-index` — Escaping variable in a sibling `Set`/`Set_from_vec` index.
 - `8:staged-compilation` — `Staged_compilation` node encountered.
-- `9:sibling-escaping-read-index` — Escaping variable in a sibling `Get`/`Get_merge_buffer` index.
+- `9:sibling-escaping-read-index` — Escaping variable in a sibling `Get`/`Get_merge_buffer` index
+  or static coordinate of a sibling `Get_dynamic`.
 - `10:escaping-index-symbol` — Escaping variable in `Embed_index`.
 - `11:already-non-virtual` — Tensor already marked non-virtual.
 - `12:no-setter` — No setter found.

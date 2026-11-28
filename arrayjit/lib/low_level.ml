@@ -316,6 +316,16 @@ module Access_fold = struct
     scan_implicit : visit;
   }
 
+  let structural =
+    {
+      discarded_operands = Visit;
+      gated_operands = Visit;
+      dead_loops = Visit;
+      local_scopes = Visit;
+      guards = Ignore;
+      scan_implicit = Skip;
+    }
+
   type binder = {
     index : Indexing.symbol;
     from_ : int;
@@ -1137,6 +1147,20 @@ module Read_site = struct
   include Comparator.Make (T)
 end
 
+(** The tensor node a scalar expression reads ITSELF -- not through a sub-expression -- with its
+    static indices and {!Read_site.t}, or [None] (gh-ocannl-1628). Exhaustive on purpose: the scalar
+    twin of {!direct_write}, shared by {!eval_reads_traversal} and {!iter_buffer_accesses} so
+    buffer-read classification (such as a gather counting its table) cannot drift.
+    [Get_merge_buffer] reads the merge buffer, not the node's context buffer, so it returns [None].
+*)
+let direct_read : scalar_t -> (Tn.t * Indexing.axis_index array * Read_site.t) option = function
+  | Get (tn, idcs) -> Some (tn, idcs, Read_site.Static idcs)
+  | Get_dynamic { tn; idcs; dyn_axis; dyn_value } ->
+      Some (tn, idcs, Read_site.Gather { idcs; dyn_axis; dyn_value })
+  | Get_merge_buffer _ | Get_local _ | Local_scope _ | Ternop _ | Binop _ | Unop _ | Constant _
+  | Constant_bits _ | Embed_index _ ->
+      None
+
 type read_charge = {
   loads : Set.M(Tnode).t;  (** Contributors loaded whichever way the selects below go. *)
   sites : Set.M(Read_site).t Map.M(Tnode).t;
@@ -1904,21 +1928,21 @@ let eval_reads_traversal ~self ~iterated =
       after_statement = (fun _ acc _ -> acc);
       after_scalar =
         (fun ctx acc sc ->
-          match sc with
-          | Get (q, idcs) -> contributor ctx acc q idcs (Read_site.Static idcs)
-          | Get_dynamic { tn = q; idcs; dyn_axis; dyn_value } ->
-              contributor ctx acc q idcs (Read_site.Gather { idcs; dyn_axis; dyn_value })
-          | Local_scope _ -> (
-              match acc.e_saved with
-              | cur :: saved ->
-                  {
-                    acc with
-                    e_stmt = merge_charges acc.e_stmt acc.e_cur;
-                    e_cur = cur;
-                    e_saved = saved;
-                  }
-              | [] -> assert false)
-          | _ -> acc);
+          match direct_read sc with
+          | Some (q, idcs, site) -> contributor ctx acc q idcs site
+          | None -> (
+              match sc with
+              | Local_scope _ -> (
+                  match acc.e_saved with
+                  | cur :: saved ->
+                      {
+                        acc with
+                        e_stmt = merge_charges acc.e_stmt acc.e_cur;
+                        e_cur = cur;
+                        e_saved = saved;
+                      }
+                  | [] -> assert false)
+              | _ -> acc));
       branches =
         (fun _ acc ~select arms ->
           let speculable =
@@ -2148,6 +2172,13 @@ let write_overlap_groups (items : ('w * read_charge) list) ~(touch : 'w -> 'w ->
   |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
   |> List.map ~f:(fun (_, g) -> List.map g ~f:snd)
 
+(* Each enclosing loop binder mapped to its full trip count, an inner binder shadowing an outer one.
+   Shared by {!trace_node_facts} and {!check_and_store_virtual}. *)
+let binder_widths (ctx : Access_fold.context) =
+  List.fold_right ctx.loops
+    ~init:(Map.empty (module Indexing.Symbol))
+    ~f:(fun (b : Access_fold.binder) m -> Map.set m ~key:b.index ~data:(b.to_ - b.from_ + 1))
+
 (* Structural facts pass (gh-554): a single non-enumerating program-order traversal computing the
    per-node facts of {!traced_array} that are not affine questions — setter/reader structure,
    scalar-constexpr and one-hot classifications, reduction extents, loop-symbol ownership and the
@@ -2180,16 +2211,10 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
              during lowering"
       | _ -> ())
   in
-  (* Each enclosing loop's index symbol mapped to its full trip count, an inner binder shadowing an
-     outer one. At a setter, the fiber cardinality of the LHS map over that box — the product over
-     symbols absent from the LHS indices — is the recompute cost (per read site) of inlining that
-     setter's computation (gh-494: {!Affine.fiber_cardinality}; the exact-vs-lower-bound distinction
-     is not needed here, the absent-symbol product is the cost either way). *)
-  let loop_ranges (ctx : Access_fold.context) =
-    List.fold_right ctx.loops
-      ~init:(Map.empty (module Indexing.Symbol))
-      ~f:(fun (b : Access_fold.binder) m -> Map.set m ~key:b.index ~data:(b.to_ - b.from_ + 1))
-  in
+  (* At a setter, the fiber cardinality of the LHS map over the enclosing binder box — the product
+     over symbols absent from the LHS indices — is the recompute cost (per read site) of inlining
+     that setter's computation (gh-494: {!Affine.fiber_cardinality}; the exact-vs-lower-bound
+     distinction is not needed here, the absent-symbol product is the cost either way). *)
   let reduction_extent loop_ranges idcs =
     match Affine.fiber_cardinality ~domain:(Map.to_alist loop_ranges) idcs with
     | `Exact n | `At_least n -> n
@@ -2206,7 +2231,7 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
   in
   let setter_facts ?(vec_len = 0) (ctx : Access_fold.context) ~tn ~idcs ~(rhs : scalar_t) =
     let traced : traced_array = get_node traced_store tn in
-    let loop_ranges = loop_ranges ctx in
+    let loop_ranges = binder_widths ctx in
     (* gh-ocannl-2196: the enclosing loops absent from the written indices are a reduction one read
        of a cell replays, so a site mentioning one reads a cell per trip. *)
     let iterated =
@@ -2218,7 +2243,9 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
     let write =
       setter_write_access ~tn ~idcs ~vec_len
         ~loops:
-          (List.rev_map ctx.loops ~f:(fun (b : Access_fold.binder) -> (b.index, (b.from_, b.to_))))
+          (Affine.Loop_chain.of_bindings_exn
+             (List.rev_map ctx.loops ~f:(fun (b : Access_fold.binder) ->
+                  (b.index, (b.from_, b.to_)))))
     in
     Hashtbl.add_multi setters ~key:tn ~data:(write, read_charge ~iterated ~self:tn rhs);
     traced.inline_reduction_extent <-
@@ -2784,135 +2811,107 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
      computation; only an escaping (unbound) non-static symbol disqualifies (see #134). gh-133 Stage
      B: inspect symbols hidden inside [Affine]/[Concat] too, not just bare [Iterator], so the
      relaxed affine path cannot admit an escaping symbol concealed in an affine index. *)
-  let check_sibling_escaping ~env_dom ~code idcs =
+  let in_env_dom (ctx : Access_fold.context) s =
+    Set.mem static_indices s
+    || List.exists ctx.loops ~f:(fun (b : Access_fold.binder) -> Indexing.equal_symbol b.index s)
+  in
+  let check_sibling_escaping ~ctx ~code idcs =
     Array.iter idcs ~f:(fun idx ->
-        let syms =
-          match idx with
-          | Indexing.Iterator s -> [ s ]
-          | Indexing.Affine { symbols; _ } -> List.map symbols ~f:snd
-          | Indexing.Concat syms -> syms
-          | Indexing.Fixed_idx _ | Indexing.Sub_axis -> []
-        in
-        List.iter syms ~f:(fun s ->
-            if (not (Set.mem static_indices s)) && not (Set.mem env_dom s) then (
+        List.iter (index_symbols [| idx |]) ~f:(fun s ->
+            if not (in_env_dom ctx s) then (
               [%log2
                 "INFO: Inlining candidate has an escaping variable",
                 (idx : Indexing.axis_index),
                 (top_llc : t)];
               raise @@ Non_virtual code)))
   in
-  (* Traverse the float code too, for completeness / future use-cases. *)
-  let rec loop_proc ~env_dom ~loop_ranges llc =
-    let loop = loop_proc ~env_dom ~loop_ranges in
-    match llc with
-    | Noop -> ()
-    | (Seq (c1, c2) : t) ->
-        loop c1;
-        loop c2
-    | For_loop { index; body; from_; to_; axis = _ } ->
-        loop_proc ~env_dom:(Set.add env_dom index)
-          ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
-          body
-    | Scan_loop { index; from_; to_; carried; body; _ } ->
-        (* gh-ocannl-696: a scan anywhere in the captured computation refuses the candidate. Writing
-           the candidate inside it is the obvious case -- cell [i]'s value depends on the whole
-           prefix through state the index does not parameterize, so replaying instance [i] cannot
-           reproduce it -- but a scan that feeds the candidate through a scope local is the same
-           recurrence one level down, and a sibling scan is dropped by the inline filter, which
-           cannot keep it without re-minting its carried locals per replay. One verdict for the
-           three, decided where the computation is captured. *)
-        ignore (index, from_, to_, carried, body);
-        raise @@ Non_virtual "148:scan-recurrence"
-    | Zero_out tn -> if Tn.equal tn top_tn then has_setter := true
-    | Set { tn; idcs; llsc; debug = _ } ->
-        if Tn.equal tn top_tn then (
-          check_idcs loop_ranges idcs;
-          has_setter := true)
-        else check_sibling_escaping ~env_dom ~code:"7:sibling-escaping-write-index" idcs;
-        loop_scalar ~env_dom ~loop_ranges llsc
-    | Set_from_vec { tn; idcs; length = _; vec_unop = _; arg = arg, _; debug = _ } ->
-        if Tn.equal tn top_tn then (
-          check_idcs loop_ranges idcs;
-          has_setter := true)
-        else check_sibling_escaping ~env_dom ~code:"7:sibling-escaping-write-index" idcs;
-        loop_scalar ~env_dom ~loop_ranges arg
-    | Set_local (_, llsc) -> loop_scalar ~env_dom ~loop_ranges llsc
-    (* #296, revised for gh-ocannl-483: this arm is LIVE, not defensive. Within [optimize_proc]
-       nothing reaches it -- [hoist_cross_statement_cse] is the only pass here that mints
-       [Declare_local] and it runs last, whereas capture happens during [virtual_llc] -- but the
-       algebraic rewrite tier runs BEFORE [Low_level.optimize] ([Assignments.lower] calls
-       [Rewrites.apply]), and [Online_softmax.hoist] declares its cached probability cell this way
-       beside the statement consuming it, so with [online_softmax] on (the [approximate] profile) a
-       candidate captured around one is refused here. The same pass's other [Declare_local], in
-       [emit_normalizer]'s scan body, does not reach this arm: an enclosing [Scan_loop] is refused
-       as 148 first. What is refused is the constructor, not that pass -- any hoisted local in the
-       captured nest does it ([row_hoisted_local] in test/operations/virtual_rejection_boundary.ml).
-       It also still guards a hoisted program re-entering virtualization. *)
-    | Declare_local _ -> raise @@ Non_virtual "19:declare-local"
-    | Comment _ -> ()
-    | Staged_compilation _ -> raise @@ Non_virtual "8:staged-compilation"
-    (* A barrier is an opaque effect: a computation containing one cannot be inlined/recomputed.
-       Defensive: schedule transforms run after virtualization, so this should be unreachable. *)
-    | Workgroup_barrier -> raise @@ Non_virtual "141:workgroup-barrier"
-    (* Cooperative statements are barrier-strength opaque effects; defensive like the barrier. *)
-    | Tile_mma _ -> raise @@ Non_virtual "143:tile-mma"
-    (* gh-466: a dynamically-indexed write is never a definite write of a virtual candidate.
-       Defensive: [rewrite_one_hot_reductions] runs after virtualization. *)
-    | Set_dynamic _ -> raise @@ Non_virtual "144:dynamic-write"
-    (* Conservative in v1: a guarded computation is not inlined (a conditional write is not a
-       definite write, so recomputing it at the read site could read an unset scope). This arm sees
-       guards INTERIOR to the captured subtree; a guard ENCLOSING it is reported by the caller via
-       [~guarded] (gh-651). Reachable pre-virtualization: [Assignments.to_low_level] emits interval
-       guards for clamped-window pooling (gh-504) and extent guards for symbolic extents (gh-490),
-       besides the launch-extent guards introduced at backend-compile time. *)
-    | If _ -> raise @@ Non_virtual "142:guarded-computation"
-  and loop_scalar ~env_dom ~loop_ranges llsc =
-    match llsc with
-    | Constant _ | Constant_bits _ -> ()
-    | Get (tn, idcs) ->
-        if Tn.equal tn top_tn then check_idcs loop_ranges idcs
-        else check_sibling_escaping ~env_dom ~code:"9:sibling-escaping-read-index" idcs
-    | Get_dynamic { dyn_value = v, _; _ } ->
-        (* gh-343: defensive -- [Get_dynamic] is produced after virtualization analysis. *)
-        loop_scalar ~env_dom ~loop_ranges v
-    | Local_scope { body; _ } -> loop_proc ~env_dom ~loop_ranges body
-    | Get_local _ -> ()
-    | Get_merge_buffer (tn, idcs) ->
-        if Tn.equal tn top_tn then check_idcs loop_ranges idcs
-        else check_sibling_escaping ~env_dom ~code:"9:sibling-escaping-read-index" idcs
-    | Embed_index (Fixed_idx _ | Sub_axis) -> ()
-    | Embed_index (Iterator s) ->
-        if not @@ Set.mem env_dom s then (
-          if not (Set.mem static_indices s) then
-            [%log2
-              "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
-          raise @@ Non_virtual "10:escaping-index-symbol")
-    | Embed_index (Affine { symbols; _ }) ->
-        List.iter symbols ~f:(fun (_, s) ->
-            if not @@ Set.mem env_dom s then (
-              if not (Set.mem static_indices s) then
+  (* gh-ocannl-1628: the legality walk runs on {!Access_fold} with {!Access_fold.structural} (every
+     operand, dead loops, scope bodies; pre-order hooks preserve first-refusal provenance order).
+     Unknown writes are caught via {!direct_write}, mirroring {!trace_node_facts}. *)
+  let check_legality llc =
+    let open Access_fold in
+    let statement ctx () stmt =
+      (match stmt with
+      | Scan_loop _ ->
+          (* gh-ocannl-696: a scan anywhere in the captured computation refuses the candidate.
+             Writing the candidate inside it is the obvious case -- cell [i]'s value depends on the
+             whole prefix through state the index does not parameterize, so replaying instance [i]
+             cannot reproduce it -- but a scan that feeds the candidate through a scope local is the
+             same recurrence one level down, and a sibling scan is dropped by the inline filter,
+             which cannot keep it without re-minting its carried locals per replay. One verdict for
+             the three, decided where the computation is captured. *)
+          raise @@ Non_virtual "148:scan-recurrence"
+      | Zero_out tn -> if Tn.equal tn top_tn then has_setter := true
+      | Set { tn; idcs; _ } | Set_from_vec { tn; idcs; _ } ->
+          if Tn.equal tn top_tn then (
+            check_idcs (binder_widths ctx) idcs;
+            has_setter := true)
+          else check_sibling_escaping ~ctx ~code:"7:sibling-escaping-write-index" idcs
+      (* #296, revised for gh-ocannl-483: this arm is LIVE, not defensive. Within [optimize_proc]
+         nothing reaches it -- [hoist_cross_statement_cse] is the only pass here that mints
+         [Declare_local] and it runs last, whereas capture happens during [virtual_llc] -- but the
+         algebraic rewrite tier runs BEFORE [Low_level.optimize] ([Assignments.lower] calls
+         [Rewrites.apply]), and [Online_softmax.hoist] declares its cached probability cell this way
+         beside the statement consuming it, so with [online_softmax] on (the [approximate] profile)
+         a candidate captured around one is refused here. The same pass's other [Declare_local], in
+         [emit_normalizer]'s scan body, does not reach this arm: an enclosing [Scan_loop] is refused
+         as 148 first. What is refused is the constructor, not that pass -- any hoisted local in the
+         captured nest does it ([row_hoisted_local] in
+         test/operations/virtual_rejection_boundary.ml). It also still guards a hoisted program
+         re-entering virtualization. *)
+      | Declare_local _ -> raise @@ Non_virtual "19:declare-local"
+      | Staged_compilation _ -> raise @@ Non_virtual "8:staged-compilation"
+      (* A barrier is an opaque effect: a computation containing one cannot be inlined/recomputed.
+         Defensive: schedule transforms run after virtualization, so this should be unreachable. *)
+      | Workgroup_barrier -> raise @@ Non_virtual "141:workgroup-barrier"
+      (* Cooperative statements are barrier-strength opaque effects; defensive like the barrier. *)
+      | Tile_mma _ -> raise @@ Non_virtual "143:tile-mma"
+      (* gh-466: a dynamically-indexed write is never a definite write of a virtual candidate.
+         Defensive: [rewrite_one_hot_reductions] runs after virtualization. *)
+      | Set_dynamic _ -> raise @@ Non_virtual "144:dynamic-write"
+      (* Conservative in v1: a guarded computation is not inlined (a conditional write is not a
+         definite write, so recomputing it at the read site could read an unset scope). This arm
+         sees guards INTERIOR to the captured subtree; a guard ENCLOSING it is reported by the
+         caller via [~guarded] (gh-651). Reachable pre-virtualization: [Assignments.to_low_level]
+         emits interval guards for clamped-window pooling (gh-504) and extent guards for symbolic
+         extents (gh-490), besides the launch-extent guards introduced at backend-compile time. *)
+      | If _ -> raise @@ Non_virtual "142:guarded-computation"
+      | stmt when Option.is_some (direct_write stmt) ->
+          invalid_arg
+            "Low_level.check_and_store_virtual: a write this pass does not handle reached it"
+      (* Deliberately fail-open on unrecognised non-write statements (gh-ocannl-1628) so a new
+         constructor flags only [Access_fold] and [direct_write]; [direct_write] catches unknown
+         writes only, so a new non-write effect constructor must add a refusal arm here. *)
+      | _ -> ());
+      Continue ()
+    in
+    let scalar ctx () llsc =
+      (match llsc with
+      | Get (tn, idcs) | Get_merge_buffer (tn, idcs) ->
+          if Tn.equal tn top_tn then check_idcs (binder_widths ctx) idcs
+          else check_sibling_escaping ~ctx ~code:"9:sibling-escaping-read-index" idcs
+      | Get_dynamic { tn; idcs; dyn_axis; _ } ->
+          (* gh-ocannl-1628: a dynamic gather's static coordinates ([i <> dyn_axis]) are rendered at
+             the replay site like [Get], so an escaping loop symbol there would become unbound (e.g.
+             under a width-1 enclosing loop exempt from rule 147); [Access_fold] descends into
+             [dyn_value] next. A gather of the candidate itself never matches its static write
+             position ([4:lhs-idcs-differ]). *)
+          if Tn.equal tn top_tn then raise @@ Non_virtual "4:lhs-idcs-differ"
+          else
+            let static_idcs = Array.filteri idcs ~f:(fun i _ -> i <> dyn_axis) in
+            check_sibling_escaping ~ctx ~code:"9:sibling-escaping-read-index" static_idcs
+      | Embed_index idx ->
+          List.iter (index_symbols [| idx |]) ~f:(fun s ->
+              if not (in_env_dom ctx s) then (
                 [%log2
                   "Inlining candidate has an escaping variable",
                   (s : Indexing.symbol),
                   (top_llc : t)];
-              raise @@ Non_virtual "10:escaping-index-symbol"))
-    | Embed_index (Concat syms) ->
-        List.iter syms ~f:(fun s ->
-            if not @@ Set.mem env_dom s then (
-              if not (Set.mem static_indices s) then
-                [%log2
-                  "Inlining candidate has an escaping variable",
-                  (s : Indexing.symbol),
-                  (top_llc : t)];
-              raise @@ Non_virtual "10:escaping-index-symbol"))
-    | Ternop (_, (llv1, _), (llv2, _), (llv3, _)) ->
-        loop_scalar ~env_dom ~loop_ranges llv1;
-        loop_scalar ~env_dom ~loop_ranges llv2;
-        loop_scalar ~env_dom ~loop_ranges llv3
-    | Binop (_, (llv1, _), (llv2, _)) ->
-        loop_scalar ~env_dom ~loop_ranges llv1;
-        loop_scalar ~env_dom ~loop_ranges llv2
-    | Unop (_, (llsc, _)) -> loop_scalar ~env_dom ~loop_ranges llsc
+                raise @@ Non_virtual "10:escaping-index-symbol"))
+      | _ -> ());
+      Continue ()
+    in
+    fold ~policy:structural ~hooks:{ (hooks ()) with statement; scalar } ~init:() llc
   in
   try
     if Tn.Placements.known_non_virtual optim_ctx.placements traced.tn then
@@ -2944,7 +2943,7 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
        like an enclosing guard, so only the caller can report it. Same verdict as a scan met inside
        the nest by the walk above. *)
     if in_scan then raise @@ Non_virtual "148:scan-recurrence";
-    loop_proc ~env_dom:static_indices ~loop_ranges:(Map.empty (module Indexing.Symbol)) top_llc;
+    check_legality top_llc;
     if not !has_setter then raise @@ Non_virtual "12:no-setter";
     (* gh-651 (loop half): an enclosing [For_loop] whose symbol the candidate's index map does not
        mention replays the whole captured nest into the SAME cells — it is a reduction/repetition
@@ -3137,7 +3136,7 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
     effs :=
       {
         Affine.e_kind = kind;
-        e_loops = List.rev loops;
+        e_loops = loops;
         e_guarded = guarded;
         e_gated = gated;
         e_path = List.rev path;
@@ -3160,7 +3159,7 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
         a_rmw = rmw;
         a_val_syms = val_syms;
         a_stmt_write = stmt_write;
-        a_loops = List.rev loops;
+        a_loops = loops;
         a_path = List.rev path;
       }
       :: !acc
@@ -3197,7 +3196,7 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
         List.iteri (flat_lines [ llc ]) ~f:(fun k stmt ->
             code ~arm ~loops ~path:(Affine.Stmt k :: path) ~guarded stmt)
     | For_loop { index; from_; to_; body; _ } ->
-        code ~arm ~loops:((index, (from_, to_)) :: loops) ~path ~guarded body
+        code ~arm ~loops:(Affine.Loop_chain.enter_exn loops index (from_, to_)) ~path ~guarded body
     | Scan_loop { index; from_; to_; carried; body; _ } ->
         (* gh-ocannl-696: the inits are statement [0] of the construct, one [Set_local]-shaped
            position each, and the body statement [1] -- so every init read orders before every body
@@ -3210,7 +3209,7 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
               ?stmt_write:None c.init;
             add_effect ~loops ~path:(Affine.Write :: path) ~guarded
               (Affine.Local_write (affine_local c.prev)));
-        let loops = (index, (from_, to_)) :: loops in
+        let loops = Affine.Loop_chain.enter_exn loops index (from_, to_) in
         code ~arm ~loops ~path:(Affine.Stmt 1 :: path) ~guarded body;
         List.iteri carried ~f:(fun j c ->
             let path = Affine.Stmt j :: Affine.Stmt 2 :: path in
@@ -3303,7 +3302,7 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
             operand `Gated b)
     | Unop (_, (a, _)) -> operand `Always a
   in
-  code ~loops:[] ~path:[] ~guarded:false llc;
+  code ~loops:Affine.Loop_chain.empty ~path:[] ~guarded:false llc;
   (List.rev !acc, List.rev !effs)
 
 let affine_accesses (llc : t) : Tn.t Affine.access list = fst (affine_relations llc)
@@ -8445,38 +8444,50 @@ let reads_scope_before_set (target : scope_id) (body : t) : bool =
   in
   match scan body with `Written -> false | `Read | `Neither -> true
 
-(** Whether a statement tree contains a [Workgroup_barrier] anywhere, including inside [For_loop]
-    bodies and [Local_scope] bodies of its scalar expressions. Used to delimit code motion:
-    [flat_lines] keeps [For_loop] opaque, so this recursive check is what splits hoisting at a
-    barrier nested in a sibling statement. *)
-let rec contains_barrier (llc : t) : bool =
+(** Shared walk for {!contains_barrier} and {!contains_explicit_barrier}: whether a statement tree
+    contains a [Workgroup_barrier] anywhere (including inside [For_loop] bodies and [Local_scope]
+    bodies of its scalar expressions), optionally treating [Tile_mma] itself as barrier-strength. *)
+let rec contains_barrier_aux ~tile_mma_is_barrier (llc : t) : bool =
   match llc with
   | Workgroup_barrier -> true
-  (* A cooperative tile statement is barrier-strength: all lanes must reach it together, and no code
-     motion may cross it. Treating it as a barrier also makes [validate_parallel] apply the
-     workgroup-extent-uniformity and no-If-guard rules to kernels containing it. *)
-  | Tile_mma _ -> true
-  | Seq (a, b) -> contains_barrier a || contains_barrier b
-  | For_loop { body; _ } -> contains_barrier body
+  (* A cooperative tile statement is barrier-strength for code motion and [validate_parallel], while
+     [contains_explicit_barrier] recurses only into [fallback] so bare CPU register-tiled schedules
+     stay on the fork-join path. *)
+  | Tile_mma { fallback; _ } ->
+      tile_mma_is_barrier || contains_barrier_aux ~tile_mma_is_barrier fallback
+  | Seq (a, b) ->
+      contains_barrier_aux ~tile_mma_is_barrier a || contains_barrier_aux ~tile_mma_is_barrier b
+  | For_loop { body; _ } -> contains_barrier_aux ~tile_mma_is_barrier body
   | Scan_loop { carried; body; _ } ->
-      List.exists carried ~f:(fun c -> scalar_contains_barrier c.init) || contains_barrier body
-  | Set { llsc; _ } -> scalar_contains_barrier llsc
+      List.exists carried ~f:(fun c -> scalar_contains_barrier_aux ~tile_mma_is_barrier c.init)
+      || contains_barrier_aux ~tile_mma_is_barrier body
+  | Set { llsc; _ } -> scalar_contains_barrier_aux ~tile_mma_is_barrier llsc
   | Set_dynamic { dyn_value = v, _; llsc; _ } ->
-      scalar_contains_barrier v || scalar_contains_barrier llsc
-  | Set_from_vec { arg = s, _; _ } -> scalar_contains_barrier s
-  | Set_local (_, llsc) -> scalar_contains_barrier llsc
-  | If { cond = c, _; body } -> scalar_contains_barrier c || contains_barrier body
+      scalar_contains_barrier_aux ~tile_mma_is_barrier v
+      || scalar_contains_barrier_aux ~tile_mma_is_barrier llsc
+  | Set_from_vec { arg = s, _; _ } -> scalar_contains_barrier_aux ~tile_mma_is_barrier s
+  | Set_local (_, llsc) -> scalar_contains_barrier_aux ~tile_mma_is_barrier llsc
+  | If { cond = c, _; body } ->
+      scalar_contains_barrier_aux ~tile_mma_is_barrier c
+      || contains_barrier_aux ~tile_mma_is_barrier body
   | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ -> false
 
-and scalar_contains_barrier (llsc : scalar_t) : bool =
+and scalar_contains_barrier_aux ~tile_mma_is_barrier (llsc : scalar_t) : bool =
   match llsc with
-  | Local_scope { body; _ } -> contains_barrier body
-  | Get_dynamic { dyn_value = v, _; _ } -> scalar_contains_barrier v
+  | Local_scope { body; _ } -> contains_barrier_aux ~tile_mma_is_barrier body
+  | Get_dynamic { dyn_value = v, _; _ } -> scalar_contains_barrier_aux ~tile_mma_is_barrier v
   | Ternop (_, (s1, _), (s2, _), (s3, _)) ->
-      scalar_contains_barrier s1 || scalar_contains_barrier s2 || scalar_contains_barrier s3
-  | Binop (_, (s1, _), (s2, _)) -> scalar_contains_barrier s1 || scalar_contains_barrier s2
-  | Unop (_, (s, _)) -> scalar_contains_barrier s
+      scalar_contains_barrier_aux ~tile_mma_is_barrier s1
+      || scalar_contains_barrier_aux ~tile_mma_is_barrier s2
+      || scalar_contains_barrier_aux ~tile_mma_is_barrier s3
+  | Binop (_, (s1, _), (s2, _)) ->
+      scalar_contains_barrier_aux ~tile_mma_is_barrier s1
+      || scalar_contains_barrier_aux ~tile_mma_is_barrier s2
+  | Unop (_, (s, _)) -> scalar_contains_barrier_aux ~tile_mma_is_barrier s
   | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
+
+let contains_explicit_barrier (llc : t) : bool = contains_barrier_aux ~tile_mma_is_barrier:false llc
+let contains_barrier (llc : t) : bool = contains_barrier_aux ~tile_mma_is_barrier:true llc
 
 (* Whether the tree carries a read-modify-write accumulation: some [Set] (resp. [Set_local]) reads
    its own target — a loop-carried dependency through memory when the written cell does not vary
@@ -9670,16 +9681,6 @@ let input_and_output_nodes optimized =
     queries over the routine's accesses. Sibling loops may rebind one symbol (gh-ocannl-1305). *)
 let loop_ranges (llc : t) : Affine.Loop_ranges.t =
   let open Access_fold in
-  let policy =
-    {
-      discarded_operands = Visit;
-      gated_operands = Visit;
-      dead_loops = Visit;
-      local_scopes = Visit;
-      guards = Ignore;
-      scan_implicit = Skip;
-    }
-  in
   let hooks =
     {
       (hooks ()) with
@@ -9692,7 +9693,7 @@ let loop_ranges (llc : t) : Affine.Loop_ranges.t =
             | _ -> acc));
     }
   in
-  fold ~policy ~hooks ~init:Affine.Loop_ranges.empty llc
+  fold ~policy:structural ~hooks ~init:Affine.Loop_ranges.empty llc
 
 (** Calls [touch] on every tnode whose context buffer the statement reads or writes, [on_opaque] on
     [Staged_compilation] (its accesses cannot be enumerated). Scope-local reads/writes
@@ -9701,58 +9702,24 @@ let loop_ranges (llc : t) : Affine.Loop_ranges.t =
     merge buffer, not the node's context buffer. The single source of buffer-access truth for the
     gh-ocannl-489 liveness passes ({!buffer_access_spans}, {!sink_zero_outs}). *)
 let iter_buffer_accesses ~(touch : Tn.t -> unit) ~(on_opaque : unit -> unit) (c : t) : unit =
-  let rec scal (sc : scalar_t) : unit =
-    match sc with
-    | Local_scope { body; id = _; orig_indices = _; mint = _ } -> stmt body
-    | Get_local _ -> ()
-    | Get (tn, _) -> touch tn
-    | Get_dynamic { tn; dyn_value = dv, _; idcs = _; dyn_axis = _ } ->
-        touch tn;
-        scal dv
-    | Get_merge_buffer (_, _) -> (* Reads the merge buffer, not the node's context buffer. *) ()
-    | Ternop (_, (a, _), (b, _), (c, _)) ->
-        scal a;
-        scal b;
-        scal c
-    | Binop (_, (a, _), (b, _)) ->
-        scal a;
-        scal b
-    | Unop (_, (a, _)) -> scal a
-    | Constant _ | Constant_bits _ | Embed_index _ -> ()
-  and stmt (c : t) : unit =
-    match c with
-    | Noop | Comment _ -> ()
+  let open Access_fold in
+  let statement _ () stmt =
+    Option.iter (direct_write stmt) ~f:touch;
+    (match stmt with
     | Staged_compilation _ -> on_opaque ()
-    | Seq (t1, t2) ->
-        stmt t1;
-        stmt t2
-    | For_loop { body; _ } -> stmt body
-    | Scan_loop { carried; body; _ } ->
-        List.iter carried ~f:(fun c -> scal c.init);
-        stmt body
-    | Zero_out tn -> touch tn
-    | Set { tn; llsc; idcs = _; debug = _ } ->
-        touch tn;
-        scal llsc
-    | Set_dynamic { tn; dyn_value = dv, _; llsc; idcs = _; dyn_axis = _; debug = _ } ->
-        touch tn;
-        scal dv;
-        scal llsc
-    | Set_from_vec { tn; arg = a, _; idcs = _; length = _; vec_unop = _; debug = _ } ->
-        touch tn;
-        scal a
-    | Set_local (_, sc) -> scal sc
-    | Declare_local _ | Workgroup_barrier -> ()
-    | If { cond = cond, _; body } ->
-        scal cond;
-        stmt body
-    | Tile_mma { d = d, _; a = a, _; b = b, _; fallback; _ } ->
-        touch d;
+    | Tile_mma { a = a, _; b = b, _; _ } ->
+        (* [d] was touched by [direct_write stmt] above; [Access_fold] descends into [fallback]
+           next. *)
         touch a;
-        touch b;
-        stmt fallback
+        touch b
+    | _ -> ());
+    Continue ()
   in
-  stmt c
+  let scalar _ () sc =
+    Option.iter (direct_read sc) ~f:(fun (tn, _, _) -> touch tn);
+    Continue ()
+  in
+  fold ~policy:structural ~hooks:{ (hooks ()) with statement; scalar } ~init:() c
 
 (** gh-ocannl-489 liveness-based buffer aliasing: per-tnode access span over the final (post-
     schedule, post-fission) code of a routine, as a closed interval of positions. [segments] are the
@@ -11557,15 +11524,12 @@ let zero_seed_candidate ?(allow_workgroup_barriers = false) (tn : Tn.t) (next : 
            && Affine.same_statement read.a_path write.a_path
            && Option.exists read.a_stmt_write ~f:(same_map write.a_map)
            && same_map read.a_map write.a_map ->
-        let range symbol =
-          List.find_map write.a_loops ~f:(fun (bound, range) ->
-              if Indexing.equal_symbol symbol bound then Some range else None)
-        in
-        if List.exists write.a_loops ~f:(fun (_, (lo, hi)) -> hi < lo) then None
+        let range symbol = Affine.Loop_chain.find write.a_loops symbol in
+        if not (Affine.loops_live write.a_loops) then None
         else if Affine.covers_box ~range (Affine.view ~dims:(Lazy.force tn.Tn.dims) write.a_map)
         then
           let repeated =
-            List.filter_map write.a_loops ~f:(fun (symbol, (lo, hi)) ->
+            List.filter_map (Affine.Loop_chain.to_alist write.a_loops) ~f:(fun (symbol, (lo, hi)) ->
                 Option.some_if
                   (hi > lo
                   && not (Array.exists write.a_map ~f:(Indexing.axis_index_mentions_symbol symbol))
@@ -11629,7 +11593,7 @@ let zero_initializer_target (stmt : t) : Tn.t option =
       | _ -> (
           match affine_accesses stmt with
           | [ { Affine.a_write = true; a_guarded = false; a_loops; a_map; _ } ] ->
-              let range sym = List.Assoc.find a_loops sym ~equal:Indexing.equal_symbol in
+              let range sym = Affine.Loop_chain.find a_loops sym in
               Option.some_if
                 (Affine.covers_box ~range (Affine.view ~dims:(Lazy.force tn.Tn.dims) a_map))
                 tn
@@ -11772,8 +11736,7 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
          their sum at the sum of the bounds, since none can be below its own. *)
       let first_of syms =
         let from_ s =
-          Option.value_map ~default:0 ~f:fst
-            (List.Assoc.find write.Affine.a_loops s ~equal:Indexing.equal_symbol)
+          Option.value_map ~default:0 ~f:fst (Affine.Loop_chain.find write.Affine.a_loops s)
         in
         Binop
           ( Ops.Cmple,
@@ -11795,7 +11758,7 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
       let pays syms =
         let trips =
           List.fold syms ~init:1 ~f:(fun acc s ->
-              match List.Assoc.find write.Affine.a_loops s ~equal:Indexing.equal_symbol with
+              match Affine.Loop_chain.find write.Affine.a_loops s with
               | Some (lo, hi) -> acc * (hi - lo + 1)
               | None -> acc)
         in
@@ -12333,7 +12296,10 @@ let read_multiplicity_query (static_indices : Indexing.static_symbol list)
         let sites = Array.of_list sites in
         let bounds =
           Array.map sites ~f:(fun a ->
-              let domain = List.map a.Affine.a_loops ~f:(fun (s, (lo, hi)) -> (s, hi - lo + 1)) in
+              let domain =
+                List.map (Affine.Loop_chain.to_alist a.Affine.a_loops) ~f:(fun (s, (lo, hi)) ->
+                    (s, hi - lo + 1))
+              in
               match Affine.fiber_cardinality_ub ~domain a.a_map with `Exact n | `At_most n -> n)
         in
         Array.foldi sites ~init:0 ~f:(fun i acc a ->
@@ -12531,14 +12497,14 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
               in
               let fiber =
                 let domain =
-                  List.filter_map a.a_loops ~f:(fun (s, (lo, hi)) ->
+                  List.filter_map (Affine.Loop_chain.to_alist a.a_loops) ~f:(fun (s, (lo, hi)) ->
                       Option.some_if (Set.mem syms s) (s, hi - lo + 1))
                 in
                 match Affine.fiber_cardinality ~domain a.a_map with `Exact f | `At_least f -> f
               in
               Result.map ~f:(fun cells -> (cells, fiber, writers))
               @@ Set.fold_result syms ~init:1 ~f:(fun cells s ->
-                  match List.Assoc.find a.a_loops s ~equal:Indexing.equal_symbol with
+                  match Affine.Loop_chain.find a.a_loops s with
                   | Some (0, hi) -> Ok (cells * (hi + 1))
                   | Some _ -> Error "enclosing loop is not zero-based"
                   | None -> Error "index symbol bound by no enclosing loop")
@@ -12702,16 +12668,14 @@ let affine_replay_cap_query ~static_indices ~live_accesses (accesses : Tn.t Affi
     List.compare Affine.compare_path_comp a.a_path b.a_path < 0
   in
   let price ~cap ~reads tn (write : _ Affine.access) =
-    let write_loops = List.rev write.a_loops in
     let range s =
-      match List.Assoc.find write_loops s ~equal:Indexing.equal_symbol with
-      | Some (lo, hi) -> hi - lo + 1
-      | None -> 1
+      match Affine.Loop_chain.find write.a_loops s with Some (lo, hi) -> hi - lo + 1 | None -> 1
     in
     Indexing.affine_injective ~symbol_range:range write.a_map
     &&
     let body =
-      List.fold_right write.a_loops
+      List.fold_right
+        (Affine.Loop_chain.to_alist write.a_loops)
         ~init:(Set { tn; idcs = write.a_map; llsc = Constant 1.; debug = "" })
         ~f:(fun (index, (from_, to_)) body -> For_loop { index; from_; to_; body; axis = Serial })
     in
@@ -12722,10 +12686,9 @@ let affine_replay_cap_query ~static_indices ~live_accesses (accesses : Tn.t Affi
               (Option.equal Int.equal (Affine.stmt_head write.a_path) (Affine.stmt_head read.a_path)))
         && before write read
         &&
-        let loops = List.rev read.a_loops in
         match
           instantiate_computations ~fresh_symbol:pricing_symbol ~placements
-            ~call_range:(fun s -> List.Assoc.find loops s ~equal:Indexing.equal_symbol)
+            ~call_range:(Affine.Loop_chain.find read.a_loops)
             ~coverage_exempt:false ~id:(pricing_scope tn) tn
             [ (Some write.a_map, body) ]
             static_indices read.a_map
@@ -12744,8 +12707,9 @@ let affine_replay_cap_query ~static_indices ~live_accesses (accesses : Tn.t Affi
     match List.partition_tf writes ~f:(fun a -> a.a_whole) with
     | [], [ write ] when ordinary_scatter write -> price ~cap ~reads tn write
     | [ init ], [ write ]
-      when ordinary_scatter write && List.is_empty init.a_loops && (not init.a_guarded)
-           && before init write ->
+      when ordinary_scatter write
+           && Affine.Loop_chain.is_empty init.a_loops
+           && (not init.a_guarded) && before init write ->
         price ~cap ~reads tn write
     | _ -> false
 
@@ -14769,9 +14733,7 @@ let computations_at_reads ~placements ~static_indices ~raw self computations =
       List.fold_result reads ~init:() ~f:(fun () (a : Tn.t Affine.access) ->
           Result.map ~f:ignore
             (instantiate_computations ~fresh_symbol:pricing_symbol ~placements
-               ~call_range:(fun s ->
-                 (* Outermost first: the innermost binder of [s] is the last. *)
-                 List.Assoc.find (List.rev a.a_loops) s ~equal:Indexing.equal_symbol)
+               ~call_range:(Affine.Loop_chain.find a.a_loops)
                  (* A flip candidate is a node [decide_placements] decides: the coverage rule, not
                     the inliner, proves its guards' fallback (gh-ocannl-1897). *)
                ~coverage_exempt:false ~id:(pricing_scope self) self computations static_indices
@@ -16523,3 +16485,1260 @@ let mma_operand_layout (swizzle : swizzle_kind option) ~ld ~idcs ~dims =
       else if not (Array.for_all idcs ~f:(function Indexing.Fixed_idx 0 -> true | _ -> false))
       then `Decline "b128-swizzled operand not accessed from the tile origin"
       else `Swizzled_b128
+
+type serialized_workgroup = {
+  sw_proc : optimized;
+  sw_grid_loops : (Indexing.symbol * int) list;
+  sw_minted_tns : Tn.t list;
+}
+
+let serial_wg_namespace = "serial_wg"
+
+let fresh_serial_wg_id =
+  let c = Stdlib.Atomic.make (-1) in
+  fun () -> Stdlib.Atomic.fetch_and_add c 1 + 1
+
+type barrier_split =
+  | No_barrier of t list
+  | Has_barrier of { head : t list; middle : t list; tail : t list }
+
+let serialize_workgroup_barriers ~scope_prec ~set_local_value_prec ~reassociable (proc : optimized)
+    : serialized_workgroup =
+  let iprec = Ops.index_prec () in
+  let is_empty_stmts stmts =
+    List.for_all stmts ~f:(function Noop | Comment _ -> true | _ -> false)
+  in
+  let minted_tns = ref [] in
+  let record_minted tn = minted_tns := tn :: !minted_tns in
+  (* Step 1: materialize implicit bracketing barriers of persistent [simdgroup_fragments] regions
+     (matching [C_syntax.render_mma_fragment_scope]'s fallback contract). A [Tile_mma] targeting a
+     fragment inside such a region guarantees only a trailing barrier per iteration, while a
+     per-statement [Tile_mma] outside one is bracketed on both sides (matching [lane0_guarded] and
+     [Schedule.ends_with_barrier]). *)
+  let fragment_scope_tiles = ref (Set.empty (module Tn)) in
+  let llc =
+    if Set.is_empty proc.simdgroup_fragments then proc.llc
+    else
+      let rec materialize (c : t) : t =
+        match c with
+        | Seq (c1, c2) -> (
+            match fragment_region c with
+            | Some
+                {
+                  fr_init;
+                  fr_reduction;
+                  fr_store;
+                  fr_rest;
+                  fr_fragment;
+                  fr_target = _;
+                  fr_target_base = _;
+                  fr_target_ld = _;
+                  fr_tile = _;
+                }
+              when Set.mem proc.simdgroup_fragments fr_fragment ->
+                fragment_scope_tiles := Set.add !fragment_scope_tiles fr_fragment;
+                unflat_lines
+                  ([
+                     Workgroup_barrier;
+                     fr_init;
+                     materialize fr_reduction;
+                     fr_store;
+                     Workgroup_barrier;
+                   ]
+                  @ [ materialize (unflat_lines fr_rest) ])
+            | _ -> Seq (materialize c1, materialize c2))
+        | For_loop fc -> For_loop { fc with body = materialize fc.body }
+        | If ({ body; _ } as i) -> If { i with body = materialize body }
+        | Scan_loop sc -> Scan_loop { sc with body = materialize sc.body }
+        | other -> other
+      in
+      materialize proc.llc
+  in
+  (* Strip a vacuous [If (index < extent)] launch guard matching [workgroup_reduce_sites],
+     [C_syntax.try_lane_all_reduce], and [C_syntax.try_warp_reduce]. *)
+  let strip_vacuous_wg_guard ~index ~extent body =
+    let nonempty st =
+      List.filter (flat_lines [ st ]) ~f:(function Noop | Comment _ -> false | _ -> true)
+    in
+    match nonempty body with
+    | [
+     If
+       {
+         cond = Binop (Ops.Cmplt, (Embed_index (Indexing.Iterator s), _), (Constant c, _)), _;
+         body = guarded;
+       };
+    ]
+      when Indexing.equal_symbol s index && Float.equal c (Float.of_int extent) ->
+        nonempty guarded
+    | stmts -> stmts
+  in
+  (* Classify a [Workgroup_reduce] loop using the exact provenance and accumulation checks shared
+     with [workgroup_reduce_sites] / [C_syntax.try_lane_all_reduce] / [C_syntax.try_warp_reduce]: -
+     [`Lane_all_reduce]: reassociable scope-local accumulation; every lane wants the whole total so
+     the loop stays serial in every lane. - [`Cell_collective]: warp/workgroup shuffle reduction
+     into a shared/materialized/lane-0 cell; must complete across all lanes before the following
+     statement (e.g. a lane-0 store). - [`Ordinary]: keeps hardware binding to the workgroup
+     coordinate. *)
+  let classify_workgroup_reduce ~index ~extent body =
+    let stmts = strip_vacuous_wg_guard ~index ~extent body in
+    match stmts with
+    | [ Set_local (id, llsc) ]
+      when reassociable id.tn && Option.is_some (accum_local_update_parts ~id llsc) ->
+        `Lane_all_reduce
+    | _ when Option.is_some (warp_reduce_cell_statement ~index stmts) -> `Cell_collective
+    | _ -> `Ordinary
+  in
+  (* Step 2: allocate canonical slot symbols for every active [Grid] and [Workgroup] slot. *)
+  let axes = hardware_axes llc in
+  let max_slot kind =
+    List.fold axes ~init:(-1) ~f:(fun m a ->
+        if Poly.equal a.ha_kind kind then max m a.ha_slot else m)
+  in
+  let make_slots kind =
+    let hi = max_slot kind in
+    if hi < 0 then []
+    else
+      List.init (hi + 1) ~f:(fun k ->
+          let slot = hi - k in
+          (slot, Indexing.get_symbol (), slot_max_extent axes kind slot))
+  in
+  let grid_slots = make_slots `Grid in
+  let wg_slots = make_slots `Workgroup in
+  let sw_grid_loops = List.map grid_slots ~f:(fun (_, sym, ext) -> (sym, ext)) in
+  let wg_dims = Array.of_list (List.map wg_slots ~f:(fun (_, _, ext) -> ext)) in
+  let wg_syms = Array.of_list (List.map wg_slots ~f:(fun (_, sym, _) -> sym)) in
+  let wg_idcs = Array.map wg_syms ~f:(fun s -> Indexing.Iterator s) in
+  let num_wg_threads = Array.fold wg_dims ~init:1 ~f:( * ) in
+  let slot_info kind slot =
+    let slots = match kind with `Grid -> grid_slots | `Workgroup -> wg_slots in
+    List.find_map_exn slots ~f:(fun (s, sym, ext) -> Option.some_if (s = slot) (sym, ext))
+  in
+  (* Track cell-target collective [Workgroup_reduce] loops lowered to serial loops under [If
+     (coord_sym == 0)] so Step 4 indexes per-lane reads by [reduce_index] while keeping the target
+     accumulator cell at lane 0 ([coord_sym]). *)
+  let cell_reduce_loops : Indexing.symbol Hashtbl.M(Indexing.Symbol).t =
+    Hashtbl.create (module Indexing.Symbol)
+  in
+  (* Step 3: eliminate all [Grid], [Workgroup], and ordinary [Workgroup_reduce] loops by
+     substituting their index symbols with the canonical slot coordinates (plus extent guards where
+     an axis is narrower than its slot maximum). *)
+  let rename_sym sym_map s = Option.value (Map.find sym_map s) ~default:s in
+  let rename_idx sym_map = function
+    | Indexing.Iterator s -> Indexing.Iterator (rename_sym sym_map s)
+    | Indexing.Affine { symbols; offset } ->
+        Indexing.affine
+          ~symbols:(List.map symbols ~f:(fun (c, s) -> (c, rename_sym sym_map s)))
+          ~offset
+    | Indexing.Concat syms -> Indexing.Concat (List.map syms ~f:(rename_sym sym_map))
+    | (Indexing.Fixed_idx _ | Indexing.Sub_axis) as idx -> idx
+  in
+  let rename_idcs sym_map idcs = Array.map idcs ~f:(rename_idx sym_map) in
+  let rec elim_hw sym_map (c : t) : t =
+    match c with
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier ->
+        c
+    | Seq (a, b) -> Seq (elim_hw sym_map a, elim_hw sym_map b)
+    | Set { tn; idcs; llsc; debug } ->
+        Set { tn; idcs = rename_idcs sym_map idcs; llsc = elim_hw_scalar sym_map llsc; debug }
+    | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, vp; llsc; debug } ->
+        Set_dynamic
+          {
+            tn;
+            idcs = rename_idcs sym_map idcs;
+            dyn_axis;
+            dyn_value = (elim_hw_scalar sym_map v, vp);
+            llsc = elim_hw_scalar sym_map llsc;
+            debug;
+          }
+    | Set_from_vec { tn; idcs; length; vec_unop; arg = v, vp; debug } ->
+        Set_from_vec
+          {
+            tn;
+            idcs = rename_idcs sym_map idcs;
+            length;
+            vec_unop;
+            arg = (elim_hw_scalar sym_map v, vp);
+            debug;
+          }
+    | Set_local (id, llsc) -> Set_local (id, elim_hw_scalar sym_map llsc)
+    | If { cond = cond, cp; body } ->
+        If { cond = (elim_hw_scalar sym_map cond, cp); body = elim_hw sym_map body }
+    | Tile_mma
+        {
+          d = d_tn, d_i;
+          a = a_tn, a_i;
+          b = b_tn, b_i;
+          lane;
+          fallback;
+          ta;
+          tb;
+          m;
+          n;
+          k;
+          ldd;
+          lda;
+          ldb;
+          tile;
+        } ->
+        Tile_mma
+          {
+            d = (d_tn, rename_idcs sym_map d_i);
+            a = (a_tn, rename_idcs sym_map a_i);
+            b = (b_tn, rename_idcs sym_map b_i);
+            lane = rename_sym sym_map lane;
+            fallback = elim_hw sym_map fallback;
+            ta;
+            tb;
+            m;
+            n;
+            k;
+            ldd;
+            lda;
+            ldb;
+            tile;
+          }
+    | Scan_loop ({ index; carried; body; _ } as sc) ->
+        let carried =
+          List.map carried ~f:(fun c -> { c with init = elim_hw_scalar sym_map c.init })
+        in
+        Scan_loop { sc with carried; body = elim_hw (Map.remove sym_map index) body }
+    | For_loop { index; from_; to_; body; axis } -> (
+        if to_ < from_ then Noop
+        else
+          match axis with
+          | Workgroup_reduce -> (
+              match classify_workgroup_reduce ~index ~extent:(to_ - from_ + 1) body with
+              | `Lane_all_reduce ->
+                  For_loop
+                    {
+                      index;
+                      from_;
+                      to_;
+                      axis = Serial;
+                      body = elim_hw (Map.remove sym_map index) body;
+                    }
+              | `Cell_collective ->
+                  let slot = hardware_depth `Workgroup body in
+                  let coord_sym, _ = slot_info `Workgroup slot in
+                  Hashtbl.set cell_reduce_loops ~key:index ~data:coord_sym;
+                  let body' = elim_hw (Map.remove sym_map index) body in
+                  let cond =
+                    Binop
+                      ( Ops.Cmpeq,
+                        (Embed_index (Indexing.Iterator coord_sym), iprec),
+                        (Constant 0.0, iprec) )
+                  in
+                  unflat_lines
+                    [
+                      Workgroup_barrier;
+                      If
+                        {
+                          cond = (cond, iprec);
+                          body = For_loop { index; from_; to_; axis = Serial; body = body' };
+                        };
+                      Workgroup_barrier;
+                    ]
+              | `Ordinary ->
+                  let slot = hardware_depth `Workgroup body in
+                  let coord_sym, slot_max = slot_info `Workgroup slot in
+                  let body' = elim_hw (Map.set sym_map ~key:index ~data:coord_sym) body in
+                  if to_ + 1 < slot_max then
+                    let cond =
+                      Binop
+                        ( Ops.Cmplt,
+                          (Embed_index (Indexing.Iterator coord_sym), iprec),
+                          (Constant (Float.of_int (to_ + 1)), iprec) )
+                    in
+                    If { cond = (cond, iprec); body = body' }
+                  else body')
+          | _ -> (
+              match hardware_kind_of_axis axis with
+              | Some kind ->
+                  let slot = hardware_depth kind body in
+                  let coord_sym, slot_max = slot_info kind slot in
+                  let body' = elim_hw (Map.set sym_map ~key:index ~data:coord_sym) body in
+                  if to_ + 1 < slot_max then
+                    let cond =
+                      Binop
+                        ( Ops.Cmplt,
+                          (Embed_index (Indexing.Iterator coord_sym), iprec),
+                          (Constant (Float.of_int (to_ + 1)), iprec) )
+                    in
+                    If { cond = (cond, iprec); body = body' }
+                  else body'
+              | None ->
+                  For_loop
+                    { index; from_; to_; axis; body = elim_hw (Map.remove sym_map index) body }))
+  and elim_hw_scalar sym_map (s : scalar_t) : scalar_t =
+    match s with
+    | Constant _ | Constant_bits _ | Get_local _ | Get_merge_buffer _ -> s
+    | Embed_index idx -> Embed_index (rename_idx sym_map idx)
+    | Get (tn, idcs) -> Get (tn, rename_idcs sym_map idcs)
+    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, vp } ->
+        Get_dynamic
+          {
+            tn;
+            idcs = rename_idcs sym_map idcs;
+            dyn_axis;
+            dyn_value = (elim_hw_scalar sym_map v, vp);
+          }
+    | Local_scope { id; body; orig_indices; mint } ->
+        Local_scope
+          { id; body = elim_hw sym_map body; orig_indices = rename_idcs sym_map orig_indices; mint }
+    | Unop (op, (v, vp)) -> Unop (op, (elim_hw_scalar sym_map v, vp))
+    | Binop (op, (v1, p1), (v2, p2)) ->
+        Binop (op, (elim_hw_scalar sym_map v1, p1), (elim_hw_scalar sym_map v2, p2))
+    | Ternop (op, (v1, p1), (v2, p2), (v3, p3)) ->
+        Ternop
+          ( op,
+            (elim_hw_scalar sym_map v1, p1),
+            (elim_hw_scalar sym_map v2, p2),
+            (elim_hw_scalar sym_map v3, p3) )
+  in
+  let wg_body = elim_hw (Map.empty (module Indexing.Symbol)) llc in
+  let rec has_sync = function
+    | Workgroup_barrier | Tile_mma _ -> true
+    | Seq (a, b) -> has_sync a || has_sync b
+    | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> has_sync body
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
+    | Set_local _ | Declare_local _ ->
+        false
+  in
+  let traced_store = Hashtbl.copy proc.traced_store in
+  let placements = Tn.Placements.copy proc.optimize_ctx.placements in
+  let simdgroup_fragments = ref proc.simdgroup_fragments in
+  let masked_fragments = ref proc.masked_fragments in
+  (* Step 4: when the workgroup has multiple threads and contains synchronization points, replicate
+     thread-private [Local] arrays and barrier-crossing statement-level locals per workgroup thread,
+     and lower sync-bearing [Scan_loop]s into explicit carried-state arrays + serial loops. *)
+  let wg_body =
+    if num_wg_threads <= 1 || not (has_sync wg_body) then wg_body
+    else
+      let is_private_local tn =
+        (not (Set.mem proc.workgroup_shared tn))
+        && (not (Tn.Placements.is_virtual_force placements tn (Site "678:serial-wg-lowering")))
+        && not (Tn.Placements.is_materialized_force placements tn (Site "678:serial-wg-lowering"))
+      in
+      let touched_private = ref [] in
+      let seen_private = Hash_set.create (module Int) in
+      let note_tn tn =
+        if is_private_local tn && not (Hash_set.mem seen_private tn.Tn.uid) then (
+          Hash_set.add seen_private tn.Tn.uid;
+          touched_private := tn :: !touched_private)
+      in
+      let rec collect_tns_stmt = function
+        | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> ()
+        | Zero_out tn -> note_tn tn
+        | Set { tn; llsc; _ } ->
+            note_tn tn;
+            collect_tns_scalar llsc
+        | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
+            note_tn tn;
+            collect_tns_scalar v;
+            collect_tns_scalar llsc
+        | Set_from_vec { tn; arg = v, _; _ } ->
+            note_tn tn;
+            collect_tns_scalar v
+        | Set_local (_, llsc) -> collect_tns_scalar llsc
+        | Seq (a, b) ->
+            collect_tns_stmt a;
+            collect_tns_stmt b
+        | For_loop { body; _ } -> collect_tns_stmt body
+        | If { cond = c, _; body } ->
+            collect_tns_scalar c;
+            collect_tns_stmt body
+        | Scan_loop { carried; body; _ } ->
+            List.iter carried ~f:(fun c -> collect_tns_scalar c.init);
+            collect_tns_stmt body
+        | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; fallback; _ } ->
+            note_tn d_tn;
+            note_tn a_tn;
+            note_tn b_tn;
+            collect_tns_stmt fallback
+      and collect_tns_scalar = function
+        | Constant _ | Constant_bits _ | Embed_index _ | Get_local _ | Get_merge_buffer _ -> ()
+        | Get (tn, _) -> note_tn tn
+        | Get_dynamic { tn; dyn_value = v, _; _ } ->
+            note_tn tn;
+            collect_tns_scalar v
+        | Local_scope { body; _ } -> collect_tns_stmt body
+        | Unop (_, (v, _)) -> collect_tns_scalar v
+        | Binop (_, (v1, _), (v2, _)) ->
+            collect_tns_scalar v1;
+            collect_tns_scalar v2
+        | Ternop (_, (v1, _), (v2, _), (v3, _)) ->
+            collect_tns_scalar v1;
+            collect_tns_scalar v2;
+            collect_tns_scalar v3
+      in
+      collect_tns_stmt wg_body;
+      let tn_replicas : Tn.t Hashtbl.M(Int).t = Hashtbl.create (module Int) in
+      List.iter (List.rev !touched_private) ~f:(fun tn ->
+          if Map.mem proc.swizzled tn || Map.mem proc.pipelined tn then
+            invalid_arg
+              ("Low_level.serialize_workgroup_barriers: non-shared swizzled or pipelined local "
+             ^ Tn.debug_name tn ^ " is not supported");
+          let prec = Lazy.force tn.Tn.storage_prec in
+          let orig_dims = Lazy.force tn.Tn.dims in
+          let rep_id = fresh_serial_wg_id () in
+          let rep =
+            Tn.create ~namespace:serial_wg_namespace (Tn.Specified prec) ~id:rep_id
+              ~label:[ Printf.sprintf "wg_priv_%d__" rep_id ]
+              ~unpadded_dims:(lazy (Array.append wg_dims orig_dims))
+              ~padding:(lazy None)
+              ()
+          in
+          record_minted rep;
+          Tn.Placements.update placements rep Tn.Local (Site "678:serial-wg-lowering");
+          let orig_traced = Hashtbl.find traced_store tn in
+          let rep_traced = get_node traced_store rep in
+          Option.iter orig_traced ~f:(fun node ->
+              rep_traced.zero_initialized_by_code <- node.zero_initialized_by_code);
+          Hashtbl.remove traced_store tn;
+          if Set.mem !fragment_scope_tiles tn then
+            fragment_scope_tiles := Set.add (Set.remove !fragment_scope_tiles tn) rep;
+          simdgroup_fragments := Set.remove !simdgroup_fragments tn;
+          masked_fragments := Set.remove !masked_fragments tn;
+          Hashtbl.set tn_replicas ~key:tn.Tn.uid ~data:rep);
+      let promoted_locals : Tn.t Hashtbl.M(Scope_id).t = Hashtbl.create (module Scope_id) in
+      let promote_scope_id id =
+        if not (Hashtbl.mem promoted_locals id) then (
+          let prec = scope_prec id in
+          let loc_id = fresh_serial_wg_id () in
+          let tn =
+            Tn.create ~namespace:serial_wg_namespace (Tn.Specified prec) ~id:loc_id
+              ~label:[ Printf.sprintf "wg_loc_%d__" loc_id ]
+              ~unpadded_dims:(lazy wg_dims)
+              ~padding:(lazy None)
+              ()
+          in
+          record_minted tn;
+          Tn.Placements.update placements tn Tn.Local (Site "678:serial-wg-lowering");
+          ignore (get_node traced_store tn : traced_array);
+          Hashtbl.set promoted_locals ~key:id ~data:tn)
+      in
+      let rec collect_crossing_locals c =
+        if has_sync c then
+          match c with
+          | Seq (a, b) ->
+              List.iter
+                (flat_lines [ a; b ])
+                ~f:(function
+                  | Declare_local { id; _ } -> promote_scope_id id | s -> collect_crossing_locals s)
+          | For_loop { body; _ } | If { body; _ } ->
+              List.iter (flat_lines [ body ]) ~f:(function
+                | Declare_local { id; _ } -> promote_scope_id id
+                | s -> collect_crossing_locals s)
+          | Scan_loop { carried; body; _ } ->
+              List.iter carried ~f:(fun c ->
+                  promote_scope_id c.prev;
+                  promote_scope_id c.next);
+              List.iter (flat_lines [ body ]) ~f:(function
+                | Declare_local { id; _ } -> promote_scope_id id
+                | s -> collect_crossing_locals s)
+          | _ -> ()
+      in
+      collect_crossing_locals wg_body;
+      (* Emit a promoted [Set_local] assignment preserving [set_local_value_prec]: when the original
+         [Set_local] evaluates at a narrower precision than the local's residency (e.g. a narrowing
+         init into a wide-residency bf16 accumulator), stage through a 1-element [Local] temporary
+         at [val_prec] so the exact single-step narrowing conversion is preserved before widening
+         into [tn[cur_wg_idcs]]. *)
+      let rounding_temps : (Ops.prec * Tn.t) list ref = ref [] in
+      let rounding_temp_for prec =
+        match List.Assoc.find !rounding_temps ~equal:Ops.equal_prec prec with
+        | Some tn -> tn
+        | None ->
+            let rnd_id = fresh_serial_wg_id () in
+            let tn =
+              Tn.create ~namespace:serial_wg_namespace (Tn.Specified prec) ~id:rnd_id
+                ~label:[ Printf.sprintf "wg_rnd_%d__" rnd_id ]
+                ~unpadded_dims:(lazy [| 1 |])
+                ~padding:(lazy None)
+                ()
+            in
+            record_minted tn;
+            Tn.Placements.update placements tn Tn.Local (Site "678:serial-wg-lowering");
+            ignore (get_node traced_store tn : traced_array);
+            rounding_temps := (prec, tn) :: !rounding_temps;
+            tn
+      in
+      let emit_promoted_assign ~cur_wg_idcs ~id ~tn ~orig_llsc ~rewritten_llsc =
+        let store_prec = scope_prec id in
+        let val_prec = set_local_value_prec id orig_llsc in
+        if Ops.equal_prec val_prec store_prec then
+          Set { tn; idcs = cur_wg_idcs; llsc = rewritten_llsc; debug = "" }
+        else
+          let rnd_tn = rounding_temp_for val_prec in
+          let z = [| Indexing.Fixed_idx 0 |] in
+          Seq
+            ( Set { tn = rnd_tn; idcs = z; llsc = rewritten_llsc; debug = "" },
+              Set { tn; idcs = cur_wg_idcs; llsc = Get (rnd_tn, z); debug = "" } )
+      in
+      let remap_tn_idcs ~cur_wg_idcs tn idcs =
+        match Hashtbl.find tn_replicas tn.Tn.uid with
+        | None -> (tn, idcs)
+        | Some rep -> (rep, Array.append cur_wg_idcs idcs)
+      in
+      let subst_backward_index ~sym ~k ~to_ (c : t) : t =
+        let subst_idx = function
+          | Indexing.Iterator s when Indexing.equal_symbol s sym ->
+              Indexing.affine ~symbols:[ (-1, k) ] ~offset:to_
+          | Indexing.Affine { symbols; offset } ->
+              let offset, symbols =
+                List.fold symbols ~init:(offset, []) ~f:(fun (off, acc) (coeff, s) ->
+                    if Indexing.equal_symbol s sym then (off + (coeff * to_), (-coeff, k) :: acc)
+                    else (off, (coeff, s) :: acc))
+              in
+              Indexing.affine ~symbols:(List.rev symbols) ~offset
+          | Indexing.Concat syms when List.mem syms sym ~equal:Indexing.equal_symbol ->
+              invalid_arg
+                "Low_level.serialize_workgroup_barriers: backward Scan_loop index in Concat"
+          | idx -> idx
+        in
+        let subst_idcs = Array.map ~f:subst_idx in
+        let rec go_stmt = function
+          | ( Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _
+            | Workgroup_barrier ) as s ->
+              s
+          | Seq (a, b) -> Seq (go_stmt a, go_stmt b)
+          | For_loop fc when Indexing.equal_symbol fc.index sym -> For_loop fc
+          | For_loop fc -> For_loop { fc with body = go_stmt fc.body }
+          | Scan_loop sc ->
+              let carried = List.map sc.carried ~f:(fun c -> { c with init = go_sc c.init }) in
+              let body = if Indexing.equal_symbol sc.index sym then sc.body else go_stmt sc.body in
+              Scan_loop { sc with carried; body }
+          | If { cond = c, cp; body } -> If { cond = (go_sc c, cp); body = go_stmt body }
+          | Set { tn; idcs; llsc; debug } ->
+              Set { tn; idcs = subst_idcs idcs; llsc = go_sc llsc; debug }
+          | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, vp; llsc; debug } ->
+              Set_dynamic
+                {
+                  tn;
+                  idcs = subst_idcs idcs;
+                  dyn_axis;
+                  dyn_value = (go_sc v, vp);
+                  llsc = go_sc llsc;
+                  debug;
+                }
+          | Set_from_vec { tn; idcs; length; vec_unop; arg = v, vp; debug } ->
+              Set_from_vec
+                { tn; idcs = subst_idcs idcs; length; vec_unop; arg = (go_sc v, vp); debug }
+          | Set_local (id, llsc) -> Set_local (id, go_sc llsc)
+          | Tile_mma ({ d = dt, di; a = at, ai; b = bt, bi; fallback; _ } as tm) ->
+              Tile_mma
+                {
+                  tm with
+                  d = (dt, subst_idcs di);
+                  a = (at, subst_idcs ai);
+                  b = (bt, subst_idcs bi);
+                  fallback = go_stmt fallback;
+                }
+        and go_sc = function
+          | (Constant _ | Constant_bits _ | Get_local _ | Get_merge_buffer _) as s -> s
+          | Embed_index idx -> Embed_index (subst_idx idx)
+          | Get (tn, idcs) -> Get (tn, subst_idcs idcs)
+          | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, vp } ->
+              Get_dynamic { tn; idcs = subst_idcs idcs; dyn_axis; dyn_value = (go_sc v, vp) }
+          | Local_scope { id; body; orig_indices; mint } ->
+              Local_scope { id; body = go_stmt body; orig_indices = subst_idcs orig_indices; mint }
+          | Unop (op, (v, vp)) -> Unop (op, (go_sc v, vp))
+          | Binop (op, (v1, p1), (v2, p2)) -> Binop (op, (go_sc v1, p1), (go_sc v2, p2))
+          | Ternop (op, (v1, p1), (v2, p2), (v3, p3)) ->
+              Ternop (op, (go_sc v1, p1), (go_sc v2, p2), (go_sc v3, p3))
+        in
+        go_stmt c
+      in
+      let rec rewrite_stmt ~cur_wg_idcs ?cell_target = function
+        | (Noop | Comment _ | Staged_compilation _ | Workgroup_barrier) as s -> s
+        | Seq (a, b) ->
+            Seq (rewrite_stmt ~cur_wg_idcs ?cell_target a, rewrite_stmt ~cur_wg_idcs ?cell_target b)
+        | For_loop fc -> (
+            match Hashtbl.find cell_reduce_loops fc.index with
+            | Some coord_sym ->
+                let lane_wg_idcs =
+                  Array.map cur_wg_idcs ~f:(function
+                    | Indexing.Iterator s when Indexing.equal_symbol s coord_sym ->
+                        Indexing.Iterator fc.index
+                    | idx -> idx)
+                in
+                (* Inside a cell-target collective reduction loop, the accumulator target (and its
+                   self-read) stays at lane 0 ([cur_wg_idcs]), while any other per-lane private
+                   array or promoted local reads lane [fc.index] ([lane_wg_idcs]). *)
+                For_loop
+                  {
+                    fc with
+                    body = rewrite_stmt ~cur_wg_idcs:lane_wg_idcs ~cell_target:cur_wg_idcs fc.body;
+                  }
+            | None -> For_loop { fc with body = rewrite_stmt ~cur_wg_idcs ?cell_target fc.body })
+        | If { cond = c, cp; body } ->
+            If
+              {
+                cond = (rewrite_scalar ~cur_wg_idcs ~target_read:None c, cp);
+                body = rewrite_stmt ~cur_wg_idcs ?cell_target body;
+              }
+        | Zero_out tn -> (
+            match Hashtbl.find tn_replicas tn.Tn.uid with
+            | None -> Zero_out tn
+            | Some rep ->
+                loop_over_dims (Lazy.force tn.Tn.dims) ~body:(fun idcs ->
+                    Set
+                      {
+                        tn = rep;
+                        idcs = Array.append cur_wg_idcs idcs;
+                        llsc = Constant 0.0;
+                        debug = "";
+                      }))
+        | Set { tn; idcs; llsc; debug } ->
+            let target_wg = Option.value cell_target ~default:cur_wg_idcs in
+            let tn', idcs' = remap_tn_idcs ~cur_wg_idcs:target_wg tn idcs in
+            let target_read = Option.map cell_target ~f:(fun t_wg -> (tn, idcs, t_wg)) in
+            Set
+              {
+                tn = tn';
+                idcs = idcs';
+                llsc = rewrite_scalar ~cur_wg_idcs ~target_read llsc;
+                debug;
+              }
+        | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, vp; llsc; debug } ->
+            let tn, idcs, dyn_axis =
+              match Hashtbl.find tn_replicas tn.Tn.uid with
+              | None -> (tn, idcs, dyn_axis)
+              | Some rep -> (rep, Array.append cur_wg_idcs idcs, dyn_axis + Array.length cur_wg_idcs)
+            in
+            Set_dynamic
+              {
+                tn;
+                idcs;
+                dyn_axis;
+                dyn_value = (rewrite_scalar ~cur_wg_idcs ~target_read:None v, vp);
+                llsc = rewrite_scalar ~cur_wg_idcs ~target_read:None llsc;
+                debug;
+              }
+        | Set_from_vec { tn; idcs; length; vec_unop; arg = v, vp; debug } ->
+            let tn, idcs = remap_tn_idcs ~cur_wg_idcs tn idcs in
+            Set_from_vec
+              {
+                tn;
+                idcs;
+                length;
+                vec_unop;
+                arg = (rewrite_scalar ~cur_wg_idcs ~target_read:None v, vp);
+                debug;
+              }
+        | Declare_local { id; needs_init } -> (
+            match Hashtbl.find promoted_locals id with
+            | None -> Declare_local { id; needs_init }
+            | Some tn ->
+                if needs_init then Set { tn; idcs = cur_wg_idcs; llsc = Constant 0.0; debug = "" }
+                else Noop)
+        | Set_local (id, orig_llsc) -> (
+            let rewritten_llsc = rewrite_scalar ~cur_wg_idcs ~target_read:None orig_llsc in
+            match Hashtbl.find promoted_locals id with
+            | None -> Set_local (id, rewritten_llsc)
+            | Some tn -> emit_promoted_assign ~cur_wg_idcs ~id ~tn ~orig_llsc ~rewritten_llsc)
+        | Tile_mma ({ d = dt, di; a = at, ai; b = bt, bi; fallback; _ } as tm) ->
+            Tile_mma
+              {
+                tm with
+                d = remap_tn_idcs ~cur_wg_idcs dt di;
+                a = remap_tn_idcs ~cur_wg_idcs at ai;
+                b = remap_tn_idcs ~cur_wg_idcs bt bi;
+                fallback = rewrite_stmt ~cur_wg_idcs fallback;
+              }
+        | Scan_loop ({ index; from_; to_; direction; carried; body } as sc) ->
+            if not (has_sync body) then
+              Scan_loop
+                {
+                  sc with
+                  carried =
+                    List.map carried ~f:(fun c ->
+                        { c with init = rewrite_scalar ~cur_wg_idcs ~target_read:None c.init });
+                  body = rewrite_stmt ~cur_wg_idcs body;
+                }
+            else
+              let inits =
+                List.map carried ~f:(fun c ->
+                    let tn = Hashtbl.find_exn promoted_locals c.prev in
+                    let rewritten_llsc = rewrite_scalar ~cur_wg_idcs ~target_read:None c.init in
+                    emit_promoted_assign ~cur_wg_idcs ~id:c.prev ~tn ~orig_llsc:c.init
+                      ~rewritten_llsc)
+              in
+              let rotations =
+                List.map carried ~f:(fun c ->
+                    let prev_tn = Hashtbl.find_exn promoted_locals c.prev in
+                    let next_tn = Hashtbl.find_exn promoted_locals c.next in
+                    Set
+                      {
+                        tn = prev_tn;
+                        idcs = cur_wg_idcs;
+                        llsc = Get (next_tn, cur_wg_idcs);
+                        debug = "";
+                      })
+              in
+              let loop =
+                match direction with
+                | Forward ->
+                    For_loop
+                      {
+                        index;
+                        from_;
+                        to_;
+                        axis = Serial;
+                        body = unflat_lines (rewrite_stmt ~cur_wg_idcs body :: rotations);
+                      }
+                | Backward ->
+                    let k = Indexing.get_symbol () in
+                    let body_rev =
+                      subst_backward_index ~sym:index ~k ~to_ (rewrite_stmt ~cur_wg_idcs body)
+                    in
+                    For_loop
+                      {
+                        index = k;
+                        from_ = 0;
+                        to_ = to_ - from_;
+                        axis = Serial;
+                        body = unflat_lines (body_rev :: rotations);
+                      }
+              in
+              unflat_lines (inits @ [ loop ])
+      and rewrite_scalar ~cur_wg_idcs ~target_read = function
+        | (Constant _ | Constant_bits _ | Embed_index _ | Get_merge_buffer _) as s -> s
+        | Get (tn, idcs) ->
+            let wg =
+              match target_read with
+              | Some (t_tn, t_idcs, t_wg)
+                when Tn.equal tn t_tn && Array.equal Indexing.equal_axis_index idcs t_idcs ->
+                  t_wg
+              | _ -> cur_wg_idcs
+            in
+            let tn, idcs = remap_tn_idcs ~cur_wg_idcs:wg tn idcs in
+            Get (tn, idcs)
+        | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, vp } ->
+            let tn, idcs, dyn_axis =
+              match Hashtbl.find tn_replicas tn.Tn.uid with
+              | None -> (tn, idcs, dyn_axis)
+              | Some rep -> (rep, Array.append cur_wg_idcs idcs, dyn_axis + Array.length cur_wg_idcs)
+            in
+            Get_dynamic
+              {
+                tn;
+                idcs;
+                dyn_axis;
+                dyn_value = (rewrite_scalar ~cur_wg_idcs ~target_read:None v, vp);
+              }
+        | Get_local id -> (
+            match Hashtbl.find promoted_locals id with
+            | None -> Get_local id
+            | Some tn -> Get (tn, cur_wg_idcs))
+        | Local_scope { id; body; orig_indices; mint } ->
+            Local_scope { id; body = rewrite_stmt ~cur_wg_idcs body; orig_indices; mint }
+        | Unop (op, (v, vp)) -> Unop (op, (rewrite_scalar ~cur_wg_idcs ~target_read v, vp))
+        | Binop (op, (v1, p1), (v2, p2)) ->
+            Binop
+              ( op,
+                (rewrite_scalar ~cur_wg_idcs ~target_read v1, p1),
+                (rewrite_scalar ~cur_wg_idcs ~target_read v2, p2) )
+        | Ternop (op, (v1, p1), (v2, p2), (v3, p3)) ->
+            Ternop
+              ( op,
+                (rewrite_scalar ~cur_wg_idcs ~target_read v1, p1),
+                (rewrite_scalar ~cur_wg_idcs ~target_read v2, p2),
+                (rewrite_scalar ~cur_wg_idcs ~target_read v3, p3) )
+      in
+      rewrite_stmt ~cur_wg_idcs:wg_idcs wg_body
+  in
+  (* Step 5: fission the workgroup coordinate loops at each reached synchronization point. *)
+  let wrap_wg stmts =
+    if is_empty_stmts stmts then []
+    else
+      let body = unflat_lines stmts in
+      [
+        List.fold_right wg_slots ~init:body ~f:(fun (_, sym, ext) inner ->
+            For_loop { index = sym; from_ = 0; to_ = ext - 1; body = inner; axis = Serial });
+      ]
+  in
+  let bind_single ~index k stmts =
+    if is_empty_stmts stmts then []
+    else [ For_loop { index; from_ = k; to_ = k; body = unflat_lines stmts; axis = Serial } ]
+  in
+  let concat s1 s2 =
+    match (s1, s2) with
+    | No_barrier a, No_barrier b -> No_barrier (a @ b)
+    | No_barrier a, Has_barrier { head; middle; tail } ->
+        Has_barrier { head = a @ head; middle; tail }
+    | Has_barrier { head; middle; tail }, No_barrier b ->
+        Has_barrier { head; middle; tail = tail @ b }
+    | ( Has_barrier { head = h1; middle = m1; tail = t1 },
+        Has_barrier { head = h2; middle = m2; tail = t2 } ) ->
+        Has_barrier { head = h1; middle = m1 @ wrap_wg (t1 @ h2) @ m2; tail = t2 }
+  in
+  let rec scalar_is_wg_uniform = function
+    | Constant _ | Constant_bits _ -> true
+    | Embed_index idx -> not (Array.exists wg_syms ~f:(fun s -> axis_index_mentions_symbol s idx))
+    | Unop (_, (v, _)) -> scalar_is_wg_uniform v
+    | Binop (_, (v1, _), (v2, _)) -> scalar_is_wg_uniform v1 && scalar_is_wg_uniform v2
+    | Ternop (_, (v1, _), (v2, _), (v3, _)) ->
+        scalar_is_wg_uniform v1 && scalar_is_wg_uniform v2 && scalar_is_wg_uniform v3
+    | Get _ | Get_dynamic _ | Get_local _ | Get_merge_buffer _ | Local_scope _ -> false
+  in
+  let rec scalar_mentions_symbol sym = function
+    | Constant _ | Constant_bits _ | Get_local _ | Get_merge_buffer _ -> false
+    | Embed_index idx -> axis_index_mentions_symbol sym idx
+    | Get (_, idcs) -> Array.exists idcs ~f:(axis_index_mentions_symbol sym)
+    | Get_dynamic { idcs; dyn_value = v, _; _ } ->
+        Array.exists idcs ~f:(axis_index_mentions_symbol sym) || scalar_mentions_symbol sym v
+    | Local_scope { orig_indices; _ } ->
+        Array.exists orig_indices ~f:(axis_index_mentions_symbol sym)
+    | Unop (_, (v, _)) -> scalar_mentions_symbol sym v
+    | Binop (_, (v1, _), (v2, _)) -> scalar_mentions_symbol sym v1 || scalar_mentions_symbol sym v2
+    | Ternop (_, (v1, _), (v2, _), (v3, _)) ->
+        scalar_mentions_symbol sym v1 || scalar_mentions_symbol sym v2
+        || scalar_mentions_symbol sym v3
+  in
+  let negate_cond (cond_s, cond_p) =
+    match cond_s with
+    | Binop (Ops.Cmplt, a, b) -> (Binop (Ops.Cmple, b, a), cond_p)
+    | Binop (Ops.Cmple, a, b) -> (Binop (Ops.Cmplt, b, a), cond_p)
+    | Binop (Ops.Cmpeq, a, b) -> (Binop (Ops.Cmpne, a, b), cond_p)
+    | Binop (Ops.Cmpne, a, b) -> (Binop (Ops.Cmpeq, a, b), cond_p)
+    | other -> (Binop (Ops.Cmpeq, (other, cond_p), (Constant 0.0, cond_p)), cond_p)
+  in
+  let guard cond stmts =
+    if is_empty_stmts stmts then [] else [ If { cond; body = unflat_lines stmts } ]
+  in
+  let is_rotor sym =
+    Map.exists proc.pipelined ~f:(fun { pt_rotor; _ } -> Indexing.equal_symbol pt_rotor sym)
+  in
+  let mentions_concat sym stmts =
+    let check_idx = function
+      | Indexing.Concat syms -> List.mem syms sym ~equal:Indexing.equal_symbol
+      | _ -> false
+    in
+    let check_idcs = Array.exists ~f:check_idx in
+    let rec check_stmt = function
+      | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier
+        ->
+          false
+      | Seq (a, b) -> check_stmt a || check_stmt b
+      | For_loop { index; body; _ } -> (not (Indexing.equal_symbol index sym)) && check_stmt body
+      | Scan_loop { index; carried; body; _ } ->
+          List.exists carried ~f:(fun c -> check_sc c.init)
+          || ((not (Indexing.equal_symbol index sym)) && check_stmt body)
+      | If { cond = c, _; body } -> check_sc c || check_stmt body
+      | Set { idcs; llsc; _ } -> check_idcs idcs || check_sc llsc
+      | Set_dynamic { idcs; dyn_value = v, _; llsc; _ } ->
+          check_idcs idcs || check_sc v || check_sc llsc
+      | Set_from_vec { idcs; arg = v, _; _ } -> check_idcs idcs || check_sc v
+      | Set_local (_, llsc) -> check_sc llsc
+      | Tile_mma { d = _, di; a = _, ai; b = _, bi; fallback; _ } ->
+          check_idcs di || check_idcs ai || check_idcs bi || check_stmt fallback
+    and check_sc = function
+      | Constant _ | Constant_bits _ | Get_local _ | Get_merge_buffer _ -> false
+      | Embed_index idx -> check_idx idx
+      | Get (_, idcs) -> check_idcs idcs
+      | Get_dynamic { idcs; dyn_value = v, _; _ } -> check_idcs idcs || check_sc v
+      | Local_scope { body; orig_indices; _ } -> check_stmt body || check_idcs orig_indices
+      | Unop (_, (v, _)) -> check_sc v
+      | Binop (_, (v1, _), (v2, _)) -> check_sc v1 || check_sc v2
+      | Ternop (_, (v1, _), (v2, _), (v3, _)) -> check_sc v1 || check_sc v2 || check_sc v3
+    in
+    List.exists stmts ~f:check_stmt
+  in
+  let shift_symbol_by_one ~sym (c : t) : t =
+    let shift_idx = function
+      | Indexing.Iterator s when Indexing.equal_symbol s sym ->
+          Indexing.affine ~symbols:[ (1, sym) ] ~offset:1
+      | Indexing.Affine { symbols; offset } as idx ->
+          let delta =
+            List.fold symbols ~init:0 ~f:(fun acc (coeff, s) ->
+                if Indexing.equal_symbol s sym then acc + coeff else acc)
+          in
+          if delta = 0 then idx else Indexing.affine ~symbols ~offset:(offset + delta)
+      | idx -> idx
+    in
+    let shift_idcs = Array.map ~f:shift_idx in
+    let rec go_stmt = function
+      | (Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier)
+        as s ->
+          s
+      | Seq (a, b) -> Seq (go_stmt a, go_stmt b)
+      | For_loop fc when Indexing.equal_symbol fc.index sym -> For_loop fc
+      | For_loop fc -> For_loop { fc with body = go_stmt fc.body }
+      | Scan_loop sc ->
+          let carried = List.map sc.carried ~f:(fun c -> { c with init = go_sc c.init }) in
+          let body = if Indexing.equal_symbol sc.index sym then sc.body else go_stmt sc.body in
+          Scan_loop { sc with carried; body }
+      | If { cond = c, cp; body } -> If { cond = (go_sc c, cp); body = go_stmt body }
+      | Set { tn; idcs; llsc; debug } ->
+          Set { tn; idcs = shift_idcs idcs; llsc = go_sc llsc; debug }
+      | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, vp; llsc; debug } ->
+          Set_dynamic
+            {
+              tn;
+              idcs = shift_idcs idcs;
+              dyn_axis;
+              dyn_value = (go_sc v, vp);
+              llsc = go_sc llsc;
+              debug;
+            }
+      | Set_from_vec { tn; idcs; length; vec_unop; arg = v, vp; debug } ->
+          Set_from_vec { tn; idcs = shift_idcs idcs; length; vec_unop; arg = (go_sc v, vp); debug }
+      | Set_local (id, llsc) -> Set_local (id, go_sc llsc)
+      | Tile_mma ({ d = dt, di; a = at, ai; b = bt, bi; fallback; _ } as tm) ->
+          Tile_mma
+            {
+              tm with
+              d = (dt, shift_idcs di);
+              a = (at, shift_idcs ai);
+              b = (bt, shift_idcs bi);
+              fallback = go_stmt fallback;
+            }
+    and go_sc = function
+      | (Constant _ | Constant_bits _ | Get_local _ | Get_merge_buffer _) as s -> s
+      | Embed_index idx -> Embed_index (shift_idx idx)
+      | Get (tn, idcs) -> Get (tn, shift_idcs idcs)
+      | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, vp } ->
+          Get_dynamic { tn; idcs = shift_idcs idcs; dyn_axis; dyn_value = (go_sc v, vp) }
+      | Local_scope { id; body; orig_indices; mint } ->
+          Local_scope { id; body = go_stmt body; orig_indices = shift_idcs orig_indices; mint }
+      | Unop (op, (v, vp)) -> Unop (op, (go_sc v, vp))
+      | Binop (op, (v1, p1), (v2, p2)) -> Binop (op, (go_sc v1, p1), (go_sc v2, p2))
+      | Ternop (op, (v1, p1), (v2, p2), (v3, p3)) ->
+          Ternop (op, (go_sc v1, p1), (go_sc v2, p2), (go_sc v3, p3))
+    in
+    go_stmt c
+  in
+  let rec strip_barriers = function
+    | Workgroup_barrier -> Noop
+    | Seq (a, b) -> Seq (strip_barriers a, strip_barriers b)
+    | For_loop fc -> For_loop { fc with body = strip_barriers fc.body }
+    | If i -> If { i with body = strip_barriers i.body }
+    | Scan_loop sc -> Scan_loop { sc with body = strip_barriers sc.body }
+    | other -> other
+  in
+  let rec has_conditional_sync = function
+    | If { body; _ } -> has_sync body
+    | Seq (a, b) -> has_conditional_sync a || has_conditional_sync b
+    | For_loop { body; _ } | Scan_loop { body; _ } -> has_conditional_sync body
+    | _ -> false
+  in
+  let rec has_unconditional_sync = function
+    | Workgroup_barrier | Tile_mma _ -> true
+    | Seq (a, b) -> has_unconditional_sync a || has_unconditional_sync b
+    | For_loop { from_; to_; body; _ } -> from_ <= to_ && has_unconditional_sync body
+    | If _ | Scan_loop _ | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _
+    | Set_dynamic _ | Set_from_vec _ | Set_local _ | Declare_local _ ->
+        false
+  in
+  let subst_symbol_const ~sym ~value (c : t) : t =
+    let subst_idx = function
+      | Indexing.Iterator s when Indexing.equal_symbol s sym -> Indexing.Fixed_idx value
+      | Indexing.Affine { symbols; offset } as idx ->
+          let changed = ref false in
+          let offset, symbols =
+            List.fold symbols ~init:(offset, []) ~f:(fun (off, acc) (coeff, s) ->
+                if Indexing.equal_symbol s sym then (
+                  changed := true;
+                  (off + (coeff * value), acc))
+                else (off, (coeff, s) :: acc))
+          in
+          if not !changed then idx else Indexing.affine ~symbols:(List.rev symbols) ~offset
+      | Indexing.Concat syms when List.mem syms sym ~equal:Indexing.equal_symbol ->
+          invalid_arg
+            "Low_level.serialize_workgroup_barriers: loop-variant conditional sync over Concat \
+             index"
+      | idx -> idx
+    in
+    let subst_idcs = Array.map ~f:subst_idx in
+    let rec go_stmt = function
+      | (Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier)
+        as s ->
+          s
+      | Seq (a, b) -> Seq (go_stmt a, go_stmt b)
+      | For_loop fc when Indexing.equal_symbol fc.index sym -> For_loop fc
+      | For_loop fc -> For_loop { fc with body = go_stmt fc.body }
+      | Scan_loop sc ->
+          let carried = List.map sc.carried ~f:(fun c -> { c with init = go_sc c.init }) in
+          let body = if Indexing.equal_symbol sc.index sym then sc.body else go_stmt sc.body in
+          Scan_loop { sc with carried; body }
+      | If { cond = c, cp; body } -> If { cond = (go_sc c, cp); body = go_stmt body }
+      | Set { tn; idcs; llsc; debug } ->
+          Set { tn; idcs = subst_idcs idcs; llsc = go_sc llsc; debug }
+      | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, vp; llsc; debug } ->
+          Set_dynamic
+            {
+              tn;
+              idcs = subst_idcs idcs;
+              dyn_axis;
+              dyn_value = (go_sc v, vp);
+              llsc = go_sc llsc;
+              debug;
+            }
+      | Set_from_vec { tn; idcs; length; vec_unop; arg = v, vp; debug } ->
+          Set_from_vec { tn; idcs = subst_idcs idcs; length; vec_unop; arg = (go_sc v, vp); debug }
+      | Set_local (id, llsc) -> Set_local (id, go_sc llsc)
+      | Tile_mma ({ d = dt, di; a = at, ai; b = bt, bi; fallback; _ } as tm) ->
+          Tile_mma
+            {
+              tm with
+              d = (dt, subst_idcs di);
+              a = (at, subst_idcs ai);
+              b = (bt, subst_idcs bi);
+              fallback = go_stmt fallback;
+            }
+    and go_sc = function
+      | (Constant _ | Constant_bits _ | Get_local _ | Get_merge_buffer _) as s -> s
+      | Embed_index idx -> (
+          match subst_idx idx with
+          | Indexing.Fixed_idx v -> Constant (Float.of_int v)
+          | other -> Embed_index other)
+      | Get (tn, idcs) -> Get (tn, subst_idcs idcs)
+      | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, vp } ->
+          Get_dynamic { tn; idcs = subst_idcs idcs; dyn_axis; dyn_value = (go_sc v, vp) }
+      | Local_scope { id; body; orig_indices; mint } ->
+          Local_scope { id; body = go_stmt body; orig_indices = subst_idcs orig_indices; mint }
+      | Unop (op, (v, vp)) -> Unop (op, (go_sc v, vp))
+      | Binop (op, (v1, p1), (v2, p2)) -> Binop (op, (go_sc v1, p1), (go_sc v2, p2))
+      | Ternop (op, (v1, p1), (v2, p2), (v3, p3)) ->
+          Ternop (op, (go_sc v1, p1), (go_sc v2, p2), (go_sc v3, p3))
+    in
+    go_stmt c
+  in
+  (* Rewrite a statement tree so no [For_loop] encloses a conditional sync: hoist loop-invariant
+     sync-bearing [If]s outside the loop (splitting into true/false loops) and unroll loop-variant
+     ones into explicit per-iteration copies. *)
+  let rec expand_loop_cond_sync (c : t) : t =
+    match c with
+    | Seq (a, b) -> Seq (expand_loop_cond_sync a, expand_loop_cond_sync b)
+    | If i -> If { i with body = expand_loop_cond_sync i.body }
+    | For_loop ({ index; from_; to_; body; _ } as fc) -> (
+        let body = expand_loop_cond_sync body in
+        if not (has_conditional_sync body) then For_loop { fc with body }
+        else if to_ < from_ then Noop
+        else
+          let rec find_invariant_if = function
+            | If { cond = cond_s, cond_p; body = ib }
+              when has_sync ib && not (scalar_mentions_symbol index cond_s) ->
+                Some (cond_s, cond_p)
+            | Seq (a, b) -> (
+                match find_invariant_if a with Some _ as r -> r | None -> find_invariant_if b)
+            | If { body = ib; _ } -> find_invariant_if ib
+            | _ -> None
+          in
+          let rec specialize_if ~target ~take = function
+            | If { cond = cond_s, cond_p; body = ib } ->
+                if phys_equal cond_s (fst target) && Ops.equal_prec cond_p (snd target) then
+                  if take then ib else Noop
+                else If { cond = (cond_s, cond_p); body = specialize_if ~target ~take ib }
+            | Seq (a, b) -> Seq (specialize_if ~target ~take a, specialize_if ~target ~take b)
+            | other -> other
+          in
+          match find_invariant_if body with
+          | Some cond ->
+              let b_true =
+                expand_loop_cond_sync
+                  (For_loop { fc with body = specialize_if ~target:cond ~take:true body })
+              in
+              let b_false =
+                expand_loop_cond_sync
+                  (For_loop { fc with body = specialize_if ~target:cond ~take:false body })
+              in
+              Seq (If { cond; body = b_true }, If { cond = negate_cond cond; body = b_false })
+          | None ->
+              (* Loop-variant conditional sync: unroll per iteration substituting [index]. *)
+              unflat_lines
+                (List.init
+                   (to_ - from_ + 1)
+                   ~f:(fun step -> subst_symbol_const ~sym:index ~value:(from_ + step) body)))
+    | other -> other
+  in
+  (* Exact monoid split for statements with NO conditional sync. *)
+  let rec split_plain (c : t) : barrier_split =
+    match c with
+    | Noop -> No_barrier []
+    | Comment _ -> No_barrier [ c ]
+    | Workgroup_barrier -> Has_barrier { head = []; middle = []; tail = [] }
+    | Tile_mma { d = d_tn, _; _ } ->
+        if Set.mem !fragment_scope_tiles d_tn then
+          (* Inside a persistent fragment scope: only a trailing barrier per iteration. *)
+          Has_barrier { head = [ c ]; middle = []; tail = [] }
+        else
+          (* Outside a fragment scope: bracketed on both sides. *)
+          Has_barrier { head = []; middle = wrap_wg [ c ]; tail = [] }
+    | Seq (a, b) -> concat (split_plain a) (split_plain b)
+    | If { body; _ } ->
+        if has_sync body then
+          invalid_arg
+            "Low_level.serialize_workgroup_barriers: unexpected conditional sync in split_plain"
+        else No_barrier [ c ]
+    | For_loop { index; from_; to_; body; axis = _ } -> (
+        if not (has_sync body) then No_barrier [ c ]
+        else if to_ < from_ then No_barrier []
+        else
+          match split_plain body with
+          | No_barrier stmts ->
+              No_barrier
+                [ For_loop { index; from_; to_; body = unflat_lines stmts; axis = Serial } ]
+          | Has_barrier { head; middle; tail } when from_ = to_ ->
+              Has_barrier
+                {
+                  head = bind_single ~index from_ head;
+                  middle = bind_single ~index from_ middle;
+                  tail = bind_single ~index from_ tail;
+                }
+          | Has_barrier { head; middle; tail } ->
+              if is_empty_stmts tail then
+                let head' = bind_single ~index from_ head in
+                let iter_body =
+                  (if is_empty_stmts head then []
+                   else
+                     [
+                       If
+                         {
+                           cond =
+                             ( Binop
+                                 ( Ops.Cmplt,
+                                   (Constant (Float.of_int from_), iprec),
+                                   (Embed_index (Indexing.Iterator index), iprec) ),
+                               iprec );
+                           body = unflat_lines (wrap_wg head);
+                         };
+                     ])
+                  @ middle
+                in
+                let middle' =
+                  if is_empty_stmts iter_body then []
+                  else
+                    [ For_loop { index; from_; to_; body = unflat_lines iter_body; axis = Serial } ]
+                in
+                Has_barrier { head = head'; middle = middle'; tail = [] }
+              else if is_empty_stmts head then
+                let iter_body =
+                  middle
+                  @ [
+                      If
+                        {
+                          cond =
+                            ( Binop
+                                ( Ops.Cmplt,
+                                  (Embed_index (Indexing.Iterator index), iprec),
+                                  (Constant (Float.of_int to_), iprec) ),
+                              iprec );
+                          body = unflat_lines (wrap_wg tail);
+                        };
+                    ]
+                in
+                let middle' =
+                  [ For_loop { index; from_; to_; body = unflat_lines iter_body; axis = Serial } ]
+                in
+                Has_barrier { head = []; middle = middle'; tail = bind_single ~index to_ tail }
+              else if is_rotor index || mentions_concat index head then
+                (* Unroll when [index] cannot be shifted by +1 (pipelined rotor or Concat). *)
+                List.init
+                  (to_ - from_ + 1)
+                  ~f:(fun step ->
+                    let k = from_ + step in
+                    Has_barrier
+                      {
+                        head = bind_single ~index k head;
+                        middle = bind_single ~index k middle;
+                        tail = bind_single ~index k tail;
+                      })
+                |> List.fold ~init:(No_barrier []) ~f:concat
+              else
+                let head' = bind_single ~index from_ head in
+                let back_edge =
+                  wrap_wg (tail @ List.map head ~f:(shift_symbol_by_one ~sym:index))
+                in
+                let iter_body =
+                  middle
+                  @ [
+                      If
+                        {
+                          cond =
+                            ( Binop
+                                ( Ops.Cmplt,
+                                  (Embed_index (Indexing.Iterator index), iprec),
+                                  (Constant (Float.of_int to_), iprec) ),
+                              iprec );
+                          body = unflat_lines back_edge;
+                        };
+                    ]
+                in
+                let middle' =
+                  [ For_loop { index; from_; to_; body = unflat_lines iter_body; axis = Serial } ]
+                in
+                Has_barrier { head = head'; middle = middle'; tail = bind_single ~index to_ tail })
+    | Scan_loop { body; _ } ->
+        if not (has_sync body) then No_barrier [ c ]
+        else invalid_arg "Low_level.serialize_workgroup_barriers: unlowered sync-bearing Scan_loop"
+    | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _ | Set_local _
+    | Declare_local _ ->
+        No_barrier [ c ]
+  in
+  (* Finish a flat list of statements into barrier-fissioned workgroup phases. When a workgroup-
+     uniform [If] encloses a synchronization point (e.g. a narrower [Grid] nest), split the
+     surrounding phase conditionally so workgroups taking the false branch do NOT get a phantom
+     barrier between statements before and after the skipped [If]. *)
+  let rec finish_stmts (stmts : t list) : t list =
+    let flat = flat_lines stmts in
+    let rec find_cond_if acc = function
+      | [] -> None
+      | If { cond = cond_s, cond_p; body } :: rest when has_sync body ->
+          if not (scalar_is_wg_uniform cond_s) then
+            invalid_arg
+              "Low_level.serialize_workgroup_barriers: synchronization under non-uniform If guard";
+          Some (List.rev acc, (cond_s, cond_p), body, rest)
+      | stmt :: rest -> find_cond_if (stmt :: acc) rest
+    in
+    match find_cond_if [] flat with
+    | None -> (
+        match List.fold flat ~init:(No_barrier []) ~f:(fun acc s -> concat acc (split_plain s)) with
+        | No_barrier stmts -> wrap_wg stmts
+        | Has_barrier { head; middle; tail } -> wrap_wg head @ middle @ wrap_wg tail)
+    | Some (before, cond, if_body, after) -> (
+        let prefix_done, p_tail =
+          match
+            List.fold before ~init:(No_barrier []) ~f:(fun acc s -> concat acc (split_plain s))
+          with
+          | No_barrier stmts -> ([], stmts)
+          | Has_barrier { head; middle; tail } -> (wrap_wg head @ middle, tail)
+        in
+        let rec split_until_uncond acc = function
+          | [] -> (List.rev acc, None)
+          | s :: rest when has_unconditional_sync s -> (List.rev acc, Some (s, rest))
+          | s :: rest -> split_until_uncond (s :: acc) rest
+        in
+        let r_same, r_uncond = split_until_uncond [] after in
+        match r_uncond with
+        | None ->
+            let true_branch = guard cond (finish_stmts (p_tail @ [ if_body ] @ r_same)) in
+            let false_branch = guard (negate_cond cond) (finish_stmts (p_tail @ r_same)) in
+            prefix_done @ true_branch @ false_branch
+        | Some (u, r_after_u) ->
+            let u_head, u_mid, u_tail =
+              match split_plain u with
+              | Has_barrier { head; middle; tail } -> (head, middle, tail)
+              | No_barrier _ -> assert false
+            in
+            let true_branch = guard cond (finish_stmts (p_tail @ [ if_body ] @ r_same @ u_head)) in
+            let false_branch = guard (negate_cond cond) (finish_stmts (p_tail @ r_same @ u_head)) in
+            prefix_done @ true_branch @ false_branch @ u_mid @ finish_stmts (u_tail @ r_after_u))
+  in
+  let final_llc =
+    if num_wg_threads <= 1 then unflat_lines (wrap_wg [ strip_barriers wg_body ])
+    else if not (has_sync wg_body) then unflat_lines (wrap_wg [ wg_body ])
+    else unflat_lines (finish_stmts [ expand_loop_cond_sync wg_body ])
+  in
+  let sw_proc =
+    {
+      proc with
+      traced_store;
+      llc = final_llc;
+      optimize_ctx = { proc.optimize_ctx with placements };
+      simdgroup_fragments = !simdgroup_fragments;
+      masked_fragments = !masked_fragments;
+    }
+  in
+  { sw_proc; sw_grid_loops; sw_minted_tns = List.rev !minted_tns }

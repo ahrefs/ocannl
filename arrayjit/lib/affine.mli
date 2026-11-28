@@ -189,6 +189,54 @@ module Loop_ranges : sig
   val is_empty : t -> bool
 end
 
+(** {2 Enclosing loop chains}
+
+    An access or effect's enclosing loops form a single nested chain, outermost first. Unlike a
+    routine's sibling loops ({!Loop_ranges}), a single enclosing chain cannot bind the same loop
+    symbol twice: shadowing would make a symbol's range ambiguous between outer and inner binders.
+    [Loop_chain.t] enforces binder uniqueness at construction with a typed refusal (gh-ocannl-1628).
+*)
+module Loop_chain : sig
+  type t [@@deriving sexp_of, equal]
+
+  type duplicate = { symbol : Indexing.symbol; outer : int * int; inner : int * int }
+  [@@deriving sexp_of, equal]
+
+  exception Duplicate_binder of duplicate [@@deriving sexp_of]
+
+  val empty : t
+  val is_empty : t -> bool
+  val length : t -> int
+
+  val enter : t -> Indexing.symbol -> int * int -> (t, duplicate) Result.t
+  (** [enter chain s (lo, hi)]: appends an innermost binder [(s, (lo, hi))] to [chain] (ordered
+      outermost first), refusing a symbol already bound in [chain]. *)
+
+  val enter_exn : t -> Indexing.symbol -> int * int -> t
+  (** As {!enter}, raising {!Duplicate_binder} on a duplicate symbol. *)
+
+  val of_bindings : (Indexing.symbol * (int * int)) list -> (t, duplicate) Result.t
+  (** Builds a chain from an outermost-first binding list, refusing the first duplicate symbol. *)
+
+  val of_bindings_exn : (Indexing.symbol * (int * int)) list -> t
+  (** As {!of_bindings}, raising {!Duplicate_binder} on a duplicate symbol. *)
+
+  val map_symbols : t -> f:(Indexing.symbol -> Indexing.symbol) -> (t, duplicate) Result.t
+  (** Renames each bound symbol in order, refusing any rename that collides two binders. *)
+
+  val map_symbols_exn : t -> f:(Indexing.symbol -> Indexing.symbol) -> t
+  (** As {!map_symbols}, raising {!Duplicate_binder} on a collision. *)
+
+  val find : t -> Indexing.symbol -> (int * int) option
+  val mem : t -> Indexing.symbol -> bool
+
+  val to_alist : t -> (Indexing.symbol * (int * int)) list
+  (** The enclosing binders, outermost first. *)
+
+  val ranges : t -> Loop_ranges.t
+  (** The chain viewed as a {!Loop_ranges.t} box environment. *)
+end
+
 val axis_index_to_string : Indexing.axis_index -> string
 (** The rendering of one index component the engine's witnesses use, for messages that quote a cell
     beside a witness in one spelling. *)
@@ -431,8 +479,8 @@ type 'tn access = {
           subject of the read-modify-write exemption ([Low_level.rmw_exempt]): matching by statement
           subordination rather than by program path, so a guarded body's write cannot alias its [If]
           condition's read (they share a path). *)
-  a_loops : (Indexing.symbol * (int * int)) list;
-      (** Enclosing loops, outermost first, with inclusive iteration bounds. *)
+  a_loops : Loop_chain.t;
+      (** Enclosing loops, outermost first, with inclusive iteration bounds and unique binders. *)
   a_path : path_comp list;
       (** Lexicographic program-order position: statement indices per [Seq] nesting level,
           interleaved with intra-statement components ({!path_comp}) at each statement the traversal
@@ -479,8 +527,7 @@ type 'tn effect_kind =
 
 type 'tn statement_effect = {
   e_kind : 'tn effect_kind;
-  e_loops : (Indexing.symbol * (int * int)) list;
-      (** Enclosing loops, outermost first, as {!field-a_loops}. *)
+  e_loops : Loop_chain.t;  (** Enclosing loops, outermost first, as {!field-a_loops}. *)
   e_guarded : bool;  (** Under an [If] guard, as {!field-a_guarded}. *)
   e_gated : bool;
       (** Under a scalar gate, as {!field-a_gated}: only a [Merge_read] or a [Local_read] can be; a
@@ -495,7 +542,7 @@ type 'tn statement_effect = {
 }
 [@@deriving sexp_of]
 
-val loops_live : (Indexing.symbol * (int * int)) list -> bool
+val loops_live : Loop_chain.t -> bool
 (** Whether every enclosing loop of an access or effect executes: a row under a dead loop
     ([to_ < from_]) never happens. *)
 

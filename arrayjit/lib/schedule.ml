@@ -2210,16 +2210,132 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
       (Site "175:stage-shared-tile");
     ignore (get_node opt.traced_store tile : traced_array);
     (* The load nest. *)
-    let fresh = List.map iterated ~f:(fun s -> (s, Indexing.get_symbol ())) in
-    let load_sym s =
-      match List.Assoc.find fresh ~equal:Indexing.equal_symbol s with Some s' -> s' | None -> s
+    let stage_axes = if shared then hardware_axes opt.llc else [] in
+    (* Pick a copy loop for a workgroup axis of [width] at hardware [slot]. Always prefer an
+       innermost untouched dividing loop ([e % width = 0]) first so the full workgroup width stays
+       active; when none divides evenly, dense copy allows higher slots to refold an already-folded
+       dividing loop (supporting 3D workgroups folding two axes onto one tile dim, e.g. 64x64x8 with
+       (8,2,16)), while the non-dense fallback drops onto an untouched [e <= width] loop (innermost
+       for slot 0, longest for higher slots). *)
+    let copy_candidate ~dense ~slot ~width loops =
+      let pick_div pred =
+        List.filter loops ~f:(fun (_, e, f) -> pred f && e % width = 0) |> List.last
+      in
+      match pick_div (fun f -> not f) with
+      | Some _ as divide -> divide
+      | None ->
+          if dense then if slot = 0 then None else pick_div Fn.id
+          else if slot = 0 then
+            List.find (List.rev loops) ~f:(fun (_, e, f) -> (not f) && e <= width)
+          else
+            List.filter loops ~f:(fun (_, e, f) -> (not f) && e <= width)
+            |> List.max_elt ~compare:(fun (_, e1, _) (_, e2, _) -> Int.compare e1 e2)
     in
-    let subst_terms terms = List.map terms ~f:(fun (c, s) -> (c, load_sym s)) in
-    (* [load_sym] renames only iterated tile loops, which occur in tile parts alone. *)
-    let load_src_idcs = Array.map idcs0 ~f:(rename_index ~f:load_sym) in
-    let tile_store_idcs =
-      Array.map tile_axes ~f:(fun (a, _) ->
-          normalize_affine ~terms:(subst_terms (tile_terms a)) ~offset:0)
+    (* A dense, separable tile can use one copy coordinate per tile axis, independently of the
+       Workgroup/register decomposition the consumer uses. Keep the allocation and reads unchanged:
+       only the load's source and destination indices use these fresh coordinates. Copy loops follow
+       source-axis order even for a transposed packed tile, so slot 0 addresses the source's minor
+       axis rather than the consumer's packed minor axis.
+
+       Transposed-tile bank-conflict guard (gh-ocannl-1842): when the source minor axis differs from
+       the tile's packed minor axis, remapping slot 0 onto the source minor axis writes down the
+       tile's major axis (stride = padded minor dim). On an unswizzled tile whose minor row bytes
+       are a multiple of 32 bytes (e.g. 32 or 64 f32), that destroys [STS.128] vectorization and
+       creates 8-way/16-way shared-store bank conflicts (measured 2-7% slower in staging#2047).
+       Require a bank-deconflicting layout (swizzle or non-32B-multiple padded row) for transposed
+       tiles; non-transposed tiles keep contiguous shared stores and always qualify. *)
+    let transposed_source_minor =
+      let n = Array.length tile_axes in
+      if n < 2 then false
+      else
+        let a_tile_minor = fst tile_axes.(n - 1) in
+        let a_src_minor = Array.fold tile_axes ~init:(-1) ~f:(fun acc (a, _) -> Int.max acc a) in
+        a_src_minor <> a_tile_minor
+    in
+    let transposed_layout_ok =
+      (not transposed_source_minor) || Option.is_some swizzle
+      || tile_dims.(Array.length tile_dims - 1) * Ops.prec_in_bytes prec % 32 <> 0
+    in
+    let dense_copy =
+      shared && Option.is_none cooperative && transposed_layout_ok
+      && (not (List.is_empty reused))
+      && Array.for_all decomp ~f:(fun (_, outer, _) ->
+          List.for_all outer ~f:(fun (_, s) ->
+              match depth_of s with
+              | Some (_, { axis = Workgroup | Workgroup_reduce; _ }) -> false
+              | _ -> true))
+      && List.for_all tile_loops ~f:(fun s ->
+          Array.count tile_axes ~f:(fun (a, _) ->
+              List.exists (tile_terms a) ~f:(fun (_, t) -> Indexing.equal_symbol s t))
+          = 1)
+      && Array.for_all tile_axes ~f:(fun (a, e) ->
+          List.sort (tile_terms a) ~compare:(fun (c, _) (d, _) -> Int.compare c d)
+          |> List.fold ~init:(Some 1) ~f:(fun next (c, s) ->
+              Option.bind next ~f:(fun n -> if c = n then Some (n * extent s) else None))
+          |> Option.value_map ~default:false ~f:(Int.equal e))
+      (* Every in-scope workgroup axis must divide a remaining copy loop so no axis falls back to a
+         guard or representative thread. *)
+      && Option.value_map lstar_depth ~default:false ~f:(fun ld ->
+          let remaining =
+            ref
+              (Array.to_list tile_axes
+              |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+              |> List.map ~f:(fun (a, e) -> (a, e, false)))
+          in
+          Array.to_list (Array.sub stack0 ~pos:0 ~len:(ld + 1))
+          |> List.rev
+          |> List.for_all ~f:(fun fl ->
+              match fl.axis with
+              | Workgroup | Workgroup_reduce -> (
+                  let w = fl.to_ - fl.from_ + 1 in
+                  if fl.from_ <> 0 || w < 1 then false
+                  else if w = 1 then true
+                  else
+                    let slot =
+                      List.find_exn stage_axes ~f:(fun a ->
+                          Poly.equal a.ha_kind `Workgroup
+                          && Indexing.equal_symbol a.ha_index fl.index)
+                      |> fun a -> a.ha_slot
+                    in
+                    match copy_candidate ~dense:true ~slot ~width:w !remaining with
+                    | Some (a, e, _) when e % w = 0 ->
+                        let q = e / w in
+                        remaining :=
+                          List.filter_map !remaining ~f:(fun (b, eb, fb) ->
+                              if a <> b then Some (b, eb, fb)
+                              else if q > 1 then Some (b, q, true)
+                              else None);
+                        true
+                    | _ -> false)
+              | Serial | Grid | Vectorized | Unrolled -> true))
+    in
+    let copy_loops, load_src_idcs, tile_store_idcs, copy_reused =
+      if dense_copy then (
+        let axes = Array.map tile_axes ~f:(fun (a, e) -> (a, Indexing.get_symbol (), e)) in
+        let source_idcs = Array.copy idcs0 in
+        Array.iter axes ~f:(fun (a, q, _) ->
+            let tp, outer, offset = decomp.(a) in
+            source_idcs.(a) <-
+              normalize_affine ~terms:((stage_compaction_factor tp, q) :: outer) ~offset);
+        ( Array.to_list axes
+          |> List.sort ~compare:(fun (a, _, _) (b, _, _) -> Int.compare a b)
+          |> List.map ~f:(fun (_, q, e) -> (q, e)),
+          source_idcs,
+          Array.map axes ~f:(fun (_, q, _) -> Indexing.Iterator q),
+          [] ))
+      else
+        let fresh = List.map iterated ~f:(fun s -> (s, Indexing.get_symbol ())) in
+        let load_sym s =
+          match List.Assoc.find fresh ~equal:Indexing.equal_symbol s with
+          | Some s' -> s'
+          | None -> s
+        in
+        let subst_terms terms = List.map terms ~f:(fun (c, s) -> (c, load_sym s)) in
+        ( List.map fresh ~f:(fun (s, s') -> (s', extent s)),
+          Array.map idcs0 ~f:(rename_index ~f:load_sym),
+          Array.map tile_axes ~f:(fun (a, _) ->
+              normalize_affine ~terms:(subst_terms (tile_terms a)) ~offset:0),
+          reused )
     in
     let tile_read_idcs =
       Array.map tile_axes ~f:(fun (a, _) -> normalize_affine ~terms:(tile_terms a) ~offset:0)
@@ -2261,10 +2377,9 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
        bounded by the width falls back to the representative-lane ([w == 0]) discipline. *)
     let lane = Option.map cooperative ~f:(fun w -> (Indexing.get_symbol (), w)) in
     let lane_plan =
-      match (lane, List.last fresh) with
+      match (lane, List.last copy_loops) with
       | None, _ | _, None -> `Serial_all
-      | Some (w_sym, w), Some (s_orig, s_inner) ->
-          let e = extent s_orig in
+      | Some (w_sym, w), Some (s_inner, e) ->
           if e <= w then `Drop_inner (s_inner, e, w_sym)
           else if e % w = 0 then `Divide_inner (s_inner, e / w, w_sym, w)
           else `Restrict_lane0
@@ -2297,12 +2412,12 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
             load_stmt
     in
     let load_nest =
-      List.fold (List.rev fresh) ~init:load_stmt ~f:(fun body (s, s') ->
+      List.fold (List.rev copy_loops) ~init:load_stmt ~f:(fun body (s, e) ->
           match lane_plan with
-          | `Drop_inner (si, _, _) when Indexing.equal_symbol s' si -> body
-          | `Divide_inner (si, ext', _, _) when Indexing.equal_symbol s' si ->
-              For_loop { index = s'; from_ = 0; to_ = ext' - 1; body; axis = Serial }
-          | _ -> For_loop { index = s'; from_ = 0; to_ = extent s - 1; body; axis = Serial })
+          | `Drop_inner (si, _, _) when Indexing.equal_symbol s si -> body
+          | `Divide_inner (si, ext', _, _) when Indexing.equal_symbol s si ->
+              For_loop { index = s; from_ = 0; to_ = ext' - 1; body; axis = Serial }
+          | _ -> For_loop { index = s; from_ = 0; to_ = e - 1; body; axis = Serial })
     in
     (* The splice target. With an anchor L* (an outer-part symbol or reused workgroup axis), the
        load nest goes at the start of L*'s body. A shared stage with no anchor (e.g. staging a
@@ -2341,7 +2456,7 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
        below): hardware threads differing only in an uncovered slot would all execute the loads,
        writing the same shared addresses concurrently — a same-value race is still a race. *)
     (if shared then
-       let axes = hardware_axes opt.llc in
+       let axes = stage_axes in
        let wg_axes =
          List.filter axes ~f:(fun a -> match a.ha_kind with `Workgroup -> true | `Grid -> false)
        in
@@ -2404,42 +2519,62 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
         let unfolded =
           ref
             (if Option.is_some cooperative then []
-             else List.map fresh ~f:(fun (s, s') -> (s', extent s)))
+             else List.map copy_loops ~f:(fun (s', e) -> (s', e, false)))
         in
-        List.fold in_scope ~init:load_nest ~f:(fun body fl ->
+        let axes = stage_axes in
+        (* Slots are assigned innermost-first by [hardware_axes]. Give slot 0 first choice of the
+           minor copy loop; higher slots take the remaining dividing loops, re-folding an
+           already-folded loop only when no untouched axis divides them (dense 3D workgroups). *)
+        List.fold (List.rev in_scope) ~init:load_nest ~f:(fun body fl ->
             match fl.axis with
             | (Workgroup | Workgroup_reduce)
-              when not (List.mem reused fl.index ~equal:Indexing.equal_symbol) -> (
+              when not (List.mem copy_reused fl.index ~equal:Indexing.equal_symbol) -> (
                 let t = fl.index and w = fl.to_ - fl.from_ + 1 in
-                let divide = List.filter !unfolded ~f:(fun (_, e) -> e % w = 0) |> List.last in
-                let drop =
-                  List.filter !unfolded ~f:(fun (_, e) -> e <= w)
-                  |> List.max_elt ~compare:(fun (_, e1) (_, e2) -> Int.compare e1 e2)
+                let slot =
+                  List.find_exn axes ~f:(fun a ->
+                      Poly.equal a.ha_kind `Workgroup && Indexing.equal_symbol a.ha_index t)
+                  |> fun a -> a.ha_slot
                 in
+                let candidate = copy_candidate ~dense:dense_copy ~slot ~width:w !unfolded in
                 let take s' =
                   unfolded :=
-                    List.filter !unfolded ~f:(fun (s'', _) -> not (Indexing.equal_symbol s' s''))
+                    List.filter !unfolded ~f:(fun (s'', _, _) -> not (Indexing.equal_symbol s' s''))
                 in
-                match (fl.from_, divide, drop) with
-                | 0, Some (s', e), _ when w > 1 ->
-                    take s';
-                    fold_copy_loop ~s'
-                      ~f:(fun cbody ->
-                        For_loop
-                          {
-                            index = s';
-                            from_ = 0;
-                            to_ = (e / w) - 1;
-                            axis = Serial;
-                            body =
-                              map_code
-                                ~fidx:
-                                  (subst_axis_index ~sym:s'
-                                     ~by:{ terms = [ (w, s'); (1, t) ]; offset = 0 })
-                                cbody;
-                          })
-                      body
-                | 0, None, Some (s', e) when w > 1 ->
+                let replace s' q =
+                  unfolded :=
+                    List.map !unfolded ~f:(fun (s'', e'', f'') ->
+                        if Indexing.equal_symbol s' s'' then (s'', q, true) else (s'', e'', f''))
+                in
+                match (fl.from_, candidate) with
+                | 0, Some (s', e, _) when w > 1 && e % w = 0 ->
+                    let q = e / w in
+                    if dense_copy && q = 1 then (
+                      take s';
+                      fold_copy_loop ~s'
+                        ~f:(fun cbody ->
+                          map_code
+                            ~fidx:(subst_axis_index ~sym:s' ~by:{ terms = [ (1, t) ]; offset = 0 })
+                            cbody)
+                        body)
+                    else (
+                      if dense_copy then replace s' q else take s';
+                      fold_copy_loop ~s'
+                        ~f:(fun cbody ->
+                          For_loop
+                            {
+                              index = s';
+                              from_ = 0;
+                              to_ = q - 1;
+                              axis = Serial;
+                              body =
+                                map_code
+                                  ~fidx:
+                                    (subst_axis_index ~sym:s'
+                                       ~by:{ terms = [ (w, s'); (1, t) ]; offset = 0 })
+                                  cbody;
+                            })
+                        body)
+                | 0, Some (s', e, _) when w > 1 ->
                     take s';
                     fold_copy_loop ~s'
                       ~f:(fun cbody ->
@@ -2835,8 +2970,8 @@ let apply_privatize ~app ~target ~over ~acc_prec (opt : Low_level.optimized) : L
             match zero_seed_candidate ~allow_workgroup_barriers:true target next with
             | Some (write, repeated) ->
                 let inside =
-                  List.drop_while write.Affine.a_loops ~f:(fun (s, _) ->
-                      not (Indexing.equal_symbol s over))
+                  List.drop_while (Affine.Loop_chain.to_alist write.Affine.a_loops)
+                    ~f:(fun (s, _) -> not (Indexing.equal_symbol s over))
                 in
                 if
                   (not (List.is_empty inside))
@@ -4746,7 +4881,7 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
             List.iter writes ~f:(fun (w : Tn.t Affine.access) ->
                 if w.a_whole then refuse_at "as a whole node (Zero_out)";
                 let left_range s' =
-                  match List.Assoc.find w.a_loops s' ~equal:Indexing.equal_symbol with
+                  match Affine.Loop_chain.find w.a_loops s' with
                   | Some _ as r -> r
                   | None -> find_range outer s'
                 in
@@ -4757,7 +4892,7 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
                 in
                 match
                   Affine.pair_conflict ~left_range ~right_range:site_range
-                    ~dup_left:(fun s' -> List.Assoc.mem w.a_loops s' ~equal:Indexing.equal_symbol)
+                    ~dup_left:(Affine.Loop_chain.mem w.a_loops)
                     ~dup_right:(fun s' -> List.mem site_dup s' ~equal:Indexing.equal_symbol)
                     ~pairs:[ (s, s) ]
                     ~left ~right
@@ -6413,7 +6548,7 @@ let pipeline_violation (opt : Low_level.optimized) : pipeline_violation option =
             if
               List.exists accesses ~f:(fun (a : _ Affine.access) ->
                   Tn.equal a.a_tn tile && (not a.a_write)
-                  && not (List.exists a.a_loops ~f:(fun (s, _) -> Indexing.equal_symbol s rotor)))
+                  && not (Affine.Loop_chain.mem a.a_loops rotor))
             then Some (Read_outside_rotor { tile; rotor })
             else None)
 
@@ -7500,7 +7635,7 @@ let crosscheck_scratch_containment (opt : Low_level.optimized) (chains : Low_lev
                   {
                     a with
                     Affine.a_map = Array.map a.Affine.a_map ~f:(rename_idx m);
-                    a_loops = List.map a.a_loops ~f:(fun (s, b) -> (rename_sym m s, b));
+                    a_loops = Affine.Loop_chain.map_symbols_exn a.a_loops ~f:(rename_sym m);
                     a_val_syms = List.map a.a_val_syms ~f:(rename_sym m);
                   })
           | _ -> a)
@@ -10284,8 +10419,8 @@ let seedable_shared_target ~limits lowered =
    [apply_fuse_epilogue] (every other [Local] update in this module is of a node the op minted), and
    it does so for a fusion target -- written by the reduction, read by the fused tail -- that is not
    [settled_on_device]. Shared placement exists only where the backend states
-   [workgroup_shared_placement] (CPU codegen rejects a non-empty [workgroup_shared]), and the target
-   is then charged its whole [size_in_bytes] by [workgroup_memory_bytes], which
+   [workgroup_shared_placement] (hardware shared memory; CPU backends keep it [false]), and the
+   target is then charged its whole [size_in_bytes] by [workgroup_memory_bytes], which
    [check_hardware_limits_classified] holds to [max_workgroup_memory_bytes] for every kernel a
    compile emits: a larger node cannot leave the device in any kernel the hardware gate admits. An
    unknown limit bounds nothing. *)

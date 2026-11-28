@@ -459,9 +459,17 @@ val staged_copies : is_staged:(Tnode.t -> bool) -> Low_level.t -> staged_copy_co
     [Get], behind at most a precision-preserving [Unop] or a [Where] against a constant (a padded
     tile's fringe guard). Zero fills, reductions into shared scratch, [Set_from_vec] and
     [Set_dynamic] are not copies. A kernel with a [Tile_mma] statement has none ([mma_rate] prices
-    its staging, fitted on staged tensorized leaves). Guards are taken. For a [BM x BN] scalar
-    blocktile of an [M x N x K] contraction: [M * N * K * (BM + BN) / (BM * BN)] cells times the
-    element width. *)
+    its staging, fitted on staged tensorized leaves). An [i < c] guard on an enclosing loop from 0
+    counts the iterations it admits; any other guard is taken. For a [BM x BN] scalar blocktile of
+    an [M x N x K] contraction: [M * N * K * (BM + BN) / (BM * BN)] cells times the element width.
+*)
+
+val staged_idle_copies : is_staged:(Tnode.t -> bool) -> Low_level.t -> staged_copy_context list
+(** The workgroup lanes refused by [Workgroup] [i < c] partition guards enclosing operand staging
+    copies, in bytes of the staged node's storage precision, per parallel context in first-copy
+    order (gh-ocannl-2280). [Serial] and [Grid] [i < c] guards reduce both the admitted and
+    workgroup totals equally and contribute no idle bytes; [Where] fringe guards and unguarded
+    copies contribute none; a kernel with a [Tile_mma] statement has none. *)
 
 val operand_deliveries :
   ?is_global:(Tnode.t -> bool) ->
@@ -495,6 +503,7 @@ val shared_loads : is_staged:(Tnode.t -> bool) -> Low_level.t -> shared_load_con
 
 type operand_census = {
   oc_staged : staged_copy_context list;
+  oc_idle : staged_copy_context list;
   oc_direct : staged_copy_context list;
   oc_shared : shared_load_context list;
 }
@@ -505,8 +514,9 @@ val operand_census :
   is_staged:(Tnode.t -> bool) ->
   Low_level.t ->
   operand_census
-(** One traversal for {!operand_deliveries}' two lists ([oc_direct] empty without [is_global]) and,
-    with [shared] (default false), {!shared_loads} ([oc_shared], else empty). *)
+(** One traversal for {!operand_deliveries}' two lists ([oc_direct] empty without [is_global]),
+    {!staged_idle_copies} ([oc_idle]), and, with [shared] (default false), {!shared_loads}
+    ([oc_shared], else empty). *)
 
 val calibration_register_tile : int * int
 (** The register tile [(rm, rn)] the launch sweep fits the issue rate and the saturating thread
@@ -541,8 +551,10 @@ val ranking_seconds_of :
   ?transactions:transaction_context list ->
   ?transaction_rate:float ->
   ?staged_copies:staged_copy_context list ->
+  ?idle_copies:staged_copy_context list ->
   ?direct_loads:staged_copy_context list ->
   ?staged_copy_rate:float ->
+  ?staged_idle_rate:float ->
   ?shared_loads:shared_load_context list ->
   ?shared_load_rate:float ->
   ?occupancy:float ->
@@ -561,12 +573,15 @@ val ranking_seconds_of :
     without an excess, the leg is exactly as before. [staged_copies] (default none) are the kernel's
     {!staged_copies}. [direct_loads] (default none) are the direct bytes from {!operand_deliveries}.
     Their {!filled_staged_bytes} are priced at [staged_copy_rate] (bytes/s) and added to the compute
-    leg. Without a positive rate or operand deliveries, the leg is exactly as before. [shared_loads]
-    (default none) are the kernel's {!excess_shared_loads} (gh-ocannl-2262): their
-    {!filled_shared_loads} are priced at [shared_load_rate] (loads/s) and added to the compute leg;
-    without a positive rate or an excess, the leg is exactly as before. [occupancy] (default none)
-    is the kernel's {!occupancy}: below 1, the compute leg is divided by it; absent or 1, unchanged.
-    [None] when neither peak is given. *)
+    leg. Without a positive rate or operand deliveries, the leg is exactly as before. [idle_copies]
+    (default none) are the kernel's {!staged_idle_copies} (gh-ocannl-2280): their
+    {!filled_staged_bytes} are priced at [staged_idle_rate] (bytes/s) and added to the compute leg;
+    without a positive rate or idle copies, the leg is exactly as before. [shared_loads] (default
+    none) are the kernel's {!excess_shared_loads} (gh-ocannl-2262): their {!filled_shared_loads} are
+    priced at [shared_load_rate] (loads/s) and added to the compute leg; without a positive rate or
+    an excess, the leg is exactly as before. [occupancy] (default none) is the kernel's
+    {!occupancy}: below 1, the compute leg is divided by it; absent or 1, unchanged. [None] when
+    neither peak is given. *)
 
 val ranking_legs_of :
   ?peak_flops:float ->
@@ -583,8 +598,10 @@ val ranking_legs_of :
   ?transactions:transaction_context list ->
   ?transaction_rate:float ->
   ?staged_copies:staged_copy_context list ->
+  ?idle_copies:staged_copy_context list ->
   ?direct_loads:staged_copy_context list ->
   ?staged_copy_rate:float ->
+  ?staged_idle_rate:float ->
   ?shared_loads:shared_load_context list ->
   ?shared_load_rate:float ->
   ?occupancy:float ->
@@ -622,6 +639,7 @@ val ranking_seconds :
   ?lane_width:int ->
   ?max_resident_threads:int ->
   ?staged_copy_rate:float ->
+  ?staged_idle_rate:float ->
   ?shared_load_rate:float ->
   ?is_staged:(Tnode.t -> bool) ->
   ?is_private:(Tnode.t -> bool) ->
@@ -630,10 +648,10 @@ val ranking_seconds :
   float option
 (** {!ranking_seconds_of} over {!analyze}, {!launch_contexts} (with [is_private]) when a fill model
     is given, and, when a capacity or a cache bandwidth is given, {!reuse_traffic}; with both a
-    transaction rate and a lane width, {!memory_transactions}; with both a staged-copy rate and
-    [is_staged], {!staged_copies}; with both a shared-load rate and [is_staged], the
-    {!excess_shared_loads} of {!shared_loads}. A ranking score, not a runtime prediction — and,
-    unlike {!roofline_seconds}, not a lower bound either. *)
+    transaction rate and a lane width, {!memory_transactions}; with [is_staged] and a staged-copy or
+    staged-idle rate, {!staged_copies} / {!staged_idle_copies}; with both a shared-load rate and
+    [is_staged], the {!excess_shared_loads} of {!shared_loads}. A ranking score, not a runtime
+    prediction — and, unlike {!roofline_seconds}, not a lower bound either. *)
 
 (** {2 Tile-MMA operand loads (gh-ocannl-1254)}
 

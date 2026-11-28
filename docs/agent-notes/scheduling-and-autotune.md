@@ -246,8 +246,9 @@ files.
   scalars), and each contraction becomes one block `Tile_mma` whose `lane` is that outer loop,
   between explicit barriers (a `Tile_mma`'s leading bracket is form-dependent, see below).
   `validate_parallel` and the renderer take this unchanged; what they refuse is a guard around a
-  barrier, so query and key tails keep the scalar form. It is GPU-only: a `Workgroup` loop
-  enclosing barriers has no serial rendering (cc would finish lane 0's scan before lane 1 starts).
+  barrier, so query and key tails keep the scalar form. The preset emits `Fold_mma` only where the
+  device advertises an f32 MMA tile (GPU-only in production; serial barrier-fission emulation on
+  `cc` below handles `Scan_loop` barriers too).
   Read the per-statement census (`Context.routine.mma` renderings), not the aggregate, to show both
   contractions tensorized (`test/operations/online_softmax_block_mma`). Measured in
   `benchmarks/report-gh1003-block-fold.md`: on Metal the attention's per-layer kernels go from
@@ -269,6 +270,22 @@ files.
   `Code_borne` cache classification. Backend-free lowering conservatively resolves auto to 0.
   In training the step is backward-bound
   (gh-ocannl-1124): the fold moves it by 1-2%.
+- **Backends without hardware workgroups render workgroup-shared staging serially by barrier
+  fission** (gh-ocannl-678, `Low_level.serialize_workgroup_barriers`): when `C_syntax.compile_proc`
+  sees `workgroup_shared` or `Workgroup_barrier` on a backend with `shared_decl_prefix = None` or
+  `barrier_syntax = None` (`cc`), it runs full GPU `validate_parallel ~fork_join:false` first,
+  hoists canonical `Grid` slot loops to the kernel root, eliminates `Grid`/`Workgroup` loops into
+  slot coordinates (with extent guards), replicates thread-private `Local` arrays and
+  barrier-crossing `Declare_local`/`Scan_loop` carried state per workgroup thread, and fissions
+  the workgroup loops strictly from barrier to barrier without inserting a phantom barrier at a
+  `Serial` loop back-edge. Shared tiles declare as plain block-scope (or heap-spilled) arrays
+  poisoned with `0xFF` (`memset`) on entry to each workgroup so missing barriers fail
+  deterministically. `Backend_intf.workgroup_shared_placement` stays `false` on `cc` so production
+  seeding and `Fuse_epilogue` never target shared placement on CPU. Guard:
+  `test/operations/cc_workgroup_shared_staging.ml` (plus executed `cc` parity in
+  `schedule_batch_grid`, `schedule_batched_mma`, `schedule_smem_matmul`,
+  `schedule_register_matmul`, `schedule_pipelined_matmul`, `schedule_swizzle_matmul`,
+  `schedule_ldmatrix_matmul`, `schedule_mma_matmul`, and `hardware_workgroup_reduce`).
 - GPU fission folds a reduction's whole-node zero into the reduction's kernel (gh-ocannl-1175) as a
   pass over the FINISHED segmentation (`group_units`'s `fold_zeros`): a singleton zero segment
   folds, expanded by the zero policy's `Expand_zero` (GPU, above its size threshold), into the
@@ -847,6 +864,40 @@ files.
   different admission would sink different statements. Under `approximate` it bites on CUDA bf16 and
   on fp8; HIP's bf16 and both backends' f16 are narrow there (`bf16_arithmetic=true`,
   `fp16_arithmetic=true`). Pinned by `test/operations/seeded_narrow_storage`.
+- **The untuned default keeps scalar blocktiles at f32-accumulating narrow sites by measured
+  boundary** (gh-ocannl-2360). Follow-up to gh-ocannl-1663: a prototype admitting staged untwinned
+  GPU MMA leaves (`32x32x32`, `16x32x32`, `32x32x16`) in `Autotune.seeded_default` at
+  f32-accumulating f16/bf16/fp8 sites (gated on `model_default_tensorize`, checked with
+  `Cost_model.accepted_tile_mma_flops` and falling back to `scalar_blocktile`) was measured in
+  exclusive mirrored A/B windows on all three GPU boxes (tag `t2360-prototype`, `bdfa8b51` in
+  `lukstafi/ocannl-staging`; f32 drift controls `0.996–1.007x` and 0 of 11 `.cu` files differing
+  across arms; max relative loss delta `6.7e-7`–`5.5e-5` on signed non-dyadic inputs):
+  - `rog-nv` (CUDA, RTX 5070 Ti Laptop sm_120, GDDR7): `#1190 fp8mm` (`8192×32×4096`) gained
+    `0.495 → 0.169 ms` (`0.342x`), but every `gpt2_mini` cell regressed — infer f16
+    `2.11 → 2.42 ms` (`1.147x`) and bf16 `2.08 → 2.44 ms` (`1.174x`), train b8 f16
+    `8.01 → 8.57 ms` (`1.069x`) and bf16 `6.50 → 7.16 ms` (`1.104x`), train b256 f16
+    `171.4 → 176.1 ms` (`1.027x`) and bf16 `168.3 → 175.7 ms` (`1.044x`).
+  - `minix` (HIP, Radeon 8060S gfx1151, unified memory): infer gained modestly (f16
+    `2.74 → 2.65 ms`, `0.972x`; bf16 `3.12 → 2.76 ms`, `0.886x`), while training regressed heavily
+    — b8 f16 `11.27 → 17.04 ms` (`1.512x`) and bf16 `12.03 → 17.21 ms` (`1.431x`), b256 f16
+    `294.8 → 484.9 ms` (`1.645x`) and bf16 `333.1 → 501.5 ms` (`1.505x`). `fp8mm` stayed unseeded
+    (`7.17 → 7.20 ms`, `1.004x`: `Hip_mma` advertises no fp8 format).
+  - `tuf` (HIP, RX 7700S gfx1102, discrete memory): infer gained modestly (f16 `3.95 → 3.67 ms`,
+    `0.931x`; bf16 `4.70 → 3.99 ms`, `0.850x`), while training regressed heavily — b8 f16
+    `12.92 → 18.42 ms` (`1.421x`) and bf16 `13.96 → 18.67 ms` (`1.337x`), b256 f16
+    `294.3 → 480.4 ms` (`1.633x`) and bf16 `356.1 → 509.4 ms` (`1.430x`). `fp8mm` stayed unseeded
+    (`10.67 → 10.73 ms`, `1.007x`).
+  - Per-kernel attribution on CUDA showed pure deep-K matmuls winning (`fp8mm` 2.93x, `logits`
+    1.56–1.79x, backward `dX` 1.64–1.98x, `softmax*v` 1.58x), outweighed by single-warp (32-thread)
+    MMA blocks losing on small-K `Q*K^T` (`K = 32`, `2.9x` slower), companion-heavy `ffn_w1+gelu`
+    (`1.31–1.45x` slower on 32 threads vs 256), `ffn_w2` (`1.22–1.29x` slower) and low-occupancy
+    `wgrad` (`1.12–1.21x` slower). Neither `16x32x32`-first (`3.38–3.50 ms` infer, `8.59–9.68 ms` b8,
+    `224.5 ms` b256 on rog) nor `model_default_schedule=true` avoids the regression: with
+    `model_default_schedule=true` alone, rog stays at `2.10 ms` f16 / `2.08 ms` bf16 infer and
+    `7.94 ms` f16 / `6.54 ms` bf16 b8; enabling `model_default_tensorize=true` alongside it
+    regresses to `4.40 / 4.24 ms` infer and `8.54 / 7.17 ms` b8. Selective admission (retaining
+    deep-K pure matmuls while excluding small-K and fused-companion sites) was not measured in this
+    pass. Re-open once multi-warp GPU MMA tiles or selective admission close those gaps.
 - **`model_default` segments at the search's presets, and prices a segment against the lower of
   its two presets** (gh-ocannl-1512, gh-ocannl-1687, `Autotune.model_segments`). The preset
   decides the cuts: `fission_segmented` coalesces adjacent segments whose preset is empty. At the
@@ -868,10 +919,19 @@ files.
   seeding, would not. On cc it fans a tiny segment out over the pool, and the score does not see
   that overhead. `test/operations/cost_model_selection`'s below-threshold legs pin the formation
   condition against both presets, and the pick against their minimum.
-- **The seeded untuned default also splits long, narrow reductions, before segmenting, on CUDA
-  and HIP** (gh-ocannl-1325, `Autotune.seeded_split_sites`, config
-  `gpu_default_split_reduce_min_serial`; where it runs is `Autotune.seeded_split_backend`).
-  Measured on gpt2_mini_train b256: CUDA 543 → 391 ms. HIP (gfx1151, unified memory) went
+- **The untuned GPU default also splits long, narrow reductions, before segmenting, on CUDA, HIP
+  and Metal** (gh-ocannl-1325, gh-ocannl-2506, `Autotune.seeded_split_sites`, config
+  `gpu_default_split_reduce_min_serial`; where it runs is `Autotune.seeded_split_backend`, backed
+  by `Backend_intf.backend_facts.splits_untuned_reductions`).
+  In `cifar_conv`, the first bias has 32 channels and a 102,400-element reduction per cell. The
+  plain Metal preset leaves the accumulation on one thread at its 64-cell mapping threshold.
+  The split gives the gradient a 32-by-32 partials launch and a separate combine.
+  `test/operations/narrow_reduction_split` pins that boundary and the executed sum.
+  Measured on gpt2_mini_train b256: CUDA 543 → 391 ms; on Metal (M4 Max, bf16 b8 `gpt2_mini_train`),
+  synced p50 45.58 → 39.83 ms and queued 36.93 → 30.31 ms (standalone LN `gamma`/`beta` grad
+  kernels 0.68–0.76 ms pre-gh-ocannl-2507 → 0.40–0.44 ms sunk unsplit → 0.106–0.131 ms per split
+  stage at the ~0.105 ms isolated Metal floor, and `cifar_resnet` f32 untuned queued 169.65 → 48.65 ms).
+  HIP (gfx1151, unified memory) went
   885 → 1256 ms, so the split was CUDA-only until gh-ocannl-1412 gave its first pass coalesced
   lanes (the next bullet). It applies the search's split-reduce detection and enabling interchange as a whole-routine
   prelude (`Autotune.split_reduce_prelude`, the `F_split` seeds' own), to every site whose serial
@@ -943,12 +1003,17 @@ files.
   statement by statement, each chain `Op_legal` after the ones kept before it, and the preset then
   runs on the interchanged code. Bitwise identical because only accumulators whose write loops each
   own an axis as a plain `Iterator` qualify (one cell, one tuple of write-loop values), and a
-  narrow-storage cell the backend widens is skipped, as for seeding. Its machine-level effect is
-  HIP's alone (see the backend-precision note on reading the PTX/ISA first): the layer-norm
+  narrow-storage cell the backend widens is skipped by default. In gh-ocannl-1348 the machine-level
+  effect was on HIP (see the backend-precision note on reading the PTX/ISA first): the layer-norm
   gamma/beta nests stop round-tripping their cells, while NVRTC had already promoted every one.
   Not in `maybe_default_schedules`: the tuner's presets and the fission probes are unchanged; the
   search meets the sink only through the seeded plan's seed (next bullet;
   `gpu_default_reduction_sink`, `Search_shaping` since then).
+- Metal admits the plain-cell sink independently of sketch seeding (gh-ocannl-2507).
+  Each cell retains its contribution order, and affine-window writes stay with
+  the preset. Its sunk untuned plan provides the first search candidate without replacing
+  the ordinary coarse and fine singles. The analytic model uses the sunk plan as its
+  incumbent and retains its existing sketch admission policy.
 - **The search seeds the seeded untuned plan FIRST** (gh-ocannl-1388, `Autotune.seeded_plan`,
   flavor `F_seeded`). Before it, a GPU search's pool started from the plain default pipeline, so a
   search that timed only its first candidate, or refused every later window, crowned a step the
@@ -1177,6 +1242,39 @@ files.
   rog's outproj b8 (0.0215 ms against 0.0474 for the old crown). The score then ranked the
   leaves near the argmin within 0.1%; what orders them is the copies' volume, not a per-k-step
   cost (gh-ocannl-1821, training-and-performance.md's staged-copy bullet).
+- Mapping hardware workgroup slot 0 (`.x`) along the source minor axis in `Schedule.apply_stage`
+  ONLY wins when paired with bank-deconflicting shared layouts and 16-byte alignment
+  (gh-ocannl-1842; `stage_copy_partition` pins all four pieces). Remapping copy lanes alone on
+  unpadded power-of-two tiles (closed staging#2047) lost 2–7% on CUDA: L1 already merged sibling
+  warps' half-sectors, while transposing the store axis on `[K, 32]`/`[K, 64]` f32 tiles broke
+  `STS.128` vectorization and created 8-way/16-way shared-store bank conflicts. The joint scheme:
+  (1) `apply_stage` remaps dense separable shared copies onto the source minor axis, guarding
+  transposed tiles (`a_src_minor <> a_tile_minor`) on a `swizzle` or non-32B-multiple row stride
+  and folding multiple workgroup axes onto one tile axis for 3D workgroups; (2) GPU scalar
+  blocktile sketches pad 32B-multiple shared rows by +16 bytes (`+4` f32, `+8` f16/bf16, `+16`
+  fp8, `+2` f64), falling back to `sk_no_bank_pad = true` (`" nopad"`) when padded tiles exceed
+  `max_workgroup_memory_bytes` while unpadded tiles fit (preserving Metal's 32 KiB and HIP's
+  64 KiB boundary geometries); (3) `C_syntax` emits `__attribute__((aligned(16)))` on
+  rank >= 2 hardware shared arrays with non-power-of-two 16B-multiple rows so nvcc keeps `LDS.128`
+  loads (without it, nvcc drops to element alignment and +4 padding regresses); (4)
+  single-axis-contraction blocktiles with `bk < wg_x` dividing `wg_x` (`64x64x8/4x4`) split `j_w`
+  into a 3D `(wg_y, wg_x / bk, bk)` workgroup (`(8, 2, 16)`) to eliminate idle-lane copy guards
+  (multi-axis contractions stay 2D so `model_default` keeps preferring `coal-k` over 32-barrier
+  `64x64x8`). Exclusive CUDA ABBA on `rog-nv-linux` (RTX 5070 Ti, base `3342c130` vs head,
+  `F_preset` controls 0.998–1.001x): `qkv b8` `32x32x8` 0.867x (`0.0230 -> 0.0199 ms`),
+  `outproj b8` fastest `64x64x32 coal-k` 0.647x (`0.0279 -> 0.0180 ms`), `qkv b256` pick
+  `64x64x8 coal-n` 0.817x (`0.580 -> 0.474 ms`), `outproj b256` pick `64x64x64 coal-k` 0.879x
+  (`0.500 -> 0.440 ms`) and `64x64x32 coal-k` 0.700x (`0.611 -> 0.427 ms`); non-picked deep-K
+  tiles crossing 32 KiB (`32x32x128`, `16x16x256`) lose occupancy from the +16B padding
+  (~1.29–1.31x at b256). Exclusive HIP ABBA on `tuf-amd-linux` (gfx1102 discrete, 64 KiB LDS,
+  base `2c79af67` vs head, `F_preset` controls 0.986–1.017x): `qkv b8` pick moves from `F_seeded`
+  (`0.0777 ms`) to `64x64x8 coal-n` (`0.0479 ms`, 0.773x same-leaf, 0.616x vs base pick,
+  argmin slowdown 1.000), `qkv b256` pick moves from `F_seeded` (`1.672 ms`) to
+  `64x64x8 coal-n` (`1.079 ms`, 0.707x same-leaf, 0.645x vs base pick, argmin slowdown 1.000),
+  `outproj b8` pick `64x64x32 coal-k` 0.870x (`0.0464 -> 0.0404 ms`), `outproj b256` pick
+  `64x64x32 coal-k` 1.031x (`0.988 -> 1.019 ms`, 64 KiB LDS residency 4 -> 3 WG/CU) while
+  `64x64x64` is neutral (1.002x) and deep-K tiles (`32x32x128`, `16x16x64`, `16x16x256`) speed up
+  0.445–0.720x.
 ## Renderer failures and fault injection
 - A schedule can pass `Schedule.apply`'s validation and still be one the RENDERER cannot express:
   the pipelined-tile checks in `c_syntax.ml` (a read reached outside its rotor loop; a rotor loop no
@@ -1626,15 +1724,25 @@ files.
   statement-site tile IS weighed (since gh-ocannl-1706, through `cpu_pack_acc_masked`; comments
   saying otherwise were stale until gh-ocannl-1856): the shape's per-chunk sum is one spelling,
   `cpu_pack_grid_chunk_bytes`, which the same test pins equal to the renderer's recorded private
-  bytes on padded plain-`grid` sites. When k has both full and partial blocks, the plain `grid`
-  shape is refuted before the cap (gh-ocannl-2275). The k partition copies the row-block Grid body
-  after staging, so the full and edge segments write the same A~ tile outside each other's Grid
-  loop. A single partial k block has no sibling segment. A direct CPU conv `Row_block` panel
+  bytes on padded plain-`grid` sites. When `Partition` or `full_block_split` copies a `Grid` loop
+  body without renaming its symbol (e.g. full and edge k segments sharing `A~` and a masked
+  accumulator fragment), `C_syntax.collect_parallel_grid` judges all outermost `Grid` occurrences
+  binding that symbol together (gh-ocannl-2324): a local privatizes when all its kernel accesses sit
+  inside that symbol's outermost `Grid` loops and every occurrence accessing it passes
+  `first_access_standalone_covering` within the per-chunk cap, and every occurrence of the symbol
+  renders on the pool or none does, each chunk declaring only the privatized locals its own body
+  accesses. Soundness and per-chunk footprint checks hold per occurrence, while the launch floor
+  holds for the group as long as at least one multi-trip occurrence meets `cc_grid_min_updates`, so
+  a smaller sibling (such as `k_full` without the epilogue in fused split-k, or an asymmetric
+  `full_block_split` copy) does not serialize a sibling that cleared the floor. Plain `grid` with
+  split k therefore stays in the menu under the normal cap and launch floor. A direct CPU conv `Row_block` panel
   privatizes both staged tiles and any accumulator fragment. Its tree charges their combined
-  footprint against the same cap. `autotune_grid_record` compiles the 40^3 and 72^3 bk=16 matmul
-  controls and compares the conv panel pre-filter's bytes with the renderer below, at and above
-  the cap. Its 41-row conv with 8 input channels and 32 output channels admits a 32-row panel at
-  6,144 bytes. A strict comparison in the pre-filter fails that panel's admission claim. The
+  footprint against the same cap. `autotune_grid_record` compiles and executes the 40^3 and 72^3
+  bk=16 matmul controls (both row-block loops on the pool with floor disabled, bitwise parity
+  against the serial packed twin) and compares the conv panel pre-filter's bytes with the renderer
+  below, at and above the cap. Its 41-row conv with 8 input channels and 32 output channels admits
+  a 32-row panel at 6,144 bytes. A strict comparison in the pre-filter fails that panel's admission
+  claim. The
   launch floor is weighed by `cpu_mma_grid_updates_bound` (gh-ocannl-1857), a saturating upper
   bound using the renderer's resolved `C_syntax.grid_min_updates ()` and
   `Cost_model.tile_mma_macs_per_update`: packing
@@ -2884,10 +2992,13 @@ files.
   within the target (depth 1 when none): slow candidates fall back to the isolated reading, a fast
   one whose deeper probes stalled keeps its deepest clean batch, and one whose single launch owed
   it a batch but that measured none within the target first takes ONE rescue probe at the
-  shallowest over-target batch projected linearly to the target (`rescue_depth` in
-  `autotune.ml`; any cost whose per-launch average does not fall with depth reads within the
-  target there, so a genuine queue threshold below the provisional depth is timed and cacheable),
-  and is REFUSED only if that also reads over — as `unbatched`, not `contended`, counted in
+  shallowest over-target batch projected linearly to 80% of the target, floored at depth 2
+  (`rescue_depth` in `autotune.ml`, gh-ocannl-2061). The margin projects a 26-launch probe at
+  10.3 ms to depth 20, giving it room for shared-device noise where depth 25 still read over
+  10 ms. The rescue's measured minimum must fit the full target. `autotune_timing_modes` pins
+  both the recovered window and refusal when every batched depth exceeds the target. If a fit
+  projected to depth 1 despite an earlier in-target batch, a missed rescue keeps the deepest such
+  batch. A candidate without a supported batch is refused as `unbatched` and counted in
   `report.timings_unbatched` (a subset of `timings_contended`, like `timings_unreadable`, so every
   cache and completeness
   gate is unchanged), because its depth-1 reading would be the isolated objective. `unbatched`
@@ -3150,12 +3261,22 @@ files.
   against a spinner-generated load ladder (`_build/default/test/operations/`, `OCANNL_BACKEND=...`
   pinned) yields the distribution directly — and CPU-backend depths sit at the 200 cap, Metal's at
   31-80, HIP's at 200-750 and CUDA's at ~1700, so one box cannot stand in for the fleet.
-- **Discrete HIP `gfx1102` sequential candidate timing can misrank 32-WG-multiple grids**
-  (gh-ocannl-2384). Because in-process `Autotune.tune` candidates share one HSA AQL hardware queue,
-  a candidate whose grid is a multiple of 32 workgroups locks into the per-WGP SIMD-pair phase left
-  by prior non-32-WG-multiple candidates and can read ~20-40% slower than its phase-0 timing,
-  misranking the crowned choice. See `training-and-performance.md` (gh-ocannl-2384) for the
-  mechanism, the `GPU_MAX_HW_QUEUES` separate-stream control, and surviving reading methods.
+- **`Autotune.time_routine` aligns the timing queue on discrete HIP `gfx1102`**
+  (gh-ocannl-2509). On the measured Linux 16-WGP device, a 32-workgroup grid multiple holds the
+  starting SIMD-pair phase and may time 20–40% slower after an interleaved candidate. On tuf, all
+  24 fresh processes started in the same phase, but small HIP copies advanced it and graph replay
+  advanced it by the submitted workgroup count. The backend reads `HW_ID1` across a whole cycle
+  on the timing runner before warmup. It writes the IDs in mapped host memory so the readback
+  does not submit another blit. The even-pair boundary gives the number of padding workgroups,
+  with probe and padding both drained by the bounded wait and charged to timing setup. Alignment
+  applies to an ordered stream of submissions at candidate entry. Routine dispatches within the
+  call advance the phase normally, including any work submitted by debug instrumentation.
+  If the IDs do not show one complete even/odd cycle, the backend reports that once per runner
+  and proceeds without padding. Mixed dispatch shapes can leave such a phase pattern.
+  A probe compilation, mapping or allocation failure before submission leaves ordinary timing
+  available. Launch and bounded-wait failures follow the existing launch and sync paths.
+  The affected device's timing identity retires its prior schedule and placement cache keys.
+  See `training-and-performance.md` (gh-ocannl-2384) for measurements outside the tuner.
 ## Cache regimes and placement replay
 - The schedule-cache directory carries one key-regime stamp, independent of the serialized entry's
   `entry_version` (gh-ocannl-835). Bump `Schedule_cache.cache_regime_version` whenever

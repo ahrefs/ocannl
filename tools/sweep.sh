@@ -102,6 +102,7 @@ SWEEP_TOOLS=$(cd "$(dirname "$0")" && pwd)
 . "$SWEEP_TOOLS/../scripts/process-group.sh"
 AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
 AGGREGATE_BYPASSES=$SWEEP_TOOLS/aggregate-bypasses.sh
+SWEEP_STREAKS=$SWEEP_TOOLS/sweep-streaks.sh
 # The per-box width cap, shared with tools/test-run.sh so the two cannot drift.
 [ -r "$SWEEP_TOOLS/box-jobs.sh" ] || {
   echo "sweep: cannot read $SWEEP_TOOLS/box-jobs.sh" >&2
@@ -404,6 +405,19 @@ esac
 # CAP: see collect_rtc_context for why sharing the unit's deadline would let a
 # diagnostic overwrite the verdict it is explaining.
 CONTEXT_CAP=${OCANNL_TOOL_SWEEP_CONTEXT_CAP:-300}
+# Minimum consecutive judged sweeps for tools/sweep-streaks.sh to flag a persistent
+# all-box/all-backend skip, 100%-bypassed unit, or UNVERIFIED claim (gh-ocannl-2424).
+STREAK_MIN=${OCANNL_TOOL_SWEEP_STREAK_MIN:-3}
+case $STREAK_MIN in
+  '' | *[!0-9]*)
+    echo "sweep: OCANNL_TOOL_SWEEP_STREAK_MIN must be an integer >= 2, not '$STREAK_MIN'" >&2
+    exit 2 ;;
+esac
+if [ ${#STREAK_MIN} -gt 9 ] || [ "$((10#$STREAK_MIN))" -lt 2 ]; then
+  echo "sweep: OCANNL_TOOL_SWEEP_STREAK_MIN must be an integer >= 2, not '$STREAK_MIN'" >&2
+  exit 2
+fi
+STREAK_MIN=$((10#$STREAK_MIN))
 LOCAL_BOX=${OCANNL_TOOL_SWEEP_LOCAL_BOX:-}
 
 while [ $# -gt 0 ]; do
@@ -890,17 +904,17 @@ announce_run_record() {
 RUN_RECORD=
 relay() {
   local pid running live=
+  # Stop taking further INT/TERM once cancellation is underway: on a group
+  # signal a lane receives TERM both from the group and from the top level's
+  # relay, so without this a second TERM re-enters `relay` during `wait` or
+  # interrupts `lane_exit` (before it requests a gated box's sleep).
+  trap '' INT TERM
   running=" $(jobs -rp | tr '\n' ' ') "
   for pid in $UNIT_PID $LANE_PIDS; do
     case $running in *" $pid "*) live="$live $pid" ;; esac
   done
   for pid in $live; do kill -TERM "$pid" 2>/dev/null; done
   for pid in $UNIT_PID $LANE_PIDS; do wait "$pid" 2>/dev/null; done
-  # A lane stops taking signals once its unit is reaped: the top level relays its own TERM to every
-  # lane as well, and a second relay arriving while the lane's EXIT trap runs ends the lane there --
-  # before lane_exit has asked for its gated box's sleep and published the line saying so (the
-  # harness's cancelled tuf lane lost both that way).
-  [ "$IN_LANE" = 1 ] && trap '' INT TERM
   # A cancelled run still ended, and the rows its lanes managed to write before
   # the signal are real; the record says which those were. Only the top level
   # writes it -- a lane runs this same relay for its own supervisor -- and only
@@ -927,10 +941,18 @@ trap 'relay 143' TERM
 # and keeps holding the lock, which is how the preparation leg came to differ
 # from the test legs.
 run_capped() {
-  local budget=$1 rc
+  local budget=$1 rc pending_signal=
   shift
+  # Atomic with respect to `relay`, matching the lane-launch loop below: a
+  # signal arriving between `capped_bg ... &` and `UNIT_PID=$!` would otherwise
+  # let `relay` return without signalling or waiting for the new supervisor.
+  trap 'pending_signal=130' INT
+  trap 'pending_signal=143' TERM
   capped_bg "$budget" "$@" &
   UNIT_PID=$!
+  trap 'relay 130' INT
+  trap 'relay 143' TERM
+  [ -z "$pending_signal" ] || relay "$pending_signal"
   wait_child "$UNIT_PID"
   rc=$?
   UNIT_PID=
@@ -3348,6 +3370,7 @@ for unit in "${UNITS[@]}"; do
 done
 
 echo
+skip_report_written=0
 if [ "$FORCE" = 1 ] && [ -z "$TARGET" ]; then
   [ -x "$AGGREGATE_SKIPS" ] || die_post_run "skip aggregator is not executable: $AGGREGATE_SKIPS"
   aggregate_args=()
@@ -3377,7 +3400,10 @@ if [ "$FORCE" = 1 ] && [ -z "$TARGET" ]; then
   } >"$report_stage"
   aggregate_rc=$?
   case $aggregate_rc in
-    0 | 1) mv "$report_stage" "$report" || die_post_run "cannot publish $report" ;;
+    0 | 1)
+      mv "$report_stage" "$report" || die_post_run "cannot publish $report"
+      skip_report_written=1
+      ;;
     *) rm -f "$report_stage"; die_post_run "skip aggregation failed (exit $aggregate_rc)" ;;
   esac
   if [ "$aggregate_rc" -eq 1 ]; then
@@ -3408,6 +3434,7 @@ fi
 # run made. The report's per-unit lines and UNVERIFIED findings (a claim
 # bypassed on every unit that reached it) are quoted here, indented, for the
 # routine that reads sweep output; a finding is a signal, never a failed sweep.
+bypass_report_written=0
 if [ -n "$TARGET" ]; then
   echo "bypass rates: not aggregated (requires no --target)"
 elif [ ${#BYPASS_RUN_UNITS[@]} -eq 0 ]; then
@@ -3431,10 +3458,62 @@ else
     die_post_run "bypass aggregation failed (exit $bypass_rc)"
   fi
   mv "$bypass_stage" "$bypass_report" || die_post_run "cannot publish $bypass_report"
+  bypass_report_written=1
   bypass_result=$(grep '^result:' "$bypass_report" | head -1)
   echo "bypass rates: ${bypass_result#result: } -- $bypass_report"
   grep -E '^([^ ].*: ([0-9]+ of [0-9]+ hatched claim|no hatched claim reached$)|UNVERIFIED: )' \
     "$bypass_report" | sed 's/^/  /'
+fi
+
+# Persistent coverage streaks across consecutive saved reports (gh-ocannl-2424):
+# only the report family(ies) written by THIS sweep are checked up to $stamp, so
+# a weekday incremental run does not re-alert on Sunday's skip report. A finding
+# never fails the sweep; the scheduled sweep routine reads the STREAK lines and
+# maintains one standing issue per streak for the CI-red triage routine.
+if [ -n "$TARGET" ]; then
+  echo "coverage streaks: not checked (requires no --target)"
+elif [ "$skip_report_written" = 0 ] && [ "$bypass_report_written" = 0 ]; then
+  echo "coverage streaks: not checked (no skip or bypass report written)"
+else
+  [ -x "$SWEEP_STREAKS" ] ||
+    die_post_run "streak checker is not executable: $SWEEP_STREAKS"
+  streak_args=(--min-streak "$STREAK_MIN" --up-to "$stamp")
+  [ "$skip_report_written" = 1 ] && streak_args+=(--skip-logs-dir "$LOGS")
+  [ "$bypass_report_written" = 1 ] && streak_args+=(--bypass-logs-dir "$LOGS")
+  streak_report=$LOGS/$stamp-streaks.txt
+  streak_stage=$streak_report.stage.$$
+  streak_err=$streak_report.err.$$
+  {
+    echo "coverage streaks for $run_sha (min-streak=$STREAK_MIN)"
+    "$SWEEP_STREAKS" "${streak_args[@]}"
+  } >"$streak_stage" 2>"$streak_err"
+  streak_rc=$?
+  case $streak_rc in
+    0 | 1)
+      rm -f "$streak_err"
+      mv "$streak_stage" "$streak_report" || die_post_run "cannot publish $streak_report"
+      streak_result=$(grep '^result:' "$streak_report" | head -1)
+      echo "coverage streaks: ${streak_result#result: } -- $streak_report"
+      if [ "$streak_rc" -eq 1 ]; then
+        echo "sweep: coverage streaks ALERT -- $streak_report" >&2
+      fi
+      grep -E '^STREAK: ' "$streak_report" | sed 's/^/  /'
+      ;;
+    3)
+      # An older saved report failed the parser (e.g. grammar drift across an
+      # older sweep version); surface loudly without marking this sweep
+      # post-run-failed, while keeping exit 2 fatal for this run's own report.
+      streak_why=$(head -1 "$streak_err" | sed 's/^sweep-streaks: //')
+      rm -f "$streak_stage" "$streak_err"
+      echo "coverage streaks: NOT CHECKED -- malformed history (${streak_why:-unreadable older report})"
+      echo "sweep: coverage streaks WARNING -- ${streak_why:-malformed historical report}" >&2
+      ;;
+    *)
+      [ -s "$streak_err" ] && cat "$streak_err" >&2
+      rm -f "$streak_stage" "$streak_err"
+      die_post_run "streak check failed (exit $streak_rc)"
+      ;;
+  esac
 fi
 echo "history: $HISTORY"
 echo "logs:    $LOGS/$stamp-*"

@@ -156,6 +156,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
 Ambient environment gates, by dune file and every alias whose build runs one:
   arrayjit/test/dune                       @lifecycle
   arrayjit/test/dune                       @metal-codegen
+  arrayjit/test/dune                       @routine-logging
   arrayjit/test/dune                       @runtest
   arrayjit/test/dune                       @runtest-env_spelling_gate
   benchmarks/runners/ocannl/dune           @mma-register-scope-emit
@@ -182,6 +183,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @lifecycle
   test/operations/dune                     @metal-codegen
   test/operations/dune                     @policy-invariance
+  test/operations/dune                     @routine-logging
   test/operations/dune                     @runtest
   test/operations/dune                     @runtest-agent_notes_structure
   test/operations/dune                     @runtest-agents_md_size
@@ -304,6 +306,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-half_unary_math-reproducible
   test/operations/dune                     @runtest-harness_census
   test/operations/dune                     @runtest-harness_census_control
+  test/operations/dune                     @runtest-harness_real_dune_legs
   test/operations/dune                     @runtest-heap_local_arrays-outlined
   test/operations/dune                     @runtest-hello_world_op
   test/operations/dune                     @runtest-kernel_attribution
@@ -348,9 +351,12 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-profile_fp16_floor-performance
   test/operations/dune                     @runtest-provenance_tag_inventory
   test/operations/dune                     @runtest-qkv_zero_init-approximate
+  test/operations/dune                     @runtest-reader_parity_dune
+  test/operations/dune                     @runtest-reader_parity_sh
   test/operations/dune                     @runtest-refused_action_streams
   test/operations/dune                     @runtest-render_decline_inventory
   test/operations/dune                     @runtest-resnet_block-origins_cap_0
+  test/operations/dune                     @runtest-resource_fault_inventory_scan
   test/operations/dune                     @runtest-reusable_tensor_programs
   test/operations/dune                     @runtest-routine_log_dropped_notice
   test/operations/dune                     @runtest-routine_log_narrow_floats
@@ -519,9 +525,9 @@ Focused aggregate families, by dune file (gh-ocannl-783). Each family alias is s
 identically in every directory that has members, so `dune build @<family>` from the workspace
 root runs the whole family; membership is derived from what a member stanza declares, and a
 member the family's `(alias (name <family>) (deps ...))` stanza omits fails this scan.
-  arrayjit/test/dune: metal-codegen
+  arrayjit/test/dune: metal-codegen, routine-logging
   benchmarks/runners/ocannl/dune: metal-codegen
-  test/operations/dune: lifecycle, metal-codegen, policy-invariance
+  test/operations/dune: lifecycle, metal-codegen, policy-invariance, routine-logging
 
 Policy-invariance opt-outs (gh-ocannl-1104): members of @policy-invariance whose stanza leaves them out of
 the numerics-mode matrix, each with its reason.

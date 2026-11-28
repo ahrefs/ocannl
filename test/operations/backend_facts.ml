@@ -92,12 +92,24 @@ let () =
         { f with BI.workgroup_shared_placement = false } ))
     ~decide:(fun facts ->
       Sched.may_keep_off_device ~facts ~limits:BI.no_hardware_limits plc tn node);
-  moves "seeds_untuned_default alone moves whether the seeded plan's keys are read"
+  p_all "the sketch and seeded-singles keys follow the sketch seeding fact"
+    (List.cartesian_product bases [ false; true ])
+    ~f:(fun (f, seeds_untuned_default) ->
+      let facts = { f with BI.seeds_untuned_default } in
+      let reads key =
+        Bool.equal (Autotune.search_shaping_key_read ~facts key) seeds_untuned_default
+      in
+      reads "gpu_default_sketch_min_reduction" && reads "autotune_seeded_singles");
+  moves "sinks_untuned_reductions alone moves whether the untuned sink key is read"
     ~vary:(fun f ->
-      ({ f with BI.seeds_untuned_default = true }, { f with BI.seeds_untuned_default = false }))
+      ({ f with BI.sinks_untuned_reductions = true }, { f with BI.sinks_untuned_reductions = false }))
+    ~decide:(fun facts -> Autotune.search_shaping_key_read ~facts "gpu_default_reduction_sink");
+  moves "splits_untuned_reductions alone moves whether the untuned split key is read"
+    ~vary:(fun f ->
+      ( { f with BI.splits_untuned_reductions = true },
+        { f with BI.splits_untuned_reductions = false } ))
     ~decide:(fun facts ->
-      ( Autotune.seeded_default_backend facts,
-        Autotune.search_shaping_key_read ~facts "gpu_default_sketch_min_reduction" ));
+      Autotune.search_shaping_key_read ~facts "gpu_default_split_reduce_min_serial");
   moves "queued_timing alone moves the queued batch depth cap"
     ~vary:(fun f ->
       ({ f with BI.queued_timing = Queued_deep }, { f with BI.queued_timing = Queued_legacy }))

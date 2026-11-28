@@ -872,8 +872,12 @@ type entry = {
    25: gh-ocannl-1843 -- CPU seeds' companions take the default preset's per-nest Grid geometry
    26: gh-ocannl-2275 -- plain packed Grid with split k and over-cap conv Grid panels leave the menu
    27: gh-ocannl-2443 -- the GPU fission floor and candidates gain ordered row-owned scatter kernels
+   28: gh-ocannl-2507 -- Metal's search gains the untuned plain-cell reduction sink as its floor
+   29: gh-ocannl-2324 -- plain packed Grid with split k returns to the menu
+   30: gh-ocannl-2506 -- Metal's untuned floor splits long reductions before GPU mapping
+   31: gh-ocannl-1842 -- GPU scalar blocktiles use source-minor stage copies with 16-byte bank padding and 3D workgroup split for shallow K
 *)
-let entry_version = 27
+let entry_version = 31
 
 let sanitize name =
   String.map name ~f:(fun c ->
@@ -1036,9 +1040,13 @@ let read_regime_stamp dir =
   | Ok (Some _) | Error _ -> Unreadable_stamp
 
 let write_regime_stamp dir =
-  Utils.Atomic_file.write_all ~path:(regime_stamp_file dir)
+  let stamp = regime_stamp_file dir in
+  Utils.Atomic_file.write_all ~path:stamp
     ~data:(Int.to_string cache_regime_version ^ "\n")
-    ~before_commit:(fun () -> Resource_fault_injection.hit Schedule_cache_before_regime_commit)
+    ~before_commit:(fun () ->
+      Resource_fault_injection.hit
+        ~artifact:(Cache_file { path = stamp })
+        Schedule_cache_before_regime_commit)
     ()
 
 (* What a cache-open is for (gh-ocannl-1439). Only a [Write] open sweeps: a read never deletes, so
@@ -1102,7 +1110,9 @@ let rec with_regime_lock ~mode dir f =
       Stdlib.Fun.protect
         ~finally:(fun () -> Unix.close fd)
         (fun () ->
-          Resource_fault_injection.hit Schedule_cache_before_lock;
+          Resource_fault_injection.hit
+            ~artifact:(Cache_file { path = lock_file })
+            Schedule_cache_before_lock;
           Unix.lockf fd (match mode with Read -> Unix.F_RLOCK | Write -> Unix.F_LOCK) 0;
           f ())
 
@@ -1220,7 +1230,9 @@ let store_sexp ~dir ~key sexp =
                 Utils.Atomic_file.write_all ~path:file
                   ~data:(Sexp.to_string_hum (sexp_of_stored_entry { key; payload = sexp }))
                   ~before_commit:(fun () ->
-                    Resource_fault_injection.hit Schedule_cache_before_commit)
+                    Resource_fault_injection.hit
+                      ~artifact:(Cache_file { path = file })
+                      Schedule_cache_before_commit)
                   ();
                 None
               with Stdlib.Sys_error msg ->
@@ -1252,7 +1264,9 @@ let lookup_sexp ~dir ~key ~of_sexp ~current =
             | Error msg -> Error msg
             | Ok true -> (
                 try
-                  Resource_fault_injection.hit Schedule_cache_before_replay;
+                  Resource_fault_injection.hit
+                    ~artifact:(Cache_file { path = file })
+                    Schedule_cache_before_replay;
                   let stored = stored_entry_of_sexp (Sexplib.Sexp.load_sexp file) in
                   (* Another key's entry under this key's digest is a miss, decided before the
                      payload is decoded: it is not this key's answer, however well it decodes. *)
@@ -1324,8 +1338,10 @@ type placement_entry = {
 (*= placement_entry_version history -- one line per value, oldest first; a bump appends one:
    1: gh-ocannl-786 -- the placement decision and the arm timings that chose it
    2: gh-ocannl-1388 -- decisions compared arm searches that lacked the seeded untuned floor
+   3: gh-ocannl-2507 -- decisions compared Metal arm searches without the reduction-sink floor
+   4: gh-ocannl-2506 -- decisions compared Metal arm searches without untuned split reductions
 *)
-let placement_entry_version = 2
+let placement_entry_version = 4
 
 let placement_key ?objective ~timing_identity ~limits ~capabilities ~facts canonical ~backend =
   Option.map (cache_key ?objective ~timing_identity ~limits ~capabilities ~facts canonical ~backend)

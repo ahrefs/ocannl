@@ -80,6 +80,32 @@ let rog_like =
 
 let rog_without_copy_rate = { rog_like with staged_copy_rate = None }
 
+(* Discrete RDNA wave32 HIP advisories (tuf, RX 7700S: 16 WGPs of 2048 threads, gh-ocannl-2280). *)
+let tuf_like =
+  {
+    BI.no_hardware_limits with
+    max_threads_per_workgroup = Some 1024;
+    max_workgroup_memory_bytes = Some 65536;
+    max_workgroup_dims = Some (1024, 1024, 1024);
+    max_grid_yz = Some 65535;
+    simdgroup_width = Some 32;
+    peak_flops = Some 1.0e13;
+    peak_memory_bandwidth = Some 6.0e12;
+    cache_capacity_bytes = Some (2 * 1024 * 1024 * 1024);
+    cache_bandwidth = Some 1.3e12;
+    issue_rate = Some 1.9e12;
+    dram_bandwidth = Some 2.6e11;
+    max_resident_threads = Some (16 * 2048);
+    multiprocessors = Some 16;
+    fill_threads = Some 512;
+    transaction_rate = Some 1.0e11;
+    workgroup_bytes_per_multiprocessor = Some 131072;
+    staged_copy_rate = Some 5.0e11;
+    staged_idle_rate = Some 3.0e11;
+    shared_load_rate = Some 6.3e11;
+    fill_lane_width = Some 32;
+  }
+
 let () =
   p "the coalesced layouts are ranked where the rate and the capacity both resolve"
     (Autotune.model_ranks_coalesced ~limits:minix_like);
@@ -106,7 +132,11 @@ let () =
        (Autotune.model_ranks_coalesced
           ~limits:{ rog_like with multiprocessors = None; fill_threads = None }));
   p "not through the copy rate without the transaction rate"
-    (not (Autotune.model_ranks_coalesced ~limits:{ rog_like with transaction_rate = None }))
+    (not (Autotune.model_ranks_coalesced ~limits:{ rog_like with transaction_rate = None }));
+  p "the coalesced layouts are ranked on discrete RDNA wave32 HIP (tuf)"
+    (Autotune.model_ranks_coalesced ~limits:tuf_like);
+  p "not on discrete RDNA wave32 HIP without the transaction rate"
+    (not (Autotune.model_ranks_coalesced ~limits:{ tuf_like with transaction_rate = None }))
 
 let () =
   let ctx = Context.cpu () in
@@ -163,6 +193,27 @@ let () =
     (Option.exists plain ~f:(fun (p, _) -> Option.is_none p.Autotune.sk_coalesce));
   p "with the coalesced menu, the pick ranks no higher than the uncoalesced walk's"
     (match (plain, with_coal) with Some (_, r0), Some (_, r1) -> Float.(r1 <= r0) | _ -> false);
+  (* gh-ocannl-2280: on discrete RDNA wave32 HIP (tuf_like) at outproj b8, the coalesced walk picks
+     64x64x32/4x4 bgrid coal-k and the uncoalesced walk picks 32x32x8/4x4 bgrid (never 64x64x8);
+     dropping staged_idle_rate flips the uncoalesced pick to 64x64x8/4x4 bgrid, and dropping
+     workgroup_bytes_per_multiprocessor flips the coalesced pick to 64x64x128/4x4 bgrid coal-k. *)
+  let pick_label res = Option.map res ~f:(fun (p, _) -> Autotune.sketch_params_label p) in
+  let tuf_plain = search ~limits:tuf_like ~coalesced:false () in
+  let tuf_coal = search ~limits:tuf_like ~coalesced:true () in
+  let tuf_noidl = search ~limits:{ tuf_like with staged_idle_rate = None } ~coalesced:false () in
+  let tuf_noocc =
+    search ~limits:{ tuf_like with workgroup_bytes_per_multiprocessor = None } ~coalesced:true ()
+  in
+  p "on tuf_like at outproj b8, the coalesced walk picks 64x64x32/4x4 bgrid coal-k"
+    (Option.equal String.equal (pick_label tuf_coal) (Some "gpu 64x64x32/4x4 bgrid coal-k"));
+  p "on tuf_like at outproj b8, the uncoalesced walk picks 32x32x8/4x4 bgrid"
+    (Option.equal String.equal (pick_label tuf_plain) (Some "gpu 32x32x8/4x4 bgrid"));
+  p "dropping staged_idle_rate on tuf_like flips the uncoalesced b8 pick to 64x64x8/4x4 bgrid"
+    (Option.equal String.equal (pick_label tuf_noidl) (Some "gpu 64x64x8/4x4 bgrid"));
+  p
+    "dropping workgroup capacity on tuf_like flips the coalesced b8 pick to 64x64x128/4x4 bgrid \
+     coal-k"
+    (Option.equal String.equal (pick_label tuf_noocc) (Some "gpu 64x64x128/4x4 bgrid coal-k nopad"));
   ()
 
 (* gh-ocannl-1821: at outproj b256 under the rog-shaped record, the real score's coalesced walk
@@ -211,4 +262,21 @@ let () =
          search ~limits:rog_without_copy_rate ~coalesced:true )
      with
     | Some (p0, r0), Some (_, r1) -> Option.is_none p0.Autotune.sk_coalesce && Float.(r1 >= r0)
-    | _ -> false)
+    | _ -> false);
+  let pick_label res = Option.map res ~f:(fun (p, _) -> Autotune.sketch_params_label p) in
+  let tuf_plain = search ~limits:tuf_like ~coalesced:false in
+  let tuf_coal = search ~limits:tuf_like ~coalesced:true in
+  let tuf_noidl = search ~limits:{ tuf_like with staged_idle_rate = None } ~coalesced:false in
+  let tuf_noocc =
+    search ~limits:{ tuf_like with workgroup_bytes_per_multiprocessor = None } ~coalesced:true
+  in
+  p "on tuf_like at outproj b256, the coalesced walk picks 64x64x32/4x4 bgrid coal-k"
+    (Option.equal String.equal (pick_label tuf_coal) (Some "gpu 64x64x32/4x4 bgrid coal-k"));
+  p "on tuf_like at outproj b256, the uncoalesced walk picks 32x32x8/4x4 bgrid"
+    (Option.equal String.equal (pick_label tuf_plain) (Some "gpu 32x32x8/4x4 bgrid"));
+  p "dropping staged_idle_rate on tuf_like flips the uncoalesced b256 pick to 64x64x8/4x4 bgrid"
+    (Option.equal String.equal (pick_label tuf_noidl) (Some "gpu 64x64x8/4x4 bgrid"));
+  p
+    "dropping workgroup capacity on tuf_like flips the coalesced b256 pick to 64x64x128/4x4 bgrid \
+     coal-k"
+    (Option.equal String.equal (pick_label tuf_noocc) (Some "gpu 64x64x128/4x4 bgrid coal-k nopad"))

@@ -454,12 +454,24 @@ files.
   (gh-ocannl-2306).
   The leaf ranker still uses the staged volume from the fit. CUDA ships 1e12 B/s
   (any of 5e11-8e12 does the same at M1); the admitted+coalesced argmin is then the fastest leaf at
-  outproj and qkv b256 and an uncoalesced leaf at b8. HIP has none: on tuf (discrete) the term
-  favors the uncoalesced `64x64x8/4x4 bgrid` measured 4.5x slow there and its deep tiles need the
-  occupancy factor. Not modeled: BK order within one block tile (exact score ties, the walk's
-  listing order decides); the register-tile and sub-warp gaps at one block tile are gh-ocannl-2262's
-  terms (below). Re-fit with `gh1600_txn_fit.py --staged-rate sweep --listed-staged-rate L` on listings
-  carrying `stg=`, judged against the cell's `nostg` arm (`gh1253_cells.sh`).
+  outproj and qkv b256 and an uncoalesced leaf at b8. On discrete RDNA wave32 HIP (tuf, RX 7700S,
+  2026-11-27 exclusive 5-rep window; gh-ocannl-2280), `Cost_model.operand_census`
+  also reports `oc_idle` (`staged_idle_copies`): the
+  bytes refused by `Workgroup` `i < c` partition guards enclosing staged copies (`Serial` and `Grid`
+  guards shrink both admitted and workgroup counts and emit 0 idle bytes). In `64x64x8/4x4`,
+  `if (ty < 8)` / `if (tx < 8)` leaves half the block idle across `__syncthreads()`, so `64x64x8`
+  trails `32x32x8` on every discrete-HIP cell (1.29x at wgrad b8 with 0 VGPR spills; 2.55x at
+  outproj b8 and 2.88x vs `32x32x8` / 4.51x vs fastest at uncoalesced outproj b256 where hiprtc
+  additionally spills 110 VGPRs). Discrete RDNA wave32 HIP
+  ships `transaction_rate = 1e11`, `workgroup_bytes_per_multiprocessor = 131072` (physical LDS/WGP),
+  `staged_copy_rate = 5e11`, and `staged_idle_rate = 3e11` (leaf-ranking only, unset in the auto
+  seeding gate; CUDA and unified HIP keep `staged_idle_rate = None`, and unified HIP keeps
+  `staged_copy_rate = None`), putting `outproj` b8/b256 argmin at `64x64x32/4x4 bgrid coal-k`
+  (1.001x/1.000x of fastest; model pick 0.56x/0.20x of seeded). Not modeled: BK order within one block tile (exact score ties, the
+  walk's listing order decides); the register-tile and sub-warp gaps at one block tile are
+  gh-ocannl-2262's terms (below). Re-fit with `gh1600_txn_fit.py --staged-rate sweep
+  --listed-staged-rate L [--idle-rate sweep --listed-idle-rate I]` on listings carrying `stg=` and
+  `idl=`, judged against the cell's `nostg` arm (`gh1253_cells.sh`, which also emits `noidl`).
 - **Compare ranked seeding on one build (gh-ocannl-2335).** `COMPARE_AUTO_GATE=1` in
   `gh1253_cells.sh` runs `auto` and `auto-legacy` at each site. Both select the ranked gate on
   CUDA and HIP. The legacy gate omits the operand-delivery rate and its launch tail, as before
@@ -523,8 +535,23 @@ files.
   (b) the `kernels` line's `shl=` lists the excess whether or not a rate priced it, so one listing
   re-scores at any rate, but the lane width moves the fill and needs a listing per width
   (`FILL_LANE_WIDTH=W`); (c) the unified HIP class and Metal are unmeasured, `None`.
-  Residuals: rog's 16-thread blocks measure 0.52 against 0.59 (likely the
-  per-multiprocessor block cap, not modeled); the plain, under-filled pairs stay gh-ocannl-1639's.
+  Residuals: rog's 16-thread blocks measure 0.49-0.52 against 0.59 on `outproj`/`qkv`, and
+  0.86 on `wgrad_b8`. The per-multiprocessor resident-block cap is NOT the cause (gh-ocannl-2350,
+  exclusive rog RTX 5070 Ti sm_120 window, `max_blocks_per_mp = 24`, `max_threads_per_mp = 1536`):
+  the verbatim `outproj_b256` `16x16x8/4x4 bgrid` kernel is flat from 24 down to 11 blocks/SM
+  (2.099 -> 2.112 ms, +0.6%), slowing only below 8 warps/SM (`fill_threads = 256`), and adding
+  physical `max_blocks_per_mp = 24` to `Cost_model.occupancy` fails in every arm
+  (`shipped`+thread-cap 0.148, `outproj_b256` 90.3% -> 88.6%, `qkv_b8` 100.0% -> 97.5%;
+  `shipped`+warp-cap or `nolane`+thread-cap 0.296, `outproj_b256` -> 89.9%; `nolane`+warp-cap
+  0.592, no closure, while mispricing unsaturated 16-thread blocks). The actual gap is
+  `Schedule.Stage`'s non-cooperative copy folding (`divide`: `List.last` of unfolded loops
+  divisible by `w`): for `16x16x8/4x4` (`w = 4`) it partitions `j_t(4)` rather than `k_i(8)`
+  across `i_w`, giving 16-row strided reads on `w[N, K]` (`outproj`/`qkv`; coalescing only that
+  copy at the same 16 threads and 24-block cap cuts runtime 2.099 -> 1.401 ms, 1.50x, moving
+  `2x2/4x4` to 0.781) while making `x[K, N]` contiguous on `wgrad_b8` (0.859);
+  `memory_transactions` reports 0 excess sectors because contiguous serial-run folding collapses
+  each thread's 8 serial `K` reads into one 32-byte sector span, matching the compact baseline and
+  hiding the per-instruction coalescing cost. The plain, under-filled pairs stay gh-ocannl-1639's.
   The `noshl`/`nolane` arms of `gh1253_cells.sh` are the references.
 - **Compare a plan and its rivals in ONE kernel decomposition** (gh-ocannl-1477). The ranking score
   sums `max(compute, memory)` per kernel, so a memory-bound kernel run on its own (the seeded plan's
@@ -1280,9 +1307,9 @@ files.
   flips and 0/11 full-tuner flips at odd `seed1` depths `1` and `617`, while `GPU_MAX_HW_QUEUES=1`
   forces both streams onto one HQD and restores 15/15 and 11/11 flips). Destroying and recreating a
   HIP stream does NOT reset the HQD phase: ROCclr recycles the persistent hardware queue with its
-  dirty phase intact. Shared-stream interleaved or sequential multi-candidate timing on discrete
-  gfx1102 does not survive this effect when a 32-WG-multiple candidate shares an HQD with
-  non-32-WG-multiple kernels.
+  dirty phase intact. Since gh-ocannl-2509, `Autotune.time_routine` aligns the queue before its
+  warmup on the measured discrete gfx1102 topology. The workgroup-phase controls above still
+  apply to custom measurement loops which submit directly to HIP.
 - **Interleaved timing visits arms in `Bench_design`'s spread mirrored rotation** (`bin/bench_design.ml`,
   gh-ocannl-743). Mirroring each batch cancels LINEAR drift (every pair exchanged, equal mean
   positions); it does not equalize each arm's position histogram, which is what a nonlinear effect

@@ -263,18 +263,17 @@ let () =
     ~f:(fun o ->
       List.exists o.o_explained.Autotune.x_segments ~f:(fun xs ->
           List.length (anchors xs.Autotune.xs_candidates) = 1));
-  (* gh-ocannl-2306: what the shipped [auto] gate seeds on CUDA and HIP, exactly. On CUDA, since
-     gh-ocannl-2279 its ranking prices the direct global operand reads beside the staged copies
-     ([seeded_ranker]'s [~price_direct_loads:true]), and the chain's seeded plan seeds both of its
-     products; with that pricing reverted it seeds neither (rog). HIP publishes no staged-copy rate
-     (hip_backend.ml's [staged_copy_rate = None]), which that pricing needs, so the revert moves
-     nothing there: HIP's gate seeds both products under its own calibration, read stable on
-     discrete (tuf) and unified (minix) memory alike. HIP's control is [seeded_ranker] declining
-     every sketch, which fails this claim alone on both boxes (the readings: gh-ocannl-2306's
-     comments, staging#2196). The claim above passes on one anchored segment; this one holds the
-     count, which decides the default the GPU searches of the F_sketch/F_swap readers run
-     (staging#2134). The CUDA stand-in below seeds both products under either score, so only a
-     device run reads it; the stderr line names the gate resolved here. *)
+  (* gh-ocannl-2306: what the shipped [auto] gate seeds on CUDA and HIP, exactly. On CUDA and
+     discrete RDNA wave32 HIP (gh-ocannl-2280), since gh-ocannl-2279 its ranking prices the direct
+     global operand reads beside the staged copies ([seeded_ranker]'s [~price_direct_loads:true]),
+     and the chain's seeded plan seeds both of its products; with that pricing reverted it seeds
+     neither (rog). Unified HIP (minix) publishes no staged-copy rate (hip_backend.ml's
+     [staged_copy_rate = None]), so its gate seeds both products under its own calibration. HIP's
+     control is [seeded_ranker] declining every sketch, which fails this claim alone on both boxes
+     (the readings: gh-ocannl-2306's comments, staging#2196). The claim above passes on one anchored
+     segment; this one holds the count, which decides the default the GPU searches of the
+     F_sketch/F_swap readers run (staging#2134). The CUDA stand-in below seeds both products under
+     either score, so only a device run reads it; the stderr line names the gate resolved here. *)
   let counted = List.mem [ "cuda"; "hip" ] backend_name ~equal:String.equal in
   Stdio.eprintf "seeding gate here: %s (not part of the golden)\n"
     (match seeding_here with

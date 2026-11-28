@@ -183,6 +183,7 @@ type sketch_params = {
   sk_depth : int;
   sk_pack_prec : Ir.Ops.prec option;
   sk_tile : Ir.Register_tile.t option;
+  sk_no_bank_pad : bool;
 }
 [@@deriving sexp]
 (** Parameters of one matmul-sketch seed candidate; see {!Sketch_families.sketch_params} for field
@@ -2450,6 +2451,12 @@ val ranking_staged_copy_rate : limits:Ir.Backend_intf.hardware_limits -> float o
     continuous launch fill, and no coalesced leaves admitted through it in {!model_default}) over
     the backend's advisory [staged_copy_rate]. An [Untimed] reading, like {!ranking_capacity}. *)
 
+val ranking_staged_idle_rate : limits:Ir.Backend_intf.hardware_limits -> float option
+(** The ranking score's staged-idle rate, in refused bytes/s (gh-ocannl-2280,
+    {!Ir.Cost_model.staged_idle_copies}): config [model_staged_idle_rate] ([none]: no staged-idle
+    term) over the backend's advisory [staged_idle_rate]. Read by the leaf ranking, not the [auto]
+    seeding gate. An [Untimed] reading, like {!ranking_capacity}. *)
+
 val ranking_shared_load_rate : limits:Ir.Backend_intf.hardware_limits -> float option
 (** The ranking score's shared-load rate, in cells/s (gh-ocannl-2262,
     {!Ir.Cost_model.excess_shared_loads}): config [model_shared_load_rate] ([none]: no
@@ -2917,18 +2924,18 @@ val seeded_default_backend : Ir.Backend_intf.backend_facts -> bool
     and HIP). *)
 
 val seeded_split_backend : Ir.Backend_intf.backend_facts -> bool
-(** Whether {!seeded_default} splits long reductions on this backend: wherever it seeds, CUDA and
-    HIP (see {!seeded_split_sites}). A test states what each backend promises through these, never a
-    restated list. *)
+(** Whether {!seeded_default} splits long reductions on this backend: its
+    [splits_untuned_reductions] (CUDA, HIP and Metal; see {!seeded_split_sites}). A test states what
+    each backend promises through these, never a restated list. *)
 
 val search_shaping_key_read : facts:Ir.Backend_intf.backend_facts -> string -> bool
 (** Whether a search on a backend with [facts] can read the [Utils.Search_shaping] configuration key
-    [key] (gh-ocannl-1331): the seeded plan's [gpu_default_*] keys where {!seeded_default_backend}
-    (and, for the split threshold, {!seeded_split_backend}) holds, [autotune_register_tile_rm_twin]
-    where {!Ir.Backend_intf.renders_on_host_pool} does (only the CPU register-tiled rendering reads
-    it), the default pipeline's keys per {!Ir.Schedule.search_shaping_key_read}, and every other key
-    everywhere. A key a backend's search cannot read keys nothing in its trajectory identity
-    ({!search_shaping_identity}). *)
+    [key] (gh-ocannl-1331): the [gpu_default_*] keys follow the backend's contraction seeding, split
+    and sink capabilities, respectively. [autotune_seeded_singles] applies where the backend seeds
+    sketches. [autotune_register_tile_rm_twin] is read where {!Ir.Backend_intf.renders_on_host_pool}
+    does (only the CPU register-tiled rendering reads it), the default pipeline's keys per
+    {!Ir.Schedule.search_shaping_key_read}, and every other key everywhere. A key a backend's search
+    cannot read keys nothing in its trajectory identity ({!search_shaping_identity}). *)
 
 val search_shaping_identity :
   facts:Ir.Backend_intf.backend_facts -> limits:Ir.Backend_intf.hardware_limits -> string
@@ -3009,10 +3016,9 @@ val model_seeding :
   facts:Ir.Backend_intf.backend_facts ->
   limits:Ir.Backend_intf.hardware_limits ->
   (seed_gate * int * bool * bool) option
-(** Whether {!model_default} starts from the seeded untuned plan on this backend under the current
-    configuration (CUDA and HIP with the seeding settings resolving): its gate, split threshold,
-    reduction-sink flag and the sink's narrow-storage admission (gh-ocannl-1405), as
-    {!seeded_default} resolves them; [None] where the incumbent is the default pipeline. *)
+(** Whether {!model_default} uses the seeded plan's sketch admission policy, and the settings it
+    uses there. A backend with only reduction sinking can use the sunk incumbent while ranking the
+    ordinary sketch menu. *)
 
 (** What the seeded plan does with one segment (gh-ocannl-1388). *)
 
@@ -3200,6 +3206,12 @@ type explain_kernel = {
           no rate prices them. The leg adds them over the rate before the occupancy divides it, so a
           listing scored at rate [L] re-scores at [R] by adding [stg * (1/R - 1/L) / occ] to [c]
           (the launch tail stays on at both). *)
+  ek_idle_bytes : float;
+      (** gh-ocannl-2280: its partition-guarded workgroup idle bytes
+          ({!Ir.Cost_model.staged_idle_copies}) as the compute leg divides them by the staged-idle
+          rate ({!Ir.Cost_model.filled_staged_bytes}), counted whether or not a rate prices them. A
+          listing scored at rate [L] (none: [1/L = 0]) re-scores at [R] by adding
+          [idl * (1/R - 1/L) / occ] to [c]. *)
   ek_shared_loads : float;
       (** gh-ocannl-2262: its shared loads beyond the calibration tile's reuse
           ({!Ir.Cost_model.excess_shared_loads}) as the compute leg divides them by the shared-load
@@ -3387,8 +3399,10 @@ val rescue_depth : observed:(int * float) list -> int option
 (** The depth of the one rescue probe a CUDA/HIP calibration makes before refusing a candidate whose
     single launch owed it a batch but whose calibration settled at depth 1 (gh-ocannl-1098), from
     every [(depth, minimum wall)] it measured: the shallowest batch over the target, projected
-    linearly down to the target, at least 2 and strictly shallower than that batch; [None] when no
-    depth lies between. Exposed so a test can tell the rescue from the probes before it. *)
+    linearly down to 80% of the target to leave room for noise (gh-ocannl-2061), at least 2 and
+    strictly shallower than that batch; [None] when no depth lies between. The rescue must still
+    measure a batch within the full target. Exposed so a test can tell the rescue from the probes
+    before it. *)
 
 val sample_min : repeats:int -> sample:(unit -> timing_sample) -> timing_result
 (** Pure sampling-policy seam used by calibration and the timed loop (gh-ocannl-855). Takes at least
@@ -3552,8 +3566,8 @@ type calibration_probe_role =
       (** The confirmation repeated once at the same depth, after it read as a stall. *)
   | Crossing_probe  (** At a fit's target crossing, below a measured over-target batch. *)
   | Rescue_probe
-      (** At {!rescue_depth}, before refusing a candidate that measured no batch within the target;
-          charged to no budget. *)
+      (** At {!rescue_depth}, to try a shallower batch when calibration settles at depth 1 and the
+          singles owed batching. Charged to no budget. *)
 
 type calibration_probe = {
   role : calibration_probe_role;
@@ -3621,8 +3635,8 @@ type batch_decision = {
       (** The depth before the wall-bounded fallback shortened an unresolved outcome
           (gh-ocannl-1096). *)
   rescue : (int * float) option;
-      (** The rescue probe's depth and minimum, when one ran (gh-ocannl-1098); [depth] equals it
-          exactly when it read within the target. *)
+      (** The rescue probe's depth and minimum, when one ran (gh-ocannl-1098). If its reading fits
+          the target, calibration settles at that depth. *)
   probes : int;  (** Batch probes started, against {!queue_calibration_max_probes}. *)
   probe_wall_ms : float;  (** Their summed wall, against {!queue_calibration_wall_ms}. *)
   budget_spent : bool;  (** Whether that budget was spent when the calibration ended. *)
@@ -4183,6 +4197,7 @@ module type Driver = sig
   val run : ?timing:bool -> ctx -> routine -> ctx
   val sync : ctx -> unit
   val await_within : ctx -> seconds:float -> bool
+  val align_timing_queue : ctx -> await:(unit -> unit) -> bool
   val release : ctx -> unit
   val adopt_ancestor : ctx -> ancestor:ctx -> unit
   val check_lineage_runnable : ctx -> routine -> unit
@@ -4400,14 +4415,16 @@ module Make (D : Driver) : sig
       blocks, chosen from the routine alone -- as the default plan's cooperative all-reduces
       (gh-ocannl-1124) do.
 
-      Every [`Normal] segment no sketch takes gets {!reduction_sink}'s interchange, then the default
-      preset of the interchanged code (gh-ocannl-1348), probed alone like a seed, and covered by the
-      same fallback to the default pipeline when the compile fails classified: a batch reduction
-      into a bias or layer-norm parameter gradient then keeps its accumulator in a register instead
-      of reading and writing its device cell every step under the preset's in-loop guard — which
-      HIP's compiler does not promote, though NVRTC does. Values stay bitwise the default's.
-      [reduction_sink] (default: config [gpu_default_reduction_sink], true) turns it off; it applies
-      with the seeding disabled too. Reads and writes no schedule cache. *)
+      On CUDA, HIP and Metal, every eligible [`Normal] segment no sketch takes gets
+      {!reduction_sink}'s interchange, then the default preset of the interchanged code
+      (gh-ocannl-1348, gh-ocannl-2507), probed alone like a seed, and covered by the same fallback
+      to the default pipeline when the compile fails classified: a batch reduction into a bias or
+      layer-norm parameter gradient then keeps its accumulator in a register instead of reading and
+      writing its device cell every step under the preset's in-loop guard — which HIP's compiler
+      does not promote, though NVRTC does. Values stay bitwise the default's. [reduction_sink]
+      (default: config [gpu_default_reduction_sink], true) turns it off; it applies with the seeding
+      disabled too. Metal uses only the plain-cell, same-precision sink. Reads and writes no
+      schedule cache. *)
 
   val model_pick :
     ?name:string ->
@@ -4493,6 +4510,10 @@ module Make (D : Driver) : sig
       observers. Both are per call, which is how a search's accounting stays its own
       (gh-ocannl-1263). The tuner's own instrument, exposed so a harness can rank candidates by
       exactly what a search ranks them by (gh-ocannl-755) rather than by a re-derivation of it.
+
+      A backend may probe and pad the dispatch queue before warmup. Both finish within setup,
+      outside ranked samples and the routine's dispatch counts.
+
       Binds test values ({!set_test_bindings}) and restores the routine's bindings afterwards, runs
       one warmup, then minimizes the per-launch time over at least 16 and [repeats] timed runs,
       topping up until ~25 ms of per-launch samples has accumulated (up to 64 runs unless the
@@ -4521,28 +4542,28 @@ module Make (D : Driver) : sig
       when none was -- the only bound sound for any cost that grows with depth, since the readings
       that left the fits unresolved cannot tell a host stall from a queue threshold. So a slow
       candidate whose fits never resolve is timed at depth 1, not in 2048-launch batches, while a
-      fast one whose deeper probes stalled still batches; one that measured no batch within the
-      target at all first takes one rescue probe below its shallowest over-target batch, projected
-      linearly to the target (gh-ocannl-1098) -- where a queue-threshold or superlinear cost reads
-      within the target -- and is refused as [unbatched] only when that also reads over it, rather
-      than timed as an isolated depth-1 reading. An unresolved single/probe pair retries at double
-      depth, and the next affine fit uses the two batch observations so an inflated single window
-      cannot force the cap. If the bounded loop first reaches the target on its last probe, the
-      interpolated target depth is still sampled and checked against the measured overshoot. A
-      non-monotone confirmation scales from the deeper measured batch, never the earlier suspect
-      crossing. When a clean pair's fixed component already fills the target, its marginal slope
-      selects a depth carrying ~10 ms of launch work instead of accepting a shallow stalled window
-      or jumping to the cap. After four noisy but resolved underestimates, calibration keeps the
-      latest affine projection rather than jumping to a 20--30 ms cap batch that would blunt the 2x
-      contention threshold. None of these projections settles deeper than
-      {!queue_depth_projection_factor} times the deepest batch the calibration probed
-      (gh-ocannl-1100): past it a queue cost can jump where nothing measured. A CUDA/HIP routine
-      slower than the target stays at depth 1 and is measured identically in both modes; it is
-      confirmed by a depth-2 probe only while its singles read under {!slow_singles_ratio} times the
-      target (gh-ocannl-1627). When singles below the target owe batching, a resolved pair starting
-      at depth 2 whose marginal launch cost fits the target and whose fixed term is below it retains
-      that measured batch even if its fixed term puts the fitted depth-1 wall above the target
-      (gh-ocannl-1184). It neither returns to the isolated singles nor refuses an ordinary
+      fast one whose deeper probes stalled still batches. When the singles owed a batch and
+      calibration settles at depth 1, {!rescue_depth} projects the shallowest over-target
+      observation down to 80% of the target (gh-ocannl-2061). A rescue within the full target is
+      timed. A missed rescue retains the deepest earlier batch measured within the target, when
+      available. A candidate left at depth 1 after owing a batch is refused as [unbatched]. An
+      unresolved single/probe pair retries at double depth, and the next affine fit uses the two
+      batch observations so an inflated single window cannot force the cap. If the bounded loop
+      first reaches the target on its last probe, the interpolated target depth is still sampled and
+      checked against the measured overshoot. A non-monotone confirmation scales from the deeper
+      measured batch, never the earlier suspect crossing. When a clean pair's fixed component
+      already fills the target, its marginal slope selects a depth carrying ~10 ms of launch work
+      instead of accepting a shallow stalled window or jumping to the cap. After four noisy but
+      resolved underestimates, calibration keeps the latest affine projection rather than jumping to
+      a 20--30 ms cap batch that would blunt the 2x contention threshold. None of these projections
+      settles deeper than {!queue_depth_projection_factor} times the deepest batch the calibration
+      probed (gh-ocannl-1100): past it a queue cost can jump where nothing measured. A CUDA/HIP
+      routine slower than the target stays at depth 1 and is measured identically in both modes; it
+      is confirmed by a depth-2 probe only while its singles read under {!slow_singles_ratio} times
+      the target (gh-ocannl-1627). When singles below the target owe batching, a resolved pair
+      starting at depth 2 whose marginal launch cost fits the target and whose fixed term is below
+      it retains that measured batch even if its fixed term puts the fitted depth-1 wall above the
+      target (gh-ocannl-1184). It neither returns to the isolated singles nor refuses an ordinary
       integer-depth boundary; unresolved or over-target marginal fits keep their refusal. Whenever a
       queued call settles at depth 1 its timed window resumes the calibration's synchronized singles
       ({!sample_window}'s [prior]) rather than timing a fresh one (gh-ocannl-1074): at depth 1 they
@@ -4765,8 +4786,8 @@ module Make (D : Driver) : sig
       compile" -- search disabled with nothing to replay, a refused lineage, a deferred cache replay
       that failed, a search that timed nothing, a budget cut that left the floor unmeasured, a
       winner replay that failed -- compiles the step the recipes ship untuned without
-      [model_default_schedule]: {!seeded_default}'s seeded plan wherever its settings admit one
-      (CUDA and HIP, seeding on), the plain default pipeline elsewhere. After a search the plan is
+      [model_default_schedule]: {!seeded_default}'s plan wherever its settings admit one (including
+      the sink-only plan on Metal), the plain default pipeline elsewhere. After a search the plan is
       the one the search seeded, replayed as its [F_seeded] candidate; without one it is derived
       inside the fallback's own compile, as {!seeded_default} derives it. Under
       [model_default_schedule=true] the fallback is still the seeded plan, not {!model_default}'s

@@ -1811,7 +1811,7 @@ let run ?(timing = false) ctx routine =
   if not timing then Option.iter persist_roles ~f:(check_persisted_writes ctx routine);
   if Lazy.force debug_fill_fresh_outputs then fill_fresh_outputs ctx routine;
 
-  Ir.Resource_fault_injection.hit Run_before_launch;
+  Ir.Resource_fault_injection.hit ~artifact:(Routine { name = routine.name }) Run_before_launch;
 
   (* Run the routine's task/schedule *)
   Ir.Task.run routine.task;
@@ -1863,6 +1863,16 @@ let await_within ctx ~seconds =
       q =
         (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
           Backend.await_within c.BI.device ~seconds);
+    }
+
+let align_timing_queue ctx ~await =
+  check_live ~fn:"align_timing_queue" ctx;
+  check_not_poisoned ctx;
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
+          Backend.align_timing_queue c.BI.device ~await);
     }
 
 let static_properties ctx =
@@ -3237,6 +3247,23 @@ let global_debug_info ctx =
       q =
         (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) _c ->
           Backend.get_global_debug_info ());
+    }
+
+type merge_slab_state = { has_slab : bool; has_location : bool; capacity : int; has_writer : bool }
+[@@deriving sexp_of, equal]
+
+let merge_slab_state ctx =
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
+          let dev = c.BI.device in
+          {
+            has_slab = Backend.has_pool dev ~pool_id:BI.merge_buffer_pool_id;
+            has_location = Option.is_some !(dev.merge_buffer);
+            capacity = dev.merge_buffer_capacity;
+            has_writer = Option.is_some dev.updating_for_merge_buffer;
+          });
     }
 
 (* gh-560: the analyze-only entry points — lowering and optimization without backend codegen or

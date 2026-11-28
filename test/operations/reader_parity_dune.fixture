@@ -1,0 +1,34 @@
+; The named stanzas are probes. Plain comments and unmarked neighbours are inert.
+(library
+ (name planner)
+ ; ocannl-backend-default: plan = cc,cuda Planner.choose -- shared planner default
+)
+(; ocannl-backend-default: plan -- reader before head
+ test
+ (name before_head))
+(test
+ (name cc_reader)
+ ; ocannl-backend-default: plan -- reads shared planner
+ ; CPU variant: ocannl-backend: cc -- pins this reader
+)
+(subdir nested
+ (test
+  (name nested_reader)
+  (deps
+   ; note: ocannl-backend: cuda, hip — pins both backends
+   ocannl_config)
+  ; ocannl-backend-default: plan -- reads shared planner
+ ))
+(test (name no_markers))
+(library
+ (name inline_reader)
+ ; ocannl-backend-default: plan -- inline reader
+ (inline_tests))
+(tests
+ (names a b)
+ ; ocannl-backend: cc -- both exercise cc
+)
+(rule
+ (alias probe)
+ ; ocannl-backend: cc -- invokes cc probe
+ (action (run %{dep:probe.exe})))

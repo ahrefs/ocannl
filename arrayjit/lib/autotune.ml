@@ -1405,6 +1405,14 @@ let depth_from_batch_wall_with_cap ~max_depth ~depth ~wall_ms =
     in
     (depth', wall_ms *. Float.of_int depth' /. Float.of_int depth)
 
+let deepest_batch_within_target ~observed =
+  List.fold observed ~init:None ~f:(fun best ((d, wall_ms) as measured) ->
+      if d < 2 || not Float.(wall_ms <= queued_batch_ms) then best
+      else
+        match best with
+        | Some (d', w') when d' > d || (d' = d && Float.(w' <= wall_ms)) -> best
+        | _ -> Some measured)
+
 (* The wall bound on a depth the affine fits did not choose (gh-ocannl-1096). When calibration ends
    unresolved -- every fit refused, or the cap taken without a measurement there -- the depth it
    returns is a bet that the per-launch cost is negligible against a fixed synchronization cost the
@@ -1430,21 +1438,18 @@ let depth_from_batch_wall_with_cap ~max_depth ~depth ~wall_ms =
    estimates at the cap. *)
 let wall_bounded_fallback_depth ~observed depth =
   if List.is_empty observed then depth
-  else
-    Int.min depth
-    @@ List.fold observed ~init:1 ~f:(fun deepest (d, wall_ms) ->
-        if Float.(wall_ms <= queued_batch_ms) then Int.max deepest d else deepest)
+  else Int.min depth (Option.value_map (deepest_batch_within_target ~observed) ~default:1 ~f:fst)
 
-(* The rescue probe's depth (gh-ocannl-1098), for a calibration about to refuse a candidate whose
-   single launch owed it a batch but which measured none within the target. The shallowest
-   over-target batch [(d, w)] projected linearly to the target: [floor (d * target / w)], at least 2
-   (depth 1 is the singles, already measured) and below [d]. For any cost whose per-launch average
-   [wall / depth] does not fall with depth -- linear, a queue threshold, a superlinear queue -- that
-   depth reads within the target, because its average is at most [w / d]. A cost whose average does
-   fall is a fixed term the affine fits resolve, and never reaches the refusal. [None] when no depth
-   lies strictly between 1 and [d]. Only the shallowest over-target batch is consulted: every deeper
-   one bounds nothing below it, and the readings cannot tell a stall from a threshold, so the probe
-   is the evidence rather than a further extrapolation. *)
+let rescue_target_fraction = 0.8
+
+(* The rescue probe's depth (gh-ocannl-1098), when calibration settles at depth 1 for a candidate
+   whose single launch owed it a batch. The shallowest over-target batch [(d, w)] projected linearly
+   to 80% of the target (gh-ocannl-2061), at least 2 (depth 1 is the singles, already measured) and
+   below [d]. When the projection permits it, the margin leaves room for shared-device noise:
+   projecting to the full target chose depth 25 from 26 at 10.3 ms, and the rescue itself still
+   measured over 10 ms. Only the shallowest over-target batch is consulted. Its per-launch average
+   can guide the probe depth, but only the rescue's measured wall can admit the batch. [None] when
+   no depth lies strictly between 1 and [d]. *)
 let rescue_depth ~observed =
   let shallowest =
     List.fold observed ~init:None ~f:(fun acc (d, wall_ms) ->
@@ -1455,9 +1460,9 @@ let rescue_depth ~observed =
           | _ -> Some (d, wall_ms))
   in
   Option.bind shallowest ~f:(fun (d, wall_ms) ->
-      let projected = Float.of_int d *. queued_batch_ms /. wall_ms in
-      let rescue = if Float.(projected >= of_int d) then d - 1 else Int.of_float projected in
-      let rescue = Int.max 2 rescue in
+      let rescue_target_ms = rescue_target_fraction *. queued_batch_ms in
+      let projected = Float.of_int d *. rescue_target_ms /. wall_ms in
+      let rescue = Int.max 2 (Int.of_float projected) in
       if rescue < d then Some rescue else None)
 
 (* The search's test seams, per domain (the treatment [timing_call_observer] got, gh-ocannl-1263): a
@@ -2217,28 +2222,21 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
                moved. *)
             let bounded_from = Option.some_if (fallback_from < bounded_from) bounded_from
             and fallback_from = Option.some_if (depth < fallback_from) fallback_from in
-            (* A candidate whose single launch owed it a batch, but whose every batched probe read
-               over the target, has no depth this calibration can time as [Queued]: the fallback
-               leaves only depth 1, whose reading is the isolated objective, and timing it would
-               crown under the wrong objective silently (Codex P1, round 3 on PR #846). The readings
-               cannot tell that from a stall. Before refusing, one rescue probe below the shallowest
-               over-target batch ({!rescue_depth}): a kernel with a genuine queue threshold below
-               its provisional depth is timed there rather than refused on every search, since its
-               refusal made it permanently uncacheable. A probe that also reads over the target
-               leaves the call refused, not ranked, not cached, retried by a later search -- under a
-               reason of its own ([unbatched]): not a diagnosis, since host load stalling every
-               batched probe reads the same, but what the calibration measured, which a threshold
-               repeats on every rerun and a stall does not. Any settle at depth 1 counts, not only
-               the unresolved one: a resolved fit that puts the crossing at one launch contradicts
-               the singles just the same. *)
+            (* When the single launch owed a batch, a depth-1 settle would rank the isolated
+               objective (Codex P1, round 3 on PR #846). A resolved fit can contradict the singles
+               just as an unresolved fallback can. Before refusing, the rescue tries a shallower
+               batch where a kernel with a queue threshold may still be timed and cached. A missed
+               rescue can still use a batch measured within the target before a fit projected to
+               depth 1. Prefer the rescue's fresh measurement at the reduced scale after such a fit.
+               If calibration still has no batch, [unbatched] names what was measured: host load
+               stalling every probe can look like a genuine queue threshold. *)
             let calibration_dispatches, depth, estimated_batch_wall_ms, rescue =
               if depth = 1 && provisional_depth > 1 then
                 match rescue_depth ~observed:!observed with
                 | None -> (calibration_dispatches, depth, estimated_batch_wall_ms, None)
-                | Some rescue ->
-                    (* One rescue probe before refusing (gh-ocannl-1098), charged to no budget: its
-                       depth is chosen so that a cost whose per-launch average does not fall with
-                       depth reads within the target there, which is a bounded wall. *)
+                | Some rescue -> (
+                    (* The reserved rescue probe still has to measure a batch within the original
+                       target. The projection only selects the depth to try. *)
                     let measured = probe_batch ~role:Rescue_probe rescue in
                     let calibration_dispatches =
                       calibration_dispatches + (measured.samples * rescue)
@@ -2248,7 +2246,10 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
                       Float.is_finite measured.ms && Float.is_positive measured.ms
                       && Float.(measured.ms <= queued_batch_ms)
                     then (calibration_dispatches, rescue, measured.ms, probed)
-                    else (calibration_dispatches, depth, estimated_batch_wall_ms, probed)
+                    else
+                      match deepest_batch_within_target ~observed:!observed with
+                      | Some (depth, wall_ms) -> (calibration_dispatches, depth, wall_ms, probed)
+                      | None -> (calibration_dispatches, depth, estimated_batch_wall_ms, probed))
               else (calibration_dispatches, depth, estimated_batch_wall_ms, None)
             in
             if depth = 1 && provisional_depth > 1 then no_supported_batch := true;
@@ -3311,6 +3312,14 @@ let staged_copy_rate_override =
     (parse_rate ~key:"model_staged_copy_rate" ~what:"rate in bytes/s"
        (Utils.get_global_arg ~arg_name:"model_staged_copy_rate" ~default:""))
 
+(* gh-ocannl-2280: the staged-idle rate (refused bytes/s from Workgroup partition guards on staged
+   copies; [none]: no staged-idle term) beats the backend's advisory [staged_idle_rate]. Read by the
+   leaf ranking only, like [shared_load_rate_override]. *)
+let staged_idle_rate_override =
+  lazy
+    (parse_rate ~key:"model_staged_idle_rate" ~what:"rate in bytes/s"
+       (Utils.get_global_arg ~arg_name:"model_staged_idle_rate" ~default:""))
+
 (* gh-ocannl-2262: the shared-load rate (cells/s beyond the calibration tile's reuse; [none]: no
    register-reuse term) beats the backend's advisory [shared_load_rate]. Same readers and class as
    the rates above. *)
@@ -3410,6 +3419,10 @@ let ranking_staged_copy_rate ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve staged_copy_rate_override u.copy_rate
 
+let ranking_staged_idle_rate ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  resolve staged_idle_rate_override u.idle_rate
+
 let ranking_shared_load_rate ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve shared_load_rate_override u.shared_rate
@@ -3471,10 +3484,12 @@ type kernel_legs = {
       (** The same fill-weighted excess at the 64- and 128-byte sector sizes, on request only: a
           diagnostic for whether the counting unit changes the ordering. *)
   kl_staged_bytes : float;
+  kl_idle_bytes : float;
   kl_shared_loads : float;
-      (** gh-ocannl-1821: the operand staging copies' bytes as the compute leg divides them by the
-          staged-copy rate ({!Ir.Cost_model.filled_staged_bytes}); 0 where they were not counted (no
-          rate). *)
+      (** gh-ocannl-1821/2280/2262: the operand staging copies' bytes
+          ({!Ir.Cost_model.filled_staged_bytes}, 0 where no copy rate prices them), the
+          partition-guarded workgroup idle bytes (counted where priced or requested), and the excess
+          shared loads. *)
   kl_workgroup_bytes : int;
   kl_block_threads : int;
       (** The kernel's static workgroup-shared bytes ({!Sched.workgroup_memory_bytes}; 0 without
@@ -3490,8 +3505,9 @@ type kernel_legs = {
    [summaries_roofline] is. *)
 let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
     ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ?staged_copy_rate
-    ?shared_load_rate ?(count_transactions = false) ?(price_direct_loads = false) ~peak_flops
-    ~peak_memory_bandwidth ~limits (segs : LL.optimized list) : (float * kernel_legs list) option =
+    ?staged_idle_rate ?shared_load_rate ?(count_transactions = false) ?(price_direct_loads = false)
+    ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list) :
+    (float * kernel_legs list) option =
   (* Each reading only where no explicit value replaces it: a caller's gate isolates the score from
      the configuration it overrides, a malformed override of it included. *)
   let max_resident_threads = (Ir.Backend_intf.untimed_limits limits).resident_threads in
@@ -3511,6 +3527,9 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
   in
   let staged_copy_rate =
     match staged_copy_rate with Some r -> r | None -> ranking_staged_copy_rate ~limits
+  in
+  let staged_idle_rate =
+    match staged_idle_rate with Some r -> r | None -> ranking_staged_idle_rate ~limits
   in
   let shared_load_rate =
     match shared_load_rate with Some r -> r | None -> ranking_shared_load_rate ~limits
@@ -3589,13 +3608,16 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
               in
               let transactions = count None in
               (* gh-ocannl-1821: the operand staging copies, where a copy rate prices them: into a
-                 workgroup-shared node that is not a fragment. *)
-              (* gh-ocannl-2262: and the shared loads beyond the calibration tile's reuse, where a
-                 shared-load rate prices them or a report asks for them -- one traversal for all. *)
+                 workgroup-shared node that is not a fragment. gh-ocannl-2280: and the refused
+                 workgroup idle bytes of partition-guarded copies, where an idle rate prices them or
+                 a report asks for them. gh-ocannl-2262: and the shared loads beyond the calibration
+                 tile's reuse, where a shared-load rate prices them or a report asks for them -- one
+                 traversal for all. *)
               let count_shared = Option.is_some shared_load_rate || count_transactions in
-              let staged_copies, direct_loads, shared_loads =
+              let count_idle = Option.is_some staged_idle_rate || count_transactions in
+              let staged_copies, idle_copies, direct_loads, shared_loads =
                 match staged_copy_rate with
-                | None when not count_shared -> ([], [], [])
+                | None when (not count_shared) && not count_idle -> ([], [], [], [])
                 | _ ->
                     let is_staged tn =
                       Set.mem o.LL.workgroup_shared tn
@@ -3621,6 +3643,7 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
                         CM.excess_shared_loads contexts census.oc_shared
                     in
                     ( (if Option.is_some staged_copy_rate then census.oc_staged else []),
+                      (if count_idle then census.oc_idle else []),
                       census.oc_direct,
                       shared_loads )
               in
@@ -3628,7 +3651,8 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
                 CM.ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes
                   ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate ~mma_flops ~device_gathers
                   ?device_gather_rate ?launch ~transactions ?transaction_rate ~staged_copies
-                  ~direct_loads ?staged_copy_rate
+                  ~idle_copies:(if Option.is_some staged_idle_rate then idle_copies else [])
+                  ~direct_loads ?staged_copy_rate ?staged_idle_rate
                   ~shared_loads:(if Option.is_some shared_load_rate then shared_loads else [])
                   ?shared_load_rate ?occupancy s reuse
               in
@@ -3648,6 +3672,8 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
                    else []);
                 kl_staged_bytes =
                   CM.filled_staged_bytes ?fill_model:(Option.map launch ~f:fst) staged_copies;
+                kl_idle_bytes =
+                  CM.filled_staged_bytes ?fill_model:(Option.map launch ~f:fst) idle_copies;
                 kl_shared_loads =
                   CM.filled_shared_loads ?fill_model:(Option.map launch ~f:fst) shared_loads;
                 kl_workgroup_bytes = workgroup_bytes;
@@ -3674,13 +3700,13 @@ let kernel_rank { kl_compute; kl_memory; _ } =
    explicit [capacity] / [cache_bandwidth] (the gate's own, or a test's) overrides the readings. *)
 let segments_ranking ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
     ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ?staged_copy_rate
-    ?shared_load_rate ?price_direct_loads ~peak_flops ~peak_memory_bandwidth ~limits
-    (segs : LL.optimized list) : (float * float) option =
+    ?staged_idle_rate ?shared_load_rate ?price_direct_loads ~peak_flops ~peak_memory_bandwidth
+    ~limits (segs : LL.optimized list) : (float * float) option =
   Option.map
     (segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
        ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ?staged_copy_rate
-       ?shared_load_rate ?price_direct_loads ~peak_flops ~peak_memory_bandwidth ~limits segs)
-    ~f:(fun (bound, legs) ->
+       ?staged_idle_rate ?shared_load_rate ?price_direct_loads ~peak_flops ~peak_memory_bandwidth
+       ~limits segs) ~f:(fun (bound, legs) ->
       (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l), bound))
 
 let ranking_ms ?capabilities ~limits segs =
@@ -4202,6 +4228,9 @@ let sketch_params_label p =
       (match p.sk_tile with
       | None -> ""
       | Some { Ir.Register_tile.rm; rn; lanes } -> Printf.sprintf " tile-rm%d-rn%d-l%d" rm rn lanes);
+      (* Unpadded fallback when 16-byte shared-tile bank padding would exceed
+         [max_workgroup_memory_bytes] (gh-ocannl-1842). *)
+      flag p.sk_no_bank_pad " nopad";
     ]
 
 (* A round candidate's suffix (gh-ocannl-1230): the parent's digest tag, then the unit the move
@@ -5624,13 +5653,18 @@ type seeded_choice = {
   sd_fell_back : bool;
 }
 
+let seeded_choice_changed c =
+  not (List.is_empty c.sd_seeded && List.is_empty c.sd_split && List.is_empty c.sd_sunk)
+
 let site_reduction_extent (site : matmul_site) =
   List.fold site.m_ko ~init:site.m_nk ~f:(fun acc (_, n) -> acc * n)
 
-(* CUDA and HIP only: the backends the untiled-contraction gap was measured on (gh-ocannl-1183) and
-   the seeded plan's before/after was measured on. Metal keeps the plain default until a Metal
-   measurement says otherwise. *)
+(* CUDA and HIP only: the backends where the contraction sketches were measured (gh-ocannl-1183). *)
 let seeded_default_backend (facts : Ir.Backend_intf.backend_facts) = facts.seeds_untuned_default
+let reduction_sink_backend (facts : Ir.Backend_intf.backend_facts) = facts.sinks_untuned_reductions
+
+let uses_seeded_incumbent ~facts choice =
+  seeded_default_backend facts || seeded_choice_changed choice
 
 type seed_gate =
   | Min_reduction of int
@@ -5850,25 +5884,24 @@ let seeded_params_judged ?capabilities ~limits ~min_reduction (seg : LL.optimize
 let seeded_params ?capabilities ~limits ~min_reduction seg =
   Result.ok (seeded_params_judged ?capabilities ~limits ~min_reduction seg)
 
-(* The untuned split runs wherever the seeded default does (gh-ocannl-1325, gh-ocannl-1412). It was
-   CUDA's alone until its first pass ran the block loop outside the cell loops ([sr_block_hoist]):
-   with the lanes walking the blocks, the HIP b256 step went from 885 to 1256 ms on gfx1151's
-   unified memory where CUDA's caches absorbed the scattered loads. *)
-let seeded_split_backend facts = seeded_default_backend facts
+(* The untuned split runs on every hardware-grid backend that admits it (CUDA, HIP, Metal;
+   gh-ocannl-1325, gh-ocannl-1412, gh-ocannl-2506). It was CUDA's alone until its first pass ran the
+   block loop outside the cell loops ([sr_block_hoist]): with the lanes walking the blocks, the HIP
+   b256 step went from 885 to 1256 ms on gfx1151's unified memory where CUDA's caches absorbed the
+   scattered loads. *)
+let seeded_split_backend (facts : Ir.Backend_intf.backend_facts) = facts.splits_untuned_reductions
 
 (* gh-ocannl-1331: whether a search on [backend] can read the [Search_shaping] key [key]: the seeded
    plan's keys where {!seeded_settings} resolves them (its backend tests come first, so another
-   backend never reads them), the register-tile twin gate where the matmul family's CPU branch reads
-   it ([matmul_flavor_tree]'s [is_cpu] arm, the register-tiled rendering), the default pipeline's
-   per {!Sched.search_shaping_key_read}. The other [autotune_*] keys are read on every backend: the
-   search's own knobs, and [autotune_pad_waste_max] in the GPU and CPU menus alike. *)
+   backend never reads them), the seeded-singles setting where the backend seeds sketches, the
+   register-tile twin gate where the matmul family's CPU branch reads it ([matmul_flavor_tree]'s
+   [is_cpu] arm), and the default pipeline's keys per {!Sched.search_shaping_key_read}. *)
 let search_shaping_key_read ~facts key =
   match key with
   | "autotune_register_tile_rm_twin" -> Ir.Backend_intf.renders_on_host_pool facts
-  | "gpu_default_sketch_min_reduction" | "gpu_default_reduction_sink" ->
-      seeded_default_backend facts
-  | "gpu_default_split_reduce_min_serial" ->
-      seeded_default_backend facts && seeded_split_backend facts
+  | "gpu_default_sketch_min_reduction" | "autotune_seeded_singles" -> seeded_default_backend facts
+  | "gpu_default_reduction_sink" -> reduction_sink_backend facts
+  | "gpu_default_split_reduce_min_serial" -> seeded_split_backend facts
   | _ -> Sched.search_shaping_key_read ~facts key
 
 let search_shaping_identity ~facts ~limits =
@@ -5975,18 +6008,19 @@ let refine_segments ~coarse ~(fine : _ list option Lazy.t) ~seed =
 let no_seeded_choice =
   { sd_seeded = []; sd_sunk = []; sd_refined = 0; sd_split = []; sd_fell_back = false }
 
-(* The resolved thresholds, or [None] where the untuned compile is the plain default. The backend
-   first: the thresholds are CUDA/HIP settings, so a malformed value must not break a compile on a
-   backend that ignores them. *)
+(* Resolve each component only on backends that use it, so a malformed CUDA/HIP threshold cannot
+   break the sink-only Metal compile. *)
 let seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink:sink_override ?seed_narrow
     ~facts ~configured_gate () =
   let gate () =
-    match (seed_gate, min_reduction) with
-    | Some _, Some _ ->
-        invalid_arg "Autotune.seeded_transform: pass ~min_reduction or ~seed_gate, not both"
-    | Some g, None -> g
-    | None, Some n -> Min_reduction n
-    | None, None -> configured_gate ()
+    if not (seeded_default_backend facts) then Min_reduction 0
+    else
+      match (seed_gate, min_reduction) with
+      | Some _, Some _ ->
+          invalid_arg "Autotune.seeded_transform: pass ~min_reduction or ~seed_gate, not both"
+      | Some g, None -> g
+      | None, Some n -> Min_reduction n
+      | None, None -> configured_gate ()
   in
   let gate_off () = match gate () with Min_reduction n -> n <= 0 | Ranked _ -> false in
   (* Resolved only where the split runs, so a malformed value breaks no compile that ignores it. *)
@@ -5995,16 +6029,19 @@ let seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink:sink_o
     else match min_serial with Some n -> n | None -> seeded_split_min_serial ()
   in
   let sink_enabled () =
-    match sink_override with Some b -> b | None -> reduction_sink_enabled ()
+    reduction_sink_backend facts
+    && Option.value_or_thunk sink_override ~default:reduction_sink_enabled
   in
   let admit_narrow () =
-    match seed_narrow with Some b -> b | None -> seed_narrow_storage_enabled ()
+    seeded_default_backend facts
+    && Option.value_or_thunk seed_narrow ~default:seed_narrow_storage_enabled
   in
   if
-    (not (seeded_default_backend facts))
-    || (gate_off () && min_serial () <= 0 && not (sink_enabled ()))
+    (not
+       (seeded_default_backend facts || reduction_sink_backend facts || seeded_split_backend facts))
     || (not (Sched.automatic_schedule_active ~facts))
-    || not (Sched.default_pipeline_fissions ())
+    || (not (Sched.default_pipeline_fissions ()))
+    || (gate_off () && min_serial () <= 0 && not (sink_enabled ()))
   then None
   else Some (gate (), min_serial (), sink_enabled (), admit_narrow ())
 
@@ -6063,8 +6100,8 @@ let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~c
         Option.map
           (segments_ranking ~capabilities ~capacity ~cache_bandwidth ~issue_rate ~dram_bandwidth
              ~mma_rate ~device_gather_rate ~fill_model ~transaction_rate ~workgroup_capacity
-             ~staged_copy_rate ~shared_load_rate:None ~price_direct_loads:true ~peak_flops
-             ~peak_memory_bandwidth ~limits [ post ])
+             ~staged_copy_rate ~staged_idle_rate:None ~shared_load_rate:None
+             ~price_direct_loads:true ~peak_flops ~peak_memory_bandwidth ~limits [ post ])
           ~f:fst
   in
   match
@@ -6241,10 +6278,11 @@ let seeded_decisions ?memo ?(census = true) ~scatter_packets ~capabilities ~limi
          first product is tiled. The finer [arity_cuts] segmentation (gh-ocannl-574) cuts those
          apart; {!refine_segments} takes its pieces where more of them seed (gh-ocannl-1413), and
          elsewhere the default segmentation stands, so no launch is added that buys no seed. *)
+      let fine =
+        lazy (match gate with Min_reduction n when n <= 0 -> None | _ -> derive ~arity_cuts:true)
+      in
       let hybrid, refined =
-        refine_segments ~coarse
-          ~fine:(lazy (derive ~arity_cuts:true))
-          ~seed:(fun k pre ->
+        refine_segments ~coarse ~fine ~seed:(fun k pre ->
             Option.map
               (seed_of (Sched.segment_class k) pre)
               ~f:(fun p -> (p, digest ~with_placements:false pre)))
@@ -6347,6 +6385,9 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narr
              baseline is a different program, and GPUs never dispatch it. *)
           report_plan (fun () -> Option.value_exn (default_seed_label ~facts));
           None
+      | plan when not (seeded_default_backend facts) ->
+          report_plan (fun () -> seeded_plan_label plan);
+          Some plan
       | plan ->
           report_plan (fun () -> seeded_plan_label plan);
           (* Every reading the per-segment decisions rest on (gh-ocannl-1442, gh-ocannl-1479): the
@@ -6443,15 +6484,19 @@ let ranking_multiprocessors ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve multiprocessors_override u.core_count
 
-(* gh-ocannl-1253: on CUDA and HIP the model starts from the seeded untuned plan
+(* gh-ocannl-1253, gh-ocannl-2506: where the untuned default adds sketch seeding
+   ([seeds_untuned_default]), plain-cell reduction sinking ([sinks_untuned_reductions]) or split
+   reductions ([splits_untuned_reductions]), the model starts from that untuned plan
    ({!seeded_default}'s, [auto] gate included) rather than the plain default pipeline: it is the
    incumbent, and the action taken when no candidate strictly beats it -- measured, on each searched
-   program, against its own sketch there ({!model_seeded_anchors}, gh-ocannl-1477). [None] where the
-   untuned compile is the plain default (another backend, seeding off). Shared by [model_default]
-   and [model_explain]. *)
+   program, against its own sketch there ({!model_seeded_anchors}, gh-ocannl-1477) when sketch
+   seeding is active. [None] where the untuned compile is the plain default (another backend, or
+   every untuned feature off). Shared by [model_default] and [model_explain]. *)
+let model_untuned_plan ~facts ~limits =
+  seeded_settings ~facts ~configured_gate:(fun () -> seeded_default_gate ~limits) ()
+
 let model_seeding ~facts ~limits =
-  if not (Ir.Backend_intf.binds_hardware_grid facts) then None
-  else seeded_settings ~facts ~configured_gate:(fun () -> seeded_default_gate ~limits) ()
+  if seeded_default_backend facts then model_untuned_plan ~facts ~limits else None
 
 (* gh-ocannl-1600: whether [model_default] ranks the coalesced layouts: only where the terms that
    tell them apart are priced -- the memory-transaction rate (with the lane group's width stated),
@@ -6550,6 +6595,7 @@ type explain_kernel = {
   ek_block_threads : int;
   ek_occupancy : float;
   ek_staged_bytes : float;
+  ek_idle_bytes : float;
   ek_shared_loads : float;
 }
 
@@ -6801,6 +6847,7 @@ module type Driver = sig
   val run : ?timing:bool -> ctx -> routine -> ctx
   val sync : ctx -> unit
   val await_within : ctx -> seconds:float -> bool
+  val align_timing_queue : ctx -> await:(unit -> unit) -> bool
   val release : ctx -> unit
   val adopt_ancestor : ctx -> ancestor:ctx -> unit
   val check_lineage_runnable : ctx -> routine -> unit
@@ -6862,12 +6909,12 @@ module Make (D : Driver) = struct
        calibration. *)
     let started = Mtime_clock.counter () in
     let saved_bindings = List.map (D.routine_bindings routine) ~f:(fun (_ss, r) -> (r, !r)) in
+    let launch f = if tag_failures then Outcome.tag Outcome.Launch f else f () in
     let run ctx =
       (* [~timing]: a gradient the routine accumulates into without zeroing is not refused for the
          repeats (gh-ocannl-1781); the search restores the lineage around its windows
          (gh-ocannl-1621). *)
-      if tag_failures then Outcome.tag Outcome.Launch (fun () -> D.run ~timing:true ctx routine)
-      else D.run ~timing:true ctx routine
+      launch (fun () -> D.run ~timing:true ctx routine)
     in
     (* gh-ocannl-2134: every wait is bounded ({!wait_bound_s}); [own_ms] is the largest per-launch
        wall of this window's completed waits. An expiry raises inside the [Sync] tag, where
@@ -6942,6 +6989,8 @@ module Make (D : Driver) = struct
         (* Warmup run: absorbs lazy initialization and fills caches like a steady-state
            iteration. *)
         check_stop ();
+        if launch (fun () -> D.align_timing_queue cctx ~await:(fun () -> sync ~depth:1 cctx)) then
+          check_stop ();
         let warmup = Mtime_clock.counter () in
         let ctx = ref (run cctx) in
         sync ~depth:1 !ctx;
@@ -7551,10 +7600,7 @@ module Make (D : Driver) = struct
           choice := { no_seeded_choice with sd_fell_back = true }
         in
         compile_advisory ?name ~on_fallback
-          ~fallback_if:(fun () ->
-            not
-              (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_split
-             && List.is_empty !choice.sd_sunk))
+          ~fallback_if:(fun () -> seeded_choice_changed !choice)
           transform ctx comp bindings
         |> report_or_release ~report:emit
 
@@ -7621,14 +7667,15 @@ module Make (D : Driver) = struct
             Int.incr n_rejected;
             None
       in
-      (* gh-ocannl-1253: on CUDA and HIP the model starts from the seeded untuned plan
-         ({!seeded_default}'s, [auto] gate included) rather than the plain default pipeline: it is
-         the incumbent, and the action taken when no candidate strictly beats it (and its own
-         sketch, [anchored] below). [None] where the untuned compile is the plain default (another
-         backend, seeding off). *)
       let seeding_here = lazy (model_seeding ~facts ~limits) in
-      (* With a seeded incumbent, [model_admits] applies the numerics gate before scoring. Metal,
-         the CPU backends and an unseeded CUDA/HIP compile keep the whole family. *)
+      (* gh-ocannl-1253, gh-ocannl-2506: the model keeps the untuned plan as the incumbent unless a
+         candidate strictly beats it. [seeds_untuned_default] (CUDA/HIP) adds sketch seeding;
+         [sinks_untuned_reductions] and [splits_untuned_reductions] (CUDA/HIP/Metal) sink and split
+         long reductions before mapping. *)
+      let untuned_here = lazy (model_untuned_plan ~facts ~limits) in
+      (* [model_admits] applies the numerics gate under [seeds_untuned_default] (CUDA/HIP
+         sketch-seeding). An unseeded Metal incumbent (sink/split only) keeps the same candidate
+         family as the plain preset. *)
       let coalesced = model_ranks_coalesced ~limits in
       let admits p = model_admits ~coalesced ~seeding:(Lazy.force seeding_here) p in
       (* gh-ocannl-1477: under seeding, a walk's threshold is the seeded plan's own sketch on the
@@ -7719,14 +7766,15 @@ module Make (D : Driver) = struct
          judges it: a plan that seeds, splits and sinks nothing IS the default pipeline, so a
          compilation failure of it is the default's and is not retried. *)
       let seeded_changed = ref false in
-      (* The seeded plan's split prelude (CUDA, gh-ocannl-1325); the program itself where the model
-         does not start from the seeded plan. On a hermetic copy for scoring; in place for the
-         pick's application, as the [`Seeded] action's [seeded_apply] splits the compile's own
-         lowering: a pick applied to a copy registers the nodes its transforms create (a fissioned
-         segment's promoted locals) in the copy's placements, not the compiling context's, and the
-         compile then fails on an undecided node (gh-ocannl-1477's fissioned chain, on HIP). *)
+      (* The untuned plan's split prelude (gated by [splits_untuned_reductions], gh-ocannl-1325,
+         gh-ocannl-2506); the program itself where the model does not start from an untuned plan
+         with splits. On a hermetic copy for scoring; in place for the pick's application, as the
+         [`Seeded] action's [seeded_apply] splits the compile's own lowering: a pick applied to a
+         copy registers the nodes its transforms create (a fissioned segment's promoted locals) in
+         the copy's placements, not the compiling context's, and the compile then fails on an
+         undecided node (gh-ocannl-1477's fissioned chain, on HIP). *)
       let prelude ?(hermetic = true) (opt : LL.optimized) =
-        match Lazy.force seeding_here with
+        match Lazy.force untuned_here with
         | Some (_, min_serial, _, _) ->
             fst
               (seeded_split ~facts ~min_serial ~static_indices
@@ -7734,18 +7782,19 @@ module Make (D : Driver) = struct
         | None -> opt
       in
       let select (opt : LL.optimized) =
-        let seeded_record = ref [] in
+        let incumbent_choice = ref no_seeded_choice in
         try
           (* The incumbent -- the seeded plan where there is one, else the untuned default pipeline
              -- scored on a hermetic copy: both the anchor candidate and the fallback. *)
           let incumbent_label, incumbent_action, incumbent_scratch =
-            match Lazy.force seeding_here with
+            match Lazy.force untuned_here with
             | Some seeding ->
-                ( "seeded",
-                  `Seeded seeding,
-                  seeded_segs
-                    ~on_choice:(fun c -> seeded_record := c.sd_seeded)
-                    seeding (scratch_of opt) )
+                let segs =
+                  seeded_segs ~on_choice:(fun c -> incumbent_choice := c) seeding (scratch_of opt)
+                in
+                if uses_seeded_incumbent ~facts !incumbent_choice then
+                  ("seeded", `Seeded seeding, segs)
+                else ("default", `Default, segs)
             | None ->
                 ( "default",
                   `Default,
@@ -7753,7 +7802,7 @@ module Make (D : Driver) = struct
           in
           (* gh-ocannl-1477: what the incumbent plan seeded, by first unit -- the anchors'
              source. *)
-          let seeded_record = !seeded_record in
+          let seeded_record = !incumbent_choice.sd_seeded in
           let default_score = score incumbent_scratch in
           (* The candidates compete on the program the seeded plan starts from, its split prelude
              included, so a winner keeps the reductions the untuned compile splits. *)
@@ -7909,11 +7958,7 @@ module Make (D : Driver) = struct
               seeded_changed := false;
               validate_segments_for_model ~fork_join:is_cpu ~limits
                 (seeded_segs
-                   ~on_choice:(fun c ->
-                     seeded_changed :=
-                       not
-                         (List.is_empty c.sd_seeded && List.is_empty c.sd_split
-                        && List.is_empty c.sd_sunk))
+                   ~on_choice:(fun c -> seeded_changed := seeded_choice_changed c)
                    seeding opt)
           | `Whole p ->
               let opt = prelude ~hermetic:false opt in
@@ -8257,6 +8302,7 @@ module Make (D : Driver) = struct
                        ek_block_threads = l.kl_block_threads;
                        ek_occupancy = l.kl_occupancy;
                        ek_staged_bytes = l.kl_staged_bytes;
+                       ek_idle_bytes = l.kl_idle_bytes;
                        ek_shared_loads = l.kl_shared_loads;
                      }));
             ex_operand_loads;
@@ -8282,21 +8328,25 @@ module Make (D : Driver) = struct
     else
       (* [model_default]'s incumbent and searched program, as it derives them. *)
       let seeding = model_seeding ~facts ~limits in
-      let record = ref [] in
+      let untuned = model_untuned_plan ~facts ~limits in
+      let record = ref no_seeded_choice in
       let incumbent_label, incumbent =
-        match seeding with
+        match untuned with
         | Some (gate, min_serial, sink_enabled, admit_narrow) ->
-            ( "seeded",
+            let segs =
               seeded_apply
-                ~on_choice:(fun c -> record := c.sd_seeded)
+                ~on_choice:(fun c -> record := c)
                 ~capabilities:caps ~facts ~limits ~accum_prec ~static_indices ~gate ~min_serial
-                ~sink_enabled ~admit_narrow (scratch_of opt) )
+                ~sink_enabled ~admit_narrow (scratch_of opt)
+            in
+            let label = if uses_seeded_incumbent ~facts !record then "seeded" else "default" in
+            (label, segs)
         | None ->
             ( "default",
               Sched.maybe_default_schedules ~facts ~limits ~static_indices (scratch_of opt) )
       in
       let base =
-        match seeding with
+        match untuned with
         | Some (_, min_serial, _, _) ->
             fst (seeded_split ~facts ~min_serial ~static_indices (scratch_of opt))
         | None -> opt
@@ -8317,7 +8367,7 @@ module Make (D : Driver) = struct
             | exception Outcome.Cause_at _ -> None
             | segs -> Some (label p, explain ~ex_admitted:(admits p) segs))
       in
-      let record = !record in
+      let record = !record.sd_seeded in
       (* gh-ocannl-1477: the leaf [model_default] anchors the walk on [prog] at -- the best-ranked
          of the seeded plan's own sketches there ({!model_seeded_anchors}, from [seeded], the plan's
          record for the units [prog] covers) -- marked [ex_anchor]; listed after the leaves when the
@@ -8532,7 +8582,6 @@ module Make (D : Driver) = struct
              Utils.registered_int ~arg_name:"autotune_split_reduce_max_sites"))
     in
     let staffed_singles = staffed_singles_setting () in
-    let seeded_singles = seeded_singles_setting () in
     let playoff_width = max 0 (Utils.registered_int ~arg_name:"autotune_composite_playoff_width") in
     (* A negative margin admits no single and so means what width 0 says; it is floored at 0 (exact
        ties only) rather than given a second spelling of off. A malformed value, NaN included, is
@@ -8566,6 +8615,9 @@ module Make (D : Driver) = struct
           context's; backend capabilities come from the facts below"])
     in
     let facts = D.backend_facts ctx in
+    (* A sink-only plan did not refine its segmentation through sketch seeding, so its floor must
+       not replace the ordinary coarse and fine singles. *)
+    let seeded_singles = seeded_default_backend facts && seeded_singles_setting () in
     let device = D.ordinal ctx in
     (* The tuned computation's name, for the calibration rows and log lines of every candidate
        (gh-ocannl-635). READ from [name] rather than re-derived (gh-ocannl-669): every compile below
@@ -8871,15 +8923,15 @@ module Make (D : Driver) = struct
     (* The untuned fallback of a call that does not search (search off, a lineage refusal, a
        deferred cache replay that failed), through the containment-aware form so a failure reports
        the phase it carries. It is {!seeded_default}'s compile, the recipes' untuned step, wherever
-       {!seeded_settings} admits the seeded plan (CUDA and HIP; gh-ocannl-1441) -- the plan derived
-       inside this compile's own transform, on [ctx]'s lowering -- and the plain default pipeline
-       elsewhere. As in {!seeded_default}, a classified failure of a compile that seeded, split or
-       sank something recompiles the plain default; any other failure goes to [raise_pre_search].
-       [Context.compile] is the plain form plus [raise_failure], which is what [raise_pre_search]
-       ends with, so the caller sees the same exception either way. Every call lies in a [not
-       search] branch or, on a path that tests no flag, carries [[@searchless "<why it does not
-       search>"]]: [test/operations/limits_field_classes] refuses any other caller, since this
-       compile reads [Untimed] fields the cache key cannot see (gh-ocannl-1570). *)
+       {!seeded_settings} admits the plan (gh-ocannl-1441) -- the plan derived inside this compile's
+       own transform, on [ctx]'s lowering -- and the plain default pipeline elsewhere. As in
+       {!seeded_default}, a classified failure of a compile that seeded, split or sank something
+       recompiles the plain default; any other failure goes to [raise_pre_search]. [Context.compile]
+       is the plain form plus [raise_failure], which is what [raise_pre_search] ends with, so the
+       caller sees the same exception either way. Every call lies in a [not search] branch or, on a
+       path that tests no flag, carries [[@searchless "<why it does not search>"]]:
+       [test/operations/limits_field_classes] refuses any other caller, since this compile reads
+       [Untimed] fields the cache key cannot see (gh-ocannl-1570). *)
     let compile_untuned_default ?base () =
       progress_stage "untuned_default_compile";
       let plain () =
@@ -8918,10 +8970,7 @@ module Make (D : Driver) = struct
                   bindings)
           with
           | Ok result -> result
-          | Error (Outcome.Classified classified)
-            when not
-                   (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_split
-                  && List.is_empty !choice.sd_sunk) ->
+          | Error (Outcome.Classified classified) when seeded_choice_changed !choice ->
               logf "the seeded untuned default FAILED (%s); compiling the plain default"
                 (Outcome.detail_of_cause classified.cause);
               plain ()
@@ -11340,12 +11389,12 @@ module Make (D : Driver) = struct
                         else None))
             in
             n_split_reduce_candidates := List.length sr_specs;
-            (* gh-ocannl-1388: the seeded untuned plan, the step the recipes' untuned compile ships
-               on CUDA and HIP ({!seeded_default}), seeded FIRST: wherever the search stops after
-               its first timing, or refuses every later window, it crowns that step, so tuned is
-               never worse than untuned by construction. Absent where the plan is the default
-               pipeline (no seed, split or sink; another backend), which the [config_thresholds]
-               preset seed reproduces, so those searches keep their candidate order. *)
+            (* gh-ocannl-1388: the untuned plan the recipes ship ({!seeded_default}), seeded FIRST:
+               wherever the search stops after its first timing, or refuses every later window, it
+               crowns that step, so tuned is never worse than untuned by construction. Absent where
+               the plan is the default pipeline (no seed, split or sink; another backend), which the
+               [config_thresholds] preset seed reproduces, so those searches keep their candidate
+               order. *)
             let seeded_specs =
               match Lazy.force seeded_plan_value with
               | None -> []
@@ -12853,6 +12902,7 @@ module Make (D : Driver) = struct
                 fun () ->
                   progress_stage "winner_compile";
                   Ir.Resource_fault_injection.hit
+                    ~artifact:(Routine { name = label })
                     Ir.Resource_fault_injection.Autotune_before_winner_replay;
                   match compile_spec_real ~label Outcome.Candidate spec with
                   | Ok c when not (shipped_dispatchable ~is_gpu c) ->

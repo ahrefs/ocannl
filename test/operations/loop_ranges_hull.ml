@@ -68,4 +68,41 @@ let () =
      decides)"
     (Ir.Affine.within_box
        ~range:(fun s' -> if Idx.equal_symbol shared s' then Some (0, 1) else None)
-       coords)
+       coords);
+  (* gh-ocannl-1628: [Affine.Loop_chain] enforces binder uniqueness per enclosing chain at
+     construction, while sibling loops remain separate single-binder chains. *)
+  let module C = Ir.Affine.Loop_chain in
+  let lc_s = sym () and lc_t = sym () in
+  let dup_expected = { C.symbol = lc_s; outer = (0, 3); inner = (1, 2) } in
+  p "Loop_chain.of_bindings refuses a duplicate binder with a typed error"
+    (match C.of_bindings [ (lc_s, (0, 3)); (lc_t, (0, 1)); (lc_s, (1, 2)) ] with
+    | Error dup -> C.equal_duplicate dup dup_expected
+    | Ok _ -> false);
+  p "Loop_chain.enter refuses a duplicate binder with a typed error"
+    (match C.enter (C.of_bindings_exn [ (lc_s, (0, 3)) ]) lc_s (1, 2) with
+    | Error dup -> C.equal_duplicate dup dup_expected
+    | Ok _ -> false);
+  p "Loop_chain.map_symbols refuses a rename collision with a typed error"
+    (let chain = C.of_bindings_exn [ (lc_s, (0, 3)); (lc_t, (1, 2)) ] in
+     match C.map_symbols chain ~f:(fun _ -> lc_s) with
+     | Error dup -> C.equal_duplicate dup dup_expected
+     | Ok _ -> false);
+  let nested_dup = loop ~upto:3 lc_s (loop ~from_:1 ~upto:2 lc_s (set_at dst (iter lc_s) (c 1.))) in
+  p "affine_relations raises Duplicate_binder on nested loops rebinding a symbol"
+    (match LL.affine_relations nested_dup with
+    | _ -> false
+    | exception C.Duplicate_binder dup -> C.equal_duplicate dup dup_expected);
+  let sibling_shared =
+    seq
+      (loop ~upto:3 lc_s (set_at dst (iter lc_s) (c 1.)))
+      (loop ~from_:1 ~upto:2 lc_s (set_at src (iter lc_s) (c 2.)))
+  in
+  let eq_bounds (lo1, hi1) (lo2, hi2) = lo1 = lo2 && hi1 = hi2 in
+  p "sibling loops sharing a symbol still extract as separate single-binder chains"
+    (match LL.affine_accesses sibling_shared with
+    | [ a1; a2 ] ->
+        C.length a1.a_loops = 1
+        && C.length a2.a_loops = 1
+        && Option.equal eq_bounds (C.find a1.a_loops lc_s) (Some (0, 3))
+        && Option.equal eq_bounds (C.find a2.a_loops lc_s) (Some (1, 2))
+    | _ -> false)
