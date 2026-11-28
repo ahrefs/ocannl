@@ -1482,11 +1482,12 @@ files.
   platform counter, a multi-group >64-CPU Windows host where `GetSystemTimes` covers one group while
   `GetProcessTimes` spans all groups, or a counter that went backwards) keeps the refusal.
   `Host_load.supported` publishes the platform-support predicate so real-counter tests gate on host
-  support rather than on `read`'s success. Config `autotune_log_host_load` (default `false`, `Execution_neutral`, read per timing
-  window) writes one flushed `autotune-host-load:` line per `Attribute_dispersion` window with its
-  verdict, foreign load, bar, tick allowance, span, attribution window, raw busy/own deltas,
-  padding, dispersion, spread, depth, samples, and admission (GPU `Refuse_dispersed` windows emit
-  none). On `minix-amd-linux` (32-thread Zen 5, `slow-autotune_fission_sketch`, 114 windows), 114/114
+  support rather than on `read`'s success. Config `autotune_log_host_load` (default `false`,
+  `Execution_neutral`, read per timing window) writes one flushed `autotune-host-load:` line per
+  `Attribute_dispersion` window that reaches host-load classification, with its verdict, foreign
+  load, bar, tick allowance, span, attribution window, raw busy/own deltas, padding, dispersion,
+  spread, depth, samples, and admission (windows cut early by `Timing_hopeless` or a budget stop
+  unwind before classification, matching `timing_call`; GPU `Refuse_dispersed` windows emit none). On `minix-amd-linux` (32-thread Zen 5, `slow-autotune_fission_sketch`, 114 windows), 114/114
   resolved `quiet` with 0 phantom `cotenant` verdicts: 3 of 92 `<50 ms` windows crossed 1.0 foreign
   core (`1.06–1.37`) from `/proc/stat` tick noise and were saved by the two-tick allowance, while
   the 22 `50–250 ms` windows stayed in `[-0.22, +0.16]` cores including 1 dispersed padded window

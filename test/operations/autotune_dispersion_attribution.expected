@@ -59,3 +59,4 @@ co-tenant: the windows are refused as contention: true
 co-tenant: none of the search's cache operations stores a schedule: true
 real host-load: every window of the dispersed cc search resolves to quiet or cotenant: true
 real host-load: a quiet dispersed cc search caches and replays: true
+not every attempted schedule store was refused: true

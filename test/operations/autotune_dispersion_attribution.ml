@@ -166,20 +166,24 @@ let () =
     && Option.is_none detail_backwards.foreign_cores
     && Option.is_some detail_backwards.allowance_cores);
   (* The real counters (gh-ocannl-1640): on platforms with a scope-matched busy counter (Linux,
-     macOS, single-group Windows), spin on one CPU for at least 0.35 s (continuing up to 2.5 s if
-     the host busy counter refreshes more slowly, as macOS's ~1 Hz mach counter does) and verify
-     that BOTH [own_s] (at least half the wall span) and [busy_s] advance, and the span resolves to
-     Quiet or Cotenant. Gated on [Host_load.supported], never on [Option.is_some r0], so a broken
-     stub or zero [own_s] fails loudly. *)
-  let spin_real_counters (before : Host_load.reading) =
+     macOS, single-group Windows), spin on one CPU until an independent CPU clock
+     ([Stdlib.Sys.time]) and wall time both reach 0.35 s and both counters advance (bounded by a 2.5
+     s wall cap for slow counter refresh rates such as macOS's ~1 Hz mach counter). Verify that
+     [own_s] credits at least half of the independent CPU delta, [busy_s] advances, and the span
+     resolves to Quiet or Cotenant. If a throttled runner starves the spin ([cpu_delta < 0.25]), the
+     independent clock records a run-time bypass instead of rejecting a valid counter; a broken
+     zero-[own_s] stub still fails loudly because [Stdlib.Sys.time] is not starved. *)
+  let spin_real_counters ~cpu0 (before : Host_load.reading) =
     let sink = ref 0 in
     let rec loop () =
       for i = 1 to 2_000_000 do
         sink := !sink lxor (i * 2654435761)
       done;
+      let cpu_delta = Stdlib.Sys.time () -. cpu0 in
       match Host_load.read () with
       | Some cur
-        when (Float.(cur.wall_s -. before.wall_s >= 0.35)
+        when (Float.(cpu_delta >= 0.35)
+             && Float.(cur.wall_s -. before.wall_s >= 0.35)
              && Float.(cur.busy_s > before.busy_s && cur.own_s > before.own_s))
              || Float.(cur.wall_s -. before.wall_s >= 2.5) ->
           ignore (Sys.opaque_identity !sink)
@@ -188,17 +192,22 @@ let () =
     in
     loop ()
   in
+  let cpu0 = Stdlib.Sys.time () in
   let r0 = Host_load.read () in
-  Option.iter r0 ~f:spin_real_counters;
+  Option.iter r0 ~f:(spin_real_counters ~cpu0);
   let r1 = Host_load.read () in
+  let cpu_delta = Stdlib.Sys.time () -. cpu0 in
   (match (r0, r1) with
   | Some before, Some after ->
       let detail = Host_load.classify_detail ~before ~after () in
       Stdio.eprintf
-        "real host-load own-spin (not part of the golden): counter_allowance_s=%.5f %s\n%!"
-        Host_load.counter_allowance_s (Host_load.format_detail detail)
+        "real host-load own-spin (not part of the golden): counter_allowance_s=%.5f sys_cpu_s=%.4f \
+         %s\n\
+         %!"
+        Host_load.counter_allowance_s cpu_delta (Host_load.format_detail detail)
   | _ -> ());
   gated ~aggregation:`Environment ~when_:Host_load.supported ~on:"a platform without a busy counter"
+    ~unless:[ ("cpu_starved", Float.(cpu_delta < 0.25)) ]
     "the real counters credit own-process CPU spin and resolve to a verdict"
     (match (r0, r1) with
     | Some before, Some after ->
@@ -206,7 +215,7 @@ let () =
         let own_delta = after.own_s -. before.own_s in
         Float.(span >= Host_load.min_span_s)
         && Float.(after.busy_s > before.busy_s)
-        && Float.(own_delta >= 0.5 *. span)
+        && Float.(own_delta >= 0.5 *. cpu_delta)
         && not
              (Host_load.equal_verdict (Host_load.classify ~before ~after ()) Host_load.Unavailable)
     | _ -> false)
@@ -641,4 +650,7 @@ let () =
     && r_real1.candidates_timed > 0 && r_real1.timings_contended = 0
     && r_real1.timings_dispersed = r_real1.candidates_timed
     && List.exists (schedule_stores ios_real1) ~f:(Fn.non Cache_plant.refused)
-    && Poly.equal r_real2.outcome Autotune.Cache_replay)
+    && Poly.equal r_real2.outcome Autotune.Cache_replay);
+  Cache_plant.not_every_store_refused
+    ~expected:(identity && real_identity && all_quiet)
+    "not every attempted schedule store was refused" (ios1 @ ios_real1)

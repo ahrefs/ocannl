@@ -4062,14 +4062,17 @@ val host_load_reading : (unit -> Utils.Host_load.reading option) Seam.t
     {!Utils.Host_load.read}; no configuration selects another. Per domain, like every {!Seam}.
 
     With config [autotune_log_host_load=true] (gh-ocannl-1640, default [false], read per window),
-    every {!Attribute_dispersion} timing window also writes one flushed line to stderr:
+    every {!Attribute_dispersion} timing window that reaches host-load classification writes one
+    flushed line to stderr:
 
     {v
     autotune-host-load: verdict=<verdict> foreign=<f> bar=<f> allowance=<f> span_s=<f> window_s=<f> busy_s=<f> own_s=<f> padded=<bool> dispersed=<bool> spread=<f> depth=<n> samples=<n> admission=<admission>
     v}
 
     formatted through {!Utils.Host_load.format_detail} with [none] for absent or non-finite floats.
-    {!Refuse_dispersed} (GPU) timing calls read no host-load counter and emit no lines. *)
+    Windows cut early by [Timing_hopeless] or a search budget stop unwind before host-load
+    classification and emit no line (matching {!timing_call}); {!Refuse_dispersed} (GPU) timing
+    calls read no host-load counter and emit no lines. *)
 
 val on_batch_wall : (depth:int -> ordinal:int -> float -> float) Seam.t
 (** The scripted clock for an executed search (gh-ocannl-1558): {!time_routine} passes every batch
