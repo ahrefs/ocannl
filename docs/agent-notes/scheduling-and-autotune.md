@@ -862,6 +862,37 @@ files.
   different admission would sink different statements. Under `approximate` it bites on CUDA bf16 and
   on fp8; HIP's bf16 and both backends' f16 are narrow there (`bf16_arithmetic=true`,
   `fp16_arithmetic=true`). Pinned by `test/operations/seeded_narrow_storage`.
+- **The untuned default keeps scalar blocktiles at f32-accumulating narrow sites by measured
+  boundary** (gh-ocannl-2360). Follow-up to gh-ocannl-1663: a prototype admitting staged untwinned
+  GPU MMA leaves (`32x32x32`, `16x32x32`, `32x32x16`) in `Autotune.seeded_default` at
+  f32-accumulating f16/bf16/fp8 sites (gated on `model_default_tensorize`, checked with
+  `Cost_model.accepted_tile_mma_flops` and falling back to `scalar_blocktile`) was measured in
+  exclusive mirrored A/B windows on all three GPU boxes (`bdfa8b51`; f32 drift controls
+  `0.996–1.007x` and 0 of 11 `.cu` files differing across arms; max relative loss delta
+  `6.7e-7`–`5.5e-5` on signed non-dyadic inputs):
+  - `rog-nv` (CUDA, RTX 5070 Ti Laptop sm_120, GDDR7): `#1190 fp8mm` (`8192×32×4096`) gained
+    `0.495 → 0.169 ms` (`0.342x`), but every `gpt2_mini` cell regressed — infer f16
+    `2.11 → 2.42 ms` (`1.147x`) and bf16 `2.08 → 2.44 ms` (`1.174x`), train b8 f16
+    `8.01 → 8.57 ms` (`1.069x`) and bf16 `6.50 → 7.16 ms` (`1.104x`), train b256 f16
+    `171.4 → 176.1 ms` (`1.027x`) and bf16 `168.3 → 175.7 ms` (`1.044x`).
+  - `minix` (HIP, Radeon 8060S gfx1151, unified memory): infer gained modestly (f16
+    `2.74 → 2.65 ms`, `0.972x`; bf16 `3.12 → 2.76 ms`, `0.886x`), while training regressed heavily
+    — b8 f16 `11.27 → 17.04 ms` (`1.512x`) and bf16 `12.03 → 17.21 ms` (`1.431x`), b256 f16
+    `294.8 → 484.9 ms` (`1.645x`) and bf16 `333.1 → 501.5 ms` (`1.505x`). `fp8mm` stayed unseeded
+    (`7.17 → 7.20 ms`, `1.004x`: `Hip_mma` advertises no fp8 format).
+  - `tuf` (HIP, RX 7700S gfx1102, discrete memory): infer gained modestly (f16 `3.95 → 3.67 ms`,
+    `0.931x`; bf16 `4.70 → 3.99 ms`, `0.850x`), while training regressed heavily — b8 f16
+    `12.92 → 18.42 ms` (`1.421x`) and bf16 `13.96 → 18.67 ms` (`1.337x`), b256 f16
+    `294.3 → 480.4 ms` (`1.633x`) and bf16 `356.1 → 509.4 ms` (`1.430x`). `fp8mm` stayed unseeded
+    (`10.67 → 10.73 ms`, `1.007x`).
+  - Per-kernel attribution on CUDA showed pure deep-K matmuls winning (`fp8mm` 2.93x, `logits`
+    1.56–1.79x, backward `dX` 1.64–1.98x, `softmax*v` 1.58x), outweighed by single-warp (32-thread)
+    MMA blocks losing on small-K `Q*K^T` (`K = 32`, `2.9x` slower), companion-heavy `ffn_w1+gelu`
+    (`1.31–1.45x` slower on 32 threads vs 256), `ffn_w2` (`1.22–1.29x` slower) and low-occupancy
+    `wgrad` (`1.12–1.21x` slower). Neither `16x32x32`-first (`3.38–3.50 ms` infer, `8.59–9.68 ms` b8,
+    `224.5 ms` b256 on rog) nor `model_default_schedule=true` (`4.24–4.40 ms` infer, `7.17–8.54 ms`
+    b8 on rog) avoids the regression. Re-open once multi-warp GPU MMA tiles (and/or small-K and
+    companion-heavy exclusion) close those gaps.
 - **`model_default` segments at the search's presets, and prices a segment against the lower of
   its two presets** (gh-ocannl-1512, gh-ocannl-1687, `Autotune.model_segments`). The preset
   decides the cuts: `fission_segmented` coalesces adjacent segments whose preset is empty. At the
