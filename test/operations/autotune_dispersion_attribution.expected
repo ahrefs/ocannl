@@ -20,7 +20,7 @@ a window longer than its span, or not positive, is no signal: true
 classify_detail reports quiet verdict, allowance and bar: true
 classify_detail reports padded window_s, span_s and inflated tick allowance: true
 classify_detail formats unavailable readings with none for missing fields: true
-the real counters advance on CPU work and resolve to a verdict over a 0.3 s span: true
+the real counters credit own-process CPU spin and resolve to a verdict: true
 == one timing call ==
 isolated: the scripted window is dispersed with spread 3: true
 isolated: a quiet host admits it at the floor: true

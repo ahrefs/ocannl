@@ -165,19 +165,22 @@ let () =
     && String.equal (Host_load.verdict_name detail_backwards.verdict) "unavailable"
     && Option.is_none detail_backwards.foreign_cores
     && Option.is_some detail_backwards.allowance_cores);
-  (* The real counters: on platforms with a scope-matched busy counter (Linux, macOS, single-group
-     Windows), a brief CPU burst plus idle wait advances both the machine busy counter and this
-     process's own time and resolves to Quiet or Cotenant. Gated on [Host_load.supported] (the
-     platform-support predicate), never on [Option.is_some r0], so a broken stub fails loudly. *)
-  let spin_until_counters_advance (before : Host_load.reading) =
+  (* The real counters (gh-ocannl-1640): on platforms with a scope-matched busy counter (Linux,
+     macOS, single-group Windows), spin on one CPU for at least 0.35 s (continuing up to 2.5 s if
+     the host busy counter refreshes more slowly, as macOS's ~1 Hz mach counter does) and verify
+     that BOTH [own_s] (at least half the wall span) and [busy_s] advance, and the span resolves to
+     Quiet or Cotenant. Gated on [Host_load.supported], never on [Option.is_some r0], so a broken
+     stub or zero [own_s] fails loudly. *)
+  let spin_real_counters (before : Host_load.reading) =
     let sink = ref 0 in
     let rec loop () =
-      for i = 1 to 200_000 do
+      for i = 1 to 2_000_000 do
         sink := !sink lxor (i * 2654435761)
       done;
       match Host_load.read () with
       | Some cur
-        when Float.(cur.busy_s > before.busy_s && cur.own_s > before.own_s)
+        when (Float.(cur.wall_s -. before.wall_s >= 0.35)
+             && Float.(cur.busy_s > before.busy_s && cur.own_s > before.own_s))
              || Float.(cur.wall_s -. before.wall_s >= 2.5) ->
           ignore (Sys.opaque_identity !sink)
       | Some _ -> loop ()
@@ -186,28 +189,24 @@ let () =
     loop ()
   in
   let r0 = Host_load.read () in
-  Option.iter r0 ~f:(fun before ->
-      spin_until_counters_advance before;
-      match Host_load.read () with
-      | Some mid ->
-          let rem = 0.3 -. (mid.wall_s -. before.wall_s) in
-          if Float.(rem > 0.) then Unix.sleepf rem
-      | None -> ());
+  Option.iter r0 ~f:spin_real_counters;
   let r1 = Host_load.read () in
   (match (r0, r1) with
   | Some before, Some after ->
       let detail = Host_load.classify_detail ~before ~after () in
       Stdio.eprintf
-        "real host-load over 0.3 s (not part of the golden): counter_allowance_s=%.5f %s\n%!"
+        "real host-load own-spin (not part of the golden): counter_allowance_s=%.5f %s\n%!"
         Host_load.counter_allowance_s (Host_load.format_detail detail)
   | _ -> ());
   gated ~aggregation:`Environment ~when_:Host_load.supported ~on:"a platform without a busy counter"
-    "the real counters advance on CPU work and resolve to a verdict over a 0.3 s span"
+    "the real counters credit own-process CPU spin and resolve to a verdict"
     (match (r0, r1) with
     | Some before, Some after ->
-        Float.(after.wall_s -. before.wall_s >= Host_load.min_span_s)
+        let span = after.wall_s -. before.wall_s in
+        let own_delta = after.own_s -. before.own_s in
+        Float.(span >= Host_load.min_span_s)
         && Float.(after.busy_s > before.busy_s)
-        && Float.(after.own_s > before.own_s)
+        && Float.(own_delta >= 0.5 *. span)
         && not
              (Host_load.equal_verdict (Host_load.classify ~before ~after ()) Host_load.Unavailable)
     | _ -> false)
@@ -552,12 +551,30 @@ let () =
   p_none ~min:1 "co-tenant: none of the search's cache operations stores a schedule" ios3
     ~f:(fun io -> not (List.is_empty (schedule_stores [ io ])));
   (* Real host-load counters on a dispersed executed cc search with the verdict stream on
-     (gh-ocannl-1640): every window resolves on supported platforms (Linux, macOS, Windows), and on
-     a quiet host the search caches and replays without mocking Host_load.read. Each batch paces to
-     16 ms so a 16-sample window spans > Host_load.min_span_s (250 ms) directly rather than padding
-     a microsecond kernel and dividing the sleep's background ticks by microseconds. *)
+     (gh-ocannl-1640): every window resolves on supported platforms (Linux, macOS, single-group
+     Windows), and on a quiet host the search caches and replays without mocking Host_load.read.
+     Each batch burns 16 ms of own-process CPU so a 16-sample window spans > Host_load.min_span_s
+     (250 ms) directly AND exercises subtracting our process's own CPU time from machine busy time
+     on every window. *)
+  let spin_s seconds =
+    match Host_load.read () with
+    | None -> Unix.sleepf seconds
+    | Some start ->
+        let sink = ref 0 in
+        let rec loop () =
+          for i = 1 to 2_000_000 do
+            sink := !sink lxor (i * 2654435761)
+          done;
+          match Host_load.read () with
+          | Some cur when Float.(cur.wall_s -. start.wall_s >= seconds) ->
+              ignore (Sys.opaque_identity !sink)
+          | Some _ -> loop ()
+          | None -> ignore (Sys.opaque_identity !sink)
+        in
+        loop ()
+  in
   let real_executed_clock ~depth ~ordinal wall =
-    Unix.sleepf 0.016;
+    spin_s 0.016;
     executed_clock ~depth ~ordinal wall
   in
   let real_search ~tag =
