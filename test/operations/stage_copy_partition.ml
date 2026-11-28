@@ -236,13 +236,13 @@ let () =
     let transform opt = Sched.apply (schedule opt) opt in
     let post = transform (Ll_test.captured_lowering ~name:("scp_cap_" ^ tag) comp) in
     let stores = Ll_test.tile_store_partitions ~tiles:post.LL.workgroup_shared post.LL.llc in
-    p_all (tag ^ ": every tile store is partitioned across both Workgroup loops") stores
+    p_all ~min:2 (tag ^ ": every tile store is partitioned across both Workgroup loops") stores
       ~f:(fun (n_wg, named_all) -> n_wg = 2 && named_all);
-    p_all
+    p_all ~min:1
       (tag ^ ": non-transposed A maps slot 0 with unit stride on its source minor axis")
       (slot0_unit_on_src_minor_reads ~source:ma.Tensor.value post)
       ~f:Fn.id;
-    p_all
+    p_all ~min:1
       (tag
       ^
       if expect_w_slot0_minor then
@@ -322,12 +322,12 @@ let () =
   Ll_test.walk post.LL.llc ~on_if:(fun c -> guards := c :: !guards);
   let stores = Ll_test.tile_store_partitions ~tiles:post.LL.workgroup_shared post.LL.llc in
   p_empty "wg3d: no idle-lane guard survives over the tile copies" ~over:stores !guards;
-  p_all "wg3d: every tile store is partitioned across all three Workgroup loops" stores
+  p_all ~min:2 "wg3d: every tile store is partitioned across all three Workgroup loops" stores
     ~f:(fun (n_wg, named_all) -> n_wg = 3 && named_all);
-  p_all "wg3d: A maps slot 0 with unit stride on its source minor axis"
+  p_all ~min:1 "wg3d: A maps slot 0 with unit stride on its source minor axis"
     (slot0_unit_on_src_minor_reads ~source:ma.Tensor.value post)
     ~f:Fn.id;
-  p_all "wg3d: transposed W maps slot 0 with unit stride on its source minor axis"
+  p_all ~min:1 "wg3d: transposed W maps slot 0 with unit stride on its source minor axis"
     (slot0_unit_on_src_minor_reads ~source:mw.Tensor.value post)
     ~f:Fn.id;
   let tile_minors =
@@ -397,10 +397,10 @@ let () =
   p "fallback: 48 KiB schedule allocates 34816 B padded tiles"
     (Sched.workgroup_memory_bytes ~capabilities:Ir.Backend_intf.no_codegen_capabilities opt_48k
     = 34816);
-  p_none "fallback: 32 KiB unpadded transposed W declines source-minor remapping"
+  p_none ~min:1 "fallback: 32 KiB unpadded transposed W declines source-minor remapping"
     (slot0_unit_on_src_minor_reads ~source:w.Tensor.value opt_32k)
     ~f:Fn.id;
-  p_all "fallback: 48 KiB padded transposed W maps slot 0 with unit stride on K"
+  p_all ~min:1 "fallback: 48 KiB padded transposed W maps slot 0 with unit stride on K"
     (slot0_unit_on_src_minor_reads ~source:w.Tensor.value opt_48k)
     ~f:Fn.id
 
@@ -468,5 +468,5 @@ let () =
   let stores = Ll_test.tile_store_partitions ~tiles:post.LL.workgroup_shared post.LL.llc in
   p_empty "divfirst: fallback slot 0 divides outer 32-trip loop with zero idle-lane guards"
     ~over:stores !guards;
-  p_all "divfirst: tile store is partitioned across both Workgroup loops" stores
+  p_all ~min:1 "divfirst: tile store is partitioned across both Workgroup loops" stores
     ~f:(fun (n_wg, named_all) -> n_wg = 2 && named_all)

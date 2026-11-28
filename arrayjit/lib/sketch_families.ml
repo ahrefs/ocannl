@@ -2119,10 +2119,13 @@ let gpu_stage_padded_minor ~prec ~no_bank_pad minor_extent =
    [bn/tn] (e.g. 64x64x8/4x4 on qkv / standard matmuls: wg_x=16, bk=8), split the column workgroup
    axis into [(wg_x / bk, bk)] so hardware slot 0 (.x) has width [bk] and [Schedule.Stage]'s dense
    copy folds all three workgroup axes onto the tile with full thread participation and zero
-   idle-lane [if (tx < bk)] / [if (ty < bk)] guards. Multi-axis contractions (e.g. uncoalesced
-   outproj) already have the [coal-k] branch with [bk >= wg_x] and far fewer barriers, so keeping
-   their uncoalesced 64x64x8 unsplit lets [model_family_search] continue to prefer [coal-k] over
-   32-barrier 64x64x8. *)
+   idle-lane [if (tx < bk)] / [if (ty < bk)] guards. The divisibility check [bm % (wg_y * factor) =
+   0 && bn % (wg_y * factor) = 0] ensures that after slot 0 divides [k_i] (extent [bk]), the two
+   remaining workgroup slots (widths [factor = wg_x / bk] and [wg_y]) divide the remaining spatial
+   tile axis of both operands ([bm] on A and [bn] on B) evenly so both dense copies partition
+   without guards. Multi-axis contractions (e.g. uncoalesced outproj) already have the [coal-k]
+   branch with [bk >= wg_x] and far fewer barriers, so keeping their uncoalesced 64x64x8 unsplit
+   lets [model_family_search] continue to prefer [coal-k] over 32-barrier 64x64x8. *)
 let gpu_blocktile_split_wg_x ~single_k ~bm ~bn ~bk ~tm ~tn =
   if single_k && tm > 0 && tn > 0 && bk > 0 then
     let wg_y = bm / tm and wg_x = bn / tn in
@@ -4017,6 +4020,20 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
           choice
           @@ judge_pad_waste
                (List.map (blocktile_geometries ()) ~f:(fun (bm, bn, bk, tm, tn) ->
+                    let wg_threads = if tm > 0 && tn > 0 then bm / tm * (bn / tn) else 1 in
+                    let staged_bytes ~no_bank_pad =
+                      Sched.kernel_workgroup_bytes ~capabilities ~workgroup_threads:wg_threads
+                        ~arrays:
+                          [
+                            bm
+                            * gpu_stage_padded_minor ~prec:a_prec ~no_bank_pad bk
+                            * Ir.Ops.prec_in_bytes a_prec;
+                            bk
+                            * gpu_stage_padded_minor ~prec:b_prec ~no_bank_pad bn
+                            * Ir.Ops.prec_in_bytes b_prec;
+                          ]
+                        ~mma_triples:[]
+                    in
                     ( Family_decision.Geometry
                         (Gpu_blocktile { g_bm = bm; g_bn = bn; g_bk = bk; g_tm = tm; g_tn = tn }),
                       site_pad_axes ~bm ~bn ~bk,
@@ -4057,20 +4074,6 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                            tiles decide admissibility so limits like Metal's 32 KiB keep admitting
                            exact-fit geometries ([sk_no_bank_pad = true] when padded tiles exceed
                            [cap], gh-ocannl-1842). *)
-                        let wg_threads = if tm > 0 && tn > 0 then bm / tm * (bn / tn) else 1 in
-                        let staged_bytes ~no_bank_pad =
-                          Sched.kernel_workgroup_bytes ~capabilities ~workgroup_threads:wg_threads
-                            ~arrays:
-                              [
-                                bm
-                                * gpu_stage_padded_minor ~prec:a_prec ~no_bank_pad bk
-                                * Ir.Ops.prec_in_bytes a_prec;
-                                bk
-                                * gpu_stage_padded_minor ~prec:b_prec ~no_bank_pad bn
-                                * Ir.Ops.prec_in_bytes b_prec;
-                              ]
-                            ~mma_triples:[]
-                        in
                         let staged = staged_bytes ~no_bank_pad:true in
                         match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
                         | Some cap when staged > cap ->
@@ -4083,20 +4086,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                             ]
                         | _ -> [])
                         (fun () ->
-                          let wg_threads = if tm > 0 && tn > 0 then bm / tm * (bn / tn) else 1 in
-                          let padded =
-                            Sched.kernel_workgroup_bytes ~capabilities ~workgroup_threads:wg_threads
-                              ~arrays:
-                                [
-                                  bm
-                                  * gpu_stage_padded_minor ~prec:a_prec ~no_bank_pad:false bk
-                                  * Ir.Ops.prec_in_bytes a_prec;
-                                  bk
-                                  * gpu_stage_padded_minor ~prec:b_prec ~no_bank_pad:false bn
-                                  * Ir.Ops.prec_in_bytes b_prec;
-                                ]
-                              ~mma_triples:[]
-                          in
+                          let padded = staged_bytes ~no_bank_pad:false in
                           let sk_no_bank_pad =
                             Option.exists limits.Ir.Backend_intf.max_workgroup_memory_bytes
                               ~f:(fun cap -> padded > cap)
