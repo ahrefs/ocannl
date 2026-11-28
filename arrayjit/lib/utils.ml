@@ -2517,7 +2517,8 @@ let library_kernel_name base_name =
   else shortened_kernel_name ~separator:'-' ~digest_length:8 ~original:name name
 
 let routine_artifact_stem name =
-  (* Reserve the digest separator so a literal label copied from an artifact gets its own file. *)
+  (* Shared paths depend on the stem alone, so reserve its separator and use a wider digest. Owned
+     paths also carry a process id, nonce and run id. *)
   let separator = '~' in
   if String.length name <= library_kernel_name_limit && not (String.contains name separator) then
     name
