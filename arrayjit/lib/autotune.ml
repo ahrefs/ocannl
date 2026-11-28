@@ -6480,12 +6480,14 @@ let ranking_multiprocessors ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve multiprocessors_override u.core_count
 
-(* gh-ocannl-1253: on CUDA and HIP the model starts from the seeded untuned plan
+(* gh-ocannl-1253, gh-ocannl-2506: where the untuned default adds sketch seeding
+   ([seeds_untuned_default]), plain-cell reduction sinking ([sinks_untuned_reductions]) or split
+   reductions ([splits_untuned_reductions]), the model starts from that untuned plan
    ({!seeded_default}'s, [auto] gate included) rather than the plain default pipeline: it is the
    incumbent, and the action taken when no candidate strictly beats it -- measured, on each searched
-   program, against its own sketch there ({!model_seeded_anchors}, gh-ocannl-1477). [None] where the
-   untuned compile is the plain default (another backend, seeding off). Shared by [model_default]
-   and [model_explain]. *)
+   program, against its own sketch there ({!model_seeded_anchors}, gh-ocannl-1477) when sketch
+   seeding is active. [None] where the untuned compile is the plain default (another backend, or
+   every untuned feature off). Shared by [model_default] and [model_explain]. *)
 let model_untuned_plan ~facts ~limits =
   seeded_settings ~facts ~configured_gate:(fun () -> seeded_default_gate ~limits) ()
 
@@ -7662,11 +7664,14 @@ module Make (D : Driver) = struct
             None
       in
       let seeding_here = lazy (model_seeding ~facts ~limits) in
-      (* gh-ocannl-1253: the model keeps the untuned plan as the incumbent unless a candidate
-         strictly beats it. CUDA and HIP can add sketch seeding; Metal can sink plain reductions. *)
+      (* gh-ocannl-1253, gh-ocannl-2506: the model keeps the untuned plan as the incumbent unless a
+         candidate strictly beats it. [seeds_untuned_default] (CUDA/HIP) adds sketch seeding;
+         [sinks_untuned_reductions] and [splits_untuned_reductions] (CUDA/HIP/Metal) sink and split
+         long reductions before mapping. *)
       let untuned_here = lazy (model_untuned_plan ~facts ~limits) in
-      (* [model_admits] applies the numerics gate under the CUDA/HIP sketch-seeding policy. A
-         sink-only Metal incumbent keeps the same candidate family as the plain preset. *)
+      (* [model_admits] applies the numerics gate under [seeds_untuned_default] (CUDA/HIP
+         sketch-seeding). An unseeded Metal incumbent (sink/split only) keeps the same candidate
+         family as the plain preset. *)
       let coalesced = model_ranks_coalesced ~limits in
       let admits p = model_admits ~coalesced ~seeding:(Lazy.force seeding_here) p in
       (* gh-ocannl-1477: under seeding, a walk's threshold is the seeded plan's own sketch on the
@@ -7757,12 +7762,13 @@ module Make (D : Driver) = struct
          judges it: a plan that seeds, splits and sinks nothing IS the default pipeline, so a
          compilation failure of it is the default's and is not retried. *)
       let seeded_changed = ref false in
-      (* The seeded plan's split prelude (CUDA, gh-ocannl-1325); the program itself where the model
-         does not start from the seeded plan. On a hermetic copy for scoring; in place for the
-         pick's application, as the [`Seeded] action's [seeded_apply] splits the compile's own
-         lowering: a pick applied to a copy registers the nodes its transforms create (a fissioned
-         segment's promoted locals) in the copy's placements, not the compiling context's, and the
-         compile then fails on an undecided node (gh-ocannl-1477's fissioned chain, on HIP). *)
+      (* The untuned plan's split prelude (gated by [splits_untuned_reductions], gh-ocannl-1325,
+         gh-ocannl-2506); the program itself where the model does not start from an untuned plan
+         with splits. On a hermetic copy for scoring; in place for the pick's application, as the
+         [`Seeded] action's [seeded_apply] splits the compile's own lowering: a pick applied to a
+         copy registers the nodes its transforms create (a fissioned segment's promoted locals) in
+         the copy's placements, not the compiling context's, and the compile then fails on an
+         undecided node (gh-ocannl-1477's fissioned chain, on HIP). *)
       let prelude ?(hermetic = true) (opt : LL.optimized) =
         match Lazy.force untuned_here with
         | Some (_, min_serial, _, _) ->
