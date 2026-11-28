@@ -183,6 +183,7 @@ type sketch_params = {
   sk_depth : int;
   sk_pack_prec : Ir.Ops.prec option;
   sk_tile : Ir.Register_tile.t option;
+  sk_no_bank_pad : bool;
 }
 [@@deriving sexp]
 (** Parameters of one matmul-sketch seed candidate; see {!Sketch_families.sketch_params} for field

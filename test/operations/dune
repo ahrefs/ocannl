@@ -16875,8 +16875,10 @@
   ocannl
   arrayjit.verdict
   ll_test
+  test_utils
   arrayjit.utils
-  arrayjit.context)
+  arrayjit.context
+  arrayjit.autotune)
  (preprocess
   (pps ppx_ocannl)))
 

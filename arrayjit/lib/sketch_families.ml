@@ -71,6 +71,7 @@ type sketch_params = {
   sk_depth : int;
   sk_pack_prec : Ir.Ops.prec option;
   sk_tile : Ir.Register_tile.t option;
+  sk_no_bank_pad : bool;
 }
 [@@deriving sexp]
 
@@ -2095,6 +2096,46 @@ let batch_grid_twin_ok (site : matmul_site) : bool =
    binds [.y]), the tensorization lane alone for the mma pipeline, whose column block IS the lane
    width. Parameters that name no block geometry — every CPU pipeline — predict nothing: the C
    backends render annotated loops serially and have no launch to bound. *)
+(* gh-ocannl-1842: 16-byte stride padding for GPU scalar blocktile shared tiles whose row stride is
+   a multiple of 32 bytes (bank-conflicting on 32-bank x 4B CUDA/HIP shared memory). Padding by 16
+   bytes (+4 f32, +8 f16/bf16, +16 fp8, +2 f64) keeps every row 16-byte aligned for [LDS.128]
+   while shifting consecutive rows by 4 banks, unlocking coalesced source-minor staging copies
+   without 8-way/16-way shared-store conflicts. *)
+let gpu_stage_bank_pad_stride ~prec minor_extent =
+  let elem_bytes = Ir.Ops.prec_in_bytes prec in
+  if
+    elem_bytes > 0 && elem_bytes <= 8
+    && 16 % elem_bytes = 0
+    && minor_extent >= 2
+    && minor_extent * elem_bytes % 32 = 0
+  then Some (minor_extent + (16 / elem_bytes))
+  else None
+
+let gpu_stage_padded_minor ~prec ~no_bank_pad minor_extent =
+  if no_bank_pad then minor_extent
+  else Option.value (gpu_stage_bank_pad_stride ~prec minor_extent) ~default:minor_extent
+
+(* gh-ocannl-1842: when a single-axis-contraction GPU scalar blocktile has [bk < bn/tn] dividing
+   [bn/tn] (e.g. 64x64x8/4x4 on qkv / standard matmuls: wg_x=16, bk=8), split the column workgroup
+   axis into [(wg_x / bk, bk)] so hardware slot 0 (.x) has width [bk] and [Schedule.Stage]'s dense
+   copy folds all three workgroup axes onto the tile with full thread participation and zero
+   idle-lane [if (tx < bk)] / [if (ty < bk)] guards. The divisibility check [bm % (wg_y * factor) =
+   0 && bn % (wg_y * factor) = 0] ensures that after slot 0 divides [k_i] (extent [bk]), the two
+   remaining workgroup slots (widths [factor = wg_x / bk] and [wg_y]) divide the remaining spatial
+   tile axis of both operands ([bm] on A and [bn] on B) evenly so both dense copies partition
+   without guards. Multi-axis contractions (e.g. uncoalesced outproj) already have the [coal-k]
+   branch with [bk >= wg_x] and far fewer barriers, so keeping their uncoalesced 64x64x8 unsplit
+   lets [model_family_search] continue to prefer [coal-k] over 32-barrier 64x64x8. *)
+let gpu_blocktile_split_wg_x ~single_k ~bm ~bn ~bk ~tm ~tn =
+  if single_k && tm > 0 && tn > 0 && bk > 0 then
+    let wg_y = bm / tm and wg_x = bn / tn in
+    bk < wg_x
+    && wg_x % bk = 0
+    &&
+    let factor = wg_x / bk in
+    bm % (wg_y * factor) = 0 && bn % (wg_y * factor) = 0
+  else false
+
 let matmul_launch_geometry (site : matmul_site) (p : sketch_params) : Sched.launch_geometry =
   if not (p.sk_gpu && p.sk_bm > 0 && p.sk_bn > 0) then Sched.unknown_launch_geometry
   else
@@ -2107,7 +2148,13 @@ let matmul_launch_geometry (site : matmul_site) (p : sketch_params) : Sched.laun
     in
     let block =
       if p.sk_mma then [ p.sk_simd ]
-      else if p.sk_tm > 0 && p.sk_tn > 0 then [ p.sk_bm / p.sk_tm; p.sk_bn / p.sk_tn ]
+      else if p.sk_tm > 0 && p.sk_tn > 0 then
+        let wg_y = p.sk_bm / p.sk_tm and wg_x = p.sk_bn / p.sk_tn in
+        if
+          gpu_blocktile_split_wg_x ~single_k:(List.is_empty site.m_ko) ~bm:p.sk_bm ~bn:p.sk_bn
+            ~bk:p.sk_bk ~tm:p.sk_tm ~tn:p.sk_tn
+        then [ wg_y; wg_x / p.sk_bk; p.sk_bk ]
+        else [ wg_y; wg_x ]
       else []
     in
     predicted_launch_geometry ~grid ~block
@@ -2180,18 +2227,33 @@ let k_extent_label (site : matmul_site) : string =
    workgroup extents), and companion nests the matching per-position split pair
    ([companion_geometry], gh-ocannl-521). *)
 let gpu_sketch_schedule ~accum_prec ~(opt : LL.optimized) (site : matmul_site)
-    ({ sk_bm = bm; sk_bn = bn; sk_bk = bk; sk_tm = tm; sk_tn = tn; sk_epilogue; sk_batch_grid; _ }
-     as p) : Sched.schedule =
+    ({
+       sk_bm = bm;
+       sk_bn = bn;
+       sk_bk = bk;
+       sk_tm = tm;
+       sk_tn = tn;
+       sk_epilogue;
+       sk_batch_grid;
+       sk_no_bank_pad;
+       _;
+     } as p) : Sched.schedule =
   let layout = batch_layout_of p in
+  let split_wg_x =
+    gpu_blocktile_split_wg_x ~single_k:(List.is_empty site.m_ko) ~bm ~bn ~bk ~tm ~tn
+  in
   (* One geometry description drives the accumulation nest, the expanded zeroing nest and the
      companion nests: per row/column chain position, the block split (Grid) and the register split
      (Workgroup), which is what makes their slots and workgroup extents agree by construction; batch
      positions stay [Serial] (gh-ocannl-528), or become whole-loop [Grid] axes under the
      [sk_batch_grid] twins (gh-ocannl-643), placed by the [batch_layout]. *)
-  let split_pair ~blk ~reg sym =
+  let split_pair ~blk ~reg ?(wg_split = false) sym =
     let sp, _, inner = Sched.split ~axis:sym ~factor:blk ~outer:LL.Grid ~inner:LL.Serial in
-    let sp2, _, _ = Sched.split ~axis:inner ~factor:reg ~outer:LL.Workgroup ~inner:LL.Serial in
-    { rp_block = [ sp ]; rp_inner = inner; rp_rest = [ sp2 ] }
+    let sp2, wg, _ = Sched.split ~axis:inner ~factor:reg ~outer:LL.Workgroup ~inner:LL.Serial in
+    if wg_split then
+      let sp3, _, _ = Sched.split ~axis:wg ~factor:bk ~outer:LL.Workgroup ~inner:LL.Workgroup in
+      { rp_block = [ sp ]; rp_inner = inner; rp_rest = [ sp2; sp3 ] }
+    else { rp_block = [ sp ]; rp_inner = inner; rp_rest = [ sp2 ] }
   in
   let row_parts ?extent sym =
     let rp = split_pair ~blk:bm ~reg:tm sym in
@@ -2203,8 +2265,10 @@ let gpu_sketch_schedule ~accum_prec ~(opt : LL.optimized) (site : matmul_site)
     match role with
     | `Batch -> if sk_batch_grid then [ Sched.Retype { axis = sym; ty = LL.Grid } ] else []
     | (`Row | `Col) as rc ->
-        let blk, reg = match rc with `Row -> (bm, tm) | `Col -> (bn, tn) in
-        let rp = split_pair ~blk ~reg sym in
+        let blk, reg, wg_split =
+          match rc with `Row -> (bm, tm, false) | `Col -> (bn, tn, split_wg_x)
+        in
+        let rp = split_pair ~blk ~reg ~wg_split sym in
         rp.rp_block @ rp.rp_rest
   in
   let roles = Array.of_list (matmul_chain_roles site) in
@@ -2230,9 +2294,17 @@ let gpu_sketch_schedule ~accum_prec ~(opt : LL.optimized) (site : matmul_site)
   let sp_i2, i_w, i_t = Sched.split ~axis:i_i ~factor:tm ~outer:LL.Workgroup ~inner:LL.Serial in
   let sp_j, j_o, j_i = Sched.split ~axis:site.m_j ~factor:bn ~outer:LL.Grid ~inner:LL.Serial in
   let sp_j2, j_w, j_t = Sched.split ~axis:j_i ~factor:tn ~outer:LL.Workgroup ~inner:LL.Serial in
+  let sp_j_wg, j_wg_syms =
+    if split_wg_x then
+      let sp_j3, j_w_hi, j_w_lo =
+        Sched.split ~axis:j_w ~factor:bk ~outer:LL.Workgroup ~inner:LL.Workgroup
+      in
+      ([ sp_j3 ], [ j_w_hi; j_w_lo ])
+    else ([], [ j_w ])
+  in
   let sp_k, k_o, k_i = Sched.split ~axis:site.m_k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
   let kb = k_blocks site [ k_o ] in
-  let swaps = sink i_t ([ j_o; j_w; j_t ] @ kb @ [ k_i ]) @ sink j_t (kb @ [ k_i ]) in
+  let swaps = sink i_t ((j_o :: j_wg_syms) @ [ j_t ] @ kb @ [ k_i ]) @ sink j_t (kb @ [ k_i ]) in
   (* Pad composition (gh-ocannl-485, gh-ocannl-730): this pipeline stages BOTH operands through
      zero-fringe workgroup tiles at every geometry, so non-multiple extents pad to the block sizes
      instead of refuting — the same argument the tensorized family has used since gh-ocannl-485,
@@ -2245,7 +2317,13 @@ let gpu_sketch_schedule ~accum_prec ~(opt : LL.optimized) (site : matmul_site)
       @ pad_to ~axis:site.m_j ~extent:site.m_nj bn
       @ pad_to ~axis:site.m_k ~extent:site.m_nk bk
   in
-  hoists_before @ pads @ zops @ [ sp_i ] @ hoists_after @ [ sp_i2; sp_j; sp_j2; sp_k ] @ swaps
+  let a_pad_stride =
+    if sk_no_bank_pad then None else gpu_stage_bank_pad_stride ~prec:(operand_prec site site.m_a) bk
+  and b_pad_stride =
+    if sk_no_bank_pad then None else gpu_stage_bank_pad_stride ~prec:(operand_prec site site.m_b) bn
+  in
+  hoists_before @ pads @ zops @ [ sp_i ] @ hoists_after @ [ sp_i2; sp_j; sp_j2 ] @ sp_j_wg
+  @ [ sp_k ] @ swaps
   @ [
       Sched.Stage
         {
@@ -2255,19 +2333,19 @@ let gpu_sketch_schedule ~accum_prec ~(opt : LL.optimized) (site : matmul_site)
           cooperative = None;
           hoisted = false;
           swizzle = None;
-          pad_stride = None;
+          pad_stride = a_pad_stride;
           pipeline_depth = 1;
           tile_prec = None;
         };
       Sched.Stage
         {
           source = site.m_b;
-          tile_loops = [ k_i; j_w; j_t ];
+          tile_loops = (k_i :: j_wg_syms) @ [ j_t ];
           shared = true;
           cooperative = None;
           hoisted = false;
           swizzle = None;
-          pad_stride = None;
+          pad_stride = b_pad_stride;
           pipeline_depth = 1;
           tile_prec = None;
         };
@@ -3880,6 +3958,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
       sk_coalesce = None;
       sk_pack_prec = None;
       sk_tile = None;
+      sk_no_bank_pad = false;
     }
   in
   (* Both GPU pipeline branches are parameterized by the batch-geometry flavor (gh-ocannl-643):
@@ -3941,6 +4020,20 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
           choice
           @@ judge_pad_waste
                (List.map (blocktile_geometries ()) ~f:(fun (bm, bn, bk, tm, tn) ->
+                    let wg_threads = if tm > 0 && tn > 0 then bm / tm * (bn / tn) else 1 in
+                    let staged_bytes ~no_bank_pad =
+                      Sched.kernel_workgroup_bytes ~capabilities ~workgroup_threads:wg_threads
+                        ~arrays:
+                          [
+                            bm
+                            * gpu_stage_padded_minor ~prec:a_prec ~no_bank_pad bk
+                            * Ir.Ops.prec_in_bytes a_prec;
+                            bk
+                            * gpu_stage_padded_minor ~prec:b_prec ~no_bank_pad bn
+                            * Ir.Ops.prec_in_bytes b_prec;
+                          ]
+                        ~mma_triples:[]
+                    in
                     ( Family_decision.Geometry
                         (Gpu_blocktile { g_bm = bm; g_bn = bn; g_bk = bk; g_tm = tm; g_tn = tn }),
                       site_pad_axes ~bm ~bn ~bk,
@@ -3977,17 +4070,11 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                           | _ -> [])
                         @
                         (* Charged as the gate charges them, each tile rounded to the backend's
-                           allocation granule (gh-ocannl-1330); no tile-MMA scope here. *)
-                        let staged =
-                          Sched.kernel_workgroup_bytes ~capabilities
-                            ~workgroup_threads:(if tm > 0 && tn > 0 then bm / tm * (bn / tn) else 1)
-                            ~arrays:
-                              [
-                                bm * bk * Ir.Ops.prec_in_bytes a_prec;
-                                bk * bn * Ir.Ops.prec_in_bytes b_prec;
-                              ]
-                            ~mma_triples:[]
-                        in
+                           allocation granule (gh-ocannl-1330); no tile-MMA scope here. Unpadded
+                           tiles decide admissibility so limits like Metal's 32 KiB keep admitting
+                           exact-fit geometries ([sk_no_bank_pad = true] when padded tiles exceed
+                           [cap], gh-ocannl-1842). *)
+                        let staged = staged_bytes ~no_bank_pad:true in
                         match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
                         | Some cap when staged > cap ->
                             [
@@ -3999,6 +4086,11 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                             ]
                         | _ -> [])
                         (fun () ->
+                          let padded = staged_bytes ~no_bank_pad:false in
+                          let sk_no_bank_pad =
+                            Option.exists limits.Ir.Backend_intf.max_workgroup_memory_bytes
+                              ~f:(fun cap -> padded > cap)
+                          in
                           leaf
                             {
                               base_params with
@@ -4010,6 +4102,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                               sk_tn = tn;
                               sk_batch_grid = batch_grid_of batch;
                               sk_batch_inner = batch_inner_of batch;
+                              sk_no_bank_pad;
                             }) ))))
     else if is_cpu then
       (* Hoisted vs in-kernel packing stays a measured choice (gh-ocannl-470): when a constant
@@ -5074,6 +5167,7 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
       sk_coalesce = None;
       sk_pack_prec = None;
       sk_tile = None;
+      sk_no_bank_pad = false;
     }
   in
   (* The CPU leg: the register-tiled implicit-GEMM pipeline ([cpu_conv_sketch_schedule]). *)

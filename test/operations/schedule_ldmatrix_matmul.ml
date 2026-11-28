@@ -334,6 +334,7 @@ let () =
             sk_coalesce = None;
             sk_pack_prec = None;
             sk_tile = None;
+            sk_no_bank_pad = false;
           }
         opt)
     ~check:(bf16_check ~a_trans:false ~b_trans:true)
