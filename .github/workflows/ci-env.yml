@@ -189,11 +189,20 @@ jobs:
     # ci.yml run gates, in dev.
     # Match ci.yml's probe and failure listing, but reuse the release objects.
     - name: Print the host's capabilities
+      id: host-caps
       continue-on-error: true
       shell: bash
       run: |
+        rm -f "$RUNNER_TEMP/host-caps.txt"
         opam exec -- dune build --release ./tools/host_caps.exe 2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"
         cd test/config && opam exec -- ../../_build/default/tools/host_caps.exe "--save=${{ runner.temp }}/host-caps.txt"
+    # Keep the probe nonblocking, but annotate a run whose probe ran without
+    # saving a valid host line so a broken probe cannot pass silently (gh-ocannl-2120).
+    - name: Verify the host probe saved a host line
+      shell: bash
+      env:
+        HOST_PROBE_OUTCOME: ${{ steps.host-caps.outcome }}
+      run: tools/ci-failed-rules.sh --github --check-host --host "$RUNNER_TEMP/host-caps.txt" --host-probe "$HOST_PROBE_OUTCOME"
     - name: Type-check everything
       shell: bash
       run: opam exec -- dune build --release @check 2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"
@@ -206,8 +215,10 @@ jobs:
     - name: List the failed dune rules
       if: ${{ failure() }}
       shell: bash
+      env:
+        HOST_PROBE_OUTCOME: ${{ steps.host-caps.outcome || 'skipped' }}
       run: |
-        tools/ci-failed-rules.sh --github --host "$RUNNER_TEMP/host-caps.txt" "$RUNNER_TEMP/dune-build.log"
+        tools/ci-failed-rules.sh --github --host "$RUNNER_TEMP/host-caps.txt" --host-probe "$HOST_PROBE_OUTCOME" "$RUNNER_TEMP/dune-build.log"
         exit 1
 
   # A merge's red here is a master red: fire the CI-red triage routine as

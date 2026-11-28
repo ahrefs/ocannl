@@ -149,6 +149,97 @@ if harness_leg 'CI mode on a missing log, and usage errors #canned'; then
 No failed dune rule in this job's build log: the failure lies in another step."
   report "$([ "$rc" = 0 ] && [ "$out" = "$want" ]; echo $?)" '--host prints the host line first; --github says when no rule failed' "exit $rc; $out"
 fi
+if harness_leg 'host probe evidence distinguishes failure from never-ran #canned'; then
+  : >"$TMP/hp-empty.log"
+  printf 'OCANNL host: cpu="fixture"\n' >"$TMP/hp-valid.txt"
+  printf 'OCANNL host: cpu="win"\r\n' >"$TMP/hp-crlf.txt"
+  : >"$TMP/hp-zero.txt"
+  printf 'OCANNL host:   \n' >"$TMP/hp-blank.txt"
+  printf 'not a host line\n' >"$TMP/hp-bad.txt"
+  printf 'OCANNL host: cpu="fixture"\nextra line\n' >"$TMP/hp-multi.txt"
+  warn_want='no host line (probe failed)
+::warning title=Host probe::no host line (probe failed)'
+  # Probe succeeded with valid LF or CRLF saved host line: check stays quiet, listing prints the line.
+  out=$(subject --github --check-host --host "$TMP/hp-valid.txt" --host-probe success 2>&1); rc=$?
+  out_crlf=$(subject --github --check-host --host "$TMP/hp-crlf.txt" --host-probe success 2>&1); rc_crlf=$?
+  report "$([ "$rc" = 0 ] && [ -z "$out" ] && [ "$rc_crlf" = 0 ] && [ -z "$out_crlf" ]; echo $?)" \
+    '--check-host stays quiet when probe succeeded and saved a valid host line' "rc=$rc/$rc_crlf; $out; $out_crlf"
+  out=$(subject --github --host "$TMP/hp-valid.txt" --host-probe success "$TMP/hp-empty.log" 2>&1); rc=$?
+  want="OCANNL host: cpu=\"fixture\"
+No failed dune rule in this job's build log: the failure lies in another step."
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want" ]; echo $?)" \
+    '--host-probe success with valid file prints the saved host line' "exit $rc; $out"
+  # Probe ran and failed (non-zero exit), both with no file saved and with a stale valid file.
+  out=$(subject --github --check-host --host "$TMP/hp-absent.txt" --host-probe failure 2>&1); rc=$?
+  out_stale=$(subject --github --check-host --host "$TMP/hp-valid.txt" --host-probe failure 2>&1); rc_stale=$?
+  out_plain=$(subject --check-host --host "$TMP/hp-absent.txt" --host-probe failure 2>&1); rc_plain=$?
+  report "$([ "$rc" = 0 ] && [ "$out" = "$warn_want" ] && [ "$rc_stale" = 0 ] && [ "$out_stale" = "$warn_want" ] && [ "$rc_plain" = 0 ] && [ "$out_plain" = 'no host line (probe failed)' ]; echo $?)" \
+    '--check-host annotates probe failure nonblocking and ignores any stale host file' "rc=$rc/$rc_stale/$rc_plain; $out; $out_stale; $out_plain"
+  want_failed="no host line (probe failed)
+No failed dune rule in this job's build log: the failure lies in another step."
+  out=$(subject --github --host "$TMP/hp-absent.txt" --host-probe failure "$TMP/hp-empty.log" 2>&1); rc=$?
+  out_stale=$(subject --github --host "$TMP/hp-valid.txt" --host-probe failure "$TMP/hp-empty.log" 2>&1); rc_stale=$?
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want_failed" ] && [ "$rc_stale" = 0 ] && [ "$out_stale" = "$want_failed" ]; echo $?)" \
+    'listing reports no host line (probe failed) on probe failure without repeating ::warning' "rc=$rc/$rc_stale; $out; $out_stale"
+  # Probe exited 0 without saving a valid host line (absent, empty, blank payload, wrong prefix, multi-line).
+  ok=0; detail=
+  for bad in "$TMP/hp-absent.txt" "$TMP/hp-zero.txt" "$TMP/hp-blank.txt" "$TMP/hp-bad.txt" "$TMP/hp-multi.txt"; do
+    out=$(subject --github --check-host --host "$bad" --host-probe success 2>&1); rc=$?
+    out2=$(subject --github --host "$bad" --host-probe success "$TMP/hp-empty.log" 2>&1); rc2=$?
+    if [ "$rc" != 0 ] || [ "$out" != "$warn_want" ] || [ "$rc2" != 0 ] || [ "$out2" != "$want_failed" ]; then
+      ok=1; detail="$bad: check=$rc ($out), list=$rc2 ($out2)"
+    fi
+  done
+  report "$ok" 'probe exiting 0 without a valid saved host line is reported as probe failed' "$detail"
+  # Probe never ran (earlier failure skipped it): no ::warning, distinct from probe failed, even with stale file or missing log.
+  out=$(subject --github --check-host --host "$TMP/hp-absent.txt" --host-probe skipped 2>&1); rc=$?
+  out_can=$(subject --github --check-host --host "$TMP/hp-absent.txt" --host-probe cancelled 2>&1); rc_can=$?
+  report "$([ "$rc" = 0 ] && [ -z "$out" ] && [ "$rc_can" = 0 ] && [ -z "$out_can" ]; echo $?)" \
+    '--check-host emits no warning when probe never ran or was cancelled' "rc=$rc/$rc_can; $out; $out_can"
+  want_never="no host line (probe never ran)
+No failed dune rule in this job's build log: the failure lies in another step."
+  out=$(subject --github --host "$TMP/hp-absent.txt" --host-probe skipped "$TMP/hp-empty.log" 2>&1); rc=$?
+  out_stale=$(subject --github --host "$TMP/hp-valid.txt" --host-probe skipped "$TMP/hp-empty.log" 2>&1); rc_stale=$?
+  out_nolog=$(subject --github --host "$TMP/hp-absent.txt" --host-probe skipped "$TMP/hp-absent.log" 2>&1); rc_nolog=$?
+  want_nolog="no host line (probe never ran)
+No dune build log at $TMP/hp-absent.log: this job failed before its dune build ran."
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want_never" ] && [ "$rc_stale" = 0 ] && [ "$out_stale" = "$want_never" ] && [ "$rc_nolog" = 0 ] && [ "$out_nolog" = "$want_nolog" ]; echo $?)" \
+    'probe never ran is distinct from probe failed and emits no warning' "rc=$rc/$rc_stale/$rc_nolog; $out; $out_stale; $out_nolog"
+  out=$(subject --github --host "$TMP/hp-absent.txt" --host-probe cancelled "$TMP/hp-empty.log" 2>&1); rc=$?
+  want_can="no host line (probe cancelled)
+No failed dune rule in this job's build log: the failure lies in another step."
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want_can" ]; echo $?)" \
+    'probe cancelled is distinct from probe failed' "exit $rc; $out"
+  # Fail-closed usage errors (exit 2).
+  ok=0; detail=
+  for args in \
+    '--host-probe failure' \
+    '--host '"$TMP/hp-absent.txt"' --host-probe ""' \
+    '--host '"$TMP/hp-absent.txt"' --host-probe bogus' \
+    '--check-host --host '"$TMP/hp-absent.txt" \
+    '--check-host --host-probe failure' \
+    '--check-host --host '"$TMP/hp-absent.txt"' --host-probe failure '"$TMP/hp-empty.log" \
+    '--names --host-probe failure' \
+    '--names --check-host'
+  do
+    eval "out=\$(subject $args 2>&1)"; rc=$?
+    [ "$rc" = 2 ] || { ok=1; detail="args=[$args] exit $rc; $out"; }
+  done
+  report "$ok" 'invalid --host-probe or --check-host combinations fail closed with exit 2' "$detail"
+  # Negative controls: dropping the ::warning annotation or collapsing skipped into failure must fail.
+  if mut=$(mutant no-host-warning '{ sub(/^    echo "::warning title=Host probe::no host line \(probe failed\)"$/, "    : # warning removed") } 1'); then
+    out=$(bash "$mut" --github --check-host --host "$TMP/hp-absent.txt" --host-probe failure 2>&1); rc=$?
+    if grep -q '^    : # warning removed$' "$mut" && [ "$out" != "$warn_want" ] && [[ $out != *"::warning"* ]]; then
+      report 0 'negative control: removing ::warning loses the host-probe annotation'
+    else report 1 'negative control: removing ::warning loses the host-probe annotation' "mutant applied: $(grep -c 'warning removed' "$mut"); $out"; fi
+  else report 1 'negative control: removing ::warning loses the host-probe annotation' 'mutant did not build'; fi
+  if mut=$(mutant collapse-skipped '{ sub(/echo "no host line \(probe never ran\)" ;;/, "echo \"no host line (probe failed)\" ;; # collapsed") } 1'); then
+    out=$(bash "$mut" --github --host "$TMP/hp-absent.txt" --host-probe skipped "$TMP/hp-empty.log" 2>&1); rc=$?
+    if grep -q '# collapsed' "$mut" && [ "$out" != "$want_never" ] && [[ $out == *"probe failed"* ]]; then
+      report 0 'negative control: collapsing skipped into failure loses the never-ran distinction'
+    else report 1 'negative control: collapsing skipped into failure loses the never-ran distinction' "mutant applied: $(grep -c '# collapsed' "$mut"); $out"; fi
+  else report 1 'negative control: collapsing skipped into failure loses the never-ran distinction' 'mutant did not build'; fi
+fi
 
 command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" 2>/dev/null
 harness_require dune
