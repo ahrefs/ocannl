@@ -1440,14 +1440,16 @@ let wall_bounded_fallback_depth ~observed depth =
   if List.is_empty observed then depth
   else Int.min depth (Option.value_map (deepest_batch_within_target ~observed) ~default:1 ~f:fst)
 
-(* The rescue probe's depth (gh-ocannl-1098), for a calibration about to refuse a candidate whose
-   single launch owed it a batch but which measured none within the target. The shallowest
-   over-target batch [(d, w)] projected linearly to 80% of the target (gh-ocannl-2061), at least 2
-   (depth 1 is the singles, already measured) and below [d]. When the projection permits it, the
-   margin leaves room for shared-device noise: projecting to the full target chose depth 25 from 26
-   at 10.3 ms, and the rescue itself still measured over 10 ms. Only the shallowest over-target
-   batch is consulted. Its per-launch average can guide the probe depth, but only the rescue's
-   measured wall can admit the batch. [None] when no depth lies strictly between 1 and [d]. *)
+let rescue_target_fraction = 0.8
+
+(* The rescue probe's depth (gh-ocannl-1098), when calibration settles at depth 1 for a candidate
+   whose single launch owed it a batch. The shallowest over-target batch [(d, w)] projected linearly
+   to 80% of the target (gh-ocannl-2061), at least 2 (depth 1 is the singles, already measured) and
+   below [d]. When the projection permits it, the margin leaves room for shared-device noise:
+   projecting to the full target chose depth 25 from 26 at 10.3 ms, and the rescue itself still
+   measured over 10 ms. Only the shallowest over-target batch is consulted. Its per-launch average
+   can guide the probe depth, but only the rescue's measured wall can admit the batch. [None] when
+   no depth lies strictly between 1 and [d]. *)
 let rescue_depth ~observed =
   let shallowest =
     List.fold observed ~init:None ~f:(fun acc (d, wall_ms) ->
@@ -1458,7 +1460,7 @@ let rescue_depth ~observed =
           | _ -> Some (d, wall_ms))
   in
   Option.bind shallowest ~f:(fun (d, wall_ms) ->
-      let rescue_target_ms = 0.8 *. queued_batch_ms in
+      let rescue_target_ms = rescue_target_fraction *. queued_batch_ms in
       let projected = Float.of_int d *. rescue_target_ms /. wall_ms in
       let rescue = Int.max 2 (Int.of_float projected) in
       if rescue < d then Some rescue else None)
@@ -2225,8 +2227,9 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
                just as an unresolved fallback can. Before refusing, the rescue tries a shallower
                batch where a kernel with a queue threshold may still be timed and cached. A missed
                rescue can still use a batch measured within the target before a fit projected to
-               depth 1. If calibration still has no batch, [unbatched] names what was measured: host
-               load stalling every probe can look like a genuine queue threshold. *)
+               depth 1. Prefer the rescue's fresh measurement at the reduced scale after such a fit.
+               If calibration still has no batch, [unbatched] names what was measured: host load
+               stalling every probe can look like a genuine queue threshold. *)
             let calibration_dispatches, depth, estimated_batch_wall_ms, rescue =
               if depth = 1 && provisional_depth > 1 then
                 match rescue_depth ~observed:!observed with

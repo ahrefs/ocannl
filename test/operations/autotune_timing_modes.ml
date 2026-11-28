@@ -1242,10 +1242,10 @@ let () =
      stall over twice that base, so it is retried. The clean retry's fit puts the crossing at 12,
      which is sampled there. Against 14 that sample fits a fixed term just under the target, a
      crossing of one launch, and a settle at depth 1 the singles contradict. The rescue below the
-     shallowest over-target batch (12) tries depth 9, an injected stall. The probe at depth 10
-     already read 9.5 ms and remains usable. Before rescue, every batch is under two target-sized
-     batches, so every probe takes all twelve minima, and the seven probes before the sampled
-     crossing spend ~898 ms: the wall budget ends nothing early. *)
+     shallowest over-target batch (12) tries depth 9, which reads 144 ms from the default branch.
+     The probe at depth 10 already read 9.5 ms and remains usable. Before rescue, every batch is
+     under two target-sized batches, so every probe takes all twelve minima, and the seven probes
+     before the sampled crossing spend ~898 ms: the wall budget ends nothing early. *)
   let longest_clean d =
     match d with
     | 1 -> 2.5
