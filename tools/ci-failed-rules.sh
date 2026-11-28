@@ -29,10 +29,11 @@
 #              `success`, `failure`, `skipped`, `cancelled`. Distinguishes a
 #              probe that ran and failed (or exited 0 without saving a valid
 #              host line) -- `no host line (probe failed)` -- from an earlier
-#              failure where the probe never ran (`no host line (probe never
-#              ran)`). A valid saved host file is a single readable line
-#              matching `^OCANNL host: [^ \t\r\n]` (matching tools/host_caps.ml);
-#              individual capability key/value fields are deliberately not parsed.
+#              failure or cancellation where the probe did not finish (`no host
+#              line (probe never ran)`). A valid saved host file is a single
+#              readable line matching `^OCANNL host: [^ \t\r\n]` (matching
+#              tools/host_caps.ml); individual capability key/value fields are
+#              deliberately not parsed.
 #   --check-host  nonblocking host-probe check mode: requires --host and
 #              --host-probe, takes no LOG arguments, prints nothing when the
 #              probe succeeded with a valid host line or never ran, and prints
@@ -171,37 +172,37 @@ host_file_valid() {
     LC_ALL=C awk 'NR == 1 { ok = /^OCANNL host: [^ \t\r\n]/ } END { exit !(NR == 1 && ok) }' < "$1"
 }
 
-if [ "$check_host" = 1 ]; then
+# Single classifier for (--host FILE, --host-probe OUTCOME) shared by
+# --check-host and failure listings: ok, failed, or never-ran.
+classify_host_probe() {
   case $host_probe in
-    skipped|cancelled) exit 0 ;;
+    skipped|cancelled) printf '%s\n' never-ran ;;
     success)
       if host_file_valid "$host"; then
-        exit 0
+        printf '%s\n' ok
+      else
+        printf '%s\n' failed
       fi ;;
-    failure) ;;
+    failure) printf '%s\n' failed ;;
   esac
-  echo "no host line (probe failed)"
-  if [ "$github" = 1 ]; then
-    echo "::warning title=Host probe::no host line (probe failed)"
+}
+
+if [ "$check_host" = 1 ]; then
+  if [ "$(classify_host_probe)" = failed ]; then
+    echo "no host line (probe failed)"
+    if [ "$github" = 1 ]; then
+      echo "::warning title=Host probe::no host line (probe failed)"
+    fi
   fi
   exit 0
 fi
 
 if [ -n "$host" ]; then
   if [ "$host_probe_set" = 1 ]; then
-    case $host_probe in
-      skipped)
-        echo "no host line (probe never ran)" ;;
-      cancelled)
-        echo "no host line (probe cancelled)" ;;
-      success)
-        if host_file_valid "$host"; then
-          cat -- "$host"
-        else
-          echo "no host line (probe failed)"
-        fi ;;
-      failure)
-        echo "no host line (probe failed)" ;;
+    case $(classify_host_probe) in
+      ok) cat -- "$host" ;;
+      failed) echo "no host line (probe failed)" ;;
+      never-ran) echo "no host line (probe never ran)" ;;
     esac
   elif [ -f "$host" ]; then
     cat -- "$host"

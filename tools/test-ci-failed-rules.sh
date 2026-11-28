@@ -206,10 +206,8 @@ No dune build log at $TMP/hp-absent.log: this job failed before its dune build r
   report "$([ "$rc" = 0 ] && [ "$out" = "$want_never" ] && [ "$rc_stale" = 0 ] && [ "$out_stale" = "$want_never" ] && [ "$rc_nolog" = 0 ] && [ "$out_nolog" = "$want_nolog" ]; echo $?)" \
     'probe never ran is distinct from probe failed and emits no warning' "rc=$rc/$rc_stale/$rc_nolog; $out; $out_stale; $out_nolog"
   out=$(subject --github --host "$TMP/hp-absent.txt" --host-probe cancelled "$TMP/hp-empty.log" 2>&1); rc=$?
-  want_can="no host line (probe cancelled)
-No failed dune rule in this job's build log: the failure lies in another step."
-  report "$([ "$rc" = 0 ] && [ "$out" = "$want_can" ]; echo $?)" \
-    'probe cancelled is distinct from probe failed' "exit $rc; $out"
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want_never" ]; echo $?)" \
+    'probe cancelled folds into probe never ran without warning' "exit $rc; $out"
   # Fail-closed usage errors (exit 2).
   ok=0; detail=
   for args in \
@@ -227,18 +225,19 @@ No failed dune rule in this job's build log: the failure lies in another step."
   done
   report "$ok" 'invalid --host-probe or --check-host combinations fail closed with exit 2' "$detail"
   # Negative controls: dropping the ::warning annotation or collapsing skipped into failure must fail.
-  if mut=$(mutant no-host-warning '{ sub(/^    echo "::warning title=Host probe::no host line \(probe failed\)"$/, "    : # warning removed") } 1'); then
+  if mut=$(mutant no-host-warning '{ sub(/^      echo "::warning title=Host probe::no host line \(probe failed\)"$/, "      : # warning removed") } 1'); then
     out=$(bash "$mut" --github --check-host --host "$TMP/hp-absent.txt" --host-probe failure 2>&1); rc=$?
-    if grep -q '^    : # warning removed$' "$mut" && [ "$out" != "$warn_want" ] && [[ $out != *"::warning"* ]]; then
+    if grep -q '^      : # warning removed$' "$mut" && [ "$out" != "$warn_want" ] && [[ $out != *"::warning"* ]]; then
       report 0 'negative control: removing ::warning loses the host-probe annotation'
     else report 1 'negative control: removing ::warning loses the host-probe annotation' "mutant applied: $(grep -c 'warning removed' "$mut"); $out"; fi
   else report 1 'negative control: removing ::warning loses the host-probe annotation' 'mutant did not build'; fi
-  if mut=$(mutant collapse-skipped '{ sub(/echo "no host line \(probe never ran\)" ;;/, "echo \"no host line (probe failed)\" ;; # collapsed") } 1'); then
+  if mut=$(mutant collapse-skipped '{ sub(/skipped\|cancelled\) printf '\''%s\\n'\'' never-ran ;;/, "skipped|cancelled) printf '\''%s\\n'\'' failed ;; # collapsed") } 1'); then
     out=$(bash "$mut" --github --host "$TMP/hp-absent.txt" --host-probe skipped "$TMP/hp-empty.log" 2>&1); rc=$?
-    if grep -q '# collapsed' "$mut" && [ "$out" != "$want_never" ] && [[ $out == *"probe failed"* ]]; then
-      report 0 'negative control: collapsing skipped into failure loses the never-ran distinction'
-    else report 1 'negative control: collapsing skipped into failure loses the never-ran distinction' "mutant applied: $(grep -c '# collapsed' "$mut"); $out"; fi
-  else report 1 'negative control: collapsing skipped into failure loses the never-ran distinction' 'mutant did not build'; fi
+    out_chk=$(bash "$mut" --github --check-host --host "$TMP/hp-absent.txt" --host-probe skipped 2>&1); rc_chk=$?
+    if grep -q '# collapsed' "$mut" && [ "$out" != "$want_never" ] && [[ $out == *"probe failed"* ]] && [[ $out_chk == *"::warning"* ]]; then
+      report 0 'negative control: collapsing skipped into failure breaks both check-host and listing'
+    else report 1 'negative control: collapsing skipped into failure breaks both check-host and listing' "mutant applied: $(grep -c '# collapsed' "$mut"); list=$out; chk=$out_chk"; fi
+  else report 1 'negative control: collapsing skipped into failure breaks both check-host and listing' 'mutant did not build'; fi
 fi
 
 command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" 2>/dev/null
