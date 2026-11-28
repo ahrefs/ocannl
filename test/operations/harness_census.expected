@@ -532,6 +532,11 @@ tools/test-typecheck-scan-cases.sh	tools/opam-env.sh
 tools/test-typecheck-scan-cases.sh	tools/scan_case_snippets.ml	declares	-
 tools/test-typecheck-scan-cases.sh	tools/test-typecheck-scan-cases.sh
 tools/test-typecheck-scan-cases.sh	tools/typecheck-scan-cases.sh
+tools/test-windows-leg.sh	.gitattributes
+tools/test-windows-leg.sh	scripts/harness-support.sh
+tools/test-windows-leg.sh	tools/opam-env.sh
+tools/test-windows-leg.sh	tools/test-windows-leg.sh
+tools/test-windows-leg.sh	tools/windows-leg.sh
 tools/test-windows-opam-cache.sh	scripts/harness-support.sh
 tools/test-windows-opam-cache.sh	tools/opam-env.sh
 tools/test-windows-opam-cache.sh	tools/test-windows-opam-cache.sh

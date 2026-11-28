@@ -273,6 +273,7 @@ shell tools/test-test-run-last.sh
 shell tools/test-test-run-bisect.sh
 shell tools/test-mutation-run.sh
 shell scripts/test-setup-ocaml-env.sh
+shell tools/test-windows-leg.sh
 shell tools/test-windows-opam-cache.sh
 shell tools/test-isolated-apt.sh
 shell tools/test-ci-times.sh

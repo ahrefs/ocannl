@@ -5975,7 +5975,18 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   Before reserving rog for the witness, the coordinator concludes the CUDA integration loop
   there. `execution run` refuses a box holding another record. Use Ludics' verdicts to determine
   when the user-boot fallback is safe. Report `NEEDS A PERSON` to the user at once.
-- **The OCANNL witness script.** Start in the detached checkout at the pushed SHA.
+- **Running a named alias set.** In native Git Bash, from the Windows clone, run
+  `bash tools/windows-leg.sh <sha> @test/operations/runtest-<name> ...` (gh-ocannl-1315).
+  The same command works from the checkout Ludics stages for a wave witness, using
+  `"$WITNESS_REVISION"` for the SHA. The leg makes its own detached LF worktree and
+  runs the cache fixture before the test runner sets up opam. It defaults to `cc`
+  and honors an explicit `OCANNL_BACKEND`. Keep the transcript with the test
+  runner's verdict, run directory and per-action Verdict records. A passing
+  leg requires a runner receipt and every named alias to stay enabled. The
+  last line is `exit: N` for the native driver. The script header gives the setup and
+  recovery boundary. For a witness that needs its own preparation, use the custom
+  script recipe below.
+- **Custom OCANNL witness scripts.** Start in the detached checkout at the pushed SHA.
   `execution windows-witness` stages it for a wave witness. For manual witnesses, stage it on
   the booted box using the rog ssh recipe below with the selected host's paths. Prepare any
   fixtures the selected aliases require, use the Git Bash PATH and `tools/opam-env.sh` setup
@@ -6060,7 +6071,7 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   PATH can omit even `uname`, preventing the MSYS detection from running (gh-ocannl-770 fleet
   verification). Invoke `C:/Program Files/Git/usr/bin/bash.exe` explicitly where `bash` resolves
   to the WindowsApps WSL launcher.
-- **A leg on `rog-nv-win`, driven over ssh** — the recipe the 2026-10-13 wave settled on
+- **A custom leg on `rog-nv-win`, driven over ssh** — the recipe the 2026-10-13 wave settled on
   (staging#1086, staging#1088):
   - **Write the leg as a script and feed it to Git Bash on stdin**:
     `ssh rog-nv-win '"C:/Program Files/Git/usr/bin/bash.exe" --noprofile --norc -eo pipefail -s' < leg.sh`,
