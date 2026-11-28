@@ -11271,16 +11271,28 @@ module C_syntax (B : C_syntax_config) = struct
                       nodes; see [zero_out_loop_redundant]); shared placements otherwise keep the
                       backend's default layout (no [aligned_local_attr]).
 
-                      A [Swizzle_b128] tile is the exception: its layout contract is stated in
-                      16-byte units, and the warp-cooperative loads that consume it ([ldmatrix],
-                      gh-ocannl-481 item 3) require every row-group address to be 16-byte aligned.
-                      Row starts are 16-byte multiples by the [Stage] validation, so aligning the
-                      base is what makes all of them aligned. The GNU attribute spelling is
-                      understood by every compiler that has a shared address space here (nvcc,
-                      hipcc, MSL's clang). *)
+                      A [Swizzle_b128] tile or a 16-byte-multiple bank-padded tile (non-power-of-two
+                      minor dim, e.g. 36/68 f32 elements, gh-ocannl-1842) is the exception: row
+                      starts must stay 16-byte aligned for [ldmatrix] (gh-ocannl-481 item 3) and
+                      128-bit [LDS.128] loads, whereas nvcc drops to element alignment on
+                      non-power-of-two shared arrays without the attribute. The GNU attribute
+                      spelling is understood by every compiler that has a shared address space here
+                      (nvcc, hipcc, MSL's clang). *)
                    (match (swizzle_of ctx) tn with
                      | Some Low_level.Swizzle_b128 -> string "__attribute__((aligned(16))) "
-                     | Some Low_level.Swizzle_elem | None -> empty)
+                     | Some Low_level.Swizzle_elem -> empty
+                     | None ->
+                         let dims = Lazy.force tn.Tn.dims in
+                         let n = Array.length dims in
+                         if
+                           n >= 2
+                           &&
+                           let c = dims.(n - 1) in
+                           c > 0
+                           && c land (c - 1) <> 0
+                           && c * Ops.prec_in_bytes (Lazy.force tn.storage_prec) % 16 = 0
+                         then string "__attribute__((aligned(16))) "
+                         else empty)
                    ^^ string prefix ^^ string typ ^^ space
                    ^^ string (get_ident tn)
                    (* A pipelined tile is [pt_depth] rotating copies (gh-487); the accesses select

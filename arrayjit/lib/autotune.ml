@@ -4227,6 +4227,9 @@ let sketch_params_label p =
       (match p.sk_tile with
       | None -> ""
       | Some { Ir.Register_tile.rm; rn; lanes } -> Printf.sprintf " tile-rm%d-rn%d-l%d" rm rn lanes);
+      (* Unpadded fallback when 16-byte shared-tile bank padding would exceed
+         [max_workgroup_memory_bytes] (gh-ocannl-1842). *)
+      flag p.sk_no_bank_pad " nopad";
     ]
 
 (* A round candidate's suffix (gh-ocannl-1230): the parent's digest tag, then the unit the move

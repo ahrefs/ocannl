@@ -189,6 +189,13 @@ type sketch_params = {
           ({!Ir.Register_tile.default}); the family tree twins each CPU tensorized leaf with the
           {!Ir.Register_tile.alternatives} of its micro-kernel extents (the "register-tile" level),
           so the width the tuner ships is measured rather than modelled. *)
+  sk_no_bank_pad : bool;
+      (** GPU scalar blocktile pipeline only (gh-ocannl-1842): suppress the 16-byte shared-tile
+          stride padding ([Stage.pad_stride]) when the padded tiles would exceed the device's
+          [max_workgroup_memory_bytes] while the unpadded tiles fit (e.g. Metal's 32 KiB on 64x64x64
+          f32, HIP's 64 KiB on 64x64x128 f32). Recorded in the params for the same reason as
+          [sk_pack_prec]: schedule construction has no [hardware_limits] and must reproduce the
+          seed-time decision. [false] on every other pipeline and whenever the padded tiles fit. *)
 }
 [@@deriving sexp]
 

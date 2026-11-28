@@ -213,7 +213,7 @@ let () =
   p
     "dropping workgroup capacity on tuf_like flips the coalesced b8 pick to 64x64x128/4x4 bgrid \
      coal-k"
-    (Option.equal String.equal (pick_label tuf_noocc) (Some "gpu 64x64x128/4x4 bgrid coal-k"));
+    (Option.equal String.equal (pick_label tuf_noocc) (Some "gpu 64x64x128/4x4 bgrid coal-k nopad"));
   ()
 
 (* gh-ocannl-1821: at outproj b256 under the rog-shaped record, the real score's coalesced walk
@@ -279,4 +279,4 @@ let () =
   p
     "dropping workgroup capacity on tuf_like flips the coalesced b256 pick to 64x64x128/4x4 bgrid \
      coal-k"
-    (Option.equal String.equal (pick_label tuf_noocc) (Some "gpu 64x64x128/4x4 bgrid coal-k"))
+    (Option.equal String.equal (pick_label tuf_noocc) (Some "gpu 64x64x128/4x4 bgrid coal-k nopad"))

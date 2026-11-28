@@ -531,6 +531,8 @@ test/operations/scope_collapse_rounding.ml [run by @test/operations/runtest-scop
     "ocannl_vec"
 test/operations/select_blend_override.ml [run by @test/operations/runtest-select_blend_override; also pins text this scan cannot name: computed fragment]
 test/operations/source_tokens_joined.ml [renders generated text in memory; run by @test/operations/runtest-source_tokens_joined]
+test/operations/stage_copy_partition.ml [run by @test/operations/runtest-stage_copy_partition]
+    "__attribute__((aligned(16)))"
 test/operations/test_bounds_folded_gather.ml [run by @test/operations/runtest-test_bounds_folded_gather]
     "!= 0 ?"
     "!= 0.0 ?"
@@ -769,6 +771,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-scope_collapse_rounding
 @test/operations/runtest-select_blend_override
 @test/operations/runtest-source_tokens_joined
+@test/operations/runtest-stage_copy_partition
 @test/operations/runtest-test_bounds_folded_gather
 @test/operations/runtest-test_ident_blacklist
 @test/operations/runtest-test_log_stmt_format

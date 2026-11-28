@@ -875,8 +875,9 @@ type entry = {
    28: gh-ocannl-2507 -- Metal's search gains the untuned plain-cell reduction sink as its floor
    29: gh-ocannl-2324 -- plain packed Grid with split k returns to the menu
    30: gh-ocannl-2506 -- Metal's untuned floor splits long reductions before GPU mapping
+   31: gh-ocannl-1842 -- GPU scalar blocktiles use source-minor stage copies with 16-byte bank padding and 3D workgroup split for shallow K
 *)
-let entry_version = 30
+let entry_version = 31
 
 let sanitize name =
   String.map name ~f:(fun c ->

@@ -132,6 +132,7 @@ let conv_params : Autotune.sketch_params =
     sk_depth = 1;
     sk_pack_prec = None;
     sk_tile = None;
+    sk_no_bank_pad = false;
   }
 
 let builder_injected = "injected sketch-builder bug (gh-ocannl-1390)"
