@@ -189,6 +189,7 @@
   (alias runtest-ll_test_scan_cases)
   (alias runtest-markdown_link_scan_cases)
   (alias runtest-markdown_links)
+  (alias runtest-measured_callback_scope_scan)
   (alias runtest-mutation_serial_scan)
   (alias runtest-mutation_serial_scan_cases)
   (alias runtest-mutation_serial_scan_control)
@@ -375,6 +376,7 @@
   (alias runtest-schedule_strided_1x1)
   (alias runtest-scope_collapse_rounding)
   (alias runtest-sketch_family_tree)
+  (alias runtest-stored_template_elision)
   (alias runtest-tf32_fissioned_epilogue)
   (alias runtest-tile_mma_forced_decline)
   (alias runtest-tile_mma_narrow)
@@ -520,6 +522,7 @@
   (alias runtest-log_index_width_wide)
   (alias runtest-markdown_links)
   (alias runtest-matmul_interchange-tf32)
+  (alias runtest-measured_callback_scope_scan)
   (alias runtest-micrograd_demo_logging)
   (alias runtest-model_default_fallback)
   (alias runtest-model_default_placements)
@@ -11299,6 +11302,38 @@
  (action
   (diff matmul_interchange.expected matmul_interchange-tf32.actual)))
 
+(executable
+ (name measured_callback_scope_scan)
+ (modules measured_callback_scope_scan)
+ (libraries base stdio ppxlib test_scan arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses test source without running a backend.
+ (target measured_callback_scope_scan.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (sandbox always)
+  (source_tree ../..))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:measured_callback_scope_scan.exe}
+    %{workspace_root}
+    %{dep:measured_callback_scope_scan.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-measured_callback_scope_scan)
+ (package neural_nets_lib)
+ (action
+  (diff
+   measured_callback_scope_scan.expected
+   measured_callback_scope_scan.actual)))
+
 ; gh-ocannl-498. Runs training steps, so it takes the shared training lock: its process-local
 ; OpenMP pool must not overlap another training test's.
 
@@ -13617,6 +13652,7 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- checks report keys, pooling proposals over the workload corpus.
  (name privatize_census)
  (package neural_nets_lib)
  (deps
@@ -14190,6 +14226,8 @@
   ll_test_ratchet.ml
   ll_test_ratchet.expected
   ll_test_scan_cases.expected
+  measured_callback_scope_scan.ml
+  measured_callback_scope_scan.expected
   exact_partials_ratchet.ml
   exact_partials_ratchet.expected
   exact_partials_scan_cases.expected
@@ -14299,6 +14337,8 @@
    refused_action_streams.expected,refused_action_scan_cases.expected
    ll_test_ratchet.ml
    ll_test_ratchet.expected,ll_test_scan_cases.expected
+   measured_callback_scope_scan.ml
+   measured_callback_scope_scan.expected
    exact_partials_ratchet.ml
    exact_partials_ratchet.expected,exact_partials_scan_cases.expected
    premise_ratchet.ml
@@ -14672,7 +14712,15 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules rng_operand_precision)
- (libraries base ocannl stdio arrayjit.verdict ll_test arrayjit.context))
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  test_utils
+  arrayjit.context
+  arrayjit.utils))
 
 (test
  (name root_ledger)
@@ -16676,7 +16724,15 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules simplify_rng_operands)
- (libraries base ocannl stdio arrayjit.verdict ll_test arrayjit.ir))
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  test_utils
+  arrayjit.ir
+  arrayjit.utils))
 
 ; The matmul sketch family as a refinement tree (gh-ocannl-514 phase 1): golden of the seed
 ; enumeration under synthetic limits (pure in the lowering, so GPU legs need no GPU).
@@ -16994,6 +17050,7 @@
   stdio
   arrayjit.verdict
   ll_test
+  test_utils
   arrayjit.ir
   arrayjit.utils
   arrayjit.context)
@@ -19010,6 +19067,7 @@
  (name unary_math_special_values)
  (package neural_nets_lib)
  (modules unary_math_special_values)
+ (locks /ocannl_unary_math_special_values)
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
@@ -19019,6 +19077,7 @@
   stdio
   arrayjit.verdict
   ll_test
+  test_utils
   unix
   arrayjit.utils
   arrayjit.context))
@@ -19031,6 +19090,7 @@
 
 (rule
  (target unary_math_special_values-reproducible.actual)
+ (locks /ocannl_unary_math_special_values)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)

@@ -538,6 +538,10 @@ let refresh_scopes (llc : Low_level.t) : Low_level.t =
     in
     code llc
 
+type pad_role = Pad_row | Pad_column | Pad_reduction
+
+let acc_masked = function Pad_row | Pad_column -> true | Pad_reduction -> false
+
 (* gh-ocannl-485 (PADTO): a pad guard recognized around the micro-kernel's accumulation, reduced to
    the accumulator's coordinates. The guarded index is [pm_terms + 1*role + pm_offset] where [role]
    is the [i] ([pm_row = true]) or [j] ([pm_row = false]) micro symbol; the guard holds iff that
@@ -835,14 +839,20 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
                   let bound = Float.to_int bound in
                   validate_padded_operand s a_op;
                   validate_padded_operand s b_op;
-                  if Indexing.equal_symbol s k then
+                  let role =
+                    if Indexing.equal_symbol s i then Pad_row
+                    else if Indexing.equal_symbol s j then Pad_column
+                    else Pad_reduction
+                  in
+                  if not (acc_masked role) then
                     (* Both operands' padded [k] slots are exact zeros, so the extra accumulated
                        contributions are exact zeros: the guard is discharged, not represented. *)
                     None
                   else
                     Some
                       {
-                        pm_row = Indexing.equal_symbol s i;
+                        pm_row =
+                          (match role with Pad_row -> true | Pad_column | Pad_reduction -> false);
                         pm_terms = outer_terms;
                         pm_offset = offset;
                         pm_bound = bound;
@@ -2810,6 +2820,12 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     precision, and every step of the privatized reduction narrowed where the serial and scope
     renderings did not — a seeded [Privatize] silently changed a tuned reduction's width. *)
 
+let privatize_index_vectors_check = "privatize_index_vectors"
+
+let is_privatize_index_vectors_refusal = function
+  | Schedule_outcome.Illegal_schedule_key check -> String.equal check privatize_index_vectors_check
+  | _ -> false
+
 let privatize_index_vectors_refusal target =
   "Schedule.Privatize: v1 requires all accesses of " ^ Tn.debug_name target
   ^ " under the loop to use identical index vectors"
@@ -3064,7 +3080,7 @@ let apply_privatize ~app ~target ~over ~acc_prec (opt : Low_level.optimized) : L
         refuse ("Schedule.Privatize: " ^ Tn.debug_name target ^ " is not written (no accumulation)");
       List.iter !accesses ~f:(fun (idcs, _, _) ->
           if not (Array.equal Indexing.equal_axis_index idcs idcs0) then
-            refuse (privatize_index_vectors_refusal target));
+            refuse ~check:privatize_index_vectors_check (privatize_index_vectors_refusal target));
       (* Per axis, the extent its component ranges over — a component flattened over a [Sub_axis]
          run (gh-ocannl-1165) addresses the run's whole extent product — for the transfers' edge
          guards and the output-mask bound below. *)

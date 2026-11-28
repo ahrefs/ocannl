@@ -33,5 +33,4 @@ let () =
   let output = stack ~train_step:None input ~mask in
   let _ctx = Ocannl.Train.forward_once ctx output in
 
-  Stdio.printf "Output shape:\n%s\n%!"
-    (Sexp.to_string_hum ([%sexp_of: Shape.t] output.Tensor.shape))
+  Stdio.printf "Output shape:\n%s\n%!" (Shape.to_string_hum output.Tensor.shape)

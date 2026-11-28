@@ -1,17 +1,6 @@
 1-D layer_norm output shape:
-((batch
-  ((beg_dims ()) (dims ()) (bcast Broadcastable)
-   (prov (((sh_id 19) (kind Batch))))))
- (input
-  ((beg_dims ()) (dims ()) (bcast Broadcastable)
-   (prov (((sh_id 19) (kind Input))))))
- (output
-  ((beg_dims ())
-   (dims ((Dim ((d 4) (basis default) (proj_id ((Proj_id 1)))))))
-   (bcast Broadcastable) (prov (((sh_id 19) (kind Output))))))
- (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
- (id 19) (debug_name layer_norm_ln))
-HERE: test/operations/layer_norm_1d.ml:21:28
+4
+HERE: test/operations/layer_norm_1d.ml:20:28
 ┌───────────────────────────────────┐
 │[19]: +_layer_norm_ln shape 0:4    │
 │┌┬────────────────────────────────┐│

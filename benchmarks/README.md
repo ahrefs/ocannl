@@ -50,9 +50,12 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   exercises only the reorder-serial and default-fissioned paths — recorded as the baseline
   the compacting-Stage seeding is measured against. Strides are spec-driven
   (`stride1`/`stride2`, default 1, valid-only) through the same builder as `lenet`.
-- **cifar_resnet** / **cifar_resnet_b1** (`model: conv`, `arch: resnet`, training): a reduced
-  ResNet-style classifier (gh-ocannl-1161) at batch 64 and batch 1, the conv workload the v1.1.2
-  conv issues close against. 3-channel 32×32 images; a padded 3×3 stem into 16 channels, then
+- **cifar_resnet** / **cifar_resnet_b1** / **cifar_resnet_b8** (`model: conv`, `arch: resnet`,
+  training): a reduced ResNet-style classifier (gh-ocannl-1161) at batch 64, 1 and 8. Batch 8
+  exercises both sides of the strided shortcut rule (gh-ocannl-1397): the stage-2 width of 16
+  beats the batch row, and the stage-3 width of 8 ties it. The batch-8 spec can generate a local
+  fixture for smoke runs. A measured publication needs its own digest and records from the boxes
+  holding those bytes. The model uses 3-channel 32×32 images, a padded 3×3 stem into 16 channels, and
   one residual block per stage at 16, 32 and 64 channels: two **padded 3×3 stride-1 convs**
   (`s<i>c1`, `s<i>c2`), the **residual add** (`s<i>res`, then its relu `s<i>out`), and from
   stage 2 on, downsampling by a 2×2 max pool on the main path with a **stride-2 1×1 conv** on
@@ -165,9 +168,17 @@ single-threaded segments that sum to the serial step
 |---|---|
 | gh-ocannl-505 (Winograd F(2×2, 3×3)) | `cifar_resnet/<gpu>/default/approximate · pad3x3`, beside the same cell in `exact` |
 | gh-ocannl-1148 (strided 1×1 at batch 1) | `cifar_resnet_b1/<gpu>/tuned/exact · sc1x1s2`, and its step cell |
+| gh-ocannl-1397 (strided 1×1 at batch 8) | `cifar_resnet_b8/<gpu>/tuned/exact · sc1x1s2`, and its step cell |
 | gh-ocannl-1147 (staged operand with a second reader) | `cifar_resnet/cc/tuned/exact` (step) |
 | gh-ocannl-697 (the conv family tree) | `cifar_resnet/<backend>/tuned/exact` and `cifar_resnet_b1/<backend>/tuned/exact`, with `· pad3x3` on a GPU |
 | gh-ocannl-503 (whole-routine zeroed GPU conv sites) | `cifar_resnet/<gpu>/tuned/exact` under `--cell-flag '*/<gpu>/tuned:schedule_fission=false'` |
+
+For a GPT memory preflight, set `BENCH_FOOTPRINT_ONLY=1` with `BENCH_FIXTURE` when running
+`bench_gpt.exe` directly. It prints modeled working and constant pool bytes for both placement
+arms and compares the total with the backend's free and total device bytes when available.
+The model counts the whole work-carrying routine, including nodes already resident after
+parameter initialization. The free-memory comparison is conservative when those nodes are
+reused. The runner exits before tuning, compiling the benchmark step, or timing it.
 
 ## Layout
 

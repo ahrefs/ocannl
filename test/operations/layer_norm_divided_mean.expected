@@ -1,20 +1,6 @@
 Chained layer norms output shape:
-((batch
-  ((beg_dims ())
-   (dims
-    ((Dim ((d 2) (basis default) (proj_id ((Proj_id 1)))))
-     (Dim ((d 8) (basis default) (proj_id ((Proj_id 2)))))))
-   (bcast Broadcastable) (prov (((sh_id 100) (kind Batch))))))
- (input
-  ((beg_dims ()) (dims ()) (bcast Broadcastable)
-   (prov (((sh_id 100) (kind Input))))))
- (output
-  ((beg_dims ())
-   (dims ((Dim ((d 16) (basis default) (proj_id ((Proj_id 3)))))))
-   (bcast Broadcastable) (prov (((sh_id 100) (kind Output))))))
- (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
- (id 100) (debug_name layer_norm_ln2))
-HERE: test/operations/layer_norm_divided_mean.ml:50:28
+2,8|16
+HERE: test/operations/layer_norm_divided_mean.ml:49:28
 ┌─────────────────────────────────────────┐
 │[121]: +_layer_norm_ln3 shape 0:2|1:4    │
 │┌──────┬────────────────────────────────┐│

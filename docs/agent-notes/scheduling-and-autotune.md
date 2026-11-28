@@ -783,7 +783,9 @@ files.
   `report.privatize_drops` (gh-ocannl-1438), aggregated by cause like `declines` but kept out of it:
   a drop costs a proposal inside a candidate that still compiles, and counting it there would break
   `declines`' sum to `candidates_failed`. `Autotune.privatize_extension` returns the drops for
-  segments no search compiles, and `privatize_census` is the tripwire that says when a workload
+  segments no search compiles. `privatize_census` reads the real search's drops by the
+  `privatize_index_vectors` rejection key, which survives the per-key detail sample. Its exhaustive
+  sketch walk remains separate because a tuner can prune sketches. The census says when a workload
   needs the relaxation. Nothing in the corpus reaches a real refusal on cc, so
   `test/operations/autotune_report_drops` injects one through `Autotune.on_privatize_proposal`,
   which raises inside the extension's refusal boundary.
@@ -1431,7 +1433,9 @@ files.
   clears candidate contention and, with a script in force, an unresolved batching verdict; calibration
   and invalid readings keep their admission rules. `flip_abandonment` pins production refusal, nesting
   and failure restoration with a majority-stalled window, then asserts search, placement and cache
-  branches without skips.
+  branches without skips. `measured_callback_scope_scan` checks test modules for a
+  timing witness using a closed set of OCaml syntax forms. The fixture still owns the scope
+  around its search.
 - **`unbatched` is load too** (gh-ocannl-1995). On a shared GPU a kernel near the batch target reads
   every batched probe a few percent over it (hip on tuf: singles 0.4 ms, depths 26, 32 and the
   rescue's 25 at 10.3, 13.5 and 11.8 ms), the calibration has no depth left, and the window is refused

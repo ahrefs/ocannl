@@ -1,3 +1,4 @@
+literal counter audit reports only direct numeric arguments, including signed hex: true
 byte: 256 source values, every bit pattern
 byte: every bit position is both set and clear in some sampled value: true
 byte: the counter is converted by byte_to_uint4x32 from its source: true

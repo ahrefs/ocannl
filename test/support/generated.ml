@@ -810,7 +810,7 @@ type declarations = {
       (** A 1-based line and the statement's tokens: a statement outside the allowlisted forms. *)
 }
 
-type token = Ident of string | Punct of char | Literal
+type token = Ident of string | Punct of char | Literal | Numeric of string
 
 let tokenize (lines : (int * string) list) =
   let toks = ref [] and in_comment = ref false and directives = ref [] in
@@ -870,7 +870,7 @@ let tokenize (lines : (int * string) list) =
               do
                 Int.incr j
               done;
-              emit Literal;
+              emit (Numeric (String.sub line ~pos:i ~len:(!j - i)));
               scan !j)
             else if Char.equal c '"' || Char.equal c '\'' then (
               let j = ref (i + 1) in
@@ -964,7 +964,11 @@ let base_type_words =
 let qualifier_words =
   [ "const"; "volatile"; "restrict"; "__restrict"; "static"; "register"; "inline"; "__volatile__" ]
 
-let token_text = function Ident s -> s | Punct c -> String.of_char c | Literal -> "<literal>"
+let token_text = function
+  | Ident s -> s
+  | Punct c -> String.of_char c
+  | Literal | Numeric _ -> "<literal>"
+
 let render_tokens toks = String.concat ~sep:" " (List.map toks ~f:(fun (_, t) -> token_text t))
 
 (* [toks] after an opening parenthesis: the tokens up to its matching [)], and those after it. *)
@@ -977,6 +981,51 @@ let split_paren toks =
     | t :: rest -> go depth (t :: acc) rest
   in
   go 0 [] toks
+
+(** Finds direct [double_to_uint4x32] calls with one signed or unsigned numeric token, optionally
+    grouped in parentheses, in the emitted statements of a kernel or its outlined parts. Ignores
+    comments, strings, character literals, builtins, preprocessor expansions, variable reads, casts
+    and larger expressions. The caller owns the allowed literal spellings for its corpus: an
+    intentional double literal and a wrongly folded index have identical syntax. *)
+let double_to_uint4x32_literals source =
+  let lines = Array.of_list (String.split_lines source) in
+  let numbered = List.map (main_logic_lines source) ~f:(fun line -> (line, lines.(line - 1))) in
+  let tokens, _ = tokenize numbered in
+  let rec literal = function
+    | [ (_, Numeric spelling) ] -> Some spelling
+    | [ (_, Punct (('+' | '-') as sign)); (_, Numeric spelling) ] ->
+        Some (String.of_char sign ^ spelling)
+    | (_, Punct '(') :: rest -> (
+        match List.last rest with
+        | Some (_, Punct ')') ->
+            let enclosed, after = split_paren rest in
+            if List.is_empty after then literal enclosed else None
+        | _ -> None)
+    | _ -> None
+  in
+  let rec scan acc = function
+    | (line, Ident "double_to_uint4x32") :: (_, Punct '(') :: args ->
+        let arg, _ = split_paren args in
+        let acc = Option.value_map (literal arg) ~default:acc ~f:(fun s -> (line, s) :: acc) in
+        scan acc args
+    | _ :: rest -> scan acc rest
+    | [] -> List.rev acc
+  in
+  scan [] tokens
+
+(* The allowances are a multiset: an unexpected second conversion of an allowed value fails. *)
+let assert_double_counter_literals ~routine ~allowed source claim =
+  let found = double_to_uint4x32_literals source in
+  let spellings = List.map found ~f:snd |> List.sort ~compare:String.compare in
+  let permitted =
+    List.map allowed ~f:Utils.decimal_float_literal |> List.sort ~compare:String.compare
+  in
+  let ok = List.equal String.equal spellings permitted in
+  if not ok then
+    Stdio.eprintf "%s: allowed double counter literals [%s]; found [%s]\n" routine
+      (String.concat ~sep:", " permitted)
+      (String.concat ~sep:", " (List.map found ~f:(fun (line, s) -> Printf.sprintf "%d:%s" line s)));
+  Verdict.p claim ok
 
 (* [toks] after an opening brace: the tokens up to its matching [}], and those after it. *)
 let split_brace toks =
@@ -1016,7 +1065,7 @@ let declarator ~with_init toks =
   match stars toks with
   | (_, Ident name) :: rest -> (
       let rec suffixes = function
-        | (_, Punct '[') :: (_, Literal) :: (_, Punct ']') :: rest -> suffixes rest
+        | (_, Punct '[') :: (_, (Literal | Numeric _)) :: (_, Punct ']') :: rest -> suffixes rest
         | (_, Ident "__attribute__") :: _ as toks -> suffixes (drop_groups toks)
         | toks -> toks
       in

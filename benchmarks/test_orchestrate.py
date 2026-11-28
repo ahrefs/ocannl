@@ -3207,8 +3207,12 @@ class FixtureDigestTest(unittest.TestCase):
         specs = [json.loads(spec.read_text()) for spec in (HERE / "workloads").glob("*.json")]
         expected = {f"{spec['name']}.safetensors" for spec in specs if spec.get("model") == "gpt"}
         resnet = {f"{spec['name']}.safetensors" for spec in specs if spec.get("arch") == "resnet"}
+        # Batch 8 is a generation fixture pending a copy record from each of the publication boxes.
+        unpublished = "cifar_resnet_b8.safetensors"
+        self.assertIn(unpublished, resnet)
+        resnet.remove(unpublished)
         self.assertTrue(expected, "no GPT workload specs found")
-        self.assertTrue(resnet, "no cifar_resnet workload specs found")
+        self.assertTrue(resnet, "no published cifar_resnet workload specs found")
         lenet = {"lenet.safetensors"}
         on_tuf = {name for name, recorded in entries.items() if any(e.origin == "tuf" for e in recorded)}
         self.assertEqual(on_tuf, expected | lenet, "TUF must record every GPT fixture copy and lenet")

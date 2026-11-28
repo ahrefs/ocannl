@@ -799,7 +799,7 @@ val seeding_census_lines : where:string -> seeding_census -> string list
     accumulator's fragment transfers, a reduction pad masks nothing ([Tensorize] discharges its
     guard against the zero-fringe staged tiles). *)
 
-type pad_role = Pad_row | Pad_column | Pad_reduction
+type pad_role = Ir.Schedule.pad_role = Pad_row | Pad_column | Pad_reduction
 
 type seed_pad = { pad_role : pad_role; pad_extent : int; pad_block : int }
 (** One padded role: the site's extent along it and the block it pads to. *)

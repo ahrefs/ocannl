@@ -32,8 +32,7 @@ let () =
   in
   let output = block x in
   let ctx = Ocannl.Train.forward_once ctx output in
-  Stdio.printf "Chained layer norms output shape:\n%s\n%!"
-    (Sexp.to_string_hum ([%sexp_of: Shape.t] output.Tensor.shape));
+  Stdio.printf "Chained layer norms output shape:\n%s\n%!" (Shape.to_string_hum output.Tensor.shape);
   (* Numeric check of the formulation itself: layer_norm of the row [1;2;3;4] (and of [5;6;7;8])
      with gamma=1, beta=0 is (x - mean) / sqrt(1.25 + eps) = [-1.342; -0.447; 0.447; 1.342]. *)
   let ln3 = layer_norm ~label:[ "ln3" ] () in

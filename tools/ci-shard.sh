@@ -60,7 +60,15 @@
 #   tools/ci-shard.sh weigh [--wall] TRACE # per-unit CPU (wall-clock) seconds from a dune trace
 #   tools/ci-shard.sh merge-weights [--wall] [LOG...]
 #                                          # a WEIGHTS (WALL_WEIGHTS) block from CI runs' logs, one per run
+#   tools/ci-shard.sh check-gap JOBS_JSON # report a scheduled main build gap over 3 minutes
 # SUITE is `main` (the default) or `train`.
+#
+# `check-gap JOBS_JSON` reads a slurped GitHub Actions jobs response for one
+# run attempt. Its allowlist is the two ubuntu 5.5.x main jobs and their named
+# "Build the shard" step. It compares successful step durations in UTC seconds;
+# queue time, runner start skew, other steps, partial reruns and other suites
+# do not enter the comparison. A failed or cancelled build has no balance
+# verdict. Missing, duplicate or unusable records refuse the comparison.
 #
 # For `main`, `targets` and `plan` run `dune show aliases` and `dune show targets` (as
 # $OCANNL_TOOL_CI_SHARD_DUNE when set, a hook for tools/test-ci-shard.sh), from
@@ -1228,6 +1236,66 @@ units_input() {
   fi
 }
 
+check_gap() {
+  python3 - "$1" <<'PY_GAP'
+from datetime import datetime, timedelta
+import json
+import sys
+
+
+def one(records, name):
+    matches = [record for record in records if record["name"] == name]
+    if len(matches) != 1:
+        raise ValueError(f"expected one {name!r} record, got {len(matches)}")
+    return matches[0]
+
+
+def timestamp(value):
+    if not isinstance(value, str):
+        raise TypeError("main shard build timestamps must be strings")
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(value)
+    if parsed.utcoffset() is None:
+        raise ValueError("main shard build timestamps must include a timezone")
+    return parsed
+
+
+def seconds(elapsed):
+    return f"{elapsed.total_seconds():.6f}".rstrip("0").rstrip(".")
+
+
+try:
+    with open(sys.argv[1]) as source:
+        jobs = [job for page in json.load(source) for job in page["jobs"]]
+    shards = [one(jobs, f"Build (ubuntu-latest, 5.5.x, main, {i}/2)") for i in (1, 2)]
+    steps = [one(job["steps"], "Build the shard") for job in shards]
+    # A cancelled or failed build can stop early, so its duration is not a load measurement.
+    if any(step["conclusion"] in {"failure", "cancelled", "skipped", "timed_out"} for step in steps):
+        print("ci-shard: balance unavailable because a main shard build did not succeed")
+        sys.exit(0)
+    durations = []
+    for step in steps:
+        if step["status"] != "completed" or step["conclusion"] != "success":
+            raise ValueError("a main shard build step is not complete")
+        elapsed = timestamp(step["completed_at"]) - timestamp(step["started_at"])
+        if elapsed <= timedelta():
+            raise ValueError("main shard build duration must be positive")
+        durations.append(elapsed)
+except (KeyError, TypeError, ValueError, OSError) as exc:
+    print(f"ci-shard: cannot compare main shards: {exc}", file=sys.stderr)
+    sys.exit(2)
+
+first, second = durations
+gap = abs(first - second)
+message = f"ubuntu main shard build durations: {seconds(first)}s vs {seconds(second)}s (gap {seconds(gap)}s)"
+if gap > timedelta(minutes=3):
+    print(f"::warning title=Ubuntu main shard imbalance::{message}")
+else:
+    print(f"ci-shard: {message}")
+PY_GAP
+}
+
 case ${1-} in
   targets)
     [ $# -eq 2 ] || [ $# -eq 3 ] || die "usage: tools/ci-shard.sh targets K/N [SUITE]"
@@ -1255,6 +1323,10 @@ case ${1-} in
       [ $# -eq 2 ] && [ -f "$2" ] || die "usage: tools/ci-shard.sh weigh [--wall] TRACE"
       weigh "$2"
     fi
+    ;;
+  check-gap)
+    [ $# -eq 2 ] && [ -f "$2" ] || die "usage: tools/ci-shard.sh check-gap JOBS_JSON"
+    check_gap "$2"
     ;;
   merge-weights)
     shift

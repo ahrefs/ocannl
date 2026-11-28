@@ -1,0 +1,11 @@
+a measurement setter with only a comment about the scope is reported: true
+a measured callback may use the uncontended scope or inspect the refusal record: true
+a getter does not require a timing witness: true
+test modules installing the measurement seam have a timing witness: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:6430ff79146d5e4bf05bdceb2021f4c1] measurement setter with
+  [scanner-refusal:70f74c802c263837cb8b3e9a45a00f38] measured callback may
+  [scanner-refusal:9433917d9e4a1b340740735628bafd4a] does not require
+  [scanner-refusal:d6ce703a4a0fe1b7ee8319a6066ca344] installing the measurement
+End of synthetic controls.

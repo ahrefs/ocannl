@@ -128,6 +128,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, test never_zeroed_grad (Autotune.tune): independent, by its marker
   test/operations/dune, test padded_conv_cache (Autotune.tune): independent, by its marker
   test/operations/dune, test placement_store (Train.tune_placements): independent, by its marker
+  test/operations/dune, test privatize_census (Autotune.tune): independent, by its marker
   test/operations/dune, test schedule_cache_device (Autotune.Make(_).tune, Autotune.tune): independent, by its marker
   test/operations/dune, test schedule_cache_numerics (Autotune.tune): independent, by its marker
   test/operations/dune, test schedule_conv_gemm (Autotune.tune): independent, by its marker
@@ -319,6 +320,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-log_index_width_wide
   test/operations/dune                     @runtest-markdown_links
   test/operations/dune                     @runtest-matmul_interchange-tf32
+  test/operations/dune                     @runtest-measured_callback_scope_scan
   test/operations/dune                     @runtest-metal_routine_log_delivery
   test/operations/dune                     @runtest-micrograd_demo_logging
   test/operations/dune                     @runtest-minted_name_labels-logged

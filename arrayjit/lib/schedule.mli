@@ -12,6 +12,12 @@
 open Base
 module Tn = Tnode
 
+type pad_role = Pad_row | Pad_column | Pad_reduction
+
+val acc_masked : pad_role -> bool
+(** A tensorized pad guard follows the accumulator only for row and column roles. A reduction guard
+    is discharged against the staged operands' zero fringes. *)
+
 type optop =
   | Split of {
       axis : Indexing.symbol;  (** The loop to split, identified by its index symbol. *)
@@ -611,6 +617,9 @@ val privatize : accum_prec:(Ops.prec -> Ops.prec) -> target:Tn.t -> over:Indexin
     [(Context.codegen_capabilities ctx).accum_prec] — the same function its code generation widens
     the serial rendering's accumulator by — so the privatized reduction's width is the policy's, not
     the schedule's (gh-ocannl-1116). *)
+
+val is_privatize_index_vectors_refusal : Schedule_outcome.rejection_key -> bool
+(** Identifies the two-index-vector refusal independently of the sampled diagnostic details. *)
 
 val privatize_index_vectors_refusal : Tn.t -> string
 (** The detail of [Privatize]'s v1 refusal of [target]: under the accumulation loop it is accessed

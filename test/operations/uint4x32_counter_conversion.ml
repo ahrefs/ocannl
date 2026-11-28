@@ -342,5 +342,23 @@ let run_leg { prec; width; sample; patterns; upload; read_back; host; leg } =
       p_all2 label got want ~f:(Array.equal Int.equal))
 
 let () =
+  let source =
+    "uint4 double_to_uint4x32(double v) { return from_bits(v); }\n" ^ "void conversion() {\n"
+    ^ Ir.C_syntax.main_logic_marker ^ "\n"
+    ^ {|  // double_to_uint4x32(0.0)
+  log("double_to_uint4x32(0.0)");
+  live = double_to_uint4x32(values[i]);
+  cast = double_to_uint4x32((double) values[i]);
+  signed_hex = double_to_uint4x32(
+      (-0x1.8p-3));
+  decimal = double_to_uint4x32(1.25e+03);
+}
+|}
+  in
+  let detected = List.map (Generated.double_to_uint4x32_literals source) ~f:snd in
+  p "literal counter audit reports only direct numeric arguments, including signed hex"
+    (List.equal String.equal detected [ "-0x1.8p-3"; "1.25e+03" ])
+
+let () =
   Stdio.eprintf "uint4x32_counter_conversion: backend %s (not part of the golden)\n%!" backend_name;
   List.iter legs ~f:(fun leg -> Verdict.case (Ir.Ops.prec_string leg.prec) (fun () -> run_leg leg))

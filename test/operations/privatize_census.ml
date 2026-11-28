@@ -10,15 +10,15 @@
 
    The control leg, on hand-built IR through the privatized preset's own extension
    ([Autotune.privatize_extension]): [c[0] += c[1]] under a serial loop is proposed and dropped by
-   exactly this refusal, while its twin [c[0] += tick k] is privatized. The census sees a dropped
-   proposal only because this seam returns it; the tuner drops it silently.
+   exactly this refusal, while its twin [c[0] += tick k] is privatized. The control also pins the
+   stable report key, because the report samples diagnostic details within a key.
 
    The corpus leg: the training steps of an MLP, a downsampling ResNet block (the strided 1x1
    shortcut beside a 3x3 conv: gh-ocannl-1147's shape) and a decoder block (Q, K, V over one input;
-   layer norms; softmax), each lowered as the tuner sees it. Per workload, the privatized preset's
-   proposals on every segment of the default segmentation, and every sketch seed's schedule on the
-   whole routine and on each segment of the sketches' finer segmentation, are applied; no attempt
-   may be refused for two index vectors. Counts and every other refusal go to stderr. *)
+   layer norms; softmax). A real tune run reports drops from the privatized presets. A separate walk
+   still checks every sketch seed's schedule on the whole routine and every sketch segment: sketch
+   failures are candidate declines, and a real search can prune or deduplicate candidates. Counts
+   and every other refusal go to stderr. *)
 
 open Base
 open Ocannl
@@ -41,53 +41,17 @@ let scratch (seg : LL.optimized) =
 let privatize_targets (sched : Sched.schedule) =
   List.filter_map sched ~f:(function Sched.Privatize { target; _ } -> Some target | _ -> None)
 
-let detail_of (cause : Outcome.cause) =
-  match cause with
-  | Outcome.Illegal_schedule { detail; _ } -> Some detail
-  | Unsupported { detail; _ }
-  | Resource_exceeded { detail; _ }
-  | Backend_rejected { detail; _ }
-  | Unclassified { detail; _ }
-  | Seed_evicted { detail; _ }
-  | Not_dispatched { detail; _ } ->
-      Some detail
+let is_vector_refusal cause = Sched.is_privatize_index_vectors_refusal (Outcome.key_of_cause cause)
 
-(* Whether [cause] is the v1 refusal of one of [targets] -- by the library's own text for it. *)
-let is_vector_refusal ~targets cause =
-  match (cause, detail_of cause) with
-  | Outcome.Illegal_schedule _, Some detail ->
-      List.exists targets ~f:(fun t ->
-          String.equal detail (Sched.privatize_index_vectors_refusal t))
-  | _ -> false
-
-(* One [Privatize] attempt: a preset proposal or a sketch seed's schedule carrying one. *)
+(* One sketch-seed schedule carrying Privatize. *)
 type attempt = { a_where : string; a_targets : Ir.Tnode.t list; a_refusal : Outcome.cause option }
 
 let show_attempt a =
   Printf.sprintf "%s [%s]: %s" a.a_where
     (String.concat ~sep:"," (List.map a.a_targets ~f:Ir.Tnode.label_name))
-    (match a.a_refusal with
-    | None -> "applied"
-    | Some cause -> Option.value (detail_of cause) ~default:"refused")
+    (Option.value_map a.a_refusal ~default:"applied" ~f:Outcome.detail_of_cause)
 
-let multi_vector a =
-  match a.a_refusal with
-  | Some cause -> is_vector_refusal ~targets:a.a_targets cause
-  | None -> false
-
-(* The privatized preset's attempts on one segment: what it kept, then what it dropped. *)
-let preset_attempts ~accum_prec ~where preset (seg : LL.optimized) =
-  let base = preset seg in
-  let sched, drops = Autotune.privatize_extension ~accum_prec ~static_indices:[] base seg in
-  let kept =
-    List.map
-      (List.drop (privatize_targets sched) (List.length (privatize_targets base)))
-      ~f:(fun t -> { a_where = where; a_targets = [ t ]; a_refusal = None })
-  in
-  ( sched,
-    kept
-    @ List.map drops ~f:(fun (d : Autotune.privatize_drop) ->
-        { a_where = where; a_targets = [ d.pd_target ]; a_refusal = Some d.pd_cause }) )
+let multi_vector a = Option.exists a.a_refusal ~f:is_vector_refusal
 
 (* --- Leg 1: the control. --- *)
 let () =
@@ -101,18 +65,26 @@ let () =
       Ll.loop_n k 8 (Ll.set c [| Ll.fixed 0 |] (Ll.add (Ll.get c [| Ll.fixed 0 |]) (addend c k)))
     in
     let o = Ll.optimize ~name llc in
-    let _sched, attempts = preset_attempts ~accum_prec ~where:name (fun _ -> []) o in
-    (c, attempts)
+    let sched, drops = Autotune.privatize_extension ~accum_prec ~static_indices:[] [] o in
+    (c, privatize_targets sched, drops)
   in
-  let c2, two_vectors = run ~name:"pc_two_vectors" ~addend:(fun c _ -> Ll.get c [| Ll.fixed 1 |]) in
-  let _, one_vector = run ~name:"pc_one_vector" ~addend:(fun _ k -> Ll.tick k) in
+  let c2, kept, two_vectors =
+    run ~name:"pc_two_vectors" ~addend:(fun c _ -> Ll.get c [| Ll.fixed 1 |])
+  in
+  let c1, one_vector, unexpected_drops = run ~name:"pc_one_vector" ~addend:(fun _ k -> Ll.tick k) in
   p "control: c[0] += c[1] is proposed once and dropped for its two index vectors"
-    (match two_vectors with
-    | [ ({ a_refusal = Some cause; _ } as a) ] ->
-        multi_vector a && is_vector_refusal ~targets:[ c2 ] cause
+    (match (kept, two_vectors) with
+    | [], [ d ] ->
+        Ir.Tnode.equal c2 d.Autotune.pd_target
+        && is_vector_refusal d.pd_cause
+        && String.equal
+             (Outcome.detail_of_cause d.pd_cause)
+             (Sched.privatize_index_vectors_refusal c2)
     | _ -> false);
   p "control: its one-vector twin c[0] += tick k is privatized"
-    (match one_vector with [ { a_refusal = None; _ } ] -> true | _ -> false)
+    (match (one_vector, unexpected_drops) with
+    | [ actual ], [] -> Ir.Tnode.equal actual c1
+    | _ -> false)
 
 (* --- Leg 2: the corpus. --- *)
 
@@ -134,9 +106,9 @@ let lowered_step ~name (loss : Tensor.t) =
         [ opt ])
       ctx comp Ir.Indexing.Empty
   in
-  (ctx, Option.value_exn ~here:[%here] !captured)
+  (ctx, comp, Option.value_exn ~here:[%here] !captured)
 
-let census ~what ctx (opt : LL.optimized) =
+let census ~what ctx comp (opt : LL.optimized) =
   let is_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
   and is_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name) in
   let limits = Context.hardware_limits ctx in
@@ -148,20 +120,22 @@ let census ~what ctx (opt : LL.optimized) =
     else []
   in
   let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
-  (* The privatized preset flavor: the default segmentation, each [`Normal] segment's preset
-     extended. *)
-  let preset_seen = ref [] in
-  let privatized seg =
-    let sched, attempts =
-      preset_attempts ~accum_prec ~where:(what ^ " preset") preset (scratch seg)
-    in
-    preset_seen := !preset_seen @ attempts;
-    sched
+  let report = ref None and proposals = ref 0 in
+  let tuned, _ =
+    Autotune.with_uncontended_test_windows (fun () ->
+        Autotune.Seam.with_value Autotune.on_privatize_proposal
+          (fun ~target:_ ~over:_ -> Int.incr proposals)
+          (fun () ->
+            Autotune.tune ~search:true ~rounds:0 ~repeats:1 ~cache_dir:""
+              ~report:(fun r -> report := Some r)
+              ctx comp Ir.Indexing.Empty))
   in
-  ignore
-    (Sched.fission_scheduled ~promote_locals:is_gpu
-       ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-       ~preset:privatized ~zero_sched ~static_indices:[] (scratch opt));
+  if not (Context.same_release_unit ctx tuned) then Context.release tuned;
+  let report = Option.value_exn ~here:[%here] !report in
+  Stdio.eprintf "%s: %d real preset proposals (not part of the golden)\n" what !proposals;
+  List.iter report.Autotune.privatize_drops ~f:(fun drop ->
+      Stdio.eprintf "  dropped %d: %s\n" drop.Autotune.count
+        (String.concat ~sep:"; " drop.Autotune.sample_details));
   (* The sketch flavors: every seed on the whole routine and on each segment of the finer
      segmentation the per-segment sketches are enumerated under. *)
   let sketch_seen = ref [] and unbuilt = ref 0 in
@@ -193,16 +167,15 @@ let census ~what ctx (opt : LL.optimized) =
       match kind with
       | `Normal -> seed_attempts ~where:(what ^ " segment") (scratch seg)
       | `Zeros | `Solo -> ());
-  let report label attempts =
+  let log_attempts label attempts =
     let refused = List.filter attempts ~f:(fun a -> Option.is_some a.a_refusal) in
     Stdio.eprintf "%s: %d %s attempts, %d refused (not part of the golden)\n" what
       (List.length attempts) label (List.length refused);
     List.iter refused ~f:(fun a -> Stdio.eprintf "  refused: %s\n" (show_attempt a))
   in
-  report "privatized-preset" !preset_seen;
-  report "sketch-seed" !sketch_seen;
+  log_attempts "sketch-seed" !sketch_seen;
   if !unbuilt > 0 then Stdio.eprintf "%s: %d sketch seeds did not build\n" what !unbuilt;
-  (!preset_seen, !sketch_seen)
+  ((!proposals, report.Autotune.privatize_drops), !sketch_seen)
 
 let mlp_loss () =
   let x = init_input ~label:"pc_mlp_x" ~b:[ 8 ] ~o:[ 16 ] in
@@ -244,13 +217,14 @@ let () =
       (List.map
          [ ("mlp", mlp_loss); ("resnet_block", resnet_loss); ("decoder_block", decoder_loss) ]
          ~f:(fun (what, loss) ->
-           let ctx, opt = lowered_step ~name:("pc_" ^ what) (loss ()) in
-           census ~what ctx opt))
+           let ctx, comp, opt = lowered_step ~name:("pc_" ^ what) (loss ()) in
+           census ~what ctx comp opt))
   in
-  let presets = List.concat presets and sketches = List.concat sketches in
-  (* Pooled over the corpus: how many proposals each workload yields is the backend's preset's. *)
-  p_none "corpus: no privatized-preset proposal is refused for two index vectors" presets
-    ~f:multi_vector;
+  let sketches = List.concat sketches in
+  let drops = List.concat_map presets ~f:snd in
+  p_empty "corpus: no privatized-preset proposal is refused for two index vectors"
+    ~over:(List.filter presets ~f:(fun (count, _) -> count > 0))
+    (List.filter drops ~f:(fun drop -> Sched.is_privatize_index_vectors_refusal drop.Autotune.key));
   (* Which sketch seeds privatize is the backend's: on cc only the scalar packing pipelines do, and
      a backend whose seeds carry none for these shapes cannot evaluate the claim. *)
   let claim = "corpus: no sketch seed's Privatize is refused for two index vectors" in

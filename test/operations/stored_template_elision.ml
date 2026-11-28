@@ -15,7 +15,7 @@
    Merge: [v := where 1 (ell + 100) merge(msrc)]. Consuming [v] in B is legal.
 
    Gate: [v := ell + relu_gate (-1) gx], whose gate is shut, so [gx] is no input of B. (The
-   materialized reading still renders the read: the routine's simplify does not fold gates.)
+   materialized reading checks the producer's value independently of template storage.)
 
    Provenance: [v := where 0 extra ell], and B writes [extra] under an [If], then reads it
    unguarded. The raw guards-taken verdict counts the guarded write as coverage; the strict splice
@@ -225,6 +225,39 @@ let case_precision_dependent_gate () =
   p "precision-dependent gate: the operand behind it is kept"
     (Option.equal Int.equal (template_count ctx v ~f:(read_of gx)) (Some 1))
 
+let case_gate_precision_contracts () =
+  let run ~name ~prec rhs ~first ~second ~expected =
+    let dims = [| dim |] in
+    let node = node_factory ~prec ~first_id:6470 ~dims () in
+    let x = node (name ^ "_x") and y = node (name ^ "_y") and out = node (name ^ "_out") in
+    List.iter [ x; y; out ] ~f:materialize;
+    let s = sym () in
+    let i = [| iter s |] in
+    let code = loop_n s dim (set out i (rhs (get x i) (get y i))) in
+    let o = optimize ~name code in
+    let values = execute ~name o ~seed:[ (x, first); (y, second) ] ~read:[ out ] in
+    Array.equal Float.equal (List.hd_exn values) expected
+  in
+  let gate rhs = binop_own Ir.Ops.Relu_gate (c 0.) rhs in
+  let odd = Array.init dim ~f:(fun i -> Float.of_int ((2 * i) + 3)) in
+  let inputs = Array.init dim ~f:(fun i -> Float.of_int (i + 1)) in
+  p "a shut real-valued gate still promotes the surrounding integer division"
+    (run ~name:"sts_gate_integer" ~prec:Ir.Ops.int32 ~first:odd ~second:inputs ~expected:odd
+       (fun x y ->
+         let sin_y = LL.apply_op (Ir.Ops.Unop Ir.Ops.Sin) [| y |] in
+         mul_own (binop_own Ir.Ops.Div (add_own x (gate sin_y)) (c 2.)) (c 2.)));
+  Test_utils.with_policy
+    (fun p -> { p with Ir.Numerics.narrow_compute_f32 = true })
+    (fun () ->
+      let small = Array.init dim ~f:(fun i -> Float.of_int (i + 1) *. 0x1p-13) in
+      p "a shut RNG conversion still pins the live half arithmetic to the store width"
+        (run ~name:"sts_gate_rng" ~prec:Ir.Ops.half ~first:inputs ~second:small
+           ~expected:(Array.create ~len:dim 0.) (fun x y ->
+             let draw =
+               LL.Unop (Ir.Ops.Uint4x32_to_prec_uniform1, (LL.Constant_bits (-1L), Ir.Ops.uint4x32))
+             in
+             binop_own Ir.Ops.Sub (add_own (add_own x y) (gate draw)) x)))
+
 let case_provenance () =
   let build () =
     let gflag = mk ~dims:[| 1 |] "gflag" and extra = mk "extra" and ell = mk "pell" in
@@ -388,7 +421,7 @@ let consumer_b ~shape ~x ~v ~out =
   let s = sym () in
   loop_n s dim (set out [| iter s |] (shape s ~x:(get x [| iter s |]) ~v:(get v [| iter s |])))
 
-let case_consumer_decided ~label ~tag shape =
+let case_consumer_decided ?(expected = x_vals) ~label ~tag shape =
   let ctx, v = tainted_lineage ~label ~tag in
   let x = mk (tag ^ "x") and out = mk (tag ^ "out") in
   List.iter [ x; out ] ~f:materialize;
@@ -406,7 +439,7 @@ let case_consumer_decided ~label ~tag shape =
       in
       p_all2
         (label ^ ": executed values are the live arm's")
-        (List.hd_exn got) x_vals ~f:Float.equal;
+        (List.hd_exn got) expected ~f:Float.equal;
       let v_m = mk (tag ^ "vm") and x_m = mk (tag ^ "xm") and out_m = mk (tag ^ "outm") in
       List.iter [ v_m; x_m; out_m ] ~f:materialize;
       let o_m = optimize ~name:("sts_" ^ tag ^ "_m") (consumer_b ~shape ~x:x_m ~v:v_m ~out:out_m) in
@@ -1394,12 +1427,23 @@ let () =
   case_provenance ();
   case_gate ();
   case_precision_dependent_gate ();
+  case_gate_precision_contracts ();
   case_kept_loop ();
   case_live_code ();
   case_consumer_decided ~label:"consumer where 1 x v" ~tag:"c1" (fun _ ~x ~v -> where_ (ic 1) x v);
   case_consumer_decided ~label:"consumer where 0 v x" ~tag:"c0" (fun _ ~x ~v -> where_ (ic 0) v x);
   case_consumer_decided ~label:"consumer where (i < 4) x v" ~tag:"ce" (fun s ~x ~v ->
       where_ (lt (embed s) (ic dim)) x v);
+  case_consumer_decided ~label:"consumer shut And" ~tag:"gand" (fun s ~x ~v ->
+      add x (binop Ir.Ops.And (binop Ir.Ops.Cmplt (embed s) (ic 0)) v));
+  case_consumer_decided
+    ~expected:(Array.map x_vals ~f:(fun x -> x +. 1.))
+    ~label:"consumer shut Or" ~tag:"gor"
+    (fun s ~x ~v -> add x (binop Ir.Ops.Or (binop Ir.Ops.Cmplt (embed s) (ic dim)) v));
+  case_consumer_decided ~label:"consumer shut Relu_gate" ~tag:"grelu" (fun s ~x ~v ->
+      add x (binop Ir.Ops.Relu_gate (binop Ir.Ops.Sub (embed s) (ic dim)) v));
+  case_consumer_refused ~label:"consumer runtime-dependent And" ~tag:"gopen" (fun s ~x ~v ->
+      add x (binop Ir.Ops.And (binop Ir.Ops.Cmplt (embed s) (ic 2)) v));
   case_consumer_kept_loop ();
   case_consumer_write_index_opaque ();
   case_nested_consumer_decided ();

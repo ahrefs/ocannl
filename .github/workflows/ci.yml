@@ -881,7 +881,8 @@ jobs:
     # print a listing it could not validate, and the assignment is expanded
     # into the log, so a red shard names what it was carrying. ubuntu only,
     # which is why plain bash may word-split the targets.
-    - if: ${{ matrix.shard }}
+    - name: Build the shard
+      if: ${{ matrix.shard }}
       shell: bash
       env:
         SHARD: ${{ matrix.shard }}
@@ -1159,6 +1160,25 @@ jobs:
       run: |
         tools/ci-failed-rules.sh --github --host "$RUNNER_TEMP/host-caps.txt" --host-probe "$HOST_PROBE_OUTCOME" "$RUNNER_TEMP/dune-build.log"
         exit 1
+
+  # The scheduled first attempt has both shards. Rerunning failed jobs can contain just one.
+  # Compare the Dune step's duration from Actions job metadata, independent of queue/start skew.
+  shard-balance:
+    if: ${{ !cancelled() && github.event_name == 'schedule' && github.run_attempt == '1' }}
+    name: Check Ubuntu main shard balance
+    needs: run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" > "$RUNNER_TEMP/shard-jobs.json"
+          tools/ci-shard.sh check-gap "$RUNNER_TEMP/shard-jobs.json"
 
   # Formatting is a gate here, and a job of its own rather than a step of the
   # build: `dune build @fmt` compiles nothing, so this switch holds only the
@@ -1597,7 +1617,7 @@ jobs:
   # run).
   notify-triage-routine:
     name: Fire CI-red triage routine
-    needs: [run, fmt, promotion-floor, harnesses, harness-real-dune, harness-affected-self-check, harness-legs-alone, torch-runner]
+    needs: [run, shard-balance, fmt, promotion-floor, harnesses, harness-real-dune, harness-affected-self-check, harness-legs-alone, torch-runner]
     if: >-
       failure() && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
       && !(github.event_name == 'workflow_dispatch' && inputs.expected_sha)

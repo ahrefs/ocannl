@@ -1801,17 +1801,19 @@ module Impl = struct
          float, which [%] does not take and which rounds an int32 above 2^24 (gh-ocannl-1883). *)
       | Trunc, p when Ops.is_integer p -> parens
       | Trunc, _ -> math_doc "trunc"
-      | Tanh_approx, Ops.Half_prec _ -> math_doc "tanh"
       (* gh-ocannl-1435: the fast f32 [tanh] the production policy selects returns 0 for x from
          about 43.7 and NaN from about 44.4 up (+inf included), +0 for -0, flushes |x| < 2^-26 to 0
          and is off by up to 2050 ulps near 2^-12
          (benchmarks/runners/ocannl/metal_f32_math_probe.ml). [precise::tanh] is within 2 ulps of
          f64 everywhere, IEEE on the special values, and bitwise the legacy policy's [tanh]; it
          costs 4x on 1024 back-to-back calls per thread (ALU-bound throughput) and nothing
-         measurable on a load-call-store stream. bfloat16 widens explicitly so the call resolves to
-         the f32 overload. *)
-      | Tanh_approx, Ops.Bfloat16_prec _ ->
-          fun v -> group (string "(bfloat)precise::tanh((float)" ^^ parens v ^^ rparen)
+         measurable on a load-call-store stream. Half and bfloat16 widen exactly to the f32
+         overload, then narrow to the destination precision. *)
+      | Tanh_approx, (Ops.Half_prec _ | Ops.Bfloat16_prec _) ->
+          fun v ->
+            group
+              (parens (string (typ_of_prec prec))
+              ^^ string "precise::tanh((float)" ^^ parens v ^^ rparen)
       | Tanh_approx, _ -> math_doc "precise::tanh"
       (* A floating Not is numeric, so composing two of them under [/] must not divide bools. *)
       | Not, p when Ops.is_float p ->

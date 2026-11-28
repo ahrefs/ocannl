@@ -4692,9 +4692,11 @@ let run_checker ?(credentials = `Shipped) ~root ~exe args =
 
 (* gh-ocannl-1233: the runs a control claim asserts on, attributed to it by its label, so that a
    `raw_direct_evidence` entry naming the claim is checked against what THOSE runs refused rather
-   than against every run of this process. Called beside the claim, with its label. *)
-let attribute claim runs =
-  Refusal_manifest.attribute ~source:"test/operations/env_var_deps.ml" ~claim (List.map runs ~f:snd)
+   than against every run of this process. Each call names the claim it sits beside. Supplemental
+   claims use [offer] where the manifest assigns evidence to a different claim. *)
+let attribute ?offer claim runs =
+  Refusal_manifest.attribute ?offer ~source:"test/operations/env_var_deps.ml" ~claim
+    (List.map runs ~f:snd)
 
 (* The sources [control_root_paths] names beside its dune file. *)
 let write_control_sources root =
@@ -4752,7 +4754,7 @@ let control () =
     "the checker exits 1 and names a key the ambient record carries, declared inside a `(subdir \
      …)` group"
     [ violating ];
-  attribute "an unknown lowercase name the record carries too is named in the same run"
+  attribute ~offer:true "an unknown lowercase name the record carries too is named in the same run"
     [ violating ];
   Verdict.p
     "the checker exits 1 and names a key the ambient record carries, declared inside a `(subdir \
@@ -4891,8 +4893,9 @@ let credential_control () =
      then to the same rule reading a name through `%%{env:...}` instead, to the program's module\n\
      reading one by name, and to the near miss again with no deny-list and with one the reader\n\
      refuses (gh-ocannl-1280).\n\n";
-  List.iter claims ~f:(fun (claim, _, result, ok) ->
-      attribute claim [ result ];
+  List.iter claims ~f:(fun (claim, case, result, ok) ->
+      let offer = match case with "pattern" | "pform" | "odd-pattern" -> true | _ -> false in
+      attribute ~offer claim [ result ];
       Verdict.p claim ok);
   try remove_tree root with Unix.Unix_error _ -> ()
 
@@ -5998,7 +6001,7 @@ let family_control () =
     "a marked rule whose only alias is the directory-wide `runtest` has no focused alias to offer, \
      and a family listing `runtest` does not aggregate it"
     runtest_only_ok;
-  attribute
+  attribute ~offer:true
     "a public name belongs to its own executable, so a rule running the second unit's public name \
      does not aggregate the first"
     [ crossed_public ];
@@ -6041,7 +6044,7 @@ let family_control () =
     "one relative lock name that two sibling directories resolve to the same path is one lock, and \
      passes"
     lock_one_resolved_path_ok;
-  attribute
+  attribute ~offer:true
     "the same `../` spelling written in the parent as well resolves to a second lock there, and is \
      refused naming the parent and both siblings"
     [ lock_shared_and_top ];
@@ -6085,7 +6088,8 @@ let family_control () =
      reported there too"
     subdir_collision_ok;
   Verdict.p "a stanza neither derivation calls a member is asked for no family alias" no_member_ok;
-  attribute "declaring a configuration variable the ambient record already carries is refused"
+  attribute ~offer:true
+    "declaring a configuration variable the ambient record already carries is refused"
     [ recorded_declaration ];
   Verdict.p "declaring a configuration variable the ambient record already carries is refused"
     (exited 1 recorded_declaration
@@ -7351,7 +7355,7 @@ let search_control () =
     "a blessed helper that stops stating a key, and a support value stating every key unblessed, \
      are both refused"
     (ok "lapsed" && ok "unblessed");
-  attribute
+  attribute ~offer:true
     "a rule re-running a `(test)`'s program by name on cc is a run of it: unanswered, it is \
      reported, naming the rule"
     (runs [ "rerun_unanswered" ]);
@@ -7363,7 +7367,8 @@ let search_control () =
     (ok "rerun_marked" && ok "rerun_pinned");
   Verdict.p "and a `setenv` of `-1` around the rule's run does not undo the initializer's pin"
     (ok "rerun_override");
-  attribute "a rule in another dune file re-running the program on cc is a run of it too"
+  attribute ~offer:true
+    "a rule in another dune file re-running the program on cc is a run of it too"
     (runs [ "rerun_foreign" ]);
   Verdict.p "a rule in another dune file re-running the program on cc is a run of it too"
     (ok "rerun_foreign");
@@ -7375,7 +7380,7 @@ let search_control () =
     "a stanza that can select cc and runs a command naming no program in command position -- a \
      shell line, a PATH tool handed an executable of ours -- is refused, not read as running none"
     (ok "rerun_shell" && ok "rerun_launcher" && ok "rerun_bin_tool");
-  attribute
+  attribute ~offer:true
     "and so is one handing a PATH tool a text-valued pform, which may expand to one, or a line \
      spelling `.exe`"
     (runs [ "rerun_read"; "rerun_quoted" ]);
@@ -8064,6 +8069,10 @@ let backend_default_marker_control () =
 |dune}
           ()
       in
+      let malformed_label = "malformed backend-default marker is refused" in
+      let disambiguation_label =
+        "identical stanza sexps in different subdirs check their own backend markers"
+      in
       let checks =
         [
           ("valid test reader with env_var OCANNL_BACKEND passes", exited 0 valid_test, valid_test);
@@ -8073,7 +8082,7 @@ let backend_default_marker_control () =
           ( "valid cc-only default read by ocannl-backend: cc test passes",
             exited 0 valid_cc_default,
             valid_cc_default );
-          ( "malformed backend-default marker is refused",
+          ( malformed_label,
             exited 1 malformed && says "comment that does not parse as a marker" malformed,
             malformed );
           ( "backend-default marker on wrong stanza is refused",
@@ -8112,7 +8121,7 @@ let backend_default_marker_control () =
             exited 1 incompatible_backend
             && says "does not overlap the backends it can run on" incompatible_backend,
             incompatible_backend );
-          ( "identical stanza sexps in different subdirs check their own backend markers",
+          ( disambiguation_label,
             exited 1 subdir_disambiguation
             && says "does not overlap the backends it can run on (cc)" subdir_disambiguation
             && (not
@@ -8125,7 +8134,10 @@ let backend_default_marker_control () =
       List.iter checks ~f:(fun (label, ok, ((status, text) as res)) ->
           if not ok then
             eprintf "backend-default control (%s) %s:\n%s\n" label (describe_status status) text;
-          attribute label [ res ];
+          let offer =
+            String.equal label malformed_label || String.equal label disambiguation_label
+          in
+          attribute ~offer label [ res ];
           Verdict.p label ok))
 
 let () =

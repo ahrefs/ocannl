@@ -861,21 +861,19 @@ let conv_mma_scope (site : conv_site) =
    staged tiles). The SAME predicates charge the masked accumulator tile's workgroup memory at
    seeding ([matmul_acc_masked], [conv_seed_pads] in the two families' memory judgments) and name
    the axis in the seeding census, so the census says what the seeding decided. *)
-type pad_role = Pad_row | Pad_column | Pad_reduction
+type pad_role = Sched.pad_role = Pad_row | Pad_column | Pad_reduction
 type seed_pad = { pad_role : pad_role; pad_extent : int; pad_block : int }
 
-let pad_masks_accumulator = function Pad_row | Pad_column -> true | Pad_reduction -> false
-
-let seed_pads_mask_accumulator pads =
-  List.exists pads ~f:(fun sp -> pad_masks_accumulator sp.pad_role)
-
+let pad_masks_accumulator = Sched.acc_masked
+let seed_pads_mask_accumulator pads = List.exists pads ~f:(fun sp -> Sched.acc_masked sp.pad_role)
 let block_divides c n = c <= n && n % c = 0
 
 (* A staged matmul geometry's accumulator mask: a row block or column block not dividing its extent.
    An unstaged one reads its operands in place, which no pad can absorb, so its seeding requires
    divisibility outright. *)
 let matmul_acc_masked (site : matmul_site) ~bm ~bn =
-  not (block_divides bm site.m_ni && block_divides bn site.m_nj)
+  (Sched.acc_masked Pad_row && not (block_divides bm site.m_ni))
+  || (Sched.acc_masked Pad_column && not (block_divides bn site.m_nj))
 
 let matmul_seed_pads (site : matmul_site) (p : sketch_params) : seed_pad list option =
   if (not (p.sk_gpu && p.sk_mma)) || p.sk_conv || Option.is_some p.sk_coalesce then None
@@ -5839,7 +5837,7 @@ let seeding_census_lines ~where (c : seeding_census) : string list =
         Printf.sprintf "the %s axis (extent %d, padded to the %d-wide block)"
           (role_name sp.pad_role) sp.pad_extent sp.pad_block
       in
-      let acc, red = List.partition_tf pads ~f:(fun sp -> pad_masks_accumulator sp.pad_role) in
+      let acc, red = List.partition_tf pads ~f:(fun sp -> Sched.acc_masked sp.pad_role) in
       let red_note =
         match red with
         | [] -> ""

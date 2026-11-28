@@ -18,6 +18,8 @@ gate: executed values are the live operand's: true
 gate: the deferred reading agrees with the materialized one: true
 precision-dependent gate: routine A defers v: true
 precision-dependent gate: the operand behind it is kept: true
+a shut real-valued gate still promotes the surrounding integer division: true
+a shut RNG conversion still pins the live half arithmetic to the store width: true
 kept loop: routine A defers v: true
 kept loop: the reduction extent folded the guard at store time: true
 kept loop: consuming v in a later routine is legal: true
@@ -42,6 +44,23 @@ consumer where (i < 4) x v: routine B compiles: true
 consumer where (i < 4) x v: routine B declares no merge buffer: true
 consumer where (i < 4) x v: executed values are the live arm's: true
 consumer where (i < 4) x v: the deferred reading agrees with the materialized one: true
+consumer shut And: routine A defers v, its template reading the merge buffer: true
+consumer shut And: routine B compiles: true
+consumer shut And: routine B declares no merge buffer: true
+consumer shut And: executed values are the live arm's: true
+consumer shut And: the deferred reading agrees with the materialized one: true
+consumer shut Or: routine A defers v, its template reading the merge buffer: true
+consumer shut Or: routine B compiles: true
+consumer shut Or: routine B declares no merge buffer: true
+consumer shut Or: executed values are the live arm's: true
+consumer shut Or: the deferred reading agrees with the materialized one: true
+consumer shut Relu_gate: routine A defers v, its template reading the merge buffer: true
+consumer shut Relu_gate: routine B compiles: true
+consumer shut Relu_gate: routine B declares no merge buffer: true
+consumer shut Relu_gate: executed values are the live arm's: true
+consumer shut Relu_gate: the deferred reading agrees with the materialized one: true
+consumer runtime-dependent And: routine A defers v, its template reading the merge buffer: true
+consumer runtime-dependent And: routine B is refused for the cross-routine merge splice: true
 consumer kept loop: routine A defers v, its template reading the merge buffer: true
 consumer kept loop: routine B compiles, deferring w: true
 consumer kept loop: routine B declares no merge buffer: true
