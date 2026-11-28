@@ -2912,10 +2912,13 @@ files.
   within the target (depth 1 when none): slow candidates fall back to the isolated reading, a fast
   one whose deeper probes stalled keeps its deepest clean batch, and one whose single launch owed
   it a batch but that measured none within the target first takes ONE rescue probe at the
-  shallowest over-target batch projected linearly to the target (`rescue_depth` in
-  `autotune.ml`; any cost whose per-launch average does not fall with depth reads within the
-  target there, so a genuine queue threshold below the provisional depth is timed and cacheable),
-  and is REFUSED only if that also reads over — as `unbatched`, not `contended`, counted in
+  shallowest over-target batch projected linearly to 80% of the target, floored at depth 2
+  (`rescue_depth` in `autotune.ml`, gh-ocannl-2061). The margin projects a 26-launch probe at
+  10.3 ms to depth 20, giving it room for shared-device noise where depth 25 still read over
+  10 ms. The rescue's measured minimum must fit the full target. `autotune_timing_modes` pins
+  both the recovered window and refusal when every batched depth exceeds the target. If a fit
+  projected to depth 1 despite an earlier in-target batch, a missed rescue keeps the deepest such
+  batch. A candidate without a supported batch is refused as `unbatched` and counted in
   `report.timings_unbatched` (a subset of `timings_contended`, like `timings_unreadable`, so every
   cache and completeness
   gate is unchanged), because its depth-1 reading would be the isolated objective. `unbatched`

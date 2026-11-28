@@ -3398,8 +3398,10 @@ val rescue_depth : observed:(int * float) list -> int option
 (** The depth of the one rescue probe a CUDA/HIP calibration makes before refusing a candidate whose
     single launch owed it a batch but whose calibration settled at depth 1 (gh-ocannl-1098), from
     every [(depth, minimum wall)] it measured: the shallowest batch over the target, projected
-    linearly down to the target, at least 2 and strictly shallower than that batch; [None] when no
-    depth lies between. Exposed so a test can tell the rescue from the probes before it. *)
+    linearly down to 80% of the target to leave room for noise (gh-ocannl-2061), at least 2 and
+    strictly shallower than that batch; [None] when no depth lies between. The rescue must still
+    measure a batch within the full target. Exposed so a test can tell the rescue from the probes
+    before it. *)
 
 val sample_min : repeats:int -> sample:(unit -> timing_sample) -> timing_result
 (** Pure sampling-policy seam used by calibration and the timed loop (gh-ocannl-855). Takes at least
