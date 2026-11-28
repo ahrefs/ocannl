@@ -2491,12 +2491,19 @@ let process_nonce =
   in
   fun () -> Lazy.force nonce
 
-(** The most bytes of a kernel's name that the file name of an artifact recording its owner carries:
-    a kept library's ({!kept_library_name}), a temporary library's ({!temp_library_prefix}), the
-    private source copy a debug compile keeps when it fails. The kernel name is informational there
-    (the owner fields and the run id make the name unique), and a routine's name has no length
-    limit, while a file-name component has one (255 bytes on the common file systems). *)
+(** A routine label has no length limit. Leave room in the filename for extensions, cc ownership
+    fields and compiler-generated suffixes, and in Windows' MAX_PATH for the enclosing directory. *)
 let library_kernel_name_limit = 64
+
+let shortened_kernel_name ~digest_length ~original name =
+  let digest = String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string original)) digest_length in
+  (* Back off from a UTF-8 continuation byte, so no character is split. *)
+  let rec cut i = if i > 0 && Char.to_int name.[i] land 0xC0 = 0x80 then cut (i - 1) else i in
+  let prefix_budget = library_kernel_name_limit - 1 - digest_length in
+  let prefix =
+    if String.length name <= prefix_budget then name else String.prefix name (cut prefix_budget)
+  in
+  prefix ^ "-" ^ digest
 
 (** [library_kernel_name base_name] is the kernel name such a file name carries:
     {!clean_filename}[ base_name] when it fits in {!library_kernel_name_limit} bytes; otherwise a
@@ -2507,11 +2514,11 @@ let library_kernel_name_limit = 64
 let library_kernel_name base_name =
   let name = clean_filename base_name in
   if String.length name <= library_kernel_name_limit then name
-  else
-    let digest = String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string name)) 8 in
-    (* Back off from a UTF-8 continuation byte, so no character is split. *)
-    let rec cut i = if i > 0 && Char.to_int name.[i] land 0xC0 = 0x80 then cut (i - 1) else i in
-    String.prefix name (cut (library_kernel_name_limit - 1 - String.length digest)) ^ "-" ^ digest
+  else shortened_kernel_name ~digest_length:8 ~original:name name
+
+let routine_artifact_stem name =
+  if String.length name <= library_kernel_name_limit then name
+  else shortened_kernel_name ~digest_length:16 ~original:name (clean_filename name)
 
 (** [owned_artifact_name ~pid ~nonce ~run_id ~extension base_name] is the file name of an artifact
     of the kernel [base_name]'s compile [run_id] that the process [pid] (with {!process_nonce}

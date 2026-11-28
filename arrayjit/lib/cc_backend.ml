@@ -2036,26 +2036,28 @@ module Compile = C_syntax.Compile_driver (CC_syntax_config)
 
 (* [sources]: one translation unit, compiled as [<name>.c]; or several (gh-ocannl-1603), compiled as
    [<name>.tu<k>.c] and linked into one library. *)
-let compile_source ~name sources =
+let compile_source ~name ~part sources =
   (* The run id makes every library path unique within the process, even once the file is gone. A
      dynamic loader (glibc, dyld, LoadLibrary) answers a [dlopen] of a path it already has mapped
      with that mapping, without reading the file; the library is unlinked while still mapped and
      [Dl.dlclose] need not unload it, so a later [temp_file] landing on the freed name would
      otherwise run the earlier kernel. *)
   let run_id = Utils.get_global_run_id () in
-  let write ~name source =
+  let stem = Utils.routine_artifact_stem name ^ part in
+  let name = name ^ part in
+  let write unit_suffix source =
     let build_file =
-      Utils.open_build_file ~base_name:name ~extension:Backend_intf.cc_facts.source_extension
+      Utils.open_build_file ~base_name:(stem ^ unit_suffix)
+        ~extension:Backend_intf.cc_facts.source_extension
     in
     Out_channel.output_string build_file.oc source;
     build_file.finalize ();
-    compilation_copy ~name ~run_id build_file source
+    compilation_copy ~name:(name ^ unit_suffix) ~run_id build_file source
   in
   let f_paths =
     match sources with
-    | [ source ] -> [ write ~name source ]
-    | _ ->
-        List.mapi sources ~f:(fun k source -> write ~name:(name ^ ".tu" ^ Int.to_string k) source)
+    | [ source ] -> [ write "" source ]
+    | _ -> List.mapi sources ~f:(fun k source -> write (".tu" ^ Int.to_string k) source)
   in
   c_compile_and_load ~name ~run_id ~f_paths
 
@@ -2095,7 +2097,9 @@ let kernel_compile_lock = Stdlib.Mutex.create ()
 let write_source_artifact ~name source =
   if Utils.settings.output_debug_files_in_build_directory then (
     let build_file =
-      Utils.open_build_file ~base_name:name ~extension:Backend_intf.cc_facts.source_extension
+      Utils.open_build_file
+        ~base_name:(Utils.routine_artifact_stem name)
+        ~extension:Backend_intf.cc_facts.source_extension
     in
     Out_channel.output_string build_file.oc source;
     build_file.finalize ())
@@ -2131,7 +2135,7 @@ let compile_kernels ~batch ~names bindings (lowereds : Low_level.optimized array
      what the cache held). [.part<k>] is a spelling no routine name takes. *)
   let compile_group ~group ~n_groups idxs =
     let whole = n_groups = 1 && List.equal Int.equal idxs all in
-    let artifact = if whole then name else name ^ ".part" ^ Int.to_string group in
+    let part = if whole then "" else ".part" ^ Int.to_string group in
     (* Before the call: a failed compile was still given these kernels. *)
     Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length idxs);
     let lib =
@@ -2142,7 +2146,7 @@ let compile_kernels ~batch ~names bindings (lowereds : Low_level.optimized array
       in
       (* Several units: the routine's full source is still [<name>.c] (read through [Generated]). *)
       if List.length sources > 1 && whole then write_source_artifact ~name (r.assemble all);
-      try Compile_cost.time_device (fun () -> compile_source ~name:artifact sources)
+      try Compile_cost.time_device (fun () -> compile_source ~name ~part sources)
       with exn ->
         let backtrace = Stdlib.Printexc.get_raw_backtrace () in
         r.attribute idxs exn backtrace
@@ -2190,7 +2194,8 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized arr
 let%track3_sexp link_compiled ?lowered_bindings ~merge_buffer ~resolve ~runner_label ctx_buffers
     (code : procedure) =
   let _name : string = code.name in
-  let log_file_name = Utils.diagn_log_file [%string "debug-%{runner_label}-%{code.name}.log"] in
+  let stem = Utils.routine_artifact_stem code.name in
+  let log_file_name = Utils.diagn_log_file [%string "debug-%{runner_label}-%{stem}.log"] in
   (* When [lowered_bindings] is given (batch linking, e.g. fissioned segments of one routine), the
      static-index refs are shared: looked up by the [Static_idx] param's symbol rather than freshly
      minted, so one bindings assoc drives every procedure of the batch. *)

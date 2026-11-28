@@ -332,6 +332,8 @@ test/operations/reserved_routine_names.ml [run by @test/operations/runtest-reser
     "void " ^ "gh686_ordinary_name" ^ "("
     "void " ^ ... ^ "("
 test/operations/rng_operand_precision.ml [run by @test/operations/runtest-rng_operand_precision]
+test/operations/routine_artifact_paths.ml [run by @test/operations/runtest-routine_artifact_paths]
+    "void " ^ ... ^ "("
 test/operations/runtime_integer_power.ml [run by @test/operations/runtest-runtime_integer_power]
     "__float2half(ocannl_pow_f32(__half2float("
     "ocannl_pow_f32("
@@ -754,6 +756,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-reduction_accumulator_residency
 @test/operations/runtest-reserved_routine_names
 @test/operations/runtest-rng_operand_precision
+@test/operations/runtest-routine_artifact_paths
 @test/operations/runtest-runtime_integer_power
 @test/operations/runtest-scan_loop
 @test/operations/runtest-schedule_batch_grid

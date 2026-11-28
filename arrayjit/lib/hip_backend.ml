@@ -491,6 +491,7 @@ end = struct
     code
 
   let hip_to_code ~name hip_src =
+    let name = Utils.routine_artifact_stem name in
     let options =
       Lazy.force ensure_initialized;
       hiprtc_options ~target_archs:(hiprtc_target_archs ())
@@ -1424,6 +1425,7 @@ extern "C" __global__ void ocannl_timing_phase(unsigned int* ids) {
         String.(strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list kernel_names))
       else kernel_names.(0)
     in
+    let name = Utils.routine_artifact_stem name in
     Lazy.force ensure_initialized;
     let target_archs = hiprtc_target_archs () in
     let extra_options = Cuda_like_config.hip_extra_compile_options () in

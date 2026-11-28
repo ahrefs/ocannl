@@ -1314,6 +1314,7 @@ end = struct
         String.(strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list kernel_names))
       else kernel_names.(0)
     in
+    let name = Utils.routine_artifact_stem name in
     (* The routine's full source, as codegen emitted it, is its [.cu] artifact whatever was
        compiled: the debug view of what codegen emitted (and what tests read) does not depend on
        what the cache held. The renaming is the key's alone; nvrtc compiles the emitted text. *)
