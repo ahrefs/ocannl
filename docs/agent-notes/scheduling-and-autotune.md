@@ -1249,17 +1249,26 @@ files.
   fp8, `+2` f64), falling back to `sk_no_bank_pad = true` (`" nopad"`) when padded tiles exceed
   `max_workgroup_memory_bytes` while unpadded tiles fit (preserving Metal's 32 KiB and HIP's
   64 KiB boundary geometries); (3) `C_syntax` emits `__attribute__((aligned(16)))` on
-  non-power-of-two shared arrays with 16B-multiple rows so nvcc keeps `LDS.128` loads (without it,
-  nvcc drops to element alignment and +4 padding regresses); (4) single-axis-contraction blocktiles
-  with `bk < wg_x` dividing `wg_x` (`64x64x8/4x4`) split `j_w` into a 3D `(wg_y, wg_x / bk, bk)`
-  workgroup (`(8, 2, 16)`) to eliminate idle-lane copy guards (multi-axis contractions stay 2D so
-  `model_default` keeps preferring `coal-k` over 32-barrier `64x64x8`). Exclusive CUDA ABBA on
-  `rog-nv-linux` (RTX 5070 Ti, base `3342c130` vs head, `F_preset` controls 0.998–1.001x): `qkv b8`
-  `32x32x8` 0.867x (`0.0230 -> 0.0199 ms`), `outproj b8` fastest `64x64x32 coal-k` 0.647x
-  (`0.0279 -> 0.0180 ms`), `qkv b256` pick `64x64x8 coal-n` 0.817x (`0.580 -> 0.474 ms`),
-  `outproj b256` pick `64x64x64 coal-k` 0.879x (`0.500 -> 0.440 ms`) and `64x64x32 coal-k` 0.700x
-  (`0.611 -> 0.427 ms`). Non-picked deep-K tiles crossing 32 KiB (`32x32x128`, `16x16x256`) lose
-  occupancy from the +16B padding (~1.29–1.31x at b256).
+  rank >= 2 hardware shared arrays with non-power-of-two 16B-multiple rows so nvcc keeps `LDS.128`
+  loads (without it, nvcc drops to element alignment and +4 padding regresses); (4)
+  single-axis-contraction blocktiles with `bk < wg_x` dividing `wg_x` (`64x64x8/4x4`) split `j_w`
+  into a 3D `(wg_y, wg_x / bk, bk)` workgroup (`(8, 2, 16)`) to eliminate idle-lane copy guards
+  (multi-axis contractions stay 2D so `model_default` keeps preferring `coal-k` over 32-barrier
+  `64x64x8`). Exclusive CUDA ABBA on `rog-nv-linux` (RTX 5070 Ti, base `3342c130` vs head,
+  `F_preset` controls 0.998–1.001x): `qkv b8` `32x32x8` 0.867x (`0.0230 -> 0.0199 ms`),
+  `outproj b8` fastest `64x64x32 coal-k` 0.647x (`0.0279 -> 0.0180 ms`), `qkv b256` pick
+  `64x64x8 coal-n` 0.817x (`0.580 -> 0.474 ms`), `outproj b256` pick `64x64x64 coal-k` 0.879x
+  (`0.500 -> 0.440 ms`) and `64x64x32 coal-k` 0.700x (`0.611 -> 0.427 ms`); non-picked deep-K
+  tiles crossing 32 KiB (`32x32x128`, `16x16x256`) lose occupancy from the +16B padding
+  (~1.29–1.31x at b256). Exclusive HIP ABBA on `tuf-amd-linux` (gfx1102 discrete, 64 KiB LDS,
+  base `2c79af67` vs head, `F_preset` controls 0.986–1.017x): `qkv b8` pick moves from `F_seeded`
+  (`0.0777 ms`) to `64x64x8 coal-n` (`0.0479 ms`, 0.773x same-leaf, 0.616x vs base pick,
+  argmin slowdown 1.000), `qkv b256` pick moves from `F_seeded` (`1.672 ms`) to
+  `64x64x8 coal-n` (`1.079 ms`, 0.707x same-leaf, 0.645x vs base pick, argmin slowdown 1.000),
+  `outproj b8` pick `64x64x32 coal-k` 0.870x (`0.0464 -> 0.0404 ms`), `outproj b256` pick
+  `64x64x32 coal-k` 1.031x (`0.988 -> 1.019 ms`, 64 KiB LDS residency 4 -> 3 WG/CU) while
+  `64x64x64` is neutral (1.002x) and deep-K tiles (`32x32x128`, `16x16x64`, `16x16x256`) speed up
+  0.445–0.720x.
 ## Renderer failures and fault injection
 - A schedule can pass `Schedule.apply`'s validation and still be one the RENDERER cannot express:
   the pipelined-tile checks in `c_syntax.ml` (a read reached outside its rotor loop; a rotor loop no
