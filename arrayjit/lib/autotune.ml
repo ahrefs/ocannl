@@ -185,6 +185,12 @@ let log_seeding ?coalesced ?capabilities ~where ~is_gpu ~is_cpu ~limits opt =
       (seeding_census_lines ~where
          (seeding_census ?coalesced ?capabilities ~is_gpu ~is_cpu ~limits opt))
 
+(* gh-ocannl-1640: per-window host-load verdicts on stderr, gated by config
+   [autotune_log_host_load]. Read per timing window so tests can state it in process; separate from
+   [autotune_log], which pays for an extra untuned-default control compile. *)
+let log_host_load_enabled () =
+  Utils.get_global_flag ~default:false ~arg_name:"autotune_log_host_load"
+
 (* gh-ocannl-1061: the search's cost record, gated by config [autotune_progress] -- or, for the
    duration of one call, by its [?progress] argument. A search can run for hours and be killed by a
    cap before it reports anything, and [autotune_log] is no substitute: it pays for an extra
@@ -2352,19 +2358,19 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
       { result with unbatched = true })
     else result
   in
-  (* gh-ocannl-1558: the attribution of a dispersed window. For a dispersed window shorter than
-     [Host_load.min_span_s] the second reading waits out the remainder, so the tick-sampled busy
-     counter covers a span it can resolve; the process is idle meanwhile, so the wait measures the
-     co-tenant and not this routine. Every foreign CPU-second of the padded span is then charged to
-     the window itself (worst case, [~window_s]): the padding can add evidence, never dilute a
-     co-tenant that ran only during the window. *)
-  let host_load =
+  (* gh-ocannl-1558, gh-ocannl-1640: the attribution of a dispersed window. For a dispersed window
+     shorter than [Host_load.min_span_s] the second reading waits out the remainder, so the
+     tick-sampled busy counter covers a span it can resolve; the process is idle meanwhile, so the
+     wait measures the co-tenant and not this routine. Every foreign CPU-second of the padded span
+     is then charged to the window itself (worst case, [~window_s]): the padding can add evidence,
+     never dilute a co-tenant that ran only during the window. *)
+  let host_load_detail =
     match dispersion with
     | Refuse_dispersed -> None
     | Attribute_dispersion ->
-        Some
-          (match !load_before with
-          | None -> Host_load.Unavailable
+        let padded, detail =
+          match !load_before with
+          | None -> (false, Host_load.unavailable_detail)
           | Some before -> (
               let after, window_s =
                 match read_load () with
@@ -2376,10 +2382,14 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
                     (read_load (), Some window_s)
                 | after -> (after, None)
               in
+              let padded = Option.is_some window_s in
               match after with
-              | None -> Host_load.Unavailable
-              | Some after -> Host_load.classify ?window_s ~before ~after ()))
+              | None -> (padded, Host_load.unavailable_detail)
+              | Some after -> (padded, Host_load.classify_detail ?window_s ~before ~after ()))
+        in
+        Some (padded, detail)
   in
+  let host_load = Option.map host_load_detail ~f:(fun (_, d) -> d.Host_load.verdict) in
   let result =
     match host_load with
     | None -> result
@@ -2400,6 +2410,17 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
            | Quiet _ | Unavailable -> ());
         attributed
   in
+  (match host_load_detail with
+  | Some (padded, detail) when log_host_load_enabled () ->
+      let spread_str =
+        if Float.is_finite result.spread then Printf.sprintf "%.2f" result.spread else "none"
+      in
+      Stdio.eprintf
+        "autotune-host-load: %s padded=%b dispersed=%b spread=%s depth=%d samples=%d admission=%s\n\
+         %!"
+        (Host_load.format_detail detail) padded result.dispersed spread_str depth window.samples
+        (batch_admission_name (timing_admission result))
+  | _ -> ());
   let decision =
     {
       phase;

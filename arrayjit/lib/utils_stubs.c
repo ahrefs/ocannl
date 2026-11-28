@@ -1005,17 +1005,47 @@ CAMLprim value ocannl_set_process_affinity(value mask) {
 #endif
 }
 
-/* Cumulative CPU-seconds the whole machine has spent busy since boot, summed over every logical
-   CPU, or NaN where this platform gives no such counter (gh-ocannl-1558: [Host_load], the
-   co-tenant signal the autotuner's dispersion attribution reads). Linux: the aggregate [cpu] line
-   of /proc/stat -- user, nice, system, irq, softirq and steal; idle and iowait are not busy, and
-   guest time is already inside user, so the guest columns are not added again -- over
-   sysconf(_SC_CLK_TCK). macOS: the mach host's CPU load ticks (user, system, nice) over the same
-   tick rate; those tick counters are 32-bit and wrap after weeks of uptime, which a reader sees as
-   a counter that went backwards. Windows: not provided. */
-CAMLprim value ocannl_host_cpu_busy_seconds(value unit) {
+/* Cumulative CPU-seconds the whole machine has spent busy since boot (summed over every logical
+   CPU), paired with this process's cumulative CPU-seconds where the same platform API supplies
+   both (gh-ocannl-1558, gh-ocannl-1640: [Host_load], the co-tenant signal the autotuner's
+   dispersion attribution reads).
+   - Linux: the aggregate [cpu] line of /proc/stat -- user, nice, system, irq, softirq and steal;
+     idle and iowait are not busy, and guest time is already inside user, so the guest columns are
+     not added again -- over sysconf(_SC_CLK_TCK); own time stays NaN so OCaml reads [Unix.times].
+   - macOS: the mach host's CPU load ticks (user, system, nice) over the same tick rate; those
+     tick counters are 32-bit and wrap after weeks of uptime, which a reader sees as a counter
+     that went backwards; own time stays NaN so OCaml reads [Unix.times].
+   - Windows: [GetSystemTimes] (kernel time INCLUDES idle time per MSDN, so busy is
+     (kernel - idle) + user when kernel >= idle) paired with [GetProcessTimes] (kernel + user over
+     every thread of this process), both in 100 ns FILETIME intervals divided by 1e7.
+   - Other platforms: (NaN, NaN).
+
+   [OCANNL_HOST_CPU_SUPPORTED] names the compile-time predicate and is published through
+   [ocannl_host_cpu_supported] so tests gate on the build rather than on a reading's success. */
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+#define OCANNL_HOST_CPU_SUPPORTED 1
+#endif
+
+CAMLprim value ocannl_host_cpu_supported(value unit) {
+  (void)unit;
+#ifdef OCANNL_HOST_CPU_SUPPORTED
+  return Val_true;
+#else
+  return Val_false;
+#endif
+}
+
+#if defined(_WIN32)
+static uint64_t ocannl_filetime_to_u64(FILETIME ft) {
+  return ((uint64_t)ft.dwHighDateTime << 32) | (uint64_t)ft.dwLowDateTime;
+}
+#endif
+
+CAMLprim value ocannl_host_cpu_times(value unit) {
   CAMLparam1(unit);
+  CAMLlocal3(res, v_busy, v_own);
   double busy = NAN;
+  double own = NAN;
 #if defined(__linux__)
   {
     FILE *f = fopen("/proc/stat", "r");
@@ -1045,6 +1075,32 @@ CAMLprim value ocannl_host_cpu_busy_seconds(value unit) {
               (double)info.cpu_ticks[CPU_STATE_NICE]) /
              (double)hz;
   }
+#elif defined(_WIN32)
+  {
+    FILETIME idle_ft, kernel_ft, user_ft;
+    FILETIME creation_ft, exit_ft, proc_kernel_ft, proc_user_ft;
+    if (GetSystemTimes(&idle_ft, &kernel_ft, &user_ft) &&
+        GetProcessTimes(GetCurrentProcess(), &creation_ft, &exit_ft, &proc_kernel_ft,
+                        &proc_user_ft)) {
+      uint64_t idle = ocannl_filetime_to_u64(idle_ft);
+      uint64_t kernel = ocannl_filetime_to_u64(kernel_ft);
+      uint64_t user = ocannl_filetime_to_u64(user_ft);
+      /* GetSystemTimes includes idle time inside kernel time; guard against underflow if a
+         kernel/hypervisor transiently reports idle > kernel. */
+      if (kernel >= idle) {
+        uint64_t busy_100ns = (kernel - idle) + user;
+        uint64_t own_100ns =
+            ocannl_filetime_to_u64(proc_kernel_ft) + ocannl_filetime_to_u64(proc_user_ft);
+        busy = (double)busy_100ns / 1e7;
+        own = (double)own_100ns / 1e7;
+      }
+    }
+  }
 #endif
-  CAMLreturn(caml_copy_double(busy));
+  v_busy = caml_copy_double(busy);
+  v_own = caml_copy_double(own);
+  res = caml_alloc_tuple(2);
+  Store_field(res, 0, v_busy);
+  Store_field(res, 1, v_own);
+  CAMLreturn(res);
 }

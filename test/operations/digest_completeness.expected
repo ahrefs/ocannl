@@ -204,6 +204,7 @@ execution-neutral -- startup and configuration-sourcing chatter, which descripto
 execution-neutral -- debug artifacts and where they go: the files are written beside the run, the kernels are what they would have been
   autotune_cache_dir
   autotune_log
+  autotune_log_host_load
   autotune_log_seeding
   autotune_progress
   build_files_prefix
