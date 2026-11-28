@@ -5745,6 +5745,18 @@ let seed_gate_tag = function
       ^ Option.value_map wg_capacity ~default:"" ~f:(Printf.sprintf " wg_capacity=%d")
       ^ set "copy_rate" copy_rate
 
+(* The untuned pipeline can still split or sink reductions on a backend without sketches. Its
+   effective zero threshold then comes from the capability, before any config lookup. *)
+let backend_seed_refusal ~facts =
+  if seeded_default_backend facts then None
+  else Some "backend capability seeds_untuned_default=false"
+
+let seed_gate_diagnostic_tag ~facts gate =
+  Option.value_or_thunk (backend_seed_refusal ~facts) ~default:(fun () -> seed_gate_tag gate)
+
+let configured_seed_refusal = "gpu_default_sketch_min_reduction=0"
+let sketch_seeding_off reason = "sketch seeding is off (" ^ reason ^ ")"
+
 (* Both automatic variants use the ranked gate. The legacy score predates the operand-delivery
    charge, which includes the staged-copy term and its launch tail. *)
 let seed_gate_setting () =
@@ -6142,9 +6154,10 @@ let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~c
 let seeded_segment_judgment ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below
     (pre : LL.optimized) : (sketch_params, string) Result.t =
   let candidate =
+    (* [seeded_decisions] handles backend-disabled gates before judgment, and the staffed start
+       exists only on seeding backends. *)
     match gate with
-    | Min_reduction n when n <= 0 ->
-        Error "sketch seeding is off (gpu_default_sketch_min_reduction=0)"
+    | Min_reduction n when n <= 0 -> Error (sketch_seeding_off configured_seed_refusal)
     | Min_reduction min_reduction -> seeded_params_judged ~capabilities ~limits ~min_reduction pre
     | Ranked
         {
@@ -6198,8 +6211,9 @@ let seeded_segment_params ~capabilities ~limits ~accum_prec ~static_indices ~gat
     (seeded_segment_judgment ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below
        pre)
 
-let seeded_decisions ?memo ?(census = true) ~scatter_packets ~capabilities ~limits ~accum_prec
-    ~admit_narrow ~static_indices ~gate ~ranked_below ~sink_enabled (opt : LL.optimized) =
+let seeded_decisions ?memo ?(census = true) ~facts ~scatter_packets ~capabilities ~limits
+    ~accum_prec ~admit_narrow ~static_indices ~gate ~ranked_below ~sink_enabled (opt : LL.optimized)
+    =
   let preset = seeded_preset ~limits in
   let zero_sched tns = Sched.zero_expansion ~limits tns in
   let keep_mapping = Sched.fission_keep_mapping ~is_gpu:true ~limits in
@@ -6239,7 +6253,8 @@ let seeded_decisions ?memo ?(census = true) ~scatter_packets ~capabilities ~limi
         census_verdict ~key "refused: a solo segment, which no sketch seeds";
         None
     | `Normal, Min_reduction n when n <= 0 ->
-        census_verdict ~key "refused: sketch seeding is off (gpu_default_sketch_min_reduction=0)";
+        let reason = Option.value (backend_seed_refusal ~facts) ~default:configured_seed_refusal in
+        census_verdict ~key ("refused: " ^ sketch_seeding_off reason);
         None
     | `Normal, _ ->
         Hashtbl.find_or_add decided (Lazy.force key) ~default:(fun () ->
@@ -6351,11 +6366,11 @@ let seeded_plan_choice (plan : seeded_plan) =
       }
 
 (* The plan on [opt], the routine [split] was applied to. *)
-let seeded_plan_on ?memo ?census ~scatter_packets ~capabilities ~limits ~accum_prec ~admit_narrow
-    ~static_indices ~gate ~ranked_below ~sink_enabled ~split opt =
+let seeded_plan_on ?memo ?census ~facts ~scatter_packets ~capabilities ~limits ~accum_prec
+    ~admit_narrow ~static_indices ~gate ~ranked_below ~sink_enabled ~split opt =
   match
-    seeded_decisions ?memo ?census ~scatter_packets ~capabilities ~limits ~accum_prec ~admit_narrow
-      ~static_indices ~gate ~ranked_below ~sink_enabled opt
+    seeded_decisions ?memo ?census ~facts ~scatter_packets ~capabilities ~limits ~accum_prec
+      ~admit_narrow ~static_indices ~gate ~ranked_below ~sink_enabled opt
   with
   | None ->
       {
@@ -6393,12 +6408,13 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narr
         if log_seeding_enabled () then
           print_seeding_lines
             [
-              Printf.sprintf "%s gate %s" seeding_census_prefix (seed_gate_tag gate);
+              Printf.sprintf "%s gate %s" seeding_census_prefix
+                (seed_gate_diagnostic_tag ~facts gate);
               Printf.sprintf "%s plan %s" seeding_census_prefix (label ());
             ]
       in
       match
-        seeded_plan_on ?memo ~scatter_packets ~capabilities ~limits ~accum_prec ~admit_narrow
+        seeded_plan_on ?memo ~facts ~scatter_packets ~capabilities ~limits ~accum_prec ~admit_narrow
           ~static_indices ~gate ~ranked_below ~sink_enabled ~split opt
       with
       | { sp_split = []; sp_segments = None; _ } ->
@@ -6434,8 +6450,8 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narr
                   | split_opt ->
                       Some
                         {
-                          (seeded_plan_on ~memo ~census:false ~scatter_packets ~capabilities ~limits
-                             ~accum_prec ~admit_narrow ~static_indices ~gate ~ranked_below
+                          (seeded_plan_on ~memo ~census:false ~facts ~scatter_packets ~capabilities
+                             ~limits ~accum_prec ~admit_narrow ~static_indices ~gate ~ranked_below
                              ~sink_enabled ~split split_opt)
                           with
                           sp_start = Some start;
@@ -6474,15 +6490,15 @@ let seeded_apply ?(on_choice = fun (_ : seeded_choice) -> ()) ~capabilities ~fac
          sp_admit_narrow = admit_narrow;
        });
   let plan =
-    seeded_plan_on ~scatter_packets ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices
-      ~gate
+    seeded_plan_on ~facts ~scatter_packets ~capabilities ~limits ~accum_prec ~admit_narrow
+      ~static_indices ~gate
       ~ranked_below:(seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices)
       ~sink_enabled ~split opt
   in
   (* gh-ocannl-1253: the derivation [tune] repeats (as [seeded_plan]) on a trajectory-matched warm
      hit, timed so its cost can be read off any untuned compile. *)
   logf "seeded_default: plan derived in %.3f s" (Unix.gettimeofday () -. t0);
-  logf "seeded_default: gate %s" (seed_gate_tag gate);
+  logf "seeded_default: gate %s" (seed_gate_diagnostic_tag ~facts gate);
   let (_, tuples), applied =
     seeded_replay ~scatter_packets ~limits ~accum_prec ~admit_narrow ~static_indices
       plan.sp_segments opt

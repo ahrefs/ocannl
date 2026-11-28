@@ -51,6 +51,10 @@ autotune_log_seeding is on for this run: true
 log_seeding writes exactly the rendered census: true
 the seeded default prints a census line for its plan: true
 the seeded default prints one census line per segment of its plan: true
+backend-disabled sketch seeding: the census gate names the effective setting: true
+backend-disabled sketch seeding: the census refusal names the cause: true
+config-disabled sketch seeding: the census gate names the effective setting: true
+config-disabled sketch seeding: the census refusal names the cause: true
 tune emits a whole-routine census line: true
 pad census: an m=48 site pads the row role alone: true
 pad census: its census names the row axis as the accumulator mask's cause: true

@@ -405,6 +405,34 @@ let () =
       p "the seeded default prints one census line per segment of its plan"
         (List.length seeded_lines = List.length segments)
   | _ -> ());
+  let disabled_census ~facts ~threshold =
+    Utils.with_stated_config
+      [ ("gpu_default_sketch_min_reduction", threshold) ]
+      (fun () ->
+        capture (fun () ->
+            ignore
+              (Autotune.seeded_plan ~min_serial:1 ~facts ~limits:gpu_limits ~accum_prec:Fn.id
+                 ~static_indices:[] mopt)))
+  in
+  let check_disabled_census label ~facts ~threshold ~gate ~reason =
+    let lines = disabled_census ~facts ~threshold in
+    let prefix = Autotune.seeding_census_prefix in
+    p_exists
+      (label ^ ": the census gate names the effective setting")
+      lines
+      ~f:(String.equal (prefix ^ " gate " ^ gate));
+    p_exists (label ^ ": the census refusal names the cause") lines ~f:(fun line ->
+        String.is_prefix line ~prefix:(prefix ^ " where=\"seeded_default segment u")
+        && String.is_suffix line ~suffix:("\" refused: sketch seeding is off (" ^ reason ^ ")"))
+  in
+  let backend_reason = "backend capability seeds_untuned_default=false" in
+  let backend_without_sketches =
+    { Ir.Backend_intf.metal_facts with seeds_untuned_default = false }
+  in
+  check_disabled_census "backend-disabled sketch seeding" ~facts:backend_without_sketches
+    ~threshold:"1" ~gate:backend_reason ~reason:backend_reason;
+  check_disabled_census "config-disabled sketch seeding" ~facts:Ir.Backend_intf.cuda_facts
+    ~threshold:"0" ~gate:"min_reduction=0" ~reason:"gpu_default_sketch_min_reduction=0";
   let va = TDSL.ndarray [| 1.; 2.; 3.; 4. |] ~label:[ "pa" ] ~output_dims:[ 4 ] () in
   let vb = TDSL.ndarray [| 4.; 3.; 2.; 1. |] ~label:[ "pb" ] ~output_dims:[ 4 ] () in
   let%op sum = va + vb in
