@@ -6154,6 +6154,8 @@ let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~c
 let seeded_segment_judgment ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below
     (pre : LL.optimized) : (sketch_params, string) Result.t =
   let candidate =
+    (* [seeded_decisions] handles backend-disabled gates before judgment, and the staffed start
+       exists only on seeding backends. *)
     match gate with
     | Min_reduction n when n <= 0 -> Error (sketch_seeding_off configured_seed_refusal)
     | Min_reduction min_reduction -> seeded_params_judged ~capabilities ~limits ~min_reduction pre
