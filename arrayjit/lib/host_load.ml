@@ -4,6 +4,7 @@ open Base
 
 external cpu_times_stub : unit -> float * float = "ocannl_host_cpu_times"
 external supported_stub : unit -> bool = "ocannl_host_cpu_supported"
+external tick_seconds_stub : unit -> float = "ocannl_host_cpu_tick_seconds"
 
 type reading = { wall_s : float; busy_s : float; own_s : float } [@@deriving sexp_of]
 type verdict = Quiet of float | Cotenant of float | Unavailable [@@deriving sexp_of, equal]
@@ -39,7 +40,11 @@ let read () =
         { wall_s; busy_s; own_s })
 
 let cotenant_cores = 1.
-let counter_allowance_s = 0.02
+
+let counter_allowance_s =
+  let tick = tick_seconds_stub () in
+  if Float.is_finite tick && Float.(tick > 0.) then 2. *. tick else 0.02
+
 let min_span_s = 0.25
 
 let unavailable_detail =

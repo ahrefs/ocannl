@@ -1471,15 +1471,18 @@ files.
   (median raw wall over the floor). On GPU backends a dispersed window is still refused
   (`Refuse_dispersed`). On backends whose facts state `host_load_attributable` (the CPU ones)
   `time_routine` reads `Utils.Host_load` (machine busy CPU-s from `/proc/stat` on Linux, mach ticks
-  on macOS, or `GetSystemTimes` `(kernel - idle) + user` on Windows, minus this whole process's
-  `Unix.times` on POSIX or `GetProcessTimes` on Windows, over the wall) from before the calibration
-  to after the window, and refuses a dispersed window only on `Cotenant` (at least a core of
-  foreign load plus a two-tick allowance over the span; a dispersed window shorter than
-  `Host_load.min_span_s` waits out the rest idle and is charged the padded span's whole foreign
-  load, so padding never dilutes a co-tenant); `Quiet` admits it, and `Unavailable` (no platform
-  counter, or a counter that went backwards) keeps the refusal. `Host_load.supported` publishes the
-  compile-time platform predicate so real-counter tests gate on the build rather than on `read`'s
-  success. Config `autotune_log_host_load` (default `false`, `Execution_neutral`, read per timing
+  on macOS, or `GetSystemTimes` `(kernel - idle) + user` on single-group Windows where
+  `GetActiveProcessorGroupCount() = 1`, minus this whole process's `Unix.times` on POSIX or
+  `GetProcessTimes` on Windows, over the wall) from before the calibration to after the window, and
+  refuses a dispersed window only on `Cotenant` (at least a core of foreign load plus a two-tick
+  allowance of the host's busy-counter clock over the span -- `2 / _SC_CLK_TCK = 0.02 s` on POSIX,
+  `2 * increment = 0.03125 s` from `GetSystemTimeAdjustment` on 64 Hz Windows; a dispersed window
+  shorter than `Host_load.min_span_s` waits out the rest idle and is charged the padded span's whole
+  foreign load, so padding never dilutes a co-tenant); `Quiet` admits it, and `Unavailable` (no
+  platform counter, a multi-group >64-CPU Windows host where `GetSystemTimes` covers one group while
+  `GetProcessTimes` spans all groups, or a counter that went backwards) keeps the refusal.
+  `Host_load.supported` publishes the platform-support predicate so real-counter tests gate on host
+  support rather than on `read`'s success. Config `autotune_log_host_load` (default `false`, `Execution_neutral`, read per timing
   window) writes one flushed `autotune-host-load:` line per `Attribute_dispersion` window with its
   verdict, foreign load, bar, tick allowance, span, attribution window, raw busy/own deltas,
   padding, dispersion, spread, depth, samples, and admission (GPU `Refuse_dispersed` windows emit

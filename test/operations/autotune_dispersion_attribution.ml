@@ -125,9 +125,13 @@ let () =
       Host_load.equal_verdict
         (Host_load.classify ~window_s ~before:start ~after:padded ())
         Host_load.Unavailable);
-  (* Pure classification detail and diagnostic line formatting (gh-ocannl-1640). Every input uses
-     exact decimal / dyadic values so formatting has no decimal-tie rounding differences across
-     platforms. *)
+  (* Pure classification detail and diagnostic line formatting (gh-ocannl-1640). Allowance and bar
+     are derived from [Host_load.counter_allowance_s] so the assertions hold on both 100 Hz POSIX
+     (0.02 s) and 64 Hz Windows (0.03125 s). *)
+  let fmt_bar_allowance window_s =
+    let allowance = Host_load.counter_allowance_s /. window_s in
+    Printf.sprintf "bar=%.4f allowance=%.4f" (Host_load.cotenant_cores +. allowance) allowance
+  in
   let detail_quiet =
     Host_load.classify_detail ~before:start ~after:(after ~span:0.5 ~own:4. ~foreign:0.25) ()
   in
@@ -136,16 +140,20 @@ let () =
        (Host_load.classify ~before:start ~after:(after ~span:0.5 ~own:4. ~foreign:0.25) ())
     && String.equal
          (Host_load.format_detail detail_quiet)
-         "verdict=quiet foreign=0.2500 bar=1.0400 allowance=0.0400 span_s=0.5000 window_s=0.5000 \
-          busy_s=4.1250 own_s=4.0000");
+         (Printf.sprintf
+            "verdict=quiet foreign=0.2500 %s span_s=0.5000 window_s=0.5000 busy_s=4.1250 \
+             own_s=4.0000"
+            (fmt_bar_allowance 0.5)));
   let detail_padded = Host_load.classify_detail ~window_s:0.05 ~before:start ~after:padded () in
   p "classify_detail reports padded window_s, span_s and inflated tick allowance"
     (Host_load.equal_verdict detail_padded.verdict
        (Host_load.classify ~window_s:0.05 ~before:start ~after:padded ())
     && String.equal
          (Host_load.format_detail detail_padded)
-         "verdict=cotenant foreign=2.0000 bar=1.4000 allowance=0.4000 span_s=0.2500 \
-          window_s=0.0500 busy_s=0.5000 own_s=0.4000");
+         (Printf.sprintf
+            "verdict=cotenant foreign=2.0000 %s span_s=0.2500 window_s=0.0500 busy_s=0.5000 \
+             own_s=0.4000"
+            (fmt_bar_allowance 0.05)));
   let detail_backwards =
     Host_load.classify_detail ~before:start ~after:(reading ~wall_s:11. ~busy_s:999. ~own_s:501.) ()
   in
@@ -157,10 +165,10 @@ let () =
     && String.equal (Host_load.verdict_name detail_backwards.verdict) "unavailable"
     && Option.is_none detail_backwards.foreign_cores
     && Option.is_some detail_backwards.allowance_cores);
-  (* The real counters: on platforms with a busy counter (Linux, macOS, Windows), a brief CPU burst
-     plus idle wait advances both the machine busy counter and this process's own time and resolves
-     to Quiet or Cotenant. Gated on [Host_load.supported] (the compile-time build predicate), never
-     on [Option.is_some r0], so a broken stub fails loudly. *)
+  (* The real counters: on platforms with a scope-matched busy counter (Linux, macOS, single-group
+     Windows), a brief CPU burst plus idle wait advances both the machine busy counter and this
+     process's own time and resolves to Quiet or Cotenant. Gated on [Host_load.supported] (the
+     platform-support predicate), never on [Option.is_some r0], so a broken stub fails loudly. *)
   let spin_until_counters_advance (before : Host_load.reading) =
     let sink = ref 0 in
     let rec loop () =
@@ -189,8 +197,9 @@ let () =
   (match (r0, r1) with
   | Some before, Some after ->
       let detail = Host_load.classify_detail ~before ~after () in
-      Stdio.eprintf "real host-load over 0.3 s (not part of the golden): %s\n%!"
-        (Host_load.format_detail detail)
+      Stdio.eprintf
+        "real host-load over 0.3 s (not part of the golden): counter_allowance_s=%.5f %s\n%!"
+        Host_load.counter_allowance_s (Host_load.format_detail detail)
   | _ -> ());
   gated ~aggregation:`Environment ~when_:Host_load.supported ~on:"a platform without a busy counter"
     "the real counters advance on CPU work and resolve to a verdict over a 0.3 s span"
@@ -376,6 +385,10 @@ let call_host_load_lines ?host ?clock ~enabled ~dispersion ~foreign () =
 
 let () =
   Stdio.printf "== per-window verdict stream ==\n";
+  let fmt_bar_allowance window_s =
+    let allowance = Host_load.counter_allowance_s /. window_s in
+    Printf.sprintf "bar=%.4f allowance=%.4f" (Host_load.cotenant_cores +. allowance) allowance
+  in
   let off_calls, off_lines =
     call_host_load_lines ~enabled:false ~dispersion:Autotune.Attribute_dispersion ~foreign:0.125 ()
   in
@@ -386,9 +399,11 @@ let () =
           (call_host_load_lines ~enabled:true ~dispersion:Autotune.Attribute_dispersion
              ~foreign:0.125 ()))
        [
-         "autotune-host-load: verdict=quiet foreign=0.1250 bar=1.0200 allowance=0.0200 \
-          span_s=1.0000 window_s=1.0000 busy_s=8.1250 own_s=8.0000 padded=false dispersed=true \
-          spread=3.00 depth=1 samples=16 admission=admitted";
+         Printf.sprintf
+           "autotune-host-load: verdict=quiet foreign=0.1250 %s span_s=1.0000 window_s=1.0000 \
+            busy_s=8.1250 own_s=8.0000 padded=false dispersed=true spread=3.00 depth=1 samples=16 \
+            admission=admitted"
+           (fmt_bar_allowance 1.0);
        ]);
   p "autotune_log_host_load=true emits the co-tenant dispersed window line"
     (List.equal String.equal
@@ -396,9 +411,11 @@ let () =
           (call_host_load_lines ~enabled:true ~dispersion:Autotune.Attribute_dispersion ~foreign:4.
              ()))
        [
-         "autotune-host-load: verdict=cotenant foreign=4.0000 bar=1.0200 allowance=0.0200 \
-          span_s=1.0000 window_s=1.0000 busy_s=12.0000 own_s=8.0000 padded=false dispersed=true \
-          spread=3.00 depth=1 samples=16 admission=refused_contended";
+         Printf.sprintf
+           "autotune-host-load: verdict=cotenant foreign=4.0000 %s span_s=1.0000 window_s=1.0000 \
+            busy_s=12.0000 own_s=8.0000 padded=false dispersed=true spread=3.00 depth=1 samples=16 \
+            admission=refused_contended"
+           (fmt_bar_allowance 1.0);
        ]);
   p "autotune_log_host_load=true also logs tight (non-dispersed) windows"
     (List.equal String.equal
@@ -407,9 +424,11 @@ let () =
              ~clock:(fun _ -> 1.)
              ~enabled:true ~dispersion:Autotune.Attribute_dispersion ~foreign:0.125 ()))
        [
-         "autotune-host-load: verdict=quiet foreign=0.1250 bar=1.0200 allowance=0.0200 \
-          span_s=1.0000 window_s=1.0000 busy_s=8.1250 own_s=8.0000 padded=false dispersed=false \
-          spread=1.00 depth=1 samples=25 admission=admitted";
+         Printf.sprintf
+           "autotune-host-load: verdict=quiet foreign=0.1250 %s span_s=1.0000 window_s=1.0000 \
+            busy_s=8.1250 own_s=8.0000 padded=false dispersed=false spread=1.00 depth=1 samples=25 \
+            admission=admitted"
+           (fmt_bar_allowance 1.0);
        ]);
   p "autotune_log_host_load=true marks a padded short window and its inflated allowance"
     (List.equal String.equal
@@ -417,9 +436,11 @@ let () =
           (call_host_load_lines ~host:short_window_host ~enabled:true
              ~dispersion:Autotune.Attribute_dispersion ~foreign:0. ()))
        [
-         "autotune-host-load: verdict=cotenant foreign=2.0000 bar=1.4000 allowance=0.4000 \
-          span_s=0.2500 window_s=0.0500 busy_s=0.5000 own_s=0.4000 padded=true dispersed=true \
-          spread=3.00 depth=1 samples=16 admission=refused_contended";
+         Printf.sprintf
+           "autotune-host-load: verdict=cotenant foreign=2.0000 %s span_s=0.2500 window_s=0.0500 \
+            busy_s=0.5000 own_s=0.4000 padded=true dispersed=true spread=3.00 depth=1 samples=16 \
+            admission=refused_contended"
+           (fmt_bar_allowance 0.05);
        ]);
   p "autotune_log_host_load=true logs unavailable when no reading exists"
     (List.equal String.equal
@@ -587,12 +608,18 @@ let () =
   let r_real2, ios_real2, _, _ =
     if all_quiet then real_search ~tag:"real host-load, warm" else (r_real1, [], real_identity, [])
   in
-  let cache_ready =
-    real_identity && not (List.exists (ios_real1 @ ios_real2) ~f:Cache_plant.refused)
+  let real_cache_label = "real host-load: a quiet dispersed cc search caches and replays" in
+  let real_cache_skip =
+    if not Host_load.supported then Some "a platform without a busy counter"
+    else if not all_quiet then Some "host co-tenant load during the real-counter search"
+    else if not real_identity then Some Cache_plant.unkeyed_on
+    else if Cache_plant.refused_in (ios_real1 @ ios_real2) real_cache_label then
+      Some Cache_plant.refused_on
+    else None
   in
-  gated ~aggregation:`Environment ~when_:(all_quiet && cache_ready)
-    ~on:"host co-tenant load or unavailable schedule cache during the real-counter search"
-    "real host-load: a quiet dispersed cc search caches and replays"
+  gated ~aggregation:`Environment ~when_:(Option.is_none real_cache_skip)
+    ~on:(Option.value real_cache_skip ~default:"")
+    real_cache_label
     (Poly.equal r_real1.outcome Autotune.Searched
     && r_real1.candidates_timed > 0 && r_real1.timings_contended = 0
     && r_real1.timings_dispersed = r_real1.candidates_timed

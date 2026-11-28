@@ -1017,22 +1017,48 @@ CAMLprim value ocannl_set_process_affinity(value mask) {
      that went backwards; own time stays NaN so OCaml reads [Unix.times].
    - Windows: [GetSystemTimes] (kernel time INCLUDES idle time per MSDN, so busy is
      (kernel - idle) + user when kernel >= idle) paired with [GetProcessTimes] (kernel + user over
-     every thread of this process), both in 100 ns FILETIME intervals divided by 1e7.
+     every thread of this process), both in 100 ns FILETIME intervals divided by 1e7. Guarded by
+     [GetActiveProcessorGroupCount() == 1]: on multi-group (>64 logical CPU) Windows hosts
+     [GetSystemTimes] reports only the calling thread's primary processor group while
+     [GetProcessTimes] spans every group, so subtracting them would hide foreign load; those hosts
+     degrade cleanly to (NaN, NaN) (Unavailable).
    - Other platforms: (NaN, NaN).
 
-   [OCANNL_HOST_CPU_SUPPORTED] names the compile-time predicate and is published through
-   [ocannl_host_cpu_supported] so tests gate on the build rather than on a reading's success. */
-#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
-#define OCANNL_HOST_CPU_SUPPORTED 1
-#endif
-
+   [ocannl_host_cpu_supported] publishes whether this host has a scope-matched platform counter
+   (Linux, macOS, or single-group Windows) so tests gate on platform support rather than on a
+   reading's success. [ocannl_host_cpu_tick_seconds] publishes one counter tick period in seconds
+   (1 / sysconf(_SC_CLK_TCK) on POSIX; GetSystemTimeAdjustment's clock increment, defaulting to
+   0.015625 s / 64 Hz, on Windows). */
 CAMLprim value ocannl_host_cpu_supported(value unit) {
   (void)unit;
-#ifdef OCANNL_HOST_CPU_SUPPORTED
+#if defined(__linux__) || defined(__APPLE__)
   return Val_true;
+#elif defined(_WIN32)
+  return Val_bool(GetActiveProcessorGroupCount() == 1);
 #else
   return Val_false;
 #endif
+}
+
+CAMLprim value ocannl_host_cpu_tick_seconds(value unit) {
+  CAMLparam1(unit);
+  double tick = NAN;
+#if defined(__linux__) || defined(__APPLE__)
+  {
+    long hz = sysconf(_SC_CLK_TCK);
+    if (hz > 0) tick = 1.0 / (double)hz;
+  }
+#elif defined(_WIN32)
+  {
+    DWORD adjustment = 0, increment = 0;
+    BOOL disabled = FALSE;
+    if (GetSystemTimeAdjustment(&adjustment, &increment, &disabled) && increment > 0)
+      tick = (double)increment / 1e7;
+    else
+      tick = 0.015625; /* 64 Hz default Windows clock interrupt (15.625 ms) */
+  }
+#endif
+  CAMLreturn(caml_copy_double(tick));
 }
 
 #if defined(_WIN32)
@@ -1076,7 +1102,7 @@ CAMLprim value ocannl_host_cpu_times(value unit) {
              (double)hz;
   }
 #elif defined(_WIN32)
-  {
+  if (GetActiveProcessorGroupCount() == 1) {
     FILETIME idle_ft, kernel_ft, user_ft;
     FILETIME creation_ft, exit_ft, proc_kernel_ft, proc_user_ft;
     if (GetSystemTimes(&idle_ft, &kernel_ft, &user_ft) &&

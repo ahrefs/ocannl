@@ -49,13 +49,15 @@ type detail = {
     (config [autotune_log_host_load], gh-ocannl-1640). *)
 
 val supported : bool
-(** Whether this build includes a platform machine-wide busy counter (Linux, macOS, Windows),
-    published from the same compile-time predicate as {!read} so tests gate on the build rather than
-    on {!read}'s own report of success. *)
+(** Whether this host provides a scope-matched machine-wide busy counter (Linux, macOS, or
+    single-group Windows where [GetActiveProcessorGroupCount() = 1]; multi-group Windows hosts with
+    over 64 logical processors degrade to [false] / [None] rather than subtracting whole-process
+    [GetProcessTimes] from single-group [GetSystemTimes]), published so tests gate on platform
+    support rather than on {!read}'s own report of success. *)
 
 val read : unit -> reading option
-(** The current reading, or [None] where the platform gives no machine-wide busy counter or it could
-    not be read. *)
+(** The current reading, or [None] where the platform gives no scope-matched machine-wide busy
+    counter or it could not be read. *)
 
 val cotenant_cores : float
 (** The foreign load, in core-equivalents averaged over the span, at and above which a span shows a
@@ -63,8 +65,10 @@ val cotenant_cores : float
     one. *)
 
 val counter_allowance_s : float
-(** The busy counter's resolution allowance, in CPU-seconds: two ticks of the 100 Hz POSIX counters,
-    for the tick each end of a span can be off by. Charged on top of {!cotenant_cores} as
+(** The busy counter's resolution allowance, in CPU-seconds: two ticks of the host's busy-counter
+    clock ([2 / sysconf(_SC_CLK_TCK)] on POSIX, [0.02] s at 100 Hz; [2 * increment] from
+    [GetSystemTimeAdjustment] on Windows, [0.03125] s at 64 Hz; fallback [0.02] s), for the tick
+    each end of a span can be off by. Charged on top of {!cotenant_cores} as
     [counter_allowance_s /. span], so a short span needs more evidence. *)
 
 val min_span_s : float
