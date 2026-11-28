@@ -874,8 +874,9 @@ type entry = {
    27: gh-ocannl-2443 -- the GPU fission floor and candidates gain ordered row-owned scatter kernels
    28: gh-ocannl-2507 -- Metal's search gains the untuned plain-cell reduction sink as its floor
    29: gh-ocannl-2324 -- plain packed Grid with split k returns to the menu
+   30: gh-ocannl-2506 -- Metal's untuned floor splits long reductions before GPU mapping
 *)
-let entry_version = 29
+let entry_version = 30
 
 let sanitize name =
   String.map name ~f:(fun c ->
@@ -1337,8 +1338,9 @@ type placement_entry = {
    1: gh-ocannl-786 -- the placement decision and the arm timings that chose it
    2: gh-ocannl-1388 -- decisions compared arm searches that lacked the seeded untuned floor
    3: gh-ocannl-2507 -- decisions compared Metal arm searches without the reduction-sink floor
+   4: gh-ocannl-2506 -- decisions compared Metal arm searches without untuned split reductions
 *)
-let placement_entry_version = 3
+let placement_entry_version = 4
 
 let placement_key ?objective ~timing_identity ~limits ~capabilities ~facts canonical ~backend =
   Option.map (cache_key ?objective ~timing_identity ~limits ~capabilities ~facts canonical ~backend)

@@ -883,10 +883,15 @@ files.
   seeding, would not. On cc it fans a tiny segment out over the pool, and the score does not see
   that overhead. `test/operations/cost_model_selection`'s below-threshold legs pin the formation
   condition against both presets, and the pick against their minimum.
-- **The seeded untuned default also splits long, narrow reductions, before segmenting, on CUDA
-  and HIP** (gh-ocannl-1325, `Autotune.seeded_split_sites`, config
-  `gpu_default_split_reduce_min_serial`; where it runs is `Autotune.seeded_split_backend`).
-  Measured on gpt2_mini_train b256: CUDA 543 → 391 ms. HIP (gfx1151, unified memory) went
+- **The untuned GPU default also splits long, narrow reductions, before segmenting, on CUDA, HIP
+  and Metal** (gh-ocannl-1325, gh-ocannl-2506, `Autotune.seeded_split_sites`, config
+  `gpu_default_split_reduce_min_serial`; where it runs is `Autotune.seeded_split_backend`, backed
+  by `Backend_intf.backend_facts.splits_untuned_reductions`).
+  Measured on gpt2_mini_train b256: CUDA 543 → 391 ms; on Metal (M4 Max, bf16 b8 `gpt2_mini_train`),
+  synced p50 45.58 → 39.83 ms and queued 36.93 → 30.31 ms (standalone LN `gamma`/`beta` grad
+  kernels 0.68–0.76 ms pre-gh-ocannl-2507 → 0.40–0.44 ms sunk unsplit → 0.106–0.131 ms per split
+  stage at the ~0.105 ms isolated Metal floor, and `cifar_resnet` f32 untuned queued 169.65 → 48.65 ms).
+  HIP (gfx1151, unified memory) went
   885 → 1256 ms, so the split was CUDA-only until gh-ocannl-1412 gave its first pass coalesced
   lanes (the next bullet). It applies the search's split-reduce detection and enabling interchange as a whole-routine
   prelude (`Autotune.split_reduce_prelude`, the `F_split` seeds' own), to every site whose serial

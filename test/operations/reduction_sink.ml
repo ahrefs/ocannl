@@ -248,22 +248,22 @@ let () =
     Autotune.seeded_plan ~min_reduction ?min_serial ?seed_narrow ~reduction_sink ~facts
       ~limits:no_hardware_limits ~accum_prec:Fn.id ~static_indices:[] opt
   in
-  let census ?(facts = cuda_facts) reduction_sink =
-    Ll_test.seeded_census (plan ~facts reduction_sink)
+  let census ?(facts = cuda_facts) ?min_serial reduction_sink =
+    Ll_test.seeded_census (plan ~facts ?min_serial reduction_sink)
   in
   p "structural: for cuda the untuned plan sinks a segment with the seeding off, seeding none"
     (Option.exists (census true) ~f:(fun c -> c.Ll_test.sunk >= 1 && c.sketched = 0));
   p "structural: the untuned Metal plan sinks a segment without sketching or splitting"
     (Option.exists (census ~facts:metal_facts true) ~f:(fun c ->
          c.Ll_test.sunk >= 1 && c.sketched = 0 && List.is_empty c.split));
-  p "structural: Metal still only sinks with sketching, splitting and narrow admission requested"
+  p "structural: Metal still only sinks with sketching and narrow admission requested"
     (let digest = Option.map ~f:Autotune.seeded_plan_digest in
      let ordinary = digest (plan ~facts:metal_facts true) in
      Option.exists ordinary ~f:(fun d ->
          Option.equal String.equal (Some d)
-           (digest (plan ~facts:metal_facts ~min_reduction:1 ~min_serial:1 ~seed_narrow:true true))));
-  p "structural control: Metal with the sink off derives no plan"
-    (Option.is_none (census ~facts:metal_facts false));
+           (digest (plan ~facts:metal_facts ~min_reduction:1 ~min_serial:0 ~seed_narrow:true true))));
+  p "structural control: Metal with the sink and split off derives no plan"
+    (Option.is_none (census ~facts:metal_facts ~min_serial:0 false));
   p "structural control: for cuda with the sink off nothing is sunk"
     (Option.for_all (census false) ~f:(fun c -> c.Ll_test.sunk = 0));
   p "structural control: for cc no plan is derived" (Option.is_none (census ~facts:cc_facts true));

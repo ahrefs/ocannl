@@ -5880,11 +5880,12 @@ let seeded_params_judged ?capabilities ~limits ~min_reduction (seg : LL.optimize
 let seeded_params ?capabilities ~limits ~min_reduction seg =
   Result.ok (seeded_params_judged ?capabilities ~limits ~min_reduction seg)
 
-(* The untuned split runs wherever the seeded default does (gh-ocannl-1325, gh-ocannl-1412). It was
-   CUDA's alone until its first pass ran the block loop outside the cell loops ([sr_block_hoist]):
-   with the lanes walking the blocks, the HIP b256 step went from 885 to 1256 ms on gfx1151's
-   unified memory where CUDA's caches absorbed the scattered loads. *)
-let seeded_split_backend facts = seeded_default_backend facts
+(* The untuned split runs on every hardware-grid backend that admits it (CUDA, HIP, Metal;
+   gh-ocannl-1325, gh-ocannl-1412, gh-ocannl-2506). It was CUDA's alone until its first pass ran the
+   block loop outside the cell loops ([sr_block_hoist]): with the lanes walking the blocks, the HIP
+   b256 step went from 885 to 1256 ms on gfx1151's unified memory where CUDA's caches absorbed the
+   scattered loads. *)
+let seeded_split_backend (facts : Ir.Backend_intf.backend_facts) = facts.splits_untuned_reductions
 
 (* gh-ocannl-1331: whether a search on [backend] can read the [Search_shaping] key [key]: the seeded
    plan's keys where {!seeded_settings} resolves them (its backend tests come first, so another
@@ -5896,8 +5897,7 @@ let search_shaping_key_read ~facts key =
   | "autotune_register_tile_rm_twin" -> Ir.Backend_intf.renders_on_host_pool facts
   | "gpu_default_sketch_min_reduction" | "autotune_seeded_singles" -> seeded_default_backend facts
   | "gpu_default_reduction_sink" -> reduction_sink_backend facts
-  | "gpu_default_split_reduce_min_serial" ->
-      seeded_default_backend facts && seeded_split_backend facts
+  | "gpu_default_split_reduce_min_serial" -> seeded_split_backend facts
   | _ -> Sched.search_shaping_key_read ~facts key
 
 let search_shaping_identity ~facts ~limits =
@@ -6033,7 +6033,8 @@ let seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink:sink_o
     && Option.value_or_thunk seed_narrow ~default:seed_narrow_storage_enabled
   in
   if
-    (not (seeded_default_backend facts || reduction_sink_backend facts))
+    (not
+       (seeded_default_backend facts || reduction_sink_backend facts || seeded_split_backend facts))
     || (not (Sched.automatic_schedule_active ~facts))
     || (not (Sched.default_pipeline_fissions ()))
     || (gate_off () && min_serial () <= 0 && not (sink_enabled ()))
@@ -6479,12 +6480,14 @@ let ranking_multiprocessors ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve multiprocessors_override u.core_count
 
-(* gh-ocannl-1253: on CUDA and HIP the model starts from the seeded untuned plan
+(* gh-ocannl-1253, gh-ocannl-2506: where the untuned default adds sketch seeding
+   ([seeds_untuned_default]), plain-cell reduction sinking ([sinks_untuned_reductions]) or split
+   reductions ([splits_untuned_reductions]), the model starts from that untuned plan
    ({!seeded_default}'s, [auto] gate included) rather than the plain default pipeline: it is the
    incumbent, and the action taken when no candidate strictly beats it -- measured, on each searched
-   program, against its own sketch there ({!model_seeded_anchors}, gh-ocannl-1477). [None] where the
-   untuned compile is the plain default (another backend, seeding off). Shared by [model_default]
-   and [model_explain]. *)
+   program, against its own sketch there ({!model_seeded_anchors}, gh-ocannl-1477) when sketch
+   seeding is active. [None] where the untuned compile is the plain default (another backend, or
+   every untuned feature off). Shared by [model_default] and [model_explain]. *)
 let model_untuned_plan ~facts ~limits =
   seeded_settings ~facts ~configured_gate:(fun () -> seeded_default_gate ~limits) ()
 
@@ -7661,11 +7664,14 @@ module Make (D : Driver) = struct
             None
       in
       let seeding_here = lazy (model_seeding ~facts ~limits) in
-      (* gh-ocannl-1253: the model keeps the untuned plan as the incumbent unless a candidate
-         strictly beats it. CUDA and HIP can add sketch seeding; Metal can sink plain reductions. *)
+      (* gh-ocannl-1253, gh-ocannl-2506: the model keeps the untuned plan as the incumbent unless a
+         candidate strictly beats it. [seeds_untuned_default] (CUDA/HIP) adds sketch seeding;
+         [sinks_untuned_reductions] and [splits_untuned_reductions] (CUDA/HIP/Metal) sink and split
+         long reductions before mapping. *)
       let untuned_here = lazy (model_untuned_plan ~facts ~limits) in
-      (* [model_admits] applies the numerics gate under the CUDA/HIP sketch-seeding policy. A
-         sink-only Metal incumbent keeps the same candidate family as the plain preset. *)
+      (* [model_admits] applies the numerics gate under [seeds_untuned_default] (CUDA/HIP
+         sketch-seeding). An unseeded Metal incumbent (sink/split only) keeps the same candidate
+         family as the plain preset. *)
       let coalesced = model_ranks_coalesced ~limits in
       let admits p = model_admits ~coalesced ~seeding:(Lazy.force seeding_here) p in
       (* gh-ocannl-1477: under seeding, a walk's threshold is the seeded plan's own sketch on the
@@ -7756,14 +7762,15 @@ module Make (D : Driver) = struct
          judges it: a plan that seeds, splits and sinks nothing IS the default pipeline, so a
          compilation failure of it is the default's and is not retried. *)
       let seeded_changed = ref false in
-      (* The seeded plan's split prelude (CUDA, gh-ocannl-1325); the program itself where the model
-         does not start from the seeded plan. On a hermetic copy for scoring; in place for the
-         pick's application, as the [`Seeded] action's [seeded_apply] splits the compile's own
-         lowering: a pick applied to a copy registers the nodes its transforms create (a fissioned
-         segment's promoted locals) in the copy's placements, not the compiling context's, and the
-         compile then fails on an undecided node (gh-ocannl-1477's fissioned chain, on HIP). *)
+      (* The untuned plan's split prelude (gated by [splits_untuned_reductions], gh-ocannl-1325,
+         gh-ocannl-2506); the program itself where the model does not start from an untuned plan
+         with splits. On a hermetic copy for scoring; in place for the pick's application, as the
+         [`Seeded] action's [seeded_apply] splits the compile's own lowering: a pick applied to a
+         copy registers the nodes its transforms create (a fissioned segment's promoted locals) in
+         the copy's placements, not the compiling context's, and the compile then fails on an
+         undecided node (gh-ocannl-1477's fissioned chain, on HIP). *)
       let prelude ?(hermetic = true) (opt : LL.optimized) =
-        match Lazy.force seeding_here with
+        match Lazy.force untuned_here with
         | Some (_, min_serial, _, _) ->
             fst
               (seeded_split ~facts ~min_serial ~static_indices
@@ -8317,9 +8324,10 @@ module Make (D : Driver) = struct
     else
       (* [model_default]'s incumbent and searched program, as it derives them. *)
       let seeding = model_seeding ~facts ~limits in
+      let untuned = model_untuned_plan ~facts ~limits in
       let record = ref no_seeded_choice in
       let incumbent_label, incumbent =
-        match model_untuned_plan ~facts ~limits with
+        match untuned with
         | Some (gate, min_serial, sink_enabled, admit_narrow) ->
             let segs =
               seeded_apply
@@ -8334,7 +8342,7 @@ module Make (D : Driver) = struct
               Sched.maybe_default_schedules ~facts ~limits ~static_indices (scratch_of opt) )
       in
       let base =
-        match seeding with
+        match untuned with
         | Some (_, min_serial, _, _) ->
             fst (seeded_split ~facts ~min_serial ~static_indices (scratch_of opt))
         | None -> opt

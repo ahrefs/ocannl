@@ -11,8 +11,8 @@ admitted, the widened bf16 accumulator is sunk by the chain it gets at its stora
 schedule_op_lines prints one line per op, a node as its label#id and never its record: true
 structural: for cuda the untuned plan sinks a segment with the seeding off, seeding none: true
 structural: the untuned Metal plan sinks a segment without sketching or splitting: true
-structural: Metal still only sinks with sketching, splitting and narrow admission requested: true
-structural control: Metal with the sink off derives no plan: true
+structural: Metal still only sinks with sketching and narrow admission requested: true
+structural control: Metal with the sink and split off derives no plan: true
 structural control: for cuda with the sink off nothing is sunk: true
 structural control: for cc no plan is derived: true
 structural: an inactive Metal schedule ignores a malformed sink flag: true

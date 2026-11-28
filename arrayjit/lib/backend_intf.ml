@@ -1171,13 +1171,16 @@ type backend_facts = {
           keep this [false] (their serial barrier-fission lowering of [workgroup_shared] is for
           emulation/parity, not production shared placement). *)
   seeds_untuned_default : bool;
-      (** The untuned compile seeds contraction sketches and splits reductions
-          ([Autotune.seeded_default], gh-ocannl-1183). Also scopes the seeded plan's numerics gate
-          in [Schedule_cache.codegen_tag] (gh-ocannl-1405) and gates ordered row-owned embedding
+      (** The untuned compile seeds contraction sketches ([Autotune.seeded_default],
+          gh-ocannl-1183). Also scopes the seeded plan's numerics gate in
+          [Schedule_cache.codegen_tag] (gh-ocannl-1405) and gates ordered row-owned embedding
           scatter packets in [Schedule.scatter_packets_enabled] (gh-ocannl-2443, gh-ocannl-2494). *)
   sinks_untuned_reductions : bool;
       (** The untuned compile can interchange plain-cell reductions before GPU mapping
           ([Autotune.reduction_sink], gh-ocannl-1348 and gh-ocannl-2507). *)
+  splits_untuned_reductions : bool;
+      (** The untuned compile splits long, narrow reductions before fissioning
+          ([Autotune.seeded_split_sites], gh-ocannl-1325, gh-ocannl-1412, gh-ocannl-2506). *)
   queued_timing : queued_timing;
   retries_contended_window : bool;
       (** A queued timing window refused as contended is retried once: the device scheduler's
@@ -1289,6 +1292,8 @@ let facts_inconsistencies facts =
       (facts.seeds_untuned_default && not grid, "seeds_untuned_default without a hardware grid");
       ( facts.sinks_untuned_reductions && not grid,
         "sinks_untuned_reductions without a hardware grid" );
+      ( facts.splits_untuned_reductions && not grid,
+        "splits_untuned_reductions without a hardware grid" );
       ( equal_queued_timing facts.queued_timing Queued_deep && not grid,
         "Queued_deep without a hardware grid" );
       ( facts.retries_contended_window && not grid,
@@ -1305,6 +1310,7 @@ let cc_facts =
     workgroup_shared_placement = false;
     seeds_untuned_default = false;
     sinks_untuned_reductions = false;
+    splits_untuned_reductions = false;
     queued_timing = Queued_legacy;
     retries_contended_window = false;
     host_load_attributable = true;
@@ -1320,6 +1326,7 @@ let cuda_facts =
     workgroup_shared_placement = true;
     seeds_untuned_default = true;
     sinks_untuned_reductions = true;
+    splits_untuned_reductions = true;
     queued_timing = Queued_deep;
     retries_contended_window = false;
     host_load_attributable = false;
@@ -1335,6 +1342,7 @@ let hip_facts =
     workgroup_shared_placement = true;
     seeds_untuned_default = true;
     sinks_untuned_reductions = true;
+    splits_untuned_reductions = true;
     queued_timing = Queued_deep;
     retries_contended_window = false;
     host_load_attributable = false;
@@ -1350,6 +1358,7 @@ let metal_facts =
     workgroup_shared_placement = true;
     seeds_untuned_default = false;
     sinks_untuned_reductions = true;
+    splits_untuned_reductions = true;
     queued_timing = Queued_legacy;
     retries_contended_window = true;
     host_load_attributable = false;

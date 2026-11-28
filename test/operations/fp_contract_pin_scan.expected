@@ -126,6 +126,7 @@ test/operations/init_prec_follows_param.ml -- same-shape: both sessions execute 
 test/operations/integer_power_domain.ml -- pinned off
 test/operations/issue_calibration.ml -- not-executed: the bitwise claim compares two fill fits computed in OCaml over synthetic sweeps
 test/operations/lane_bounds_static.ml -- no-contraction: Threefry uniform draws and plain addition, no product feeding an add
+test/operations/layer_norm_param_grad_split.ml -- same-shape: on cc seeded_default neither sinks nor splits, so every untuned leg compiles the default plan
 test/operations/lineage_recompile_step.ml -- exact-operands: integer inputs, eighth-step weights and a dyadic rate stay exact for the three steps
 test/operations/masked_persistent_fragment.ml -- not-cc: executed claims need a GPU advertising an f16 tile; cc skips them
 test/operations/matmul_interchange.ml -- exact-operands: positive quarters and eighths with an explicit fma; every gradient sum is exact

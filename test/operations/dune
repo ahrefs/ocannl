@@ -10679,6 +10679,26 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name layer_norm_param_grad_split)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules layer_norm_param_grad_split)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.autotune
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.verdict
+  neural_nets_lib.tensor)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name layer_norm_test)
  (package neural_nets_lib)
  (deps

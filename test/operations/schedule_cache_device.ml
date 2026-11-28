@@ -179,9 +179,9 @@ let () =
   p "concrete identity round-trips a placement entry"
     (Option.value_map (SC.lookup_placements ~dir:cache_dir ~key:valid_placement) ~default:false
        ~f:(fun e -> SC.equal_placement_decision e.decision placement.decision));
-  (* The prior format is a valid record of an arm comparison without Metal's sink floor. *)
-  SC.store_placements ~dir:cache_dir ~key:valid_placement { placement with version = 2 };
-  p "placement decisions from before the Metal sink floor miss"
+  (* The prior format is a valid record of an arm comparison without Metal's untuned split floor. *)
+  SC.store_placements ~dir:cache_dir ~key:valid_placement { placement with version = 3 };
+  p "placement decisions from before the Metal split floor miss"
     (Option.is_none (SC.lookup_placements ~dir:cache_dir ~key:valid_placement));
   SC.store_placements ~dir:cache_dir ~key:valid_placement placement;
   let device_only = Some { fixture with toolchain_signature = None } in
