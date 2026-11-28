@@ -4922,7 +4922,7 @@ module Real_dune_legs = struct
     and uncertain_gates = ref []
     and incomplete = ref [] in
     let parse ~first text =
-      let top, lexical, structural = C.parse text in
+      let top, lexical, structural = C.parse ~quoted_heredocs:true text in
       List.iter (lexical @ structural) ~f:(fun (line, (reason : Refusals.refusal)) ->
           incomplete := ({ path; line = first + line - 1 }, reason.message) :: !incomplete);
       top
@@ -5106,6 +5106,11 @@ module Real_dune_legs = struct
           [] );
         ( "quoted heredoc data",
           "leg() {\ncat <<'END'\n$(harness_real_dune)\nEND\n}\nharness_leg_run '3: hidden' leg\n",
+          [],
+          [] );
+        ("comment mention", "# harness_real_dune\n:\n", [], []);
+        ( "quoted string argument",
+          "leg() { echo \"harness_real_dune\" >/dev/null; }\nharness_leg_run '1: data' leg\n",
           [],
           [] );
         ( "orphan function",

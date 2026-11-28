@@ -593,14 +593,14 @@ EOF
   } >"$discovered"
   cp "$discovered" "$TMP/fx-discovered.tsv"
 
-  # 1. Clean fixture passes both static and runtime checks.
+  # 1. The supplied discovery table agrees with the registries and drives the runtime check.
   run_checker "$TMP/fx-clean-static.out" --mode static --repo-root "$fx"
   local s_rc=$check_rc
   run_checker "$TMP/fx-clean-runtime.out" --mode runtime --repo-root "$fx"
   if [ "$s_rc" = 0 ] && [ "$check_rc" = 0 ]; then
-    report 0 'control: clean fixture (function, helper, inline, heredoc/comment) passes both checks'
+    report 0 'control: supplied discovery table passes registry and runtime checks'
   else
-    report 1 'control: clean fixture (function, helper, inline, heredoc/comment) passes both checks' \
+    report 1 'control: supplied discovery table passes registry and runtime checks' \
       "static=$s_rc ($(cat "$TMP/fx-clean-static.out")); runtime=$check_rc ($(cat "$TMP/fx-clean-runtime.out"))"
   fi
 

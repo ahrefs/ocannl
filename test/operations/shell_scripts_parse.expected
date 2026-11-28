@@ -584,6 +584,8 @@ real-Dune discovery inline success branch: true
 real-Dune discovery inline else branch: true
 real-Dune discovery unquoted heredoc expansion: true
 real-Dune discovery quoted heredoc data: true
+real-Dune discovery comment mention: true
+real-Dune discovery quoted string argument: true
 real-Dune discovery orphan function: true
 real-Dune discovery live backticks: true
 real-Dune discovery dynamic gate: true
