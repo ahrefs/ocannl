@@ -36,3 +36,5 @@ fallback: 32 KiB schedule fits in 32768 B: true
 fallback: 48 KiB schedule allocates 34816 B padded tiles: true
 fallback: 32 KiB unpadded transposed W declines source-minor remapping: true
 fallback: 48 KiB padded transposed W maps slot 0 with unit stride on K: true
+divfirst: fallback slot 0 divides outer 32-trip loop with zero idle-lane guards: true
+divfirst: tile store is partitioned across both Workgroup loops: true

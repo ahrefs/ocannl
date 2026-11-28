@@ -403,3 +403,70 @@ let () =
   p_all "fallback: 48 KiB padded transposed W maps slot 0 with unit stride on K"
     (slot0_unit_on_src_minor_reads ~source:w.Tensor.value opt_48k)
     ~f:Fn.id
+
+(* Section 4 (gh-ocannl-1842 local-review regression): when dense remapping is declined on an
+   unpadded transposed tile and hardware slot 0 (width 16) is unused while the remaining serial copy
+   loops are outer [k_i = 32] and inner [i_t = 4], slot 0 must divide the 32-element loop with zero
+   idle-lane guards rather than dropping onto the 4-element loop under [t < 4]. *)
+let () =
+  let m = 64 and n = 64 and k = 32 in
+  let mav =
+    Array.init (m * k) ~f:(Ll_test.cycle_flat ~dims:[| m; k |] ~modulus:13 ~offset:0. ~stride:0.25)
+  in
+  let mwv =
+    Array.init (n * k) ~f:(Ll_test.cycle_flat ~dims:[| n; k |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+  in
+  let ma = TDSL.ndarray mav ~label:[ "divfirst_a" ] ~output_dims:[ m; k ] () in
+  let mw = TDSL.ndarray mwv ~label:[ "divfirst_w" ] ~output_dims:[ n; k ] () in
+  let%op md = ma +* "ik; jk => ij" mw in
+  let comp = named "scp_divfirst" (Train.forward md) in
+  let base_opt = Ll_test.captured_lowering ~name:"scp_cap_divfirst" comp in
+  let paths = Ll_test.nest_paths base_opt.LL.llc in
+  let i, j, kk =
+    match List.find_exn paths ~f:(fun p -> List.length p = 3) with
+    | [ i; j; kk ] -> (i, j, kk)
+    | _ -> assert false
+  in
+  let ez, zsyms = Sched.expand_zero ~tn:md.Tensor.value in
+  let zi, zj = match zsyms with [ zi; zj ] -> (zi, zj) | _ -> assert false in
+  let sp_zi, _, zi_i = Sched.split ~axis:zi ~factor:64 ~outer:LL.Grid ~inner:LL.Serial in
+  let sp_zi2, _, _ = Sched.split ~axis:zi_i ~factor:4 ~outer:LL.Workgroup ~inner:LL.Serial in
+  let sp_zj, _, zj_i = Sched.split ~axis:zj ~factor:64 ~outer:LL.Grid ~inner:LL.Serial in
+  let sp_zj2, _, _ = Sched.split ~axis:zj_i ~factor:4 ~outer:LL.Workgroup ~inner:LL.Serial in
+  let sp_i, _, i_i = Sched.split ~axis:i ~factor:64 ~outer:LL.Grid ~inner:LL.Serial in
+  let sp_i2, i_w, i_t = Sched.split ~axis:i_i ~factor:4 ~outer:LL.Workgroup ~inner:LL.Serial in
+  let sp_j, j_o, j_i = Sched.split ~axis:j ~factor:64 ~outer:LL.Grid ~inner:LL.Serial in
+  let sp_j2, j_w, j_t = Sched.split ~axis:j_i ~factor:4 ~outer:LL.Workgroup ~inner:LL.Serial in
+  let sp_k, k_o, k_i = Sched.split ~axis:kk ~factor:32 ~outer:LL.Serial ~inner:LL.Serial in
+  let sink s targets = List.map targets ~f:(fun t -> Sched.Swap { outer = s; inner = t }) in
+  let sched =
+    [ ez; sp_zi; sp_zi2; sp_zj; sp_zj2; sp_i; sp_i2; sp_j; sp_j2; sp_k ]
+    @ sink i_t [ j_o; j_w; j_t; k_o; k_i ]
+    @ sink j_t [ k_o; k_i ]
+    @ [
+        (* Unpadded transposed tile of [ma]: [k_i=32] outer, [i_w=16; i_t=4] inner (minor dim 64 f32
+           = 256B, multiple of 32B -> dense_copy declined). Unused slot 0 is [j_w=16]; serial copy
+           loops are [k_i=32; i_t=4]. *)
+        Sched.Stage
+          {
+            source = ma.Tensor.value;
+            tile_loops = [ k_i; i_w; i_t ];
+            shared = true;
+            cooperative = None;
+            hoisted = false;
+            swizzle = None;
+            pad_stride = None;
+            pipeline_depth = 1;
+            tile_prec = None;
+          };
+        Sched.privatize ~accum_prec:Fn.id ~target:md.Tensor.value ~over:k_o;
+      ]
+  in
+  let post = Sched.apply sched base_opt in
+  let guards = ref [] in
+  Ll_test.walk post.LL.llc ~on_if:(fun c -> guards := c :: !guards);
+  let stores = Ll_test.tile_store_partitions ~tiles:post.LL.workgroup_shared post.LL.llc in
+  p_empty "divfirst: fallback slot 0 divides outer 32-trip loop with zero idle-lane guards"
+    ~over:stores !guards;
+  p_all "divfirst: tile store is partitioned across both Workgroup loops" stores
+    ~f:(fun (n_wg, named_all) -> n_wg = 2 && named_all)

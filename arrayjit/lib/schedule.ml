@@ -2201,30 +2201,25 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     ignore (get_node opt.traced_store tile : traced_array);
     (* The load nest. *)
     let stage_axes = if shared then hardware_axes opt.llc else [] in
-    (* Pick a copy loop for a workgroup axis of [width] at hardware [slot]. Slot 0 (the fastest lane
-       axis) takes the innermost admissible loop to drive the minor axis; higher slots prefer an
-       untouched dividing loop, then an already-folded dividing loop (supporting 3D workgroups
-       folding two axes onto one tile dim, e.g. 64x64x8 with (8,2,16)), and on the non-dense
-       fallback the longest drop [e <= width]. *)
+    (* Pick a copy loop for a workgroup axis of [width] at hardware [slot]. Always prefer an
+       innermost untouched dividing loop ([e % width = 0]) first so the full workgroup width stays
+       active; when none divides evenly, dense copy allows higher slots to refold an already-folded
+       dividing loop (supporting 3D workgroups folding two axes onto one tile dim, e.g. 64x64x8 with
+       (8,2,16)), while the non-dense fallback drops onto an untouched [e <= width] loop (innermost
+       for slot 0, longest for higher slots). *)
     let copy_candidate ~dense ~slot ~width loops =
       let pick_div pred =
         List.filter loops ~f:(fun (_, e, f) -> pred f && e % width = 0) |> List.last
       in
-      if slot = 0 then
-        if dense then pick_div (fun f -> not f)
-        else
-          List.find (List.rev loops) ~f:(fun (_, e, f) -> (not f) && (e % width = 0 || e <= width))
-      else
-        match pick_div (fun f -> not f) with
-        | Some _ as divide -> divide
-        | None -> (
-            match if dense then pick_div Fn.id else None with
-            | Some _ as refold -> refold
-            | None ->
-                if dense then None
-                else
-                  List.filter loops ~f:(fun (_, e, f) -> (not f) && e <= width)
-                  |> List.max_elt ~compare:(fun (_, e1, _) (_, e2, _) -> Int.compare e1 e2))
+      match pick_div (fun f -> not f) with
+      | Some _ as divide -> divide
+      | None ->
+          if dense then if slot = 0 then None else pick_div Fn.id
+          else if slot = 0 then
+            List.find (List.rev loops) ~f:(fun (_, e, f) -> (not f) && e <= width)
+          else
+            List.filter loops ~f:(fun (_, e, f) -> (not f) && e <= width)
+            |> List.max_elt ~compare:(fun (_, e1, _) (_, e2, _) -> Int.compare e1 e2)
     in
     (* A dense, separable tile can use one copy coordinate per tile axis, independently of the
        Workgroup/register decomposition the consumer uses. Keep the allocation and reads unchanged:
