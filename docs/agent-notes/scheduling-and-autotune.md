@@ -3290,6 +3290,9 @@ files.
   and proceeds without padding. Mixed dispatch shapes can leave such a phase pattern.
   A probe compilation, mapping or allocation failure before submission leaves ordinary timing
   available. Launch and bounded-wait failures follow the existing launch and sync paths.
+  The lazy probe takes its HIP compilation target and period from `device_attributes`, the
+  deadline-bounded per-ordinal discovery shared by timing identity and the post-link scratch
+  budget. Stream creation can precede discovery, and the cache records only successful reads.
   The affected device's timing identity retires its prior schedule and placement cache keys.
   See `training-and-performance.md` (gh-ocannl-2384) for measurements outside the tuner.
 ## Cache regimes and placement replay
