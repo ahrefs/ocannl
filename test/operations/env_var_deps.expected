@@ -305,6 +305,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-half_unary_math-reproducible
   test/operations/dune                     @runtest-harness_census
   test/operations/dune                     @runtest-harness_census_control
+  test/operations/dune                     @runtest-harness_real_dune_legs
   test/operations/dune                     @runtest-heap_local_arrays-outlined
   test/operations/dune                     @runtest-hello_world_op
   test/operations/dune                     @runtest-kernel_attribution
@@ -348,6 +349,8 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-profile_fp16_floor-performance
   test/operations/dune                     @runtest-provenance_tag_inventory
   test/operations/dune                     @runtest-qkv_zero_init-approximate
+  test/operations/dune                     @runtest-reader_parity_dune
+  test/operations/dune                     @runtest-reader_parity_sh
   test/operations/dune                     @runtest-refused_action_streams
   test/operations/dune                     @runtest-render_decline_inventory
   test/operations/dune                     @runtest-resnet_block-origins_cap_0

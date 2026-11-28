@@ -1047,6 +1047,11 @@ let raw_entries =
         "[scanner-refusal:2a0fdaf225cc691ffc63804ceb591d29] production test-run is";
         "[scanner-refusal:fd1b281d075e1e22e4fe44bc8642e4c7] duplicate harness";
         "[scanner-refusal:523d1f69c7bf5fef964dbf38dc8de10c] comment mentioning support";
+        "[scanner-refusal:a48a6f670d78b54474bb65d5fcb18df5] real-Dune discovery";
+        "[scanner-refusal:47b05fb7e20317a656356f55a1eae51b] real-Dune discovery";
+        "[scanner-refusal:8571c9a75c93d8eb2ac6cfad83067cc8] unread harness manifest";
+        "[scanner-refusal:866e42eecb81b99a6c1bcf55a84b4020] real-Dune manifest reads";
+        "[scanner-refusal:b83b170fbabf212570a39f460686a130] real-Dune manifest refuses";
         "[scanner-refusal:ac074b168e19f7f99423326fcdea5669] shebang";
         "[scanner-refusal:8743bc48ff2a3da0c15e40f654ad6ff7] shebang";
         "[scanner-refusal:3184b30e46c2d310e18bbae7c1c8ae9e] shared harness contract";

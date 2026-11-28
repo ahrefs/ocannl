@@ -1,0 +1,14 @@
+reader_parity_dune.fixture
+library 1 defines plan cc,cuda Planner.choose
+test 2 reads plan
+test 3 pin cc
+test 3 reads plan
+test 4 pin cuda,hip
+test 4 reads plan
+library 6 reads plan
+tests 7 pin cc
+rule 8 pin cc
+reader_parity_dune_plain_library.fixture
+refused
+reader_parity_dune_quoted_marker.fixture
+refused

@@ -180,6 +180,7 @@
   (alias runtest-generated_lock_scan_control)
   (alias runtest-harness_census)
   (alias runtest-harness_census_control)
+  (alias runtest-harness_real_dune_legs)
   (alias runtest-label_dispatch_scan)
   (alias runtest-label_dispatch_scan_control)
   (alias runtest-label_dispatch_scan_refusal_control)
@@ -205,6 +206,8 @@
   (alias runtest-prepush_scan_membership)
   (alias runtest-provenance_tag_inventory)
   (alias runtest-provenance_tag_scan_cases)
+  (alias runtest-reader_parity_dune)
+  (alias runtest-reader_parity_sh)
   (alias runtest-refusal_control_scan_cases)
   (alias runtest-refused_action_scan_cases)
   (alias runtest-refused_action_streams)
@@ -504,6 +507,7 @@
   (alias runtest-half_unary_math-reproducible)
   (alias runtest-harness_census)
   (alias runtest-harness_census_control)
+  (alias runtest-harness_real_dune_legs)
   (alias runtest-heap_local_arrays-outlined)
   (alias runtest-kernel_attribution)
   (alias runtest-label_dispatch_scan)
@@ -543,6 +547,8 @@
   (alias runtest-profile_fp16_floor-performance)
   (alias runtest-provenance_tag_inventory)
   (alias runtest-qkv_zero_init-approximate)
+  (alias runtest-reader_parity_dune)
+  (alias runtest-reader_parity_sh)
   (alias runtest-refused_action_streams)
   (alias runtest-render_decline_inventory)
   (alias runtest-resnet_block-origins_cap_0)
@@ -9886,6 +9892,12 @@
     harness_census_control.expected
     harness_census_control.expected.corrected))))
 
+(rule
+ (alias runtest-harness_real_dune_legs)
+ (package neural_nets_lib)
+ (action
+  (diff harness_real_dune_legs.expected harness_real_dune_legs.actual)))
+
 ; gh-ocannl-1669: cc declares Local arrays past the stack budget on the heap, function scope and
 ; pool-chunk privatized tiles alike, each budget pinned on both sides and executed.
 
@@ -13818,6 +13830,79 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; The shell driver compares reader outputs. Dune checks one golden for each result (gh-ocannl-2511).
+
+(rule
+ ; ocannl-backend: none -- compares Dune marker placement and grammar without running kernels.
+ (targets reader_parity_dune.actual reader_parity_dune.filelist)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (:fixtures
+   (glob_files reader_parity_dune*.fixture)))
+ (action
+  (progn
+   (with-stdout-to
+    reader_parity_dune.filelist
+    (echo "%{fixtures}"))
+   (with-stdout-to
+    reader_parity_dune.actual
+    (run
+     %{dep:dune_scan_cases.exe}
+     --reader-dump
+     @reader_parity_dune.filelist)))))
+
+(rule
+ ; ocannl-backend: none -- the affected marker reader only reads these fixtures.
+ (alias runtest-reader_parity_dune)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  ../../tools/affected-tests.sh
+  reader_parity_dune.actual
+  (glob_files reader_parity_dune*.fixture)
+  sweep_harness_mawk.stamp
+  (sandbox always))
+ (action
+  (progn
+   (setenv
+    READER_PARITY_KIND
+    dune
+    (run %{dep:sweep_harness_driver.exe} %{dep:reader_parity.sh}))
+   (diff reader_parity_dune.expected reader_parity_dune.actual))))
+
+(rule
+ ; ocannl-backend: none -- compares shell lexical observations without executing the fixture.
+ (target reader_parity_sh.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:shell_scripts_parse.exe}
+    --reader-dump
+    %{dep:reader_parity_sh.fixture}))))
+
+(rule
+ ; ocannl-backend: none -- the affected shell reader only reads this fixture.
+ (alias runtest-reader_parity_sh)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  ../../tools/affected-tests.sh
+  reader_parity_sh.actual
+  reader_parity_sh.fixture
+  sweep_harness_mawk.stamp
+  (sandbox always))
+ (action
+  (progn
+   (setenv
+    READER_PARITY_KIND
+    sh
+    (run %{dep:sweep_harness_driver.exe} %{dep:reader_parity.sh}))
+   (diff reader_parity_sh.expected reader_parity_sh.actual))))
+
 ; gh-ocannl-1804: a consumer dropped and reclaimed with its backprop unconsumed gives back the leaves
 ; it absorbed, transitively, and nothing else; a held copy, a compiled consumer and handed-out code
 ; keep the ownership, tensors built earlier are not retrofitted, and rewinds and scoped restores
@@ -16412,7 +16497,10 @@
 
 (rule
  ; ocannl-backend: none -- links no backend: it hands shell scripts to `bash -n`/`sh -n` and runs no kernels.
- (targets shell_scripts_parse.actual shell_scripts_parse.filelist)
+ (targets
+  shell_scripts_parse.actual
+  shell_scripts_parse.filelist
+  harness_real_dune_legs.actual)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
@@ -16446,6 +16534,8 @@
     (run
      %{dep:shell_scripts_parse.exe}
      %{workspace_root}
+     --discovery-output
+     harness_real_dune_legs.actual
      @shell_scripts_parse.filelist)))))
 
 (rule

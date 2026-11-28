@@ -1604,11 +1604,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   its leg's number in the selector if it is a new leg -- the job names the check it did not see
   pass. A nested run of a harness copy unsets the record variable with the others.
   `tools/test-real-dune-registrations.sh` enforces both registrations locally and in the merge
-  build: Leg 1 scans every manifest harness for live `harness_real_dune` calls and verifies exact
-  agreement with `real_dune_legs`, Leg 2 runs every discovered leg under
-  `OCANNL_TOOL_HARNESS_NO_DUNE=1` and holds the emitted hidden-dune skips equal to
-  `tools/harness-skips-ci-shell-dune.txt`, and Leg 3 pins dropped, stale, over-selected and
-  unattributed controls (gh-ocannl-2486).
+  build (gh-ocannl-2486). The `shell_scripts_parse` scan uses `Shell_context` to attribute live
+  calls in manifest members to their legs. The `runtest-harness_real_dune_legs` alias checks the
+  resulting `harness_real_dune_legs.expected` table (gh-ocannl-2511). Its paths include every
+  manifest member, including members without real-Dune legs. The toolchain-free harness checks
+  those paths against `--list` and the legs against `real_dune_legs`. It runs each discovered leg
+  separately under `OCANNL_TOOL_HARNESS_NO_DUNE=1` and holds the emitted hidden-dune skips equal to
+  `tools/harness-skips-ci-shell-dune.txt`. Its fixtures exercise the registry and runtime checks.
+- The `runtest-reader_parity_dune` and `runtest-reader_parity_sh` aliases feed the same fixtures to
+  the OCaml readers and `tools/affected-tests.sh --reader-dump`. The shell driver compares their
+  outputs, and Dune diffs one golden per alias. Add changes to their shared contract so either
+  reader changing on its own fails the alias.
 
 - The three gh-ocannl-2140 fixtures separate a response verdict from teardown
   and later publication. `wait_signal_race.py` keeps its five-second cancellation

@@ -14,6 +14,11 @@
 #   tools/test-run.sh affected --harness-census [MEMBER] (alone: what each
 #   harness reaches, and through which token, below)
 #
+# The internal --reader-dump mode reads only named Dune or shell fixtures.
+# It reports selected parser observations without asking Git, Dune or the
+# harness manifest. Marker parity covers well-formed backend pins and the
+# closed backend-default grammar. env_var_deps owns malformed ordinary pins.
+#
 # `--referenced-only`, `--gpu-gated`, `--why` and `--harnesses` may stand before a
 # `--` (after `--since BASE`, a revision, or the `--files` paths too).
 #
@@ -514,6 +519,21 @@ die() { echo "affected: $*" >&2; exit 2; }
 # the printed order never depends on the caller's locale (gh-ocannl-1431).
 export LC_ALL=C
 
+reader_kind=
+reader_fixtures=()
+if [ "${1:-}" = --reader-dump ]; then
+  [ "$#" -ge 3 ] || die "--reader-dump needs dune or sh and at least one fixture"
+  reader_kind=$2
+  case $reader_kind in dune | sh) ;; *) die "unknown fixture reader: $reader_kind" ;; esac
+  shift 2
+  for fixture do
+    case $fixture in /*) ;; *) fixture=$PWD/$fixture ;; esac
+    [ -f "$fixture" ] || die "cannot read fixture $fixture"
+    reader_fixtures+=("$fixture")
+  done
+  set --
+fi
+
 CDPATH= cd -P "$(dirname "$0")/.." || die "cannot cd to the repository root"
 command -v perl >/dev/null 2>&1 || die "perl not found"
 
@@ -610,8 +630,10 @@ else
 fi
 
 in_git=0
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 && in_git=1
-if [ "$mode" = census ]; then
+if [ -z "$reader_kind" ]; then
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 && in_git=1
+fi
+if [ "$mode" = census ] || [ -n "$reader_kind" ]; then
   : >"$tmp/changed"
 elif [ "$mode" = files ]; then
   printf '%s\n' "${paths[@]}" >"$tmp/changed"
@@ -840,7 +862,10 @@ sub parse_dune {
                 die "$what:$line: `$decl` is not a valid backend-default name\n"
                   unless $decl =~ /^[a-z][a-z0-9-]*$/;
                 die "$what:$line: `ocannl-backend-default:` reader belongs on a test, executable, or inline-test library stanza, not `($head)`\n"
-                  unless $head =~ /^(?:tests?|executables?|library)$/;
+                  unless $head =~ /^(?:tests?|executables?)$/
+                    || ($head eq "library" && grep {
+                      ref($_) && @$_ && !ref($_->[0]) && $_->[0] eq "inline_tests"
+                    } @$el);
                 push @$el, ["affected_default_read", $decl, "$what:$line"];
               }
             }
@@ -854,22 +879,69 @@ sub parse_dune {
   }
   return $stack[0];
 }
+
+sub dump_dune_markers {
+  my ($items, $ordinal) = @_;
+  for my $item (@$items) {
+    if (ref($item) && @$item >= 2 && !ref($item->[0]) && $item->[0] eq "subdir" && !ref($item->[1])) {
+      dump_dune_markers([@$item[2 .. $#$item]], $ordinal);
+      next;
+    }
+    $$ordinal++;
+    next unless ref($item) && @$item && !ref($item->[0]);
+    my $site = "$item->[0] $$ordinal";
+    my @markers;
+    for my $field (grep { ref($_) && @$_ } @$item) {
+      my $tag = $field->[0];
+      if ($tag eq "affected_stanza_backends" || $tag eq "affected_rule_backends") {
+        push @markers, "pin " . join(",", @$field[1 .. $#$field]);
+      } elsif ($tag eq "affected_default_def") {
+        push @markers, "defines " . join(" ", @$field[1 .. 3]);
+      } elsif ($tag eq "affected_default_read") {
+        push @markers, "reads $field->[1]";
+      }
+    }
+    print "$site $_\n" for sort @markers;
+  }
+}
 1;
 DUNE_SOURCE
+if [ "$reader_kind" = dune ]; then
+  perl -e '
+    require shift;
+    for my $file (@ARGV) {
+      open my $fh, "<", $file or die "cannot read $file: $!";
+      my $text = do { local $/; <$fh> };
+      close $fh or die "cannot close $file: $!";
+      (my $name = $file) =~ s{.*/}{};
+      print "$name\n";
+      my $forms = eval { parse_dune($text, $name, 1) };
+      if (!defined $forms) { print "refused\n"; next }
+      my $ordinal = 0;
+      dump_dune_markers($forms, \$ordinal);
+    }
+  ' "$tmp/dune-source.pl" "${reader_fixtures[@]}"
+  exit $?
+fi
 
 # The harness legs (gh-ocannl-1900; the header's boundary): their membership
 # from CI's own list, every file their text may name, and harness.pl's reading
 # of that text. Dune is not asked: `--harnesses` stops here.
 for x in harness-cmds harness-err harness-read harness-eres; do : >"$tmp/$x"; done
-if [ -f tools/test-harnesses.sh ]; then
-  bash tools/test-harnesses.sh --list >"$tmp/harness-members" 2>"$tmp/err" ||
-    die "tools/test-harnesses.sh --list failed:
-$(cat "$tmp/err")"
-  if [ "$in_git" = 1 ]; then
-    git ls-files -z --cached --others --exclude-standard >"$tmp/files" || die "git ls-files failed"
+if [ "$reader_kind" = sh ] || [ -f tools/test-harnesses.sh ]; then
+  if [ "$reader_kind" = sh ]; then
+    : >"$tmp/harness-members"
+    : >"$tmp/files"
   else
-    find . \( -name _build -o -name .git \) -prune -o -type f -print0 >"$tmp/files" ||
-      die "cannot list files"
+    bash tools/test-harnesses.sh --list >"$tmp/harness-members" 2>"$tmp/err" ||
+      die "tools/test-harnesses.sh --list failed:
+$(cat "$tmp/err")"
+    if [ "$in_git" = 1 ]; then
+      git ls-files -z --cached --others --exclude-standard >"$tmp/files" || die "git ls-files failed"
+    else
+      find . \( -name _build -o -name .git \) -prune -o -type f -print0 >"$tmp/files" ||
+        die "cannot list files"
+    fi
   fi
   cat >"$tmp/harness.pl" <<'HARNESS'
 # harness.pl TMP: the harness legs the changed paths reach (the header's
@@ -1772,23 +1844,26 @@ sub heredoc_is_data {
 # unpiped top-level echo/printf (unless overridden by a function/alias, or
 # inside a function body / after persistent `exec` stdout redirect without a
 # per-command file stdout redirection).
+sub sh_toks_has_word {
+  my ($toks, @words) = @_;
+  for my $t (@$toks) {
+    next unless $t->[0] eq "word";
+    my $word = $t->[3];
+    $word = sh_unquote($word) if $word =~ /['"\\]/;
+    return 1 if grep { $_ eq $word } @words;
+  }
+  return 0;
+}
+sub sh_toks_need_filter {
+  my ($toks) = @_;
+  return (grep { $_->[0] eq "redir_hd" || $_->[0] eq "redir_out" } @$toks)
+    || sh_toks_has_word($toks, "echo", "printf");
+}
 sub filter_sh_logical {
   my ($s, $overridden, $in_fn, $toks) = @_;
   $toks //= sh_tokenize($s);
   return $s unless $toks;   # unbalanced -> fail closed
-  my $needs_filter = 0;
-  for my $t (@$toks) {
-    my $tp = $t->[0];
-    if ($tp eq "redir_hd" || $tp eq "redir_out") { $needs_filter = 1; last }
-    if ($tp eq "word") {
-      my $w = $t->[3];
-      if ($w eq "echo" || $w eq "printf"
-          || ($w =~ /['"\\]/ && do { my $u = sh_unquote($w); $u eq "echo" || $u eq "printf" })) {
-        $needs_filter = 1; last;
-      }
-    }
-  }
-  return $s unless $needs_filter;
+  return $s unless sh_toks_need_filter($toks);
   my $out = $s;
   my $pipes = sh_pipelines($toks);
   for my $pipe (@$pipes) {
@@ -1857,16 +1932,7 @@ sub sh_scan_overrides {
   }
   $toks //= sh_tokenize($line);
   if ($toks) {
-    my $maybe_ov = 0;
-    for my $t (@$toks) {
-      next unless $t->[0] eq "word";
-      my $w = $t->[3];
-      if ($w eq "alias" || $w eq "exec"
-          || ($w =~ /['"\\]/ && do { my $u = sh_unquote($w); $u eq "alias" || $u eq "exec" })) {
-        $maybe_ov = 1; last;
-      }
-    }
-    return unless $maybe_ov;
+    return unless sh_toks_has_word($toks, "alias", "exec");
     for my $pipe (@{sh_pipelines($toks)}) {
       for my $stage (@$pipe) {
         my ($hidx, $hraw) = stage_command_head($stage);
@@ -1955,7 +2021,7 @@ sub sh_scan_line_quotes {
 # substitutions, piped compound blocks, function bodies, local overrides, and
 # single-line token classification), cached once per `.sh` file.
 sub sh_parse_base {
-  my ($f) = @_;
+  my ($f, $joins) = @_;
   return $sh_base{$f} if $sh_base{$f};
   my @l = split /\n/, raw($f), -1;
   my @kind = ("code") x scalar(@l);
@@ -1976,6 +2042,7 @@ sub sh_parse_base {
       if ($chk eq $hd->{delim}) {
         $kind[$_] = "hd_body" for @{$hd->{body}};
         $kind[$i] = "hd_delim";
+        $hd->{delimiter_line} = $i;
         push @closed_hds, $hd;
         shift @queue;
       } else {
@@ -2103,22 +2170,11 @@ sub sh_parse_base {
         }
       }
       my $toks = sh_tokenize($log);
+      push @$joins, [$i, $j] if $joins && $j > $i;
       sh_scan_overrides($log, \%funcs, $toks);
       if ($toks) {
         if ($j == $i && $line !~ /(?<!\\)(?:\\\\)*\\\z/) {
-          my $nf = 0;
-          for my $t (@$toks) {
-            my $tp = $t->[0];
-            if ($tp eq "redir_hd" || $tp eq "redir_out") { $nf = 1; last }
-            if ($tp eq "word") {
-              my $w = $t->[3];
-              if ($w eq "echo" || $w eq "printf"
-                  || ($w =~ /['"\\]/ && do { my $u = sh_unquote($w); $u eq "echo" || $u eq "printf" })) {
-                $nf = 1; last;
-              }
-            }
-          }
-          $line_toks{$i} = $nf ? $toks : 0;
+          $line_toks{$i} = sh_toks_need_filter($toks) ? $toks : 0;
         }
         sh_walk_groups($toks, \@blk_stk, \$pending_fn, $i,
           sub {
@@ -3020,6 +3076,44 @@ sub expand_loads {
 # Each harness's reach, with the step that reached each path: its program (it
 # and what it loads), what that names, and the program of each script named.
 # A step is [FROM, `loads` or `names`, LINE, RUN, OWNERS].
+if (($ARGV[1] // "") eq "reader-dump") {
+  for my $file (@ARGV[2 .. $#ARGV]) {
+    (my $name = $file) =~ s{.*/}{};
+    print "$name\n";
+    my @joins;
+    my $base = sh_parse_base($file, \@joins);
+    my $source = raw($file);
+    my $offset = 0;
+    for my $line (0 .. $#{$base->{lines}}) {
+      my $text = $base->{lines}[$line];
+      if ($text =~ /^(probe_[a-z_]+)="?\$\(/) {
+        my ($label, $start) = ($1, $offset + length($&) - 2);
+        my $finish = sh_skip_balanced($source, $start, '$(');
+        defined($finish) or fail("$name: $label did not close");
+        my $after = substr($source, $finish, 3);
+        my $width = substr($source, $offset, $finish - $offset) =~ tr/\n//;
+        $after =~ /^"?; / or fail("$name: $label closed before its trailing command");
+        if ($width > 0) {
+          my $last = $line;
+          $last++ while $base->{unfilt}[$last + 1];
+          $last == $line + $width or fail("$name: $label differs between Perl shell passes");
+        }
+        print "$label closes +$width\n";
+      }
+      $offset += length($text) + 1;
+    }
+    for my $hd (@{$base->{closed_hds}}) {
+      my $last = $hd->{delimiter_line} + 1;
+      my $first = $last - @{$hd->{body}};
+      my $spliced = $hd->{opener_end} > $hd->{opener};
+      my $joined = grep { $_->[0] <= $hd->{opener} && $_->[1] >= $hd->{opener_end} } @joins;
+      !!$joined == !!$spliced or fail("$name: heredoc on line $first differs between Perl shell passes");
+      print "heredoc $first..$last ", ($hd->{quoted} ? "quoted" : "unquoted"),
+        ($spliced ? " spliced" : " unspliced"), "\n";
+    }
+  }
+  exit 0;
+}
 my %reach;
 for my $h (@members) {
   my %par = ($h => undef);
@@ -3231,6 +3325,10 @@ open my $cs, ">", "$tmp/census" or fail("cannot write $tmp/census");
 print $cs "$_\n" for sort @census;
 close $cs;
 HARNESS
+  if [ "$reader_kind" = sh ]; then
+    perl "$tmp/harness.pl" "$tmp" reader-dump "${reader_fixtures[@]}"
+    exit $?
+  fi
   census_args=()
   [ "$census" = 0 ] || census_args=(census ${census_member:+"$census_member"})
   perl "$tmp/harness.pl" "$tmp" ${census_args[@]+"${census_args[@]}"} || exit 2
