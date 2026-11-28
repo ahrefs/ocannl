@@ -1056,6 +1056,17 @@
 # process.
 #autotune_log_seeding=false
 
+# gh-ocannl-1640: per-window host-load verdicts for CPU dispersion attribution. If true, every
+# timing window on a `host_load_attributable` (CPU) backend that reaches host-load classification
+# writes one flushed `autotune-host-load:` line to stderr with its `verdict` (`quiet`, `cotenant`,
+# or `unavailable`), `foreign` load in core-equivalents, effective co-tenant `bar`, tick
+# `allowance`, wall `span_s`, attribution `window_s`, raw `busy_s` and `own_s` deltas, `padded`,
+# `dispersed`, `spread`, `depth`, `samples`, and `admission`. Windows cut early by
+# `Timing_hopeless` or a search budget stop unwind before classification and emit no line
+# (matching `Autotune.timing_call`); GPU backends use dispersion-only refusal and emit nothing.
+# Adds no timing calls or extra compiles; read per timing window.
+#autotune_log_host_load=false
+
 # gh-ocannl-1560: strict replay. If true, every fissioned candidate `Autotune.tune` compiles is,
 # after its compile and link, rebuilt from the form the search would save for it -- the saved
 # split-reduce prelude decoded and applied, the saved segmentation cut, every segment's structural

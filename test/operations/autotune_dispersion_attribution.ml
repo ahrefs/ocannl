@@ -125,23 +125,97 @@ let () =
       Host_load.equal_verdict
         (Host_load.classify ~window_s ~before:start ~after:padded ())
         Host_load.Unavailable);
-  (* The real counters: where the platform has them, two readings around an idle wait resolve to a
-     verdict, and this process's CPU time did not run backwards. Whether the host is quiet is the
-     machine's business, not a claim. *)
+  (* Pure classification detail and diagnostic line formatting (gh-ocannl-1640). Allowance and bar
+     are derived from [Host_load.counter_allowance_s] so the assertions hold on both 100 Hz POSIX
+     (0.02 s) and 64 Hz Windows (0.03125 s). *)
+  let fmt_bar_allowance window_s =
+    let allowance = Host_load.counter_allowance_s /. window_s in
+    Printf.sprintf "bar=%.4f allowance=%.4f" (Host_load.cotenant_cores +. allowance) allowance
+  in
+  let detail_quiet =
+    Host_load.classify_detail ~before:start ~after:(after ~span:0.5 ~own:4. ~foreign:0.25) ()
+  in
+  p "classify_detail reports quiet verdict, allowance and bar"
+    (Host_load.equal_verdict detail_quiet.verdict
+       (Host_load.classify ~before:start ~after:(after ~span:0.5 ~own:4. ~foreign:0.25) ())
+    && String.equal
+         (Host_load.format_detail detail_quiet)
+         (Printf.sprintf
+            "verdict=quiet foreign=0.2500 %s span_s=0.5000 window_s=0.5000 busy_s=4.1250 \
+             own_s=4.0000"
+            (fmt_bar_allowance 0.5)));
+  let detail_padded = Host_load.classify_detail ~window_s:0.05 ~before:start ~after:padded () in
+  p "classify_detail reports padded window_s, span_s and inflated tick allowance"
+    (Host_load.equal_verdict detail_padded.verdict
+       (Host_load.classify ~window_s:0.05 ~before:start ~after:padded ())
+    && String.equal
+         (Host_load.format_detail detail_padded)
+         (Printf.sprintf
+            "verdict=cotenant foreign=2.0000 %s span_s=0.2500 window_s=0.0500 busy_s=0.5000 \
+             own_s=0.4000"
+            (fmt_bar_allowance 0.05)));
+  let detail_backwards =
+    Host_load.classify_detail ~before:start ~after:(reading ~wall_s:11. ~busy_s:999. ~own_s:501.) ()
+  in
+  p "classify_detail formats unavailable readings with none for missing fields"
+    (String.equal
+       (Host_load.format_detail Host_load.unavailable_detail)
+       "verdict=unavailable foreign=none bar=none allowance=none span_s=none window_s=none \
+        busy_s=none own_s=none"
+    && String.equal (Host_load.verdict_name detail_backwards.verdict) "unavailable"
+    && Option.is_none detail_backwards.foreign_cores
+    && Option.is_some detail_backwards.allowance_cores);
+  (* The real counters (gh-ocannl-1640): on platforms with a scope-matched busy counter (Linux,
+     macOS, single-group Windows), spin on one CPU until an independent CPU clock
+     ([Stdlib.Sys.time]) and wall time both reach 0.35 s and both counters advance (bounded by a 2.5
+     s wall cap for slow counter refresh rates such as macOS's ~1 Hz mach counter). Verify that
+     [own_s] credits at least half of the independent CPU delta, [busy_s] advances, and the span
+     resolves to Quiet or Cotenant. If a throttled runner starves the spin ([cpu_delta < 0.25]), the
+     independent clock records a run-time bypass instead of rejecting a valid counter; a broken
+     zero-[own_s] stub still fails loudly because [Stdlib.Sys.time] is not starved. *)
+  let spin_real_counters ~cpu0 (before : Host_load.reading) =
+    let sink = ref 0 in
+    let rec loop () =
+      for i = 1 to 2_000_000 do
+        sink := !sink lxor (i * 2654435761)
+      done;
+      let cpu_delta = Stdlib.Sys.time () -. cpu0 in
+      match Host_load.read () with
+      | Some cur
+        when (Float.(cpu_delta >= 0.35)
+             && Float.(cur.wall_s -. before.wall_s >= 0.35)
+             && Float.(cur.busy_s > before.busy_s && cur.own_s > before.own_s))
+             || Float.(cur.wall_s -. before.wall_s >= 2.5) ->
+          ignore (Sys.opaque_identity !sink)
+      | Some _ -> loop ()
+      | None -> ignore (Sys.opaque_identity !sink)
+    in
+    loop ()
+  in
+  let cpu0 = Stdlib.Sys.time () in
   let r0 = Host_load.read () in
-  Unix.sleepf 0.3;
+  Option.iter r0 ~f:(spin_real_counters ~cpu0);
   let r1 = Host_load.read () in
+  let cpu_delta = Stdlib.Sys.time () -. cpu0 in
   (match (r0, r1) with
   | Some before, Some after ->
-      Stdio.eprintf "real host-load verdict over an idle 0.3 s (not part of the golden): %s\n%!"
-        (Sexp.to_string_hum (Host_load.sexp_of_verdict (Host_load.classify ~before ~after ())))
+      let detail = Host_load.classify_detail ~before ~after () in
+      Stdio.eprintf
+        "real host-load own-spin (not part of the golden): counter_allowance_s=%.5f sys_cpu_s=%.4f \
+         %s\n\
+         %!"
+        Host_load.counter_allowance_s cpu_delta (Host_load.format_detail detail)
   | _ -> ());
-  gated ~aggregation:`Environment ~when_:(Option.is_some r0) ~on:"a platform without a busy counter"
-    "the real counters resolve to a verdict over a 0.3 s span"
+  gated ~aggregation:`Environment ~when_:Host_load.supported ~on:"a platform without a busy counter"
+    ~unless:[ ("cpu_starved", Float.(cpu_delta < 0.25)) ]
+    "the real counters credit own-process CPU spin and resolve to a verdict"
     (match (r0, r1) with
     | Some before, Some after ->
-        Float.(after.wall_s -. before.wall_s >= 0.3)
-        && Float.(after.own_s >= before.own_s)
+        let span = after.wall_s -. before.wall_s in
+        let own_delta = after.own_s -. before.own_s in
+        Float.(span >= Host_load.min_span_s)
+        && Float.(after.busy_s > before.busy_s)
+        && Float.(own_delta >= 0.5 *. cpu_delta)
         && not
              (Host_load.equal_verdict (Host_load.classify ~before ~after ()) Host_load.Unavailable)
     | _ -> false)
@@ -290,6 +364,109 @@ let () =
     && Option.exists short.c.decision.host_load ~f:is_cotenant
     && Poly.equal (Autotune.timing_admission short.result) Autotune.Refused_contended)
 
+(* --- Per-window verdict stream (config autotune_log_host_load, gh-ocannl-1640). --- *)
+
+let host_load_lines lines = List.filter lines ~f:(String.is_prefix ~prefix:"autotune-host-load: ")
+
+let call_host_load_lines ?host ?clock ~enabled ~dispersion ~foreign () =
+  let events = ref [] and calls = ref [] in
+  let host = match host with Some h -> h events | None -> scripted_host ~foreign events in
+  let batch = match clock with Some c -> c | None -> scripted_clock ~floor_ms:1. events in
+  let (), lines =
+    Stderr_capture.lines (fun () ->
+        Utils.with_stated_config
+          [ ("autotune_log_host_load", Bool.to_string enabled) ]
+          (fun () ->
+            ignore
+              (Autotune.Seam.with_value Autotune.host_load_reading host (fun () ->
+                   Autotune.calibrate_and_time_with_retry_observer ~hopeless_against:None
+                     ~prior_depth:None
+                     ~on_retry:(fun () -> ())
+                     ~on_call:(fun c -> calls := c :: !calls)
+                     ~phase:None ~retry_contended:false ~dispersion ~timing:Autotune.Isolated
+                     ~repeats:3
+                     ~queue_depth_cap:
+                       (Autotune.queue_depth_cap_for_backend Ir.Backend_intf.cc_facts)
+                     ~batch))))
+  in
+  (!calls, host_load_lines lines)
+
+let () =
+  Stdio.printf "== per-window verdict stream ==\n";
+  let fmt_bar_allowance window_s =
+    let allowance = Host_load.counter_allowance_s /. window_s in
+    Printf.sprintf "bar=%.4f allowance=%.4f" (Host_load.cotenant_cores +. allowance) allowance
+  in
+  let off_calls, off_lines =
+    call_host_load_lines ~enabled:false ~dispersion:Autotune.Attribute_dispersion ~foreign:0.125 ()
+  in
+  p_empty "autotune_log_host_load=false emits no verdict lines" ~over:off_calls off_lines;
+  p "autotune_log_host_load=true emits the quiet dispersed window line"
+    (List.equal String.equal
+       (snd
+          (call_host_load_lines ~enabled:true ~dispersion:Autotune.Attribute_dispersion
+             ~foreign:0.125 ()))
+       [
+         Printf.sprintf
+           "autotune-host-load: verdict=quiet foreign=0.1250 %s span_s=1.0000 window_s=1.0000 \
+            busy_s=8.1250 own_s=8.0000 padded=false dispersed=true spread=3.00 depth=1 samples=16 \
+            admission=admitted"
+           (fmt_bar_allowance 1.0);
+       ]);
+  p "autotune_log_host_load=true emits the co-tenant dispersed window line"
+    (List.equal String.equal
+       (snd
+          (call_host_load_lines ~enabled:true ~dispersion:Autotune.Attribute_dispersion ~foreign:4.
+             ()))
+       [
+         Printf.sprintf
+           "autotune-host-load: verdict=cotenant foreign=4.0000 %s span_s=1.0000 window_s=1.0000 \
+            busy_s=12.0000 own_s=8.0000 padded=false dispersed=true spread=3.00 depth=1 samples=16 \
+            admission=refused_contended"
+           (fmt_bar_allowance 1.0);
+       ]);
+  p "autotune_log_host_load=true also logs tight (non-dispersed) windows"
+    (List.equal String.equal
+       (snd
+          (call_host_load_lines
+             ~clock:(fun _ -> 1.)
+             ~enabled:true ~dispersion:Autotune.Attribute_dispersion ~foreign:0.125 ()))
+       [
+         Printf.sprintf
+           "autotune-host-load: verdict=quiet foreign=0.1250 %s span_s=1.0000 window_s=1.0000 \
+            busy_s=8.1250 own_s=8.0000 padded=false dispersed=false spread=1.00 depth=1 samples=25 \
+            admission=admitted"
+           (fmt_bar_allowance 1.0);
+       ]);
+  p "autotune_log_host_load=true marks a padded short window and its inflated allowance"
+    (List.equal String.equal
+       (snd
+          (call_host_load_lines ~host:short_window_host ~enabled:true
+             ~dispersion:Autotune.Attribute_dispersion ~foreign:0. ()))
+       [
+         Printf.sprintf
+           "autotune-host-load: verdict=cotenant foreign=2.0000 %s span_s=0.2500 window_s=0.0500 \
+            busy_s=0.5000 own_s=0.4000 padded=true dispersed=true spread=3.00 depth=1 samples=16 \
+            admission=refused_contended"
+           (fmt_bar_allowance 0.05);
+       ]);
+  p "autotune_log_host_load=true logs unavailable when no reading exists"
+    (List.equal String.equal
+       (snd
+          (call_host_load_lines
+             ~host:(fun _ () -> None)
+             ~enabled:true ~dispersion:Autotune.Attribute_dispersion ~foreign:0. ()))
+       [
+         "autotune-host-load: verdict=unavailable foreign=none bar=none allowance=none span_s=none \
+          window_s=none busy_s=none own_s=none padded=false dispersed=true spread=3.00 depth=1 \
+          samples=16 admission=refused_contended";
+       ]);
+  let gpu_calls, gpu_lines =
+    call_host_load_lines ~enabled:true ~dispersion:Autotune.Refuse_dispersed ~foreign:0.125 ()
+  in
+  p_empty "autotune_log_host_load=true emits nothing under the GPU dispersion-only policy"
+    ~over:gpu_calls gpu_lines
+
 (* --- An executed cc search on the scripted clock. --- *)
 
 let rows = 8
@@ -381,4 +558,99 @@ let () =
     && r3.candidates_timed = 0 && r3.timings_dispersed = 0);
   (* Over the search's cache operations, its lookup at least: none of them stored a schedule. *)
   p_none ~min:1 "co-tenant: none of the search's cache operations stores a schedule" ios3
-    ~f:(fun io -> not (List.is_empty (schedule_stores [ io ])))
+    ~f:(fun io -> not (List.is_empty (schedule_stores [ io ])));
+  (* Real host-load counters on a dispersed executed cc search with the verdict stream on
+     (gh-ocannl-1640): every window resolves on supported platforms (Linux, macOS, single-group
+     Windows), and on a quiet host the search caches and replays without mocking Host_load.read.
+     Each batch burns 16 ms of own-process CPU so a 16-sample window spans > Host_load.min_span_s
+     (250 ms) directly AND exercises subtracting our process's own CPU time from machine busy time
+     on every window. *)
+  let spin_s seconds =
+    match Host_load.read () with
+    | None -> Unix.sleepf seconds
+    | Some start ->
+        let sink = ref 0 in
+        let rec loop () =
+          for i = 1 to 2_000_000 do
+            sink := !sink lxor (i * 2654435761)
+          done;
+          match Host_load.read () with
+          | Some cur when Float.(cur.wall_s -. start.wall_s >= seconds) ->
+              ignore (Sys.opaque_identity !sink)
+          | Some _ -> loop ()
+          | None -> ignore (Sys.opaque_identity !sink)
+        in
+        loop ()
+  in
+  let real_executed_clock ~depth ~ordinal wall =
+    spin_s 0.016;
+    executed_clock ~depth ~ordinal wall
+  in
+  let real_search ~tag =
+    let report = ref None in
+    let ctx = Context.cpu () in
+    let identity = Option.is_some (Context.timing_identity ctx) in
+    let (ctx, ios), lines =
+      Stderr_capture.lines (fun () ->
+          Utils.with_stated_config
+            [ ("autotune_log_host_load", "true") ]
+            (fun () ->
+              SC.recording_cache_io (fun () ->
+                  Autotune.Seam.with_value Autotune.on_batch_wall real_executed_clock (fun () ->
+                      fst
+                        (Autotune.tune ~search:true ~beam_width:1 ~rounds:0 ~repeats:1
+                           ~timing:Autotune.Isolated ~cache_dir ~log:false
+                           ~report:(fun r -> report := Some r)
+                           ctx comp Ir.Indexing.Empty)))))
+    in
+    Context.release ctx;
+    let r = Option.value_exn ~here:[%here] !report in
+    let verdict_lines = host_load_lines lines in
+    List.iter verdict_lines ~f:(fun l -> Stdio.eprintf "%s (not part of the golden): %s\n%!" tag l);
+    Stdio.eprintf
+      "%s (not part of the golden): %s, timed %d, refused %d, dispersed %d, %d verdict lines, %d \
+       cache ops\n\
+       %!"
+      tag (Autotune.outcome_name r.outcome) r.candidates_timed r.timings_contended
+      r.timings_dispersed (List.length verdict_lines) (List.length ios);
+    (r, ios, identity, verdict_lines)
+  in
+  fresh_dir cache_dir;
+  let r_real1, ios_real1, real_identity, real_lines = real_search ~tag:"real host-load, cold" in
+  let is_resolved_line l =
+    String.is_substring l ~substring:"verdict=quiet "
+    || String.is_substring l ~substring:"verdict=cotenant "
+  in
+  let is_quiet_line l = String.is_substring l ~substring:"verdict=quiet " in
+  gated_all ~aggregation:`Environment ~when_:Host_load.supported
+    ~on:"a platform without a busy counter"
+    "real host-load: every window of the dispersed cc search resolves to quiet or cotenant"
+    real_lines ~f:is_resolved_line;
+  let all_quiet =
+    Host_load.supported
+    && (not (List.is_empty real_lines))
+    && List.for_all real_lines ~f:is_quiet_line
+  in
+  let r_real2, ios_real2, _, _ =
+    if all_quiet then real_search ~tag:"real host-load, warm" else (r_real1, [], real_identity, [])
+  in
+  let real_cache_label = "real host-load: a quiet dispersed cc search caches and replays" in
+  let real_cache_skip =
+    if not Host_load.supported then Some "a platform without a busy counter"
+    else if not all_quiet then Some "host co-tenant load during the real-counter search"
+    else if not real_identity then Some Cache_plant.unkeyed_on
+    else if Cache_plant.refused_in (ios_real1 @ ios_real2) real_cache_label then
+      Some Cache_plant.refused_on
+    else None
+  in
+  gated ~aggregation:`Environment ~when_:(Option.is_none real_cache_skip)
+    ~on:(Option.value real_cache_skip ~default:"")
+    real_cache_label
+    (Poly.equal r_real1.outcome Autotune.Searched
+    && r_real1.candidates_timed > 0 && r_real1.timings_contended = 0
+    && r_real1.timings_dispersed = r_real1.candidates_timed
+    && List.exists (schedule_stores ios_real1) ~f:(Fn.non Cache_plant.refused)
+    && Poly.equal r_real2.outcome Autotune.Cache_replay);
+  Cache_plant.not_every_store_refused
+    ~expected:(identity && real_identity && all_quiet)
+    "not every attempted schedule store was refused" (ios1 @ ios_real1)

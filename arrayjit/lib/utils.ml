@@ -211,6 +211,7 @@ let known_config_keys =
       "autotune_log";
       "autotune_progress";
       "autotune_log_seeding";
+      "autotune_log_host_load";
       "autotune_strict_replay";
       "tune_inline_flips";
       "tune_call_budget_seconds";
@@ -647,6 +648,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "autotune_log";
         "autotune_progress";
         "autotune_log_seeding";
+        "autotune_log_host_load";
         "log_buffer_aliasing";
         "log_memory_budget";
         "schedule_log_launches";

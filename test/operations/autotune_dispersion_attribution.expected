@@ -17,7 +17,10 @@ the precise own time running ahead of the tick-sampled busy count is quiet: true
 a counter that went backwards, a non-finite reading or an empty span is no signal: true
 padding a short window does not dilute a co-tenant that ran only during it: true
 a window longer than its span, or not positive, is no signal: true
-the real counters resolve to a verdict over a 0.3 s span: true
+classify_detail reports quiet verdict, allowance and bar: true
+classify_detail reports padded window_s, span_s and inflated tick allowance: true
+classify_detail formats unavailable readings with none for missing fields: true
+the real counters credit own-process CPU spin and resolve to a verdict: true
 == one timing call ==
 isolated: the scripted window is dispersed with spread 3: true
 isolated: a quiet host admits it at the floor: true
@@ -37,6 +40,14 @@ queued depth-1 reuse: the load span covers exactly the window's batches: true
 the depth-1 shape reuses the calibration singles: true
 the fast queued shape batches deeper than one: true
 a short dispersed window reads once more after its wait and charges the span's foreign load to it: true
+== per-window verdict stream ==
+autotune_log_host_load=false emits no verdict lines: true
+autotune_log_host_load=true emits the quiet dispersed window line: true
+autotune_log_host_load=true emits the co-tenant dispersed window line: true
+autotune_log_host_load=true also logs tight (non-dispersed) windows: true
+autotune_log_host_load=true marks a padded short window and its inflated allowance: true
+autotune_log_host_load=true logs unavailable when no reading exists: true
+autotune_log_host_load=true emits nothing under the GPU dispersion-only policy: true
 == an executed cc search ==
 quiet: the search timed candidates and refused no window: true
 quiet: every admitted window was dispersed: true
@@ -46,3 +57,6 @@ quiet: the search committed a schedule entry: true
 quiet: the second call replays it, with the stored spread: true
 co-tenant: the windows are refused as contention: true
 co-tenant: none of the search's cache operations stores a schedule: true
+real host-load: every window of the dispersed cc search resolves to quiet or cotenant: true
+real host-load: a quiet dispersed cc search caches and replays: true
+not every attempted schedule store was refused: true
