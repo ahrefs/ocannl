@@ -1236,6 +1236,30 @@ files.
   rog's outproj b8 (0.0215 ms against 0.0474 for the old crown). The score then ranked the
   leaves near the argmin within 0.1%; what orders them is the copies' volume, not a per-k-step
   cost (gh-ocannl-1821, training-and-performance.md's staged-copy bullet).
+- Mapping hardware workgroup slot 0 (`.x`) along the source minor axis in `Schedule.apply_stage`
+  ONLY wins when paired with bank-deconflicting shared layouts and 16-byte alignment
+  (gh-ocannl-1842; `stage_copy_partition` pins all four pieces). Remapping copy lanes alone on
+  unpadded power-of-two tiles (closed staging#2047) lost 2–7% on CUDA: L1 already merged sibling
+  warps' half-sectors, while transposing the store axis on `[K, 32]`/`[K, 64]` f32 tiles broke
+  `STS.128` vectorization and created 8-way/16-way shared-store bank conflicts. The joint scheme:
+  (1) `apply_stage` remaps dense separable shared copies onto the source minor axis, guarding
+  transposed tiles (`a_src_minor <> a_tile_minor`) on a `swizzle` or non-32B-multiple row stride
+  and folding multiple workgroup axes onto one tile axis for 3D workgroups; (2) GPU scalar
+  blocktile sketches pad 32B-multiple shared rows by +16 bytes (`+4` f32, `+8` f16/bf16, `+16`
+  fp8, `+2` f64), falling back to `sk_no_bank_pad = true` (`" nopad"`) when padded tiles exceed
+  `max_workgroup_memory_bytes` while unpadded tiles fit (preserving Metal's 32 KiB and HIP's
+  64 KiB boundary geometries); (3) `C_syntax` emits `__attribute__((aligned(16)))` on
+  non-power-of-two shared arrays with 16B-multiple rows so nvcc keeps `LDS.128` loads (without it,
+  nvcc drops to element alignment and +4 padding regresses); (4) single-axis-contraction blocktiles
+  with `bk < wg_x` dividing `wg_x` (`64x64x8/4x4`) split `j_w` into a 3D `(wg_y, wg_x / bk, bk)`
+  workgroup (`(8, 2, 16)`) to eliminate idle-lane copy guards (multi-axis contractions stay 2D so
+  `model_default` keeps preferring `coal-k` over 32-barrier `64x64x8`). Exclusive CUDA ABBA on
+  `rog-nv-linux` (RTX 5070 Ti, base `3342c130` vs head, `F_preset` controls 0.998–1.001x): `qkv b8`
+  `32x32x8` 0.867x (`0.0230 -> 0.0199 ms`), `outproj b8` fastest `64x64x32 coal-k` 0.647x
+  (`0.0279 -> 0.0180 ms`), `qkv b256` pick `64x64x8 coal-n` 0.817x (`0.580 -> 0.474 ms`),
+  `outproj b256` pick `64x64x64 coal-k` 0.879x (`0.500 -> 0.440 ms`) and `64x64x32 coal-k` 0.700x
+  (`0.611 -> 0.427 ms`). Non-picked deep-K tiles crossing 32 KiB (`32x32x128`, `16x16x256`) lose
+  occupancy from the +16B padding (~1.29–1.31x at b256).
 ## Renderer failures and fault injection
 - A schedule can pass `Schedule.apply`'s validation and still be one the RENDERER cannot express:
   the pipelined-tile checks in `c_syntax.ml` (a read reached outside its rotor loop; a rotor loop no
