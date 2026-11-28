@@ -406,6 +406,11 @@ val library_kernel_name_limit : int
 val library_kernel_name : String.t -> String.t
 (** The cleaned kernel name, cut at a UTF-8 boundary with a digest suffix if over the limit. *)
 
+val routine_artifact_stem : string -> string
+(** The stem used for a routine's shared build artifacts. Long names and names containing the
+    reserved digest separator [~] carry a bounded readable prefix and a digest of the full name. Add
+    backend-specific suffixes and extensions after applying this function. *)
+
 val kept_library_name : pid:int -> nonce:string -> run_id:int -> String.t -> string
 (** The owner- and run-recording file name of a library kept in the build directory. *)
 

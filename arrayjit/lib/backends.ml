@@ -915,9 +915,10 @@ let%track6_sexp lower_assignments ~(facts : backend_facts) ~limits ~accum_prec o
   let name : string =
     Option.value_or_thunk name ~default:(fun () -> Assignments.get_name_exn asgns)
   in
-  let unoptim_ll_source = Utils.output_to_build_file ~fname:(name ^ "-unoptimized.ll") in
-  let ll_source = Utils.output_to_build_file ~fname:(name ^ ".ll") in
-  let cd_source = Utils.output_to_build_file ~fname:(name ^ ".cd") in
+  let stem = Utils.routine_artifact_stem name in
+  let unoptim_ll_source = Utils.output_to_build_file ~fname:(stem ^ "-unoptimized.ll") in
+  let ll_source = Utils.output_to_build_file ~fname:(stem ^ ".ll") in
+  let cd_source = Utils.output_to_build_file ~fname:(stem ^ ".cd") in
   ( name,
     Assignments.lower
       ~rewrite_target:{ online_softmax_auto_block = limits.online_softmax_auto_block }

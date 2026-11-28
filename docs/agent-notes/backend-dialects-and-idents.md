@@ -713,6 +713,12 @@ configuration.
   because a freed name may already belong to another process. Profilers and crash symbolication
   that read a kernel's `.so` after the process (`perf report`, macOS crash reports) need
   `output_dlls_in_build_directory=true` too.
+- Shared source and IR artifacts use `Utils.routine_artifact_stem` before adding backend or
+  translation-unit suffixes (gh-ocannl-1307). The UTF-8 prefix and full-label digest give the
+  directory room under Windows' MAX_PATH. cc's runtime debug log uses `debug-<runner>-<stem>.log`.
+  NVRTC and HIPRTC receive the artifact basename as their program name so diagnostic and line-table
+  filenames match the saved source. Pass the full routine name to `Generated` and look inside the
+  source for the full symbol. The checkout and directory prefix spend part of the path budget.
 - The startup cleanup of `build_files/<exe>/` and `log_files/<exe>/` cannot tell a running sibling's
   ownerless artifacts (debug sources, logs) from a finished run's, so it asks a lock
   (gh-ocannl-1335): a process takes a SHARED `Unix.lockf` on `<base>/<exe>.ocannl-lock` the first

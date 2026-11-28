@@ -2226,7 +2226,8 @@ module Impl = struct
     let option_state = metal_option_state () in
     (* The routine's full source is its [.metal] artifact whatever is compiled: the debug view of
        what codegen emitted (and what tests read) does not depend on what the cache held. *)
-    let metal_file = write_source_artifact ~name:k.artifact_name k.source in
+    let stem = Utils.routine_artifact_stem k.artifact_name in
+    let metal_file = write_source_artifact ~name:stem k.source in
     (* One library of [idxs]. Every kernel in batch order is the routine's own source, already
        written; any other subset is written as [<name>.part<k>.metal], under the name its
        diagnostics then carry. *)
@@ -2235,9 +2236,9 @@ module Impl = struct
       let name, source, metal_file =
         if whole then (k.artifact_name, k.source, metal_file)
         else
-          let name = k.artifact_name ^ ".part" ^ Int.to_string group in
+          let part = ".part" ^ Int.to_string group in
           let source = k.assemble idxs in
-          (name, source, write_source_artifact ~name source)
+          (k.artifact_name ^ part, source, write_source_artifact ~name:(stem ^ part) source)
       in
       let routine_names = List.map idxs ~f:(fun i -> (k.symbols.(i), k.given_names.(i))) in
       let library =
@@ -2248,7 +2249,7 @@ module Impl = struct
     in
     if not (Kernel_code_cache.enabled kernel_cache && not (Utils.with_runtime_debug ())) then
       Stdlib.Mutex.protect kernel_compile_lock (fun () ->
-          clear_part_artifacts k.artifact_name;
+          clear_part_artifacts stem;
           let program, _ = compile_group ~group:0 ~n_groups:1 all in
           Array.map k.symbols ~f:(fun symbol -> (program, symbol)))
     else
@@ -2266,7 +2267,7 @@ module Impl = struct
       in
       Kernel_code_cache.resolve kernel_cache ~lock:kernel_compile_lock ~keys ~options
         ~symbols:k.symbols ~always_lock:Utils.settings.output_debug_files_in_build_directory
-        ~before_compile:(fun ~n_compiled:_ ~n_groups:_ -> clear_part_artifacts k.artifact_name)
+        ~before_compile:(fun ~n_compiled:_ ~n_groups:_ -> clear_part_artifacts stem)
         ~compile_group:(fun ~group ~n_groups _options idxs -> compile_group ~group ~n_groups idxs)
         ()
 

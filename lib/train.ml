@@ -2051,7 +2051,9 @@ let dump_cd_file ~caller ~name bindings (comp : Asgns.comp) =
     raise
     @@ Utils.User_error
          (caller ^ ": output_cd_file is true, but output_debug_files_in_build_directory is false");
-  let cd_source = Utils.output_to_build_file ~fname:(name ^ "-debug.cd") in
+  let cd_source =
+    Utils.output_to_build_file ~fname:(Utils.routine_artifact_stem name ^ "-debug.cd")
+  in
   let static_indices = Idx.bound_symbols bindings in
   match cd_source with
   | None -> ()

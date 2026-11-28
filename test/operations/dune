@@ -14757,6 +14757,23 @@
  (modules round_up_total_termination)
  (libraries base ocannl stdio bounded_run arrayjit.verdict arrayjit.utils))
 
+(test
+ (name routine_artifact_paths)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules routine_artifact_paths)
+ (libraries
+  base
+  ocannl
+  test_utils
+  arrayjit.verdict
+  arrayjit.utils
+  arrayjit.context)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1999: with the stream-file key off a default build drops a logged routine's lines; the
 ; first batch dropped says so on stderr, once.
 

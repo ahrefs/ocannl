@@ -505,9 +505,10 @@ let cuda_arm_leg leg arm =
 let optimize_in ?(materialized = []) ?(static_indices = []) ?blends_value_selects ?accum_prec
     (ctx : LL.optimize_ctx) ~name llc : LL.optimized =
   LL.decide_materialized ~provenance:(Tn.Site "589:test-ll-materialize") ctx materialized;
+  let stem = Utils.routine_artifact_stem name in
   LL.optimize ?blends_value_selects ?accum_prec ctx
-    ~unoptim_ll_source:(Utils.output_to_build_file ~fname:(name ^ "-unoptimized.ll"))
-    ~ll_source:(Utils.output_to_build_file ~fname:(name ^ ".ll"))
+    ~unoptim_ll_source:(Utils.output_to_build_file ~fname:(stem ^ "-unoptimized.ll"))
+    ~ll_source:(Utils.output_to_build_file ~fname:(stem ^ ".ll"))
     ~name static_indices llc
 
 (** [optimize ~name llc] is {!optimize_in} in a fresh lineage. *)

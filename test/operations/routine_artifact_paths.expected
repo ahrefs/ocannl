@@ -1,0 +1,9 @@
+long labels of different lengths have distinct artifact paths of equal length: true
+a routine named after a shortened stem has its own lowering path: true
+the routine retains its full label: true
+the long-named routine computes its expected values: true
+the routine retains its full label: true
+the long-named routine computes its expected values: true
+both generated sources retain their own full routine symbol: true
+both routines have all their lowering artifacts: true
+both optional training dumps retain their full labels: true
