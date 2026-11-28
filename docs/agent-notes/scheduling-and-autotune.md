@@ -921,6 +921,10 @@ files.
   and Metal** (gh-ocannl-1325, gh-ocannl-2506, `Autotune.seeded_split_sites`, config
   `gpu_default_split_reduce_min_serial`; where it runs is `Autotune.seeded_split_backend`, backed
   by `Backend_intf.backend_facts.splits_untuned_reductions`).
+  In `cifar_conv`, the first bias has 32 channels and a 102,400-element reduction per cell. The
+  plain Metal preset leaves the accumulation on one thread at its 64-cell mapping threshold.
+  The split gives the gradient a 32-by-32 partials launch and a separate combine.
+  `test/operations/narrow_reduction_split` pins that boundary and the executed sum.
   Measured on gpt2_mini_train b256: CUDA 543 → 391 ms; on Metal (M4 Max, bf16 b8 `gpt2_mini_train`),
   synced p50 45.58 → 39.83 ms and queued 36.93 → 30.31 ms (standalone LN `gamma`/`beta` grad
   kernels 0.68–0.76 ms pre-gh-ocannl-2507 → 0.40–0.44 ms sunk unsplit → 0.106–0.131 ms per split
