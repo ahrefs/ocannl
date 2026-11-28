@@ -5981,8 +5981,9 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   `"$WITNESS_REVISION"` for the SHA. The leg makes its own detached LF worktree and
   runs the cache fixture before the test runner sets up opam. It defaults to `cc`
   and honors an explicit `OCANNL_BACKEND`. Keep the transcript with the test
-  runner's verdict, run directory and per-action Verdict records. The last line
-  is `exit: N` for the native driver. The script header gives the setup and
+  runner's verdict, run directory and per-action Verdict records. A passing
+  leg requires a runner receipt and every named alias to stay enabled. The
+  last line is `exit: N` for the native driver. The script header gives the setup and
   recovery boundary. For a witness that needs its own preparation, use the custom
   script recipe below.
 - **Custom OCANNL witness scripts.** Start in the detached checkout at the pushed SHA.

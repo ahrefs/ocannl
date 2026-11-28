@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Usage: tools/windows-leg.sh SHA @ALIAS [@ALIAS ...]
 # Start in a Git clone on an already booted Windows host with Git Bash and
-# a provisioned opam switch. A missing commit is fetched by SHA from origin.
+# a provisioned opam switch. A missing commit is fetched by SHA from OCANNL
+# staging.
 # Every invocation keeps its own detached worktree and evidence under TMPDIR
 # (or /tmp). The caller owns boot, provisioning and cleanup after collection.
 # A refused or interrupted run may leave that directory for diagnosis.
@@ -10,8 +11,9 @@
 # slash-separated names. Dune options, file targets and revision names are
 # outside this interface. The checkout guard reads the index/worktree EOL
 # columns of git ls-files for test/support/verdict.ml. The receipt reads the
-# runner's own paths query and exit file. Per-action Verdict TSVs are relayed
-# verbatim. Test logs, golden files and claim text are never parsed.
+# runner's own paths query, numeric raw exit and presence of a nonempty
+# disabled-aliases file. Per-action Verdict TSVs are relayed verbatim. Test
+# logs, golden files and claim text are never parsed.
 set -eu
 set -o pipefail
 
@@ -46,7 +48,8 @@ export GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=false
 export GIT_CONFIG_KEY_1=core.eol GIT_CONFIG_VALUE_1=lf
 git rev-parse --git-dir >/dev/null || refuse 'start in a Git clone'
 if ! git cat-file -e "$sha" 2>/dev/null; then
-  git fetch --no-tags origin "$sha" || refuse "could not fetch $sha from origin"
+  git fetch --no-tags https://github.com/lukstafi/ocannl-staging.git "$sha" ||
+    refuse "could not fetch $sha from OCANNL staging"
 fi
 [ "$(git cat-file -t "$sha")" = commit ] || refuse "$sha is not a commit"
 
@@ -70,10 +73,10 @@ export OCANNL_TOOL_VERDICT_RECORDS="$claims"
 export OCANNL_TOOL_TEST_RUNS="$leg_dir/runs"
 unset DUNE_BUILD_DIR
 export OCANNL_BACKEND="${OCANNL_BACKEND:-cc}"
-printf 'windows-leg: host=%s sha=%s backend=%s\n' "$(hostname)" "$sha" "$OCANNL_BACKEND"
+printf 'windows-leg: host=%s sha=%s OCANNL_BACKEND=%s\n' "$(hostname)" "$sha" "$OCANNL_BACKEND"
 
 rc=0
-"$BASH" tools/test-run.sh run --expect-backend "$OCANNL_BACKEND" build \
+"$BASH" tools/test-run.sh run build \
   --stop-on-first-error --cache=disabled -j 4 "$@" || rc=$?
 
 run_dir=$("$BASH" tools/test-run.sh paths run last) || run_dir=
@@ -84,7 +87,8 @@ else
 fi
 receipt_ok=0
 if [ -n "$run_dir" ] && [ -r "$run_dir/exit" ] &&
-   IFS= read -r recorded_rc <"$run_dir/exit" && [ "$recorded_rc" = "$rc" ]; then
+   IFS= read -r recorded_rc <"$run_dir/exit" && [[ $recorded_rc =~ ^[0-9]{1,3}$ ]] &&
+   [ "$recorded_rc" -le 255 ] && { [ "$rc" != 0 ] || [ "$recorded_rc" = 0 ]; }; then
   receipt_ok=1
 fi
 
@@ -94,9 +98,10 @@ set -- "$leg_dir/claims/"*.tsv
 export_ok=1
 if [ "$#" -eq 0 ]; then
   printf 'windows-leg: no Verdict action records were produced\n'
-else
-  cat -- "$@" || export_ok=0
 fi
+for claim_file do
+  cat -- "$claim_file" || export_ok=0
+done
 if [ "$receipt_ok" = 0 ]; then
   printf 'windows-leg: runner receipt missing or inconsistent with exit %s\n' "$rc" >&2
 fi
@@ -105,5 +110,8 @@ if [ "$export_ok" = 0 ]; then
 fi
 if [ "$rc" = 0 ] && { [ "$receipt_ok" = 0 ] || [ "$export_ok" = 0 ]; }; then
   finish 2
+fi
+if [ "$rc" = 0 ] && [ -s "$run_dir/disabled-aliases" ]; then
+  refuse "the runner skipped requested aliases (see $run_dir/disabled-aliases)"
 fi
 finish "$rc"

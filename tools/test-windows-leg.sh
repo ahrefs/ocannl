@@ -11,6 +11,12 @@ harness_args "$@"
 harness_require git
 harness_scratch test-windows-leg
 subject=${subject_file:-$HERE/windows-leg.sh}
+case $subject in /* | [A-Za-z]:/*) ;; *) subject=$PWD/$subject ;; esac
+# Fixture Git must keep its own index, objects and commit settings.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+  GIT_COMMON_DIR GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CEILING_DIRECTORIES
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+staging=https://github.com/lukstafi/ocannl-staging.git
 one=@test/operations/runtest-verdict_teardown
 two=@@test/operations/runtest-verdict_quantified
 
@@ -38,12 +44,16 @@ case "$1" in
     [ "$(cat "$FIXTURE_CALLS")" = cache ]
     [ "$OCANNL_BACKEND" = "$FIXTURE_BACKEND" ]
     [ -z "${DUNE_BUILD_DIR+x}" ]
+    printf 'backend=%s\n' "$OCANNL_BACKEND" >>"$FIXTURE_CALLS"
     printf '%s\n' "$@" >>"$FIXTURE_CALLS"
     case "$FIXTURE_RECORD" in
       missing) ;;
       *) mkdir -p "$OCANNL_TOOL_TEST_RUNS/this-run"
          printf '%s\n' "$FIXTURE_RECORD" >"$OCANNL_TOOL_TEST_RUNS/this-run/exit" ;;
     esac
+    if [ "$FIXTURE_DISABLED" = yes ]; then
+      printf '%s\n' "$FIXTURE_DISABLED_ALIAS" >"$OCANNL_TOOL_TEST_RUNS/this-run/disabled-aliases"
+    fi
     if [ "$FIXTURE_CLAIMS" = yes ]; then
       printf 'OCANNL_TOOL_VERDICT_ACTION\tfixture.exe\twork dir\t\nOCANNL_TOOL_VERDICT_EVALUATED\tfixture.exe\ta checked claim\nOCANNL_TOOL_VERDICT_SKIP\tbackend\tfixture.exe\ta skipped claim\n' >"$OCANNL_TOOL_VERDICT_RECORDS/actions.tsv"
     fi
@@ -80,6 +90,7 @@ invoke() { # LABEL CWD [SHA ALIAS ...]
       FIXTURE_OS="${leg_os:-Msys}" FIXTURE_SHA="${sha:-}" FIXTURE_CALLS="$calls" \
       FIXTURE_CACHE_RC="${cache_rc:-0}" FIXTURE_RUN_RC="${run_rc:-0}" \
       FIXTURE_RECORD="${record:-0}" FIXTURE_CLAIMS="${claims:-yes}" \
+      FIXTURE_DISABLED="${disabled:-no}" FIXTURE_DISABLED_ALIAS="$two" \
       "$BASH" "$subject" "$@"
   ) >"$transcript" 2>&1 || rc=$?
 }
@@ -112,7 +123,7 @@ if harness_leg '2: detached LF checkout, cache fixture, batch argv and claim exp
   git -C "$clone" -c user.name=fixture -c user.email=fixture@example.test commit --allow-empty -qm newer || exit 2
   printf '#!/bin/sh\nexit 98\n' >"$clone/tools/test-run.sh"
   invoke green "$clone" "$sha" "$one" "$two"
-  printf '%s\n' cache run --expect-backend cc build --stop-on-first-error --cache=disabled -j 4 "$one" "$two" >"$TMP/expected"
+  printf '%s\n' cache backend=cc run build --stop-on-first-error --cache=disabled -j 4 "$one" "$two" >"$TMP/expected"
   [ "$rc" = 0 ] && cmp -s "$TMP/expected" "$calls" &&
     grep -Fq 'verdict: fixture (exit 0)' "$transcript" &&
     grep -Eq '^windows-leg: run directory: .+/this-run$' "$transcript" &&
@@ -124,7 +135,17 @@ fi
 
 if harness_leg '3: checkout and cache failures stop before the runner'; then
   [ -d "$TMP/clone" ] || seed || exit 2
-  invoke missing "$clone" 0123456789abcdef0123456789abcdef01234567 "$one"
+  # Route the fixed staging URL to a local source even when origin is elsewhere.
+  fetch_clone="$TMP/fetch-clone"
+  clone_path=$(git -C "$clone" rev-parse --show-toplevel) || exit 2
+  git init -q "$fetch_clone" &&
+    git -C "$fetch_clone" remote add origin . &&
+    git -C "$fetch_clone" config "url.$clone_path.insteadOf" "$staging" || exit 2
+  invoke fetched "$fetch_clone" "$sha" "$one"
+  [ "$rc" = 0 ] && grep -Fq 'verdict: fixture (exit 0)' "$transcript" &&
+    git -C "$fetch_clone" cat-file -e "$sha^{commit}"
+  report $? 'a missing commit is fetched from staging independently of origin' "$(cat "$transcript")"
+  invoke missing "$fetch_clone" 0123456789abcdef0123456789abcdef01234567 "$one"
   refusal 'could not fetch'; report $? 'a missing revision is refused before any fixture'
   cache_rc=7 invoke cache-red "$clone" "$sha" "$one"
   [ "$rc" = 7 ] && [ "$(cat "$calls")" = cache ] &&
@@ -141,12 +162,13 @@ fi
 
 if harness_leg '4: runner status, isolated receipt and tests without Verdict'; then
   [ -d "$TMP/clone" ] || seed || exit 2
-  run_rc=65 record=65 invoke red "$clone" "$sha" "$one"
+  run_rc=65 record=1 invoke red "$clone" "$sha" "$one"
   [ "$rc" = 65 ] && grep -Fq 'verdict: fixture (exit 65)' "$transcript" &&
     grep -Eq '^windows-leg: run directory: .+/this-run$' "$transcript" &&
     grep -Fq 'a checked claim' "$transcript" &&
+    ! grep -Fq 'runner receipt missing or inconsistent' "$transcript" &&
     [ "$(tail -n 1 "$transcript")" = 'exit: 65' ]
-  report $? 'a red batch exports its own receipt and available claims' "$(cat "$transcript")"
+  report $? 'a classified build failure preserves its verdict and raw receipt' "$(cat "$transcript")"
   for bad_record in missing 65; do
     record=$bad_record invoke "bad-receipt-$bad_record" "$clone" "$sha" "$one"
     [ "$rc" = 2 ] && grep -Fq 'runner receipt missing or inconsistent' "$transcript" &&
@@ -154,10 +176,14 @@ if harness_leg '4: runner status, isolated receipt and tests without Verdict'; t
     report $? "a green batch needs a matching receipt ($bad_record)" "$(cat "$transcript")"
   done
   claims=no leg_backend=cuda invoke no-claims "$clone" "$sha" "$one"
-  [ "$rc" = 0 ] && grep -Fxq cuda "$calls" &&
+  [ "$rc" = 0 ] && grep -Fxq backend=cuda "$calls" &&
     grep -Fq 'no Verdict action records were produced' "$transcript" &&
     [ "$(tail -n 1 "$transcript")" = 'exit: 0' ]
   report $? 'an explicit backend is forwarded and an alias can succeed without Verdict' "$(cat "$transcript")"
+  disabled=yes invoke disabled "$clone" "$sha" "$one" "$two"
+  [ "$rc" = 2 ] && grep -Fq 'the runner skipped requested aliases' "$transcript" &&
+    [ "$(tail -n 1 "$transcript")" = 'exit: 2' ]
+  report $? 'a partially disabled named set cannot pass' "$(cat "$transcript")"
 fi
 
 finish
