@@ -1,0 +1,50 @@
+benchmarks/test-box-gate.sh
+benchmarks/test-check-box.sh
+benchmarks/test-gh1133-cells.sh
+benchmarks/test-gh1253-cells.sh
+benchmarks/test-gh834-cells.sh
+scripts/test-harness-support.sh
+scripts/test-process-group.sh
+scripts/test-setup-ocaml-env.sh
+test/operations/apt_fallback.sh
+test/operations/ci_matrix.sh
+tools/test-action-durations.sh
+tools/test-affected-tests.sh
+tools/test-ci-durations.sh
+tools/test-ci-failed-rules.sh
+tools/test-ci-shard.sh
+tools/test-ci-times.sh
+tools/test-compare-bounded-outcomes.sh
+tools/test-device-memory-load.sh
+tools/test-fmt-check.sh
+tools/test-harness-legs-alone.sh
+tools/test-isolated-apt.sh
+tools/test-machine-verify.sh
+tools/test-merge-build-check.sh	--compile-only models #2170 x #2173 through real Dune #compile-only-real
+tools/test-merge-build-check.sh	the real compile-tier fixture rule has stable output and retains failures #compile-output
+tools/test-merge-build-replay.sh
+tools/test-mutation-run.sh
+tools/test-owed-run-tty.sh
+tools/test-pin-revisions.sh
+tools/test-ppx-output-diff.sh
+tools/test-promote.sh
+tools/test-promotion-record.sh
+tools/test-real-dune-registrations.sh
+tools/test-refusal-manifest-sync.sh
+tools/test-row-trace-compact.sh
+tools/test-test-harnesses.sh
+tools/test-test-run-bisect.sh	121: bisect rejects backend-disabled targets #bisect
+tools/test-test-run-bisect.sh	79: credentials never reach dune #credentials
+tools/test-test-run-devices.sh
+tools/test-test-run-digest.sh	36d: a real quiet run keeps a failing claim with its action beside passing stderr #digest
+tools/test-test-run-digest.sh	80b: a manual dune beside a managed run keeps its live trace #digest
+tools/test-test-run-digest.sh	80c: elapsed and the executed-action inventory distinguish reused tests #digest
+tools/test-test-run-digest.sh	84: repeat --direct builds once and replays the rules #repeat
+tools/test-test-run-digest.sh	92b: a real build failure is BUILD FAILED, not a failed test #digest
+tools/test-test-run-last.sh
+tools/test-test-run-lifecycle.sh
+tools/test-test-run-options.sh	107: capped single-test builds retain stderr before timeout #options
+tools/test-test-run-options.sh	120: backend-disabled aliases skip without voiding a mixed batch #options
+tools/test-test-run-options.sh	89: an alias dune does not know is refused before the slot #options
+tools/test-typecheck-scan-cases.sh
+tools/test-windows-opam-cache.sh

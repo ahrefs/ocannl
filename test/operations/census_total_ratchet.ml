@@ -138,6 +138,11 @@ let allowed =
       reason = "a census row quotes repository paths and a harness's literal leg selector";
     };
     {
+      golden = Golden "test/operations/harness_real_dune_legs.expected";
+      pattern = "^[A-Za-z0-9_./-]+\\.sh\t[^\t]+$";
+      reason = "the registration table quotes a literal source leg label on each row";
+    };
+    {
       golden = Golden "test/operations/ll_test_ratchet.expected";
       pattern = {|^Source floor: [^ ]+ >= [0-9]+$\| -- records<=[0-9]+ traversals<=[0-9]+: |};
       reason =
@@ -179,6 +184,11 @@ let allowed =
       golden = Golden "test/operations/operand_key_scan_cases.expected";
       pattern = {|the blind [0-9]+x[0-9]+ fixture|};
       reason = "the shape of the synthetic fixture that opened gh-ocannl-1018";
+    };
+    {
+      golden = Golden "test/operations/reader_parity_sh.expected";
+      pattern = {|^heredoc [0-9]+\.\.[0-9]+ |};
+      reason = "the physical body and delimiter locations in the shared shell fixture";
     };
     {
       golden = Golden "test/operations/shell_scripts_parse.expected";

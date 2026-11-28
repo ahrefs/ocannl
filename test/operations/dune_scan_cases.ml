@@ -2201,7 +2201,39 @@ let sweep_harness_dependencies dune_file =
         (Slot.file_needs ~dir rule) ~f:reads_local_dune
   | _ -> fail "expected one rule for runtest-sweep_harness in %s" dune_file
 
-let () =
+(* The fixture projection identifies each stanza by its position in the flattened stanza list.
+   Marker order and diagnostic wording do not determine attribution. *)
+let dump_markers path =
+  let text = Stdio.In_channel.read_all path in
+  let pins = Scan.backend_marker_contract text in
+  let defaults = Scan.default_marker_contract text in
+  printf "%s\n" (Stdlib.Filename.basename path);
+  if not (List.is_empty pins.contract_issues && List.is_empty defaults.contract_issues) then
+    printf "refused\n"
+  else
+    List.zip_exn pins.contract_stanzas defaults.contract_stanzas
+    |> List.iteri ~f:(fun index (pinned, defaulted) ->
+        let stanza = pinned.Scan.marker_stanza in
+        let pinned =
+          List.map pinned.Scan.stanza_markers ~f:(fun marker ->
+              "pin " ^ marker.Scan.contained_value.Scan.backend)
+        in
+        let defaults =
+          List.map defaulted.Scan.stanza_markers ~f:(fun marker ->
+              match marker.Scan.contained_value with
+              | Scan.Default_definition { default_name; default_backends; default_targets; _ } ->
+                  let backends = String.concat ~sep:"," default_backends in
+                  let targets =
+                    List.map default_targets ~f:(fun (m, d) -> m ^ "." ^ d)
+                    |> String.concat ~sep:","
+                  in
+                  String.concat ~sep:" " [ "defines"; default_name; backends; targets ]
+              | Scan.Default_reader { default_name; _ } -> "reads " ^ default_name)
+        in
+        List.sort (pinned @ defaults) ~compare:String.compare
+        |> List.iter ~f:(printf "%s %d %s\n" stanza.marked_head (index + 1)))
+
+let run_cases () =
   sweep_policy_inventory_cases ();
   let check name expected found =
     if List.equal String.equal found expected then printf "ok: %s\n" name
@@ -2487,3 +2519,10 @@ let () =
       sweep_harness_dependencies dune_file
   | _ -> Verdict.fail "usage: dune_scan_cases <config_dep_completeness.exe> DUNE_FILE");
   Test_scan.Refusal_control_manifest.print "config_dep_completeness.ml"
+
+let () =
+  match Array.to_list (Test_scan.Scan_argv.expand Stdlib.Sys.argv) with
+  | _ :: "--reader-dump" :: (_ :: _ as paths) ->
+      Stdlib.set_binary_mode_out Stdlib.stdout true;
+      List.iter paths ~f:dump_markers
+  | _ -> run_cases ()
