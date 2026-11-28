@@ -8129,8 +8129,7 @@ box.
   `cc_pool_core_class`.
 - `cuda_backend.ml`: `cuda_kernel_cache_mib`, `cuda_printf_fifo_size`, `debug_log_from_routines`,
   `log_level`.
-- `hip_backend.ml`: `collapse_foreign_stderr_noise`, `debug_log_from_routines`,
-  `hip_kernel_cache_mib`, `hip_printf_fifo_size`, `hip_scratch_validation`, `log_level`.
+- `hip_backend.ml`: `hip_kernel_cache_mib`, `hip_scratch_validation`.
 - `metal_backend.ml`: `metal_kernel_cache_mib`.
 - `persistence.ml`: `checkpoint_load_mmap`.
 - `row.ml`: `debug_check_retired_solver_vars`, `max_shape_error_origins`,

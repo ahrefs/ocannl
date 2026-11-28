@@ -645,13 +645,10 @@ extern "C" __global__ void ocannl_timing_phase(unsigned int* ids) {
       reported_unrecognized_phase = false;
     }
 
-  let make_timing_phase_probe dev primary_context =
-    let attrs =
-      Utils.with_device_init_deadline ~backend_name:name (fun () -> H.Device.get_attributes dev)
-    in
-    Option.bind (timing_phase_period attrs) ~f:(fun workgroups ->
+  let make_timing_phase_probe ~arch ~period primary_context =
+    Option.bind period ~f:(fun workgroups ->
         set_ctx primary_context;
-        match compile_timing_phase_probe ~arch:attrs.gcn_arch_name ~workgroups with
+        match compile_timing_phase_probe ~arch ~workgroups with
         | probe -> Some probe
         | exception
             (( Mapped_phase_memory.Unavailable _ | Dl.DL_error _ | H.Hip_error _
@@ -828,6 +825,22 @@ extern "C" __global__ void ocannl_timing_phase(unsigned int* ids) {
                    }))
               : Utils.exit_teardown_outcome list))
 
+  (* Scratch validation runs on every link. Re-entering the driver there caused contention when
+     several HIP processes shared an iGPU. Cache only successful reads so a transient failure in an
+     optional timing identity lookup can be retried. *)
+  let device_attributes =
+    let cache = Hashtbl.create (module Int) in
+    let lock = Stdlib.Mutex.create () in
+    fun ~ordinal dev ->
+      match Stdlib.Mutex.protect lock (fun () -> Hashtbl.find cache ordinal) with
+      | Some attrs -> attrs
+      | None ->
+          (* Guarded callers may already own the deadline (gh-ocannl-1281). Take it before locking
+             the cache on a miss, then recheck in case another caller filled it. *)
+          Utils.with_device_init_deadline ~backend_name:name (fun () ->
+              Stdlib.Mutex.protect lock (fun () ->
+                  Hashtbl.find_or_add cache ordinal ~default:(fun () -> H.Device.get_attributes dev)))
+
   let%track3_sexp get_device ~(ordinal : int) : device =
     let n = num_devices () in
     (* See the corresponding note in [Cuda_backend.get_device]. *)
@@ -845,7 +858,12 @@ extern "C" __global__ void ocannl_timing_phase(unsigned int* ids) {
       let dev = H.Device.get ~ordinal in
       let primary_context : H.Context.t = H.Context.get_primary dev in
       let set_builtins_in = set_builtins_for_device ~primary_context in
-      let timing_phase_probe = lazy (make_timing_phase_probe dev primary_context) in
+      let timing_phase_probe =
+        lazy
+          (let attrs = device_attributes ~ordinal dev in
+           make_timing_phase_probe ~arch:attrs.gcn_arch_name ~period:(timing_phase_period attrs)
+             primary_context)
+      in
       let timing_phase_lock = Stdlib.Mutex.create () in
       let dev = { dev; primary_context; set_builtins_in; timing_phase_probe; timing_phase_lock } in
       set_ctx primary_context;
@@ -866,20 +884,6 @@ extern "C" __global__ void ocannl_timing_phase(unsigned int* ids) {
       result
     in
     Option.value_or_thunk !devices.(ordinal) ~default
-
-  let _hip_properties =
-    let cache =
-      let%debug2_sexp f (ordinal : int) =
-        let dev = get_device ~ordinal in
-        lazy (H.Device.get_attributes dev.dev.dev)
-      in
-      lazy (Array.init (num_devices ()) ~f)
-    in
-    let%debug2_sexp get_props (device : device) : H.Device.attributes =
-      let cache = Lazy.force cache in
-      Lazy.force cache.(device.ordinal)
-    in
-    get_props
 
   let await (device : device) : unit =
     set_ctx device.dev.primary_context;
@@ -1597,21 +1601,9 @@ extern "C" __global__ void ocannl_timing_phase(unsigned int* ids) {
       if granules_per_work_item <= 0 then None
       else Some (granules_per_work_item * scratch_granule_bytes)
 
-  (* Memoized per ordinal, like [_hip_properties]: this runs on EVERY link, and re-entering the
-     driver for static device properties once per routine is pure overhead — it showed up as
-     contention with several HIP processes sharing one iGPU. *)
-  let scratch_budget_of_device =
-    let cache =
-      lazy
-        (Array.init (num_devices ()) ~f:(fun ordinal ->
-             lazy
-               (let attrs = H.Device.get_attributes (H.Device.get ~ordinal) in
-                (attrs, scratch_limit_per_work_item attrs))))
-    in
-    fun (device : device) ->
-      (* Discovery a link can force first: under the device-init deadline (gh-ocannl-1281). *)
-      Utils.with_device_init_deadline ~backend_name:name (fun () ->
-          Lazy.force (Lazy.force cache).(device.ordinal))
+  let scratch_budget_of_device (device : device) =
+    let attrs = device_attributes ~ordinal:device.ordinal device.dev.dev in
+    (attrs, scratch_limit_per_work_item attrs)
 
   (* Single source of truth for the enforced post-link scratch limit of [device] (gh-ocannl-2404):
      both [thread_scratch_limit] and [validate_scratch_budget] read from here, so callers checking
@@ -2093,7 +2085,7 @@ extern "C" __global__ void ocannl_timing_phase(unsigned int* ids) {
      construction limits. Driver/runtime/header provenance remains a documented separate concern. *)
   let timing_identity (device : device) =
     try
-      let attributes = H.Device.get_attributes device.dev.dev in
+      let attributes = device_attributes ~ordinal:device.ordinal device.dev.dev in
       let queue_phase =
         Option.map (timing_phase_period attributes) ~f:(fun period ->
             ("timing_queue_phase", [%sexp_of: int] period))
