@@ -825,16 +825,21 @@ extern "C" __global__ void ocannl_timing_phase(unsigned int* ids) {
                    }))
               : Utils.exit_teardown_outcome list))
 
-  (* Opening a stream needs no metadata. Cache successful reads so a transient error in an optional
-     timing identity lookup does not poison later discovery. *)
+  (* Scratch validation runs on every link. Re-entering the driver there caused contention when
+     several HIP processes shared an iGPU. Cache only successful reads so a transient failure in an
+     optional timing identity lookup can be retried. *)
   let device_attributes =
     let cache = Hashtbl.create (module Int) in
     let lock = Stdlib.Mutex.create () in
     fun ~ordinal dev ->
-      Stdlib.Mutex.protect lock (fun () ->
-          Hashtbl.find_or_add cache ordinal ~default:(fun () ->
-              Utils.with_device_init_deadline ~backend_name:name (fun () ->
-                  H.Device.get_attributes dev)))
+      match Stdlib.Mutex.protect lock (fun () -> Hashtbl.find cache ordinal) with
+      | Some attrs -> attrs
+      | None ->
+          (* Guarded callers may already own the deadline (gh-ocannl-1281). Take it before locking
+             the cache on a miss, then recheck in case another caller filled it. *)
+          Utils.with_device_init_deadline ~backend_name:name (fun () ->
+              Stdlib.Mutex.protect lock (fun () ->
+                  Hashtbl.find_or_add cache ordinal ~default:(fun () -> H.Device.get_attributes dev)))
 
   let%track3_sexp get_device ~(ordinal : int) : device =
     let n = num_devices () in
