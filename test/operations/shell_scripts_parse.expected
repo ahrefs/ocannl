@@ -752,6 +752,7 @@ tools/refusal-manifest-sync.sh parses: true
 tools/remote-verify.sh parses: true
 tools/replay-rules.sh parses: true
 tools/sweep-fingerprint.sh parses: true
+tools/sweep-streaks.sh parses: true
 tools/sweep-supervisor.sh parses: true
 tools/sweep-unit-state.sh parses: true
 tools/sweep.sh parses: true

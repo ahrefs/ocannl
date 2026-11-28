@@ -16931,6 +16931,8 @@
   ../../tools/aggregate-skips.sh
   ; the bypass-rate reader sweep.sh resolves beside itself (gh-ocannl-996)
   ../../tools/aggregate-bypasses.sh
+  ; the cross-sweep streak checker sweep.sh resolves beside itself (gh-ocannl-2424)
+  ../../tools/sweep-streaks.sh
   ../../tools/sweep.sh
   ../../tools/lab-map.sh
   ../../tools/fleet-registry.sh

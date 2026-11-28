@@ -26,8 +26,8 @@
 # What it deliberately does not do: judge completeness (a unit's records hold
 # the actions that RAN -- an incremental unit's cached actions wrote none -- so
 # the denominator is this run's reaches, never the suite's claims), compare
-# against earlier sweeps (each night's report and records stay in the sweep's
-# logs, which is what a rate over nights is a query over), or fail the sweep. A
+# against earlier sweeps (tools/sweep-streaks.sh owns the cross-sweep streak
+# check over the saved reports), or fail the sweep. A
 # claim bypassed on every unit that reached it is reported UNVERIFIED -- this
 # run checked it nowhere -- as a finding for the routine to notice, not an exit
 # status: a bound's hatch is valid, and a loaded night is no regression.
