@@ -867,9 +867,9 @@ files.
   GPU MMA leaves (`32x32x32`, `16x32x32`, `32x32x16`) in `Autotune.seeded_default` at
   f32-accumulating f16/bf16/fp8 sites (gated on `model_default_tensorize`, checked with
   `Cost_model.accepted_tile_mma_flops` and falling back to `scalar_blocktile`) was measured in
-  exclusive mirrored A/B windows on all three GPU boxes (`bdfa8b51`; f32 drift controls
-  `0.996–1.007x` and 0 of 11 `.cu` files differing across arms; max relative loss delta
-  `6.7e-7`–`5.5e-5` on signed non-dyadic inputs):
+  exclusive mirrored A/B windows on all three GPU boxes (tag `t2360-prototype`, `bdfa8b51` in
+  `lukstafi/ocannl-staging`; f32 drift controls `0.996–1.007x` and 0 of 11 `.cu` files differing
+  across arms; max relative loss delta `6.7e-7`–`5.5e-5` on signed non-dyadic inputs):
   - `rog-nv` (CUDA, RTX 5070 Ti Laptop sm_120, GDDR7): `#1190 fp8mm` (`8192×32×4096`) gained
     `0.495 → 0.169 ms` (`0.342x`), but every `gpt2_mini` cell regressed — infer f16
     `2.11 → 2.42 ms` (`1.147x`) and bf16 `2.08 → 2.44 ms` (`1.174x`), train b8 f16
@@ -890,9 +890,12 @@ files.
     MMA blocks losing on small-K `Q*K^T` (`K = 32`, `2.9x` slower), companion-heavy `ffn_w1+gelu`
     (`1.31–1.45x` slower on 32 threads vs 256), `ffn_w2` (`1.22–1.29x` slower) and low-occupancy
     `wgrad` (`1.12–1.21x` slower). Neither `16x32x32`-first (`3.38–3.50 ms` infer, `8.59–9.68 ms` b8,
-    `224.5 ms` b256 on rog) nor `model_default_schedule=true` (`4.24–4.40 ms` infer, `7.17–8.54 ms`
-    b8 on rog) avoids the regression. Re-open once multi-warp GPU MMA tiles (and/or small-K and
-    companion-heavy exclusion) close those gaps.
+    `224.5 ms` b256 on rog) nor `model_default_schedule=true` avoids the regression: with
+    `model_default_schedule=true` alone, rog stays at `2.10 ms` f16 / `2.08 ms` bf16 infer and
+    `7.94 ms` f16 / `6.54 ms` bf16 b8; enabling `model_default_tensorize=true` alongside it
+    regresses to `4.40 / 4.24 ms` infer and `8.54 / 7.17 ms` b8. Selective admission (retaining
+    deep-K pure matmuls while excluding small-K and fused-companion sites) was not measured in this
+    pass. Re-open once multi-warp GPU MMA tiles or selective admission close those gaps.
 - **`model_default` segments at the search's presets, and prices a segment against the lower of
   its two presets** (gh-ocannl-1512, gh-ocannl-1687, `Autotune.model_segments`). The preset
   decides the cuts: `fission_segmented` coalesces adjacent segments whose preset is empty. At the

@@ -1508,7 +1508,7 @@ files.
   and keeps existing cache keys at the default. The untuned default (`Autotune.seeded_default`)
   keeps `Autotune.scalar_blocktile` only after exclusive CUDA and HIP (unified and discrete)
   measurements showed net regressions on `gpt2_mini_train` under current single-warp GPU MMA
-  sketches (gh-ocannl-2360; tables in `docs/agent-notes/scheduling-and-autotune.md`).
+  sketches (gh-ocannl-2360; measurements in `docs/agent-notes/scheduling-and-autotune.md`).
 - **The `approximate` profile is the one word for the numerics-changing regime** (gh-ocannl-719):
   the `performance` payload plus `tf32_matmuls=true`, `cc_backend_fast_math=true`,
   `cc_backend_fp_contract=fast` and `tune_inline_flips=2`, contract "results differ from the exact
