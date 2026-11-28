@@ -230,12 +230,12 @@
   (alias runtest-verdict_ratchet)
   (alias runtest-workflow_job_timeouts)))
 
-; Two focused aggregates beyond `scans` (gh-ocannl-783). Same arrangement and same completeness
+; Focused aggregates beyond `scans` (gh-ocannl-783). Same arrangement and same completeness
 ; check, a different question: `scans` collects the tests that read the REPOSITORY, these collect
 ; the tests that answer for one SUBSYSTEM, so that a change confined to it is revalidated without a
 ; backend-wide directory run. Each family alias is spelled the same in every directory that has
 ; members, which is what makes `dune build @metal-codegen` from the root run the whole family
-; wherever it lives -- `arrayjit/test/dune` carries the other half of both of these.
+; wherever it lives -- `arrayjit/test/dune` also carries focused aggregates.
 ;
 ; Membership is DERIVED, never listed twice: `test/operations/env_var_deps` asks each stanza what it
 ; IS -- a stanza whose backend marker names `metal` is a Metal member, a stanza declaring a named probe with
@@ -243,9 +243,8 @@
 ; the same way it derives the `scans` family from the rules that glob the repository. A list checked
 ; against a second copy of itself could only ever confirm that the copy still says what it says.
 ;
-; The members are `(test)` stanzas, so what these list are the per-test aliases dune generates from
-; 3.20 rather than hand-written rule fields -- which is the reason `dune-project` declares 3.20 as
-; the floor rather than 3.18.
+; For `(test)` stanzas these list the per-test aliases dune generates from 3.20, which is the
+; reason `dune-project` declares 3.20 as the floor rather than 3.18.
 
 ; The Metal-pinned tests: the executed Metal-only guards and the emitted-MSL structural ones. Every
 ; stanza here names `metal` in its backend marker, so no other box can judge any of them, and the
@@ -284,6 +283,38 @@
   (alias runtest-session_growth)
   (alias runtest-set_values_pool_coalescing)
   (alias runtest-wrapper_release_paths)))
+
+; gh-ocannl-2177: env_var_deps derives the logging members from their actions, configs and own
+; sources, and checks this list against those members. Use the variant alias that enables logging
+; when the executable has a separate quiet run.
+
+(alias
+ (name routine-logging)
+ (deps
+  (alias runtest-affine_lowering)
+  (alias runtest-cache_key_agreement)
+  (alias runtest-cache_key_agreement-outranked)
+  (alias runtest-cc_backend_trace_name)
+  (alias runtest-declared_temporaries-logged)
+  (alias runtest-digest_identity_flips)
+  (alias runtest-env_spelling_gate)
+  (alias runtest-fixed_name_temporaries-logged)
+  (alias runtest-integer_power_domain)
+  (alias runtest-log_index_width_narrow)
+  (alias runtest-log_index_width_wide)
+  (alias runtest-metal_routine_log_delivery)
+  (alias runtest-micrograd_demo_logging)
+  (alias runtest-minted_name_labels-logged)
+  (alias runtest-narrow_scatter_residency)
+  (alias runtest-reduction_sink)
+  (alias runtest-routine_log_dropped_notice)
+  (alias runtest-routine_log_level_notice)
+  (alias runtest-routine_log_narrow_floats)
+  (alias runtest-routine_log_nested_scopes)
+  (alias runtest-routine_log_rng_init)
+  (alias runtest-routine_log_stream_files)
+  (alias runtest-test_log_stmt_format)
+  (alias runtest-uniform_rank_zero-logged)))
 
 ; The numerics-mode matrix (gh-ocannl-1104): every test whose own modules name the numerics policy
 ; -- `Ir.Numerics`, or a `Test_utils` value reaching it -- which the daily sweep's `cc-policy-*` and
@@ -7841,7 +7872,7 @@
 (executable
  (name env_var_deps)
  (modules env_var_deps)
- (libraries base stdio unix arrayjit.utils test_scan arrayjit.verdict))
+ (libraries base stdio unix arrayjit.utils test_scan arrayjit.verdict ppxlib))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads dune files and OCaml sources as text.
@@ -7856,6 +7887,7 @@
   (alias runtest-env_spelling_gate)
   ocannl_config
   (glob_files_rec ../../dune)
+  (glob_files_rec ../../ocannl_config)
   (glob_files_rec ../../arrayjit/lib/*.ml)
   ; gh-ocannl-1652: the `copy_files#` copies of the GPU backends compiled against the vendor
   ; stubs. Their libraries declare the same tracing gates as the real ones, which this check

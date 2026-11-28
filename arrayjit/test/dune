@@ -53,7 +53,7 @@
  (deps
   (alias runtest-env_spelling_gate)))
 
-; This directory's half of the two focused aggregates (gh-ocannl-783); `test/operations/dune` holds
+; This directory's part of the focused aggregates (gh-ocannl-783); `test/operations/dune` holds
 ; the other half and the reasoning. The alias names match across directories on purpose: `dune build
 ; @metal-codegen` from the workspace root runs both halves, since dune builds an alias in every
 ; directory beneath the one it is given.
@@ -79,6 +79,14 @@
  (deps
   (alias runtest-env_spelling_gate)
   (alias runtest-test_slab_free_on_grow)))
+
+(alias
+ (name routine-logging)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (alias runtest-test_cross_cse)
+  (alias runtest-test_render_context)
+  (alias runtest-test_stage_b_where_debug)))
 
 (test
  (name test_numerical_types)

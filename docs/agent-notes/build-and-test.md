@@ -31,8 +31,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   of edit, not a subsystem: a config key, a dune stanza, a printed claim, an agent note, a new script
   or source file, an emitted-text pin, or a reference to a library value or type -- test-only edits
   included, since the scans read test sources, goldens and dune files as text (gh-ocannl-1431). The
-  focused aggregates `@metal-codegen` and `@lifecycle` are slices of the Metal-pinned tests and the
-  run/start lifecycle legs, not of the scans. For shell changes the second half of the batch is
+  focused aggregates `@metal-codegen`, `@lifecycle`, and `@routine-logging` select subsystem tests.
+  For a change to logged codegen, run `@routine-logging` on each affected backend (gh-ocannl-2177).
+  `env_var_deps` derives membership from literal Dune action settings, the configuration nearest
+  each run (including literal copies), and settings writes or computed flag prefixes in the test's
+  own OCaml modules. A logged producer reaches the aggregate through its test or golden-diff alias,
+  with the same Dune condition on the listing. The scanner's header specifies the input forms it
+  recognizes. For shell changes the second half of the batch is
   `tools/test-harnesses.sh --affected --since BASE` (gh-ocannl-1929): exactly the harness commands
   `affected --harnesses` prints (gh-ocannl-1900; a harness's `--only` selects its legs), under one
   slot and one footer, the command `prepush` closes with and does not run; `tools/test-harnesses.sh`
