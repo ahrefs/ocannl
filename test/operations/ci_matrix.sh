@@ -15,8 +15,8 @@
 # fail-fast disabled, and checks an unconditional step with a direct env
 # binding and command.
 # Expressions, extra axes, and alternate command forms are outside that grammar.
-# The census check reads the named steps in the build job and evaluates the
-# save decision's single-line if with explicit job status and baseline outcome.
+# The census check reads the named steps in the build job and evaluates their
+# single-line if conditions with explicit job status and baseline outcome.
 # Workflow scheduling and cache actions are outside this fixture.
 # Named legs are independent; shared readers/setup run before each selected leg.
 # The renamed-gate fixture reads only top-level literal `harness_leg_run 'name'
@@ -1116,8 +1116,23 @@ sys.exit(int(os.environ['OPAM_RC' if name == 'opam' else 'DPKG_RC']))
 elif leg == 'census-save':
     job = job_block(source, 'run')
     decision = workflow_step(job, 'Decide whether to save the cc census listings')
-    conditions = re.findall(r'^      if: (.+)$', decision, re.M)
-    assert len(conditions) == 1, 'census save needs a single-line if'
+    baseline = workflow_step(job, 'List the restored cc census listings')
+    assert re.findall(r'^      id: (.+)$', baseline, re.M) == ['census-baseline'], \
+        'census-baseline must identify the baseline listing step'
+    assert job.index(baseline) < job.index(decision), 'census save must follow the baseline listing'
+
+    def condition(step, label):
+        conditions = re.findall(r'^      if: (.+)$', step, re.M)
+        assert len(conditions) == 1, label + ' needs a single-line if'
+        return conditions[0]
+
+    context = dict(runner_os='Linux', suite='main')
+    baseline_if = condition(baseline, 'census baseline')
+    assert expression(baseline_if, 'workflow_dispatch', **context), \
+        'census baseline must run after successful setup'
+    assert not expression(baseline_if, 'workflow_dispatch', job_status='failure', **context), \
+        'census baseline must skip after an early setup failure'
+    decision_if = condition(decision, 'census save')
     for case, status, outcome, expected in (
             ('setup fails before cache initialization', 'failure', 'skipped', False),
             ('baseline listing fails', 'failure', 'failure', False),
@@ -1125,15 +1140,11 @@ elif leg == 'census-save':
             ('build succeeds after baseline listing', 'success', 'success', True),
             ('run is cancelled after baseline listing', 'cancelled', 'success', False),
     ):
-        actual = expression(conditions[0], 'workflow_dispatch', job_status=status,
-                            runner_os='Linux', suite='main', census_baseline=outcome)
+        actual = expression(decision_if, 'workflow_dispatch', job_status=status,
+                            census_baseline=outcome, **context)
         assert actual is expected, '%s: expected census save decision to %s' % (
             case, 'run' if expected else 'skip')
 
-    baseline = workflow_step(job, 'List the restored cc census listings')
-    assert re.findall(r'^      id: (.+)$', baseline, re.M) == ['census-baseline'], \
-        'census-baseline must identify the baseline listing step'
-    assert job.index(baseline) < job.index(decision), 'census save must follow the baseline listing'
     print('PASS census decision requires a successful baseline and still runs after later failures')
 
 
