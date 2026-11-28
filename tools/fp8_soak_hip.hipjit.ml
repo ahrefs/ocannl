@@ -138,8 +138,8 @@ extern "C" __global__ void ocannl_guarded_narrow_f64(unsigned long long base,
 (* [context] and [kernel_module] are held for the same reason the CUDA arm holds them: a primary
    context released by its finalizer resets the device under the sweep. See that arm's comment. *)
 type state = {
-  context : H.Context.t;
-  kernel_module : H.Module.t;
+  context : H.Context.t; [@warning "-69"]
+  kernel_module : H.Module.t; [@warning "-69"]
   attrs : H.Device.attributes;
   stream : H.Stream.t;
   narrow_f32 : H.Module.func;

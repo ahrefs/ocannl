@@ -43,12 +43,17 @@
    library `<backend>` under either of its names, and any other library for itself, a corpus
    library's public and private names being one. A library of the stand-in tree outside the table
    stands for nothing, and is refused. A mapped library the genuine stanza does not declare -- in
-   its `(libraries …)`, a `(re_export …)`, or a `select` condition, which links it wherever the arm
-   is chosen -- is refused unless [availability_only] names it with its reason, and an entry there
-   excusing nothing is refused in turn. A stand-in's `(re_export …)` needs the genuine stanza's,
-   since it widens what a dependent sees. A preprocessor the stand-in runs over the module and the
-   genuine stanza does not is refused too. Only that direction is a defect: a genuine stanza
-   declaring MORE is normal, since an executable carries modules its arm's library does not.
+   its unconditional `(libraries …)`, a `(re_export …)`, or that arm's own `select` condition, which
+   links it wherever the arm is chosen (never a sibling alternative of that `select` and never
+   another `select` of the stanza; gh-ocannl-2338) -- is refused unless [availability_only] names it
+   with its reason, and an entry there excusing nothing is refused in turn. A non-arm module
+   compiled alongside a single arm of the same genuine stanza shares that arm's `select` condition
+   for the stand-in's `(libraries …)` list, while its own source and interface stay held to
+   unconditional libraries only; a non-arm module with no companion arm (or beside several arms)
+   sees unconditional libraries only. A stand-in's `(re_export …)` needs the genuine stanza's, since
+   it widens what a dependent sees. A preprocessor the stand-in runs over the module and the genuine
+   stanza does not is refused too. Only that direction is a defect: a genuine stanza declaring MORE
+   is normal, since an executable carries modules its arm's library does not.
 
    THE RULE, SUB-LIBRARIES (gh-ocannl-2288 follow-up). A package is several libraries, and under
    `(implicit_transitive_deps false)` one of them does not make another's modules visible: a copy
@@ -84,10 +89,10 @@
    `Cuda` names no module, and a local module shadowing a stand-in module's name is taken for it,
    which errs toward a demand. Beyond the one-library-per-module map, whether the copy uses what its
    library declares: declarations are compared, never uses, so a stand-in library declared and
-   unused is refused all the same where the genuine stanza lacks it -- drop it. Which arm of ANOTHER
-   `select` a box chooses: a module is held to every condition of the stanza's other selects, as a
-   stand-in compiling several arms declares their union (an arm's own select counts only through the
-   arm's condition). A module that copies no file is held to nothing, and so is a default-set
+   unused is refused all the same where the genuine stanza lacks it -- drop it. Whether every
+   alternative of ANOTHER `select` happens to require the same library: an arm is credited only with
+   its own `select` condition (a library every alternative needs belongs unconditionally in
+   `(libraries …)`). A module that copies no file is held to nothing, and so is a default-set
    library's module no rule copies -- beside a `copy_files` glob, whose files dune files do not
    list, a default-set library is refused; the census lists the libraries compiling no copy. Of
    preprocessing, only the `pps` libraries: not their flags or arguments, not `preprocessor_deps`,
@@ -251,38 +256,47 @@ let compiled_by ~all copy module_ =
       && Option.is_some (library_name o)
       && not (Poly.equal (stanza_claims o module_) `No))
 
-(* The libraries a stanza declares, each with whether it re-exports it: its `(libraries …)` atoms, a
-   `(re_export …)`'s, and the libraries a `select` condition requires, since the condition is what
-   makes dune link them wherever the arm is chosen. For a module copied from [arm], the alternatives
-   of that arm's own `select` count only through the arm's condition: dune links one alternative per
-   select, so a sibling's libraries are absent wherever this arm is chosen. Other selects count with
-   all their conditions: which of their arms a box chooses is not this arm's to say, and a stand-in
-   library compiling several arms declares their union. *)
-let declared_libraries ?arm s =
+(* The libraries a stanza declares, each with whether it re-exports it: its unconditional
+   `(libraries …)` atoms, a `(re_export …)`'s, and -- according to [selects] -- the required
+   (non-`!`) libraries of its `select` conditions: - [`All]: every `select` condition of the stanza
+   (used for the stand-in library itself, so a library placed inside a stand-in's `select` cannot
+   evade checking). - [`Arm arm]: only the `select` condition(s) choosing [arm] (if [arm] appears in
+   more than one clause, the intersection of their required libraries, since any one clause may be
+   chosen). Sibling alternatives of that `select` and every OTHER `select` of the stanza are
+   excluded: dune may pick another `select`'s fallback on the box where [arm] is chosen
+   (gh-ocannl-2338). - [`None]: unconditional libraries only, no `select` conditions. *)
+let declared_libraries ~selects s =
   let fields = Option.value (Scan.field s.sexp "libraries") ~default:[] in
-  let own_select =
-    match arm with
-    | None -> None
-    | Some arm ->
-        List.find_map (Scan.select_choices s.sexp) ~f:(fun (target, _, a) ->
-            if String.equal (Scan.normalize_path (Scan.in_subdir s.dir a)) arm then Some target
-            else None)
+  let unconditional =
+    List.concat_map fields ~f:(function
+      | Sexp.Atom l -> [ (l, false) ]
+      | Sexp.List [ Sexp.Atom "re_export"; Sexp.Atom l ] -> [ (l, true) ]
+      | _ -> [])
   in
-  List.concat_map fields ~f:(function
-    | Sexp.Atom l -> [ (l, false) ]
-    | Sexp.List [ Sexp.Atom "re_export"; Sexp.Atom l ] -> [ (l, true) ]
-    | _ -> [])
-  @ List.concat_map (Scan.select_choices s.sexp) ~f:(fun (target, condition, a) ->
-      let counts =
-        match (own_select, arm) with
-        | Some own, Some arm when String.equal own target ->
-            String.equal (Scan.normalize_path (Scan.in_subdir s.dir a)) arm
-        | _ -> true
-      in
-      if not counts then []
-      else
-        List.filter_map condition ~f:(fun l ->
-            if String.is_prefix l ~prefix:"!" then None else Some (l, false)))
+  let positive condition =
+    List.filter_map condition ~f:(fun l -> if String.is_prefix l ~prefix:"!" then None else Some l)
+  in
+  let from_selects =
+    match selects with
+    | `None -> []
+    | `All ->
+        List.concat_map (Scan.select_choices s.sexp) ~f:(fun (_, condition, _) ->
+            List.map (positive condition) ~f:(fun l -> (l, false)))
+    | `Arm arm -> (
+        let matching =
+          List.filter_map (Scan.select_choices s.sexp) ~f:(fun (_, condition, a) ->
+              if String.equal (Scan.normalize_path (Scan.in_subdir s.dir a)) arm then
+                Some (positive condition)
+              else None)
+        in
+        match matching with
+        | [] -> []
+        | first :: rest ->
+            List.filter first ~f:(fun l ->
+                List.for_all rest ~f:(fun cond -> List.mem cond l ~equal:String.equal))
+            |> List.map ~f:(fun l -> (l, false)))
+  in
+  unconditional @ from_selects
 
 let stanza_label s =
   Printf.sprintf "(%s %s) of %s"
@@ -623,7 +637,18 @@ let mirrors ~fail ~exceptions ~all ~packages ~package_modules ~uses ~backends ~c
                                (dir_of source));
                           None))
             in
-            List.iter (declared_libraries l) ~f:(fun (library, re_export) ->
+            let same_stanza (a : stanza) (b : stanza) =
+              String.equal a.dune_file b.dune_file && String.equal a.dir b.dir && a.line = b.line
+            in
+            let library_selects p =
+              if p.arm then `Arm p.source
+              else
+                match List.filter pairs ~f:(fun q -> q.arm && same_stanza q.genuine p.genuine) with
+                | [ a ] -> `Arm a.source
+                | _ -> `None
+            in
+            let source_selects p = if p.arm then `Arm p.source else `None in
+            List.iter (declared_libraries ~selects:`All l) ~f:(fun (library, re_export) ->
                 match substitute library with
                 | None ->
                     fail
@@ -634,11 +659,13 @@ let mirrors ~fail ~exceptions ~all ~packages ~package_modules ~uses ~backends ~c
                           library it reaches instead"
                          (site l) library)
                 | Some sub ->
-                    let genuine_declares p =
-                      satisfies ~re_export
-                        (declared_libraries ?arm:(if p.arm then Some p.source else None) p.genuine)
+                    let genuine_declares ~selects p =
+                      satisfies ~re_export (declared_libraries ~selects:(selects p) p.genuine)
                     in
-                    let lacking = List.filter pairs ~f:(fun p -> not (genuine_declares p sub)) in
+                    let lacking =
+                      List.filter pairs ~f:(fun p ->
+                          not (genuine_declares ~selects:library_selects p sub))
+                    in
                     (* Each mapped module of the package stand-in a copy names, held to its own
                        library: one library of a package does not make another's modules visible. *)
                     let lacking_modules =
@@ -660,7 +687,9 @@ let mirrors ~fail ~exceptions ~all ~packages ~package_modules ~uses ~backends ~c
                               List.filter_map mapped ~f:(fun (m, sub_library) ->
                                   if
                                     List.mem named m ~equal:String.equal
-                                    && not (genuine_declares p (Library sub_library))
+                                    && not
+                                         (genuine_declares ~selects:source_selects p
+                                            (Library sub_library))
                                   then Some (p, m, sub_library)
                                   else None))
                     in
@@ -995,6 +1024,19 @@ let control () =
     if routed then Test_scan.Refusal_control_manifest.observe_failure ~source ~format;
     p label routed
   in
+  let refused_each ?exceptions ?sources ?ml_paths label ~format ~fragments dune_files =
+    let messages, _ = run_tree ?exceptions ?sources ?ml_paths dune_files in
+    let routed =
+      (not (List.is_empty fragments))
+      && List.length messages = List.length fragments
+      && List.for_all fragments ~f:(fun fragment ->
+          List.exists messages ~f:(String.is_substring ~substring:fragment))
+    in
+    if not routed then
+      List.iter messages ~f:(fun m -> eprintf "  %s said: %s\n" label (Verdict.one_line m));
+    if routed then Test_scan.Refusal_control_manifest.observe_failure ~source ~format;
+    p label routed
+  in
   (* The whole answer against the expected one: no refusal, and the census's two lists -- so a
      reader gone blind (no arm found) cannot pass an accepted case. *)
   let accepted label ~vendor ~ungated dune_files =
@@ -1059,6 +1101,108 @@ let control () =
           "(executable (name probe) (libraries base (select probe_impl.ml from (cudajit.cuda -> \
            probe_impl.cudajit.ml) (unix -> probe_impl.unix.ml) (-> probe_impl.missing.ml))))\n" );
         arms_copy ~libraries:"base cudajit_stub unix" ();
+      ]);
+  let hipjit_stub =
+    ( "arrayjit/vendor_stubs/hipjit/dune",
+      "(library (name hipjit_stub) (modules hip))\n\
+       (rule (alias runtest-hip) (enabled_if %{lib-available:hipjit.hip}) (action (progn)))\n" )
+  in
+  let two_select_program =
+    ( "t/dune",
+      "(executable (name probe) (modules probe probe_cuda probe_hip)\n\
+      \ (libraries base\n\
+      \  (select probe_cuda.ml from (cudajit.cuda -> probe_cuda.cudajit.ml) (-> \
+       probe_cuda.missing.ml))\n\
+      \  (select probe_hip.ml from (hipjit.hip -> probe_hip.hipjit.ml) (-> probe_hip.missing.ml))))\n"
+    )
+  in
+  refused "a library only a sibling select of the same stanza names is refused"
+    ~format:lacking_format
+    ~fragment:
+      "compiles a copy of t/probe_cuda.cudajit.ml with `hipjit_stub`, standing for a library of \
+       package `hipjit`, which t/dune:1"
+    ((hipjit_stub :: stand_ins)
+    @ [
+        two_select_program;
+        ( "arrayjit/vendor_stubs/arms/dune",
+          "(rule (action (copy# ../../../t/probe_cuda.cudajit.ml probe_cuda.ml)))\n\
+           (library (name probe_cuda_arm) (modules probe_cuda) (libraries base cudajit_stub \
+           hipjit_stub))\n\
+           (rule (action (copy# ../../../t/probe_hip.hipjit.ml probe_hip.ml)))\n\
+           (library (name probe_hip_arm) (modules probe_hip) (libraries base hipjit_stub))\n" );
+      ]);
+  refused_each
+    "a multi-arm stand-in declaring the union of sibling selects' libraries is refused on both arms"
+    ~format:lacking_format
+    ~fragments:
+      [
+        "compiles a copy of t/probe_cuda.cudajit.ml with `hipjit_stub`, standing for a library of \
+         package `hipjit`, which t/dune:1";
+        "compiles a copy of t/probe_hip.hipjit.ml with `cudajit_stub`, standing for a library of \
+         package `cudajit`, which t/dune:1";
+      ]
+    ((hipjit_stub :: stand_ins)
+    @ [
+        two_select_program;
+        ( "arrayjit/vendor_stubs/arms/dune",
+          "(rule (action (copy# ../../../t/probe_cuda.cudajit.ml probe_cuda.ml)))\n\
+           (rule (action (copy# ../../../t/probe_hip.hipjit.ml probe_hip.ml)))\n\
+           (library (name probe_arms) (modules probe_cuda probe_hip) (libraries base cudajit_stub \
+           hipjit_stub))\n" );
+      ]);
+  mirrored "separate stand-in libraries for sibling selects of one stanza are accepted"
+    ~mirrors:
+      [
+        ("probe_cuda_arm", [ ("probe_cuda", "(executable probe) of t/dune") ]);
+        ("probe_hip_arm", [ ("probe_hip", "(executable probe) of t/dune") ]);
+      ]
+    ((hipjit_stub :: stand_ins)
+    @ [
+        two_select_program;
+        ( "arrayjit/vendor_stubs/arms/dune",
+          "(rule (action (copy# ../../../t/probe_cuda.cudajit.ml probe_cuda.ml)))\n\
+           (library (name probe_cuda_arm) (modules probe_cuda) (libraries base cudajit_stub))\n\
+           (rule (action (copy# ../../../t/probe_hip.hipjit.ml probe_hip.ml)))\n\
+           (library (name probe_hip_arm) (modules probe_hip) (libraries base hipjit_stub))\n" );
+      ]);
+  let helper_program =
+    ( "t/dune",
+      "(executable (name probe) (modules probe_impl helper)\n\
+      \ (libraries base\n\
+      \  (select probe_impl.ml from (cudajit.cuda -> probe_impl.cudajit.ml) (-> \
+       probe_impl.missing.ml))))\n" )
+  in
+  mirrored "a non-arm helper compiled alongside its stanza's single arm shares that arm's select"
+    ~mirrors:
+      [
+        ( "probe_arm",
+          [
+            ("helper", "(executable probe) of t/dune");
+            ("probe_impl", "(executable probe) of t/dune");
+          ] );
+      ]
+    (stand_ins
+    @ [
+        helper_program;
+        ( "arrayjit/vendor_stubs/arms/dune",
+          "(copy_files# (files ../../../t/helper.ml))\n\
+           (rule (action (copy# ../../../t/probe_impl.cudajit.ml probe_impl.ml)))\n\
+           (library (name probe_arm) (modules probe_impl helper) (libraries base cudajit_stub))\n"
+        );
+      ]);
+  refused "a stand-in compiling a non-arm module alone cannot use its stanza's select libraries"
+    ~format:lacking_format
+    ~fragment:
+      "compiles a copy of t/helper.ml with `cudajit_stub`, standing for a library of package \
+       `cudajit`, which t/dune:1"
+    (stand_ins
+    @ [
+        helper_program;
+        ( "arrayjit/vendor_stubs/arms/dune",
+          "(copy_files# (files ../../../t/helper.ml))\n\
+           (rule (action (copy# ../../../t/probe_impl.cudajit.ml probe_impl.ml)))\n\
+           (library (name probe_arm) (modules probe_impl) (libraries base cudajit_stub))\n\
+           (library (name helper_arm) (modules helper) (libraries base cudajit_stub))\n" );
       ]);
   refused "a stand-in re-export the genuine stanza does not make is refused" ~format:lacking_format
     ~fragment:"with `(re_export cudajit_stub)`, standing for"
@@ -1206,6 +1350,50 @@ let control () =
          ~ml:"let ptx = Nvrtc.compile_to_ptx\nlet context = Cuda.Context.get_current ()\n"
          ())
     (genuine_backend "base cudajit.cuda" :: backend_stand_in "base cudajit_stub");
+  refused "a package module whose sub-library only a sibling select declares is refused"
+    ~format:module_lacking_format
+    ~fragment:
+      "compiles a copy of t/probe_cuda.cudajit.ml naming `Nvrtc`, a module of `cudajit_stub` \
+       standing for `cudajit.nvrtc`, which t/dune:1"
+    ~sources:(function
+      | "t/probe_cuda.cudajit.ml" -> Some "let ptx = Nvrtc.compile_to_ptx\n"
+      | "t/probe_nvrtc.cudajit.ml" -> Some ""
+      | _ -> None)
+    (stand_ins
+    @ [
+        ( "t/dune",
+          "(executable (name probe) (modules probe_cuda probe_nvrtc)\n\
+          \ (libraries base\n\
+          \  (select probe_cuda.ml from (cudajit.cuda -> probe_cuda.cudajit.ml) (-> \
+           probe_cuda.missing.ml))\n\
+          \  (select probe_nvrtc.ml from (cudajit.nvrtc -> probe_nvrtc.cudajit.ml) (-> \
+           probe_nvrtc.missing.ml))))\n" );
+        ( "arrayjit/vendor_stubs/arms/dune",
+          "(rule (action (copy# ../../../t/probe_cuda.cudajit.ml probe_cuda.ml)))\n\
+           (library (name probe_cuda_arm) (modules probe_cuda) (libraries base cudajit_stub))\n\
+           (rule (action (copy# ../../../t/probe_nvrtc.cudajit.ml probe_nvrtc.ml)))\n\
+           (library (name probe_nvrtc_arm) (modules probe_nvrtc) (libraries base cudajit_stub))\n"
+        );
+      ]);
+  refused
+    "a non-arm helper naming a package module only its companion arm's select declares is refused"
+    ~format:module_lacking_format
+    ~fragment:
+      "compiles a copy of t/helper.ml naming `Cuda`, a module of `cudajit_stub` standing for \
+       `cudajit.cuda`, which t/dune:1"
+    ~sources:(function
+      | "t/helper.ml" -> Some "let _ = Cuda.init\n"
+      | "t/probe_impl.cudajit.ml" -> Some ""
+      | _ -> None)
+    (stand_ins
+    @ [
+        helper_program;
+        ( "arrayjit/vendor_stubs/arms/dune",
+          "(copy_files# (files ../../../t/helper.ml))\n\
+           (rule (action (copy# ../../../t/probe_impl.cudajit.ml probe_impl.ml)))\n\
+           (library (name probe_arm) (modules probe_impl helper) (libraries base cudajit_stub))\n"
+        );
+      ]);
   refused "a module a copy opens is named by it" ~format:module_lacking_format
     ~fragment:nvrtc_lacking
     ~sources:(backend_source ~ml:"open Nvrtc\nlet ptx = compile_to_ptx\n" ())

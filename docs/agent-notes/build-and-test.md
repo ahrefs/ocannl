@@ -5198,10 +5198,16 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   The census golden lists the map. A hand-written stub interface, which has no installed
   copy to diff, gets a signature check on its agreement alias instead (`runtest-runtime` for metal's
   `Runtime`, `runtest-hip_ffi` for hipjit's `Hip_ffi`), so it is mapped like the rest. Two
-  consequences for whoever edits the tree. Keep ONE stand-in library per genuine stanza: a library
-  compiling modules of two is held to both, which is why each `typecheck/` compiles its `context`
-  arm in a `<backend>_backend_impl_arm` of its own, and Metal's `metal_math_api_runtime` in a
-  `_stub_check` of its own. And declare only what the genuine stanza declares: a package reached
+  consequences for whoever edits the tree. Keep ONE stand-in library per genuine stanza and per
+  `select` arm (gh-ocannl-2338): a library compiling modules of two stanzas is held to both, and
+  each arm is held only to its genuine stanza's unconditional libraries plus its own `select`
+  condition (never a sibling alternative or another `select` of the same stanza; a non-arm companion
+  helper compiled alongside a single arm shares that arm's condition for the stand-in's library
+  list while its own source stays held to unconditional libraries only), which is why each
+  `typecheck/` compiles its `context` arm in a `<backend>_backend_impl_arm` of its own, Metal's
+  `metal_math_api_runtime` in a `_stub_check` of its own, and multi-select tools (`fp8_soak`,
+  `vendor_idents`) put each arm in its own stand-in library checked against a `.mli` interface. And
+  declare only what the genuine stanza declares: a package reached
   through a backend needs no stand-in of its own (under `implicit_transitive_deps false` its types
   resolve through the backend's hidden include), so a
   library listing one is refused even where nothing uses it. A library the stand-in needs only

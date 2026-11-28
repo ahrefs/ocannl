@@ -85,8 +85,8 @@ extern "C" __global__ void ocannl_vendor_narrow_f64(unsigned long long base,
    module, so this one is about saying the lifetime rather than inferring it from a binding's
    internals -- and about the HIP arm, where the same reasoning has to hold. *)
 type state = {
-  context : Cu.Context.t;
-  kernel_module : Cu.Module.t;
+  context : Cu.Context.t; [@warning "-69"]
+  kernel_module : Cu.Module.t; [@warning "-69"]
   attrs : Cu.Device.attributes;
   stream : Cu.Stream.t;
   narrow_f32 : Cu.Module.func;
