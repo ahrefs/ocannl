@@ -1,0 +1,9 @@
+the ordinary Metal preset leaves the narrow bias accumulation on one thread: true
+at the lower mapping threshold the ordinary preset maps the bias channels: true
+the untuned Metal plan splits the bias gradient into 32 blocks: true
+the partials pass launches one thread per block and channel before the combine: true
+the zero split threshold leaves the Metal bias reduction unsplit: true
+disabling the split gives the ordinary bias gradient bitwise: true
+the real untuned Metal compile ships the parallel partials pass and its combine: true
+the ordinary bias gradient agrees with the f64 sum: true
+the untuned bias gradient agrees with the f64 sum: true

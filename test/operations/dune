@@ -12283,6 +12283,33 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-2505: pin the convolution bias gradient below the Metal mapping threshold.
+
+(test
+ (name narrow_reduction_split)
+ (package neural_nets_lib)
+ (action
+  (run
+   %{test}
+   --ocannl_automatic_gpu_schedule=true
+   --ocannl_schedule_fission=true
+   --ocannl_gpu_default_split_reduce_min_serial=1024
+   --ocannl_model_default_schedule=false))
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules narrow_reduction_split)
+ (libraries
+  base
+  ocannl
+  arrayjit.autotune
+  arrayjit.context
+  arrayjit.utils
+  arrayjit.verdict
+  ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
 (test
  (name narrow_rng_nesting)
  (package neural_nets_lib)
