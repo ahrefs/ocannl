@@ -3398,8 +3398,10 @@ val rescue_depth : observed:(int * float) list -> int option
 (** The depth of the one rescue probe a CUDA/HIP calibration makes before refusing a candidate whose
     single launch owed it a batch but whose calibration settled at depth 1 (gh-ocannl-1098), from
     every [(depth, minimum wall)] it measured: the shallowest batch over the target, projected
-    linearly down to the target, at least 2 and strictly shallower than that batch; [None] when no
-    depth lies between. Exposed so a test can tell the rescue from the probes before it. *)
+    linearly down to 80% of the target to leave room for noise (gh-ocannl-2061), at least 2 and
+    strictly shallower than that batch; [None] when no depth lies between. The rescue must still
+    measure a batch within the full target. Exposed so a test can tell the rescue from the probes
+    before it. *)
 
 val sample_min : repeats:int -> sample:(unit -> timing_sample) -> timing_result
 (** Pure sampling-policy seam used by calibration and the timed loop (gh-ocannl-855). Takes at least
@@ -3563,8 +3565,8 @@ type calibration_probe_role =
       (** The confirmation repeated once at the same depth, after it read as a stall. *)
   | Crossing_probe  (** At a fit's target crossing, below a measured over-target batch. *)
   | Rescue_probe
-      (** At {!rescue_depth}, before refusing a candidate that measured no batch within the target;
-          charged to no budget. *)
+      (** At {!rescue_depth}, to try a shallower batch when calibration settles at depth 1 and the
+          singles owed batching. Charged to no budget. *)
 
 type calibration_probe = {
   role : calibration_probe_role;
@@ -3632,8 +3634,8 @@ type batch_decision = {
       (** The depth before the wall-bounded fallback shortened an unresolved outcome
           (gh-ocannl-1096). *)
   rescue : (int * float) option;
-      (** The rescue probe's depth and minimum, when one ran (gh-ocannl-1098); [depth] equals it
-          exactly when it read within the target. *)
+      (** The rescue probe's depth and minimum, when one ran (gh-ocannl-1098). If its reading fits
+          the target, calibration settles at that depth. *)
   probes : int;  (** Batch probes started, against {!queue_calibration_max_probes}. *)
   probe_wall_ms : float;  (** Their summed wall, against {!queue_calibration_wall_ms}. *)
   budget_spent : bool;  (** Whether that budget was spent when the calibration ended. *)
@@ -4539,28 +4541,28 @@ module Make (D : Driver) : sig
       when none was -- the only bound sound for any cost that grows with depth, since the readings
       that left the fits unresolved cannot tell a host stall from a queue threshold. So a slow
       candidate whose fits never resolve is timed at depth 1, not in 2048-launch batches, while a
-      fast one whose deeper probes stalled still batches; one that measured no batch within the
-      target at all first takes one rescue probe below its shallowest over-target batch, projected
-      linearly to the target (gh-ocannl-1098) -- where a queue-threshold or superlinear cost reads
-      within the target -- and is refused as [unbatched] only when that also reads over it, rather
-      than timed as an isolated depth-1 reading. An unresolved single/probe pair retries at double
-      depth, and the next affine fit uses the two batch observations so an inflated single window
-      cannot force the cap. If the bounded loop first reaches the target on its last probe, the
-      interpolated target depth is still sampled and checked against the measured overshoot. A
-      non-monotone confirmation scales from the deeper measured batch, never the earlier suspect
-      crossing. When a clean pair's fixed component already fills the target, its marginal slope
-      selects a depth carrying ~10 ms of launch work instead of accepting a shallow stalled window
-      or jumping to the cap. After four noisy but resolved underestimates, calibration keeps the
-      latest affine projection rather than jumping to a 20--30 ms cap batch that would blunt the 2x
-      contention threshold. None of these projections settles deeper than
-      {!queue_depth_projection_factor} times the deepest batch the calibration probed
-      (gh-ocannl-1100): past it a queue cost can jump where nothing measured. A CUDA/HIP routine
-      slower than the target stays at depth 1 and is measured identically in both modes; it is
-      confirmed by a depth-2 probe only while its singles read under {!slow_singles_ratio} times the
-      target (gh-ocannl-1627). When singles below the target owe batching, a resolved pair starting
-      at depth 2 whose marginal launch cost fits the target and whose fixed term is below it retains
-      that measured batch even if its fixed term puts the fitted depth-1 wall above the target
-      (gh-ocannl-1184). It neither returns to the isolated singles nor refuses an ordinary
+      fast one whose deeper probes stalled still batches. When the singles owed a batch and
+      calibration settles at depth 1, {!rescue_depth} projects the shallowest over-target
+      observation down to 80% of the target (gh-ocannl-2061). A rescue within the full target is
+      timed. A missed rescue retains the deepest earlier batch measured within the target, when
+      available. A candidate left at depth 1 after owing a batch is refused as [unbatched]. An
+      unresolved single/probe pair retries at double depth, and the next affine fit uses the two
+      batch observations so an inflated single window cannot force the cap. If the bounded loop
+      first reaches the target on its last probe, the interpolated target depth is still sampled and
+      checked against the measured overshoot. A non-monotone confirmation scales from the deeper
+      measured batch, never the earlier suspect crossing. When a clean pair's fixed component
+      already fills the target, its marginal slope selects a depth carrying ~10 ms of launch work
+      instead of accepting a shallow stalled window or jumping to the cap. After four noisy but
+      resolved underestimates, calibration keeps the latest affine projection rather than jumping to
+      a 20--30 ms cap batch that would blunt the 2x contention threshold. None of these projections
+      settles deeper than {!queue_depth_projection_factor} times the deepest batch the calibration
+      probed (gh-ocannl-1100): past it a queue cost can jump where nothing measured. A CUDA/HIP
+      routine slower than the target stays at depth 1 and is measured identically in both modes; it
+      is confirmed by a depth-2 probe only while its singles read under {!slow_singles_ratio} times
+      the target (gh-ocannl-1627). When singles below the target owe batching, a resolved pair
+      starting at depth 2 whose marginal launch cost fits the target and whose fixed term is below
+      it retains that measured batch even if its fixed term puts the fitted depth-1 wall above the
+      target (gh-ocannl-1184). It neither returns to the isolated singles nor refuses an ordinary
       integer-depth boundary; unresolved or over-target marginal fits keep their refusal. Whenever a
       queued call settles at depth 1 its timed window resumes the calibration's synchronized singles
       ({!sample_window}'s [prior]) rather than timing a fresh one (gh-ocannl-1074): at depth 1 they

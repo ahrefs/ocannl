@@ -1405,6 +1405,14 @@ let depth_from_batch_wall_with_cap ~max_depth ~depth ~wall_ms =
     in
     (depth', wall_ms *. Float.of_int depth' /. Float.of_int depth)
 
+let deepest_batch_within_target ~observed =
+  List.fold observed ~init:None ~f:(fun best ((d, wall_ms) as measured) ->
+      if d < 2 || not Float.(wall_ms <= queued_batch_ms) then best
+      else
+        match best with
+        | Some (d', w') when d' > d || (d' = d && Float.(w' <= wall_ms)) -> best
+        | _ -> Some measured)
+
 (* The wall bound on a depth the affine fits did not choose (gh-ocannl-1096). When calibration ends
    unresolved -- every fit refused, or the cap taken without a measurement there -- the depth it
    returns is a bet that the per-launch cost is negligible against a fixed synchronization cost the
@@ -1430,21 +1438,18 @@ let depth_from_batch_wall_with_cap ~max_depth ~depth ~wall_ms =
    estimates at the cap. *)
 let wall_bounded_fallback_depth ~observed depth =
   if List.is_empty observed then depth
-  else
-    Int.min depth
-    @@ List.fold observed ~init:1 ~f:(fun deepest (d, wall_ms) ->
-        if Float.(wall_ms <= queued_batch_ms) then Int.max deepest d else deepest)
+  else Int.min depth (Option.value_map (deepest_batch_within_target ~observed) ~default:1 ~f:fst)
 
-(* The rescue probe's depth (gh-ocannl-1098), for a calibration about to refuse a candidate whose
-   single launch owed it a batch but which measured none within the target. The shallowest
-   over-target batch [(d, w)] projected linearly to the target: [floor (d * target / w)], at least 2
-   (depth 1 is the singles, already measured) and below [d]. For any cost whose per-launch average
-   [wall / depth] does not fall with depth -- linear, a queue threshold, a superlinear queue -- that
-   depth reads within the target, because its average is at most [w / d]. A cost whose average does
-   fall is a fixed term the affine fits resolve, and never reaches the refusal. [None] when no depth
-   lies strictly between 1 and [d]. Only the shallowest over-target batch is consulted: every deeper
-   one bounds nothing below it, and the readings cannot tell a stall from a threshold, so the probe
-   is the evidence rather than a further extrapolation. *)
+let rescue_target_fraction = 0.8
+
+(* The rescue probe's depth (gh-ocannl-1098), when calibration settles at depth 1 for a candidate
+   whose single launch owed it a batch. The shallowest over-target batch [(d, w)] projected linearly
+   to 80% of the target (gh-ocannl-2061), at least 2 (depth 1 is the singles, already measured) and
+   below [d]. When the projection permits it, the margin leaves room for shared-device noise:
+   projecting to the full target chose depth 25 from 26 at 10.3 ms, and the rescue itself still
+   measured over 10 ms. Only the shallowest over-target batch is consulted. Its per-launch average
+   can guide the probe depth, but only the rescue's measured wall can admit the batch. [None] when
+   no depth lies strictly between 1 and [d]. *)
 let rescue_depth ~observed =
   let shallowest =
     List.fold observed ~init:None ~f:(fun acc (d, wall_ms) ->
@@ -1455,9 +1460,9 @@ let rescue_depth ~observed =
           | _ -> Some (d, wall_ms))
   in
   Option.bind shallowest ~f:(fun (d, wall_ms) ->
-      let projected = Float.of_int d *. queued_batch_ms /. wall_ms in
-      let rescue = if Float.(projected >= of_int d) then d - 1 else Int.of_float projected in
-      let rescue = Int.max 2 rescue in
+      let rescue_target_ms = rescue_target_fraction *. queued_batch_ms in
+      let projected = Float.of_int d *. rescue_target_ms /. wall_ms in
+      let rescue = Int.max 2 (Int.of_float projected) in
       if rescue < d then Some rescue else None)
 
 (* The search's test seams, per domain (the treatment [timing_call_observer] got, gh-ocannl-1263): a
@@ -2217,28 +2222,21 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
                moved. *)
             let bounded_from = Option.some_if (fallback_from < bounded_from) bounded_from
             and fallback_from = Option.some_if (depth < fallback_from) fallback_from in
-            (* A candidate whose single launch owed it a batch, but whose every batched probe read
-               over the target, has no depth this calibration can time as [Queued]: the fallback
-               leaves only depth 1, whose reading is the isolated objective, and timing it would
-               crown under the wrong objective silently (Codex P1, round 3 on PR #846). The readings
-               cannot tell that from a stall. Before refusing, one rescue probe below the shallowest
-               over-target batch ({!rescue_depth}): a kernel with a genuine queue threshold below
-               its provisional depth is timed there rather than refused on every search, since its
-               refusal made it permanently uncacheable. A probe that also reads over the target
-               leaves the call refused, not ranked, not cached, retried by a later search -- under a
-               reason of its own ([unbatched]): not a diagnosis, since host load stalling every
-               batched probe reads the same, but what the calibration measured, which a threshold
-               repeats on every rerun and a stall does not. Any settle at depth 1 counts, not only
-               the unresolved one: a resolved fit that puts the crossing at one launch contradicts
-               the singles just the same. *)
+            (* When the single launch owed a batch, a depth-1 settle would rank the isolated
+               objective (Codex P1, round 3 on PR #846). A resolved fit can contradict the singles
+               just as an unresolved fallback can. Before refusing, the rescue tries a shallower
+               batch where a kernel with a queue threshold may still be timed and cached. A missed
+               rescue can still use a batch measured within the target before a fit projected to
+               depth 1. Prefer the rescue's fresh measurement at the reduced scale after such a fit.
+               If calibration still has no batch, [unbatched] names what was measured: host load
+               stalling every probe can look like a genuine queue threshold. *)
             let calibration_dispatches, depth, estimated_batch_wall_ms, rescue =
               if depth = 1 && provisional_depth > 1 then
                 match rescue_depth ~observed:!observed with
                 | None -> (calibration_dispatches, depth, estimated_batch_wall_ms, None)
-                | Some rescue ->
-                    (* One rescue probe before refusing (gh-ocannl-1098), charged to no budget: its
-                       depth is chosen so that a cost whose per-launch average does not fall with
-                       depth reads within the target there, which is a bounded wall. *)
+                | Some rescue -> (
+                    (* The reserved rescue probe still has to measure a batch within the original
+                       target. The projection only selects the depth to try. *)
                     let measured = probe_batch ~role:Rescue_probe rescue in
                     let calibration_dispatches =
                       calibration_dispatches + (measured.samples * rescue)
@@ -2248,7 +2246,10 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
                       Float.is_finite measured.ms && Float.is_positive measured.ms
                       && Float.(measured.ms <= queued_batch_ms)
                     then (calibration_dispatches, rescue, measured.ms, probed)
-                    else (calibration_dispatches, depth, estimated_batch_wall_ms, probed)
+                    else
+                      match deepest_batch_within_target ~observed:!observed with
+                      | Some (depth, wall_ms) -> (calibration_dispatches, depth, wall_ms, probed)
+                      | None -> (calibration_dispatches, depth, estimated_batch_wall_ms, probed))
               else (calibration_dispatches, depth, estimated_batch_wall_ms, None)
             in
             if depth = 1 && provisional_depth > 1 then no_supported_batch := true;
