@@ -39,6 +39,9 @@ AGENTS.md's dependency-pin guidance.
   with `tools/owed-run.sh check <head sha> runtest`. For a local run or an unpublished leg, use
   the recovery steps in build-and-test.md#the-owed-run-record. The merge build requires the
   record for the final head. Cite the run in the PR body too.
+  On a Mac, changes to `*.sh` reached by the harness census or a sweep-driver Dune rule also owe a
+  [scoped Linux shell receipt](https://github.com/lukstafi/ocannl-staging/blob/master/docs/agent-notes/build-and-test.md#the-owed-run-record).
+  Run `tools/merge-build-check.sh --plan --base origin/@@MAIN@@`. Its `--plan-merge` step prints the leg command.
   If the first tier is itself CROSS-CUTTING, run the tests
   exercising the change and name them in the PR body beside that leg. Run applicable `slow-`
   aliases named from the full list: no per-PR job runs `@slow`. The `train-` aliases the change
