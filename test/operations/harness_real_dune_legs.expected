@@ -47,4 +47,5 @@ tools/test-test-run-options.sh	107: capped single-test builds retain stderr befo
 tools/test-test-run-options.sh	120: backend-disabled aliases skip without voiding a mixed batch #options
 tools/test-test-run-options.sh	89: an alias dune does not know is refused before the slot #options
 tools/test-typecheck-scan-cases.sh
+tools/test-windows-leg.sh
 tools/test-windows-opam-cache.sh
