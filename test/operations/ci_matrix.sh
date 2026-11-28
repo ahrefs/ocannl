@@ -15,6 +15,9 @@
 # fail-fast disabled, and checks an unconditional step with a direct env
 # binding and command.
 # Expressions, extra axes, and alternate command forms are outside that grammar.
+# The census check reads the named steps in the build job and evaluates their
+# single-line if conditions with explicit job status and baseline outcome.
+# Workflow scheduling and cache actions are outside this fixture.
 # Named legs are independent; shared readers/setup run before each selected leg.
 # The renamed-gate fixture reads only top-level literal `harness_leg_run 'name'
 # run_contract` lines with lowercase, digit and hyphen names, and replaces one
@@ -61,14 +64,20 @@ def gh_format(template, *args):
                   lambda m: m[0][0] if m[1] is None else str(args[int(m[1])]), template)
 
 
-def expression(value, event, windows=False, compiler='', *, expected_sha='', sha=''):
+def expression(value, event, windows=False, compiler='', *, expected_sha='', sha='',
+               job_status='success', runner_os='', suite='', census_baseline=''):
     # This is the workflow's small expression vocabulary, not a second matrix.
     # Parse and whitelist the translated AST so a new operator fails loudly.
     value = value.removeprefix('${{').removesuffix('}}').strip()
-    tokens = re.findall(r"'(?:[^']*)'|github\.(?:event_name|sha)|inputs\.[a-z_]+|fromJSON|format|&&|\|\||!=|==|!|[(),]|\s+", value)
+    tokens = re.findall(
+        r"'(?:[^']*)'|github\.(?:event_name|sha)|inputs\.[a-z_]+"
+        r"|runner\.os|matrix\.suite|steps\.census-baseline\.outcome"
+        r"|cancelled\(\)|fromJSON|format|&&|\|\||!=|==|!|[(),]|\s+", value)
     assert ''.join(tokens) == value, value
     mapping = {'github.event_name': 'event', 'inputs.windows_only': 'windows',
                'inputs.ocaml_compiler': 'compiler', 'inputs.expected_sha': 'expected_sha', 'github.sha': 'sha',
+               'runner.os': 'runner_os', 'matrix.suite': 'suite',
+               'steps.census-baseline.outcome': 'census_baseline', 'cancelled()': 'cancelled',
                '&&': ' and ', '||': ' or ', '!': ' not '}
     translated = ''.join(mapping.get(token, token) for token in tokens).strip()
     tree = ast.parse(translated, mode='eval')
@@ -78,9 +87,13 @@ def expression(value, event, windows=False, compiler='', *, expected_sha='', sha
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             assert isinstance(node.func, ast.Name) and node.func.id in ('fromJSON', 'format')
+    # Actions supplies a success() check when no explicit status check is present.
+    if job_status != 'success' and 'cancelled()' not in tokens:
+        return False
     return eval(compile(tree, '<workflow expression>', 'eval'), {'__builtins__': {}},
                 dict(event=event, windows=windows, compiler=compiler, expected_sha=expected_sha, sha=sha,
-                     fromJSON=json.loads, format=gh_format))
+                     runner_os=runner_os, suite=suite, census_baseline=census_baseline,
+                     cancelled=job_status == 'cancelled', fromJSON=json.loads, format=gh_format))
 
 
 def unfiltered_triggers(text, events, absent=()):
@@ -1100,6 +1113,41 @@ sys.exit(int(os.environ['OPAM_RC' if name == 'opam' else 'DPKG_RC']))
     print('PASS the three depext scripts are identical apart from their resolver flags')
 
 
+elif leg == 'census-save':
+    job = job_block(source, 'run')
+    decision = workflow_step(job, 'Decide whether to save the cc census listings')
+    baseline = workflow_step(job, 'List the restored cc census listings')
+    assert re.findall(r'^      id: (.+)$', baseline, re.M) == ['census-baseline'], \
+        'census-baseline must identify the baseline listing step'
+    assert job.index(baseline) < job.index(decision), 'census save must follow the baseline listing'
+
+    def condition(step, label):
+        conditions = re.findall(r'^      if: (.+)$', step, re.M)
+        assert len(conditions) == 1, label + ' needs a single-line if'
+        return conditions[0]
+
+    context = dict(runner_os='Linux', suite='main')
+    baseline_if = condition(baseline, 'census baseline')
+    assert expression(baseline_if, 'workflow_dispatch', **context), \
+        'census baseline must run after successful setup'
+    assert not expression(baseline_if, 'workflow_dispatch', job_status='failure', **context), \
+        'census baseline must skip after an early setup failure'
+    decision_if = condition(decision, 'census save')
+    for case, status, outcome, expected in (
+            ('setup fails before cache initialization', 'failure', 'skipped', False),
+            ('baseline listing fails', 'failure', 'failure', False),
+            ('build fails after baseline listing', 'failure', 'success', True),
+            ('build succeeds after baseline listing', 'success', 'success', True),
+            ('run is cancelled after baseline listing', 'cancelled', 'success', False),
+    ):
+        actual = expression(decision_if, 'workflow_dispatch', job_status=status,
+                            census_baseline=outcome, **context)
+        assert actual is expected, '%s: expected census save decision to %s' % (
+            case, 'run' if expected else 'skip')
+
+    print('PASS census decision requires a successful baseline and still runs after later failures')
+
+
 elif leg == 'weigh':
     # The main shards' weigh step prints what `tools/ci-shard.sh merge-weights` reads back from a run's
     # log (gh-ocannl-1464): run the step's own script for each shard over a fixture trace, beside the
@@ -1534,6 +1582,7 @@ harness_leg_run 'workflow-readers' run_contract
 harness_leg_run 'step-order' run_contract
 harness_leg_run 'host-evidence' run_contract
 harness_leg_run 'depexts' run_contract
+harness_leg_run 'census-save' run_contract
 harness_leg_run 'weigh' run_contract
 harness_leg_run 'dispatch-guard' run_contract
 harness_leg_run 'disk-watchdog' run_contract

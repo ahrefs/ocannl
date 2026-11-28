@@ -5876,7 +5876,10 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   earlier UTC day: a hit refreshes its entry's mtime, which the census's 30-day expiry reads, and
   a snapshot nothing re-saves keeps the old ones. Saving every run had left 159 entries, 5.3 of the
   repository's 10.7 GB of caches, most of them pull-request-scoped (staging#1464 first saw the
-  repository over its 10 GB). The job log's `cc census listings:` line says which way it went.
+  repository over its 10 GB). The save decision requires the restored listing step to succeed
+  (gh-ocannl-2121). With a complete baseline, a later failed build can still save. When the
+  decision runs, the `cc census listings:` line records its result. The `census-save` leg of
+  `test/operations/ci_matrix.sh` exercises the workflow condition for early and late failures.
 - `gh-pages-api.yml` runs for pull requests and `workflow_dispatch` as well as pushes to master, but
   only a push deploys; validation runs receive their own concurrency group and exercise the build
   and cache topology without publishing. Both Pages workflows split a push run into `build` and

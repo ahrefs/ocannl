@@ -800,6 +800,7 @@ jobs:
     # The entry files the restore brought, which the save decision compares
     # the directory against after the build.
     - name: List the restored cc census listings
+      id: census-baseline
       if: runner.os == 'Linux' && matrix.suite == 'main'
       shell: bash
       run: |
@@ -956,10 +957,11 @@ jobs:
     # Pull-request entries are visible only to their own PR, so a PR saves
     # only what it added. Any finished build, red or green: every entry is
     # whole (published through Utils.Atomic_file) and only ever the listing
-    # its key names.
+    # its key names. The comparison needs a complete baseline, which an
+    # early failure can prevent the job from recording.
     - name: Decide whether to save the cc census listings
       id: census-save
-      if: ${{ !cancelled() && runner.os == 'Linux' && matrix.suite == 'main' }}
+      if: ${{ !cancelled() && runner.os == 'Linux' && matrix.suite == 'main' && steps.census-baseline.outcome == 'success' }}
       shell: bash
       env:
         MATCHED: ${{ steps.census-restore.outputs.cache-matched-key }}
