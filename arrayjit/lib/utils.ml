@@ -2495,7 +2495,7 @@ let process_nonce =
     fields and compiler-generated suffixes, and in Windows' MAX_PATH for the enclosing directory. *)
 let library_kernel_name_limit = 64
 
-let shortened_kernel_name ~digest_length ~original name =
+let shortened_kernel_name ~separator ~digest_length ~original name =
   let digest = String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string original)) digest_length in
   (* Back off from a UTF-8 continuation byte, so no character is split. *)
   let rec cut i = if i > 0 && Char.to_int name.[i] land 0xC0 = 0x80 then cut (i - 1) else i in
@@ -2503,7 +2503,7 @@ let shortened_kernel_name ~digest_length ~original name =
   let prefix =
     if String.length name <= prefix_budget then name else String.prefix name (cut prefix_budget)
   in
-  prefix ^ "-" ^ digest
+  Printf.sprintf "%s%c%s" prefix separator digest
 
 (** [library_kernel_name base_name] is the kernel name such a file name carries:
     {!clean_filename}[ base_name] when it fits in {!library_kernel_name_limit} bytes; otherwise a
@@ -2514,11 +2514,14 @@ let shortened_kernel_name ~digest_length ~original name =
 let library_kernel_name base_name =
   let name = clean_filename base_name in
   if String.length name <= library_kernel_name_limit then name
-  else shortened_kernel_name ~digest_length:8 ~original:name name
+  else shortened_kernel_name ~separator:'-' ~digest_length:8 ~original:name name
 
 let routine_artifact_stem name =
-  if String.length name <= library_kernel_name_limit then name
-  else shortened_kernel_name ~digest_length:16 ~original:name (clean_filename name)
+  (* Reserve the digest separator so a literal label copied from an artifact gets its own file. *)
+  let separator = '~' in
+  if String.length name <= library_kernel_name_limit && not (String.contains name separator) then
+    name
+  else shortened_kernel_name ~separator ~digest_length:16 ~original:name (clean_filename name)
 
 (** [owned_artifact_name ~pid ~nonce ~run_id ~extension base_name] is the file name of an artifact
     of the kernel [base_name]'s compile [run_id] that the process [pid] (with {!process_nonce}

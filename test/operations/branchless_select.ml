@@ -336,18 +336,20 @@ let for_each_gpu_artifact dialect name ~on_error ~on_parsed =
     | Asm.Air -> (".metal", ".metal")
   in
   (* The whole program's artifact, or each part a split compile wrote ([<name>.part<k>], from 0). *)
-  let exists stem = Stdlib.Sys.file_exists (Generated.path ~ext:artifact_ext stem) in
+  let exists suffix = Stdlib.Sys.file_exists (Generated.path ~ext:(suffix ^ artifact_ext) name) in
   let rec parts k =
-    let stem = Printf.sprintf "%s.part%d" name k in
-    if exists stem then stem :: parts (k + 1) else []
+    let suffix = Printf.sprintf ".part%d" k in
+    if exists suffix then suffix :: parts (k + 1) else []
   in
-  let stems = (if exists name then [ name ] else []) @ parts 0 in
+  let suffixes = (if exists "" then [ "" ] else []) @ parts 0 in
   let say_line m = Stdio.eprintf "branchless_select: %s: %s (not part of the golden)\n" name m in
-  if List.is_empty stems then say_line ("no " ^ artifact_ext ^ " artifact");
-  List.map stems ~f:(fun stem ->
-      let artifact = Generated.path ~ext:artifact_ext stem in
-      let source_basename = stem ^ source_ext in
-      let source = Generated.read ~ext:source_ext stem in
+  if List.is_empty suffixes then say_line ("no " ^ artifact_ext ^ " artifact");
+  List.map suffixes ~f:(fun suffix ->
+      let stem = name ^ suffix in
+      let artifact = Generated.path ~ext:(suffix ^ artifact_ext) name in
+      let ext = suffix ^ source_ext in
+      let source_basename = Stdlib.Filename.basename (Generated.path ~ext name) in
+      let source = Generated.read ~ext name in
       match
         Asm.disassemble_gpu ?cuda_arch:(Lazy.force cuda_arch)
           ?metal_options:(Lazy.force metal_options)

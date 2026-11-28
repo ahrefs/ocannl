@@ -13,7 +13,7 @@ let () =
   let first = "gh1307_" ^ String.make 300 'k' ^ "_first" in
   let second = "gh1307_" ^ String.make 700 'k' ^ "_second" in
   let names = [ first; second ] in
-  let extensions = [ Generated.extension (); ".cd"; ".ll"; "-unoptimized.ll" ] in
+  let extensions = [ Generated.extension (); ".cd"; ".ll"; "-unoptimized.ll"; "-debug.cd" ] in
   p_all "long labels of different lengths have distinct artifact paths of equal length" extensions
     ~f:(fun ext ->
       let first_path = Generated.path ~ext first and second_path = Generated.path ~ext second in
@@ -26,13 +26,18 @@ let () =
          <= Utils.library_kernel_name_limit + String.length ext
       && String.length first_path = String.length second_path
       && not (String.equal first_path second_path));
+  let copied_stem = Stdlib.Filename.basename (Generated.path ~ext:"" first) in
+  p "a routine named after a shortened stem has its own lowering path"
+    (not (String.equal (Generated.path ~ext:".ll" copied_stem) (Generated.path ~ext:".ll" first)));
   List.iteri names ~f:(fun i name ->
       let scale = Float.of_int (i + 2) in
       let x = TDSL.range 16 in
       let multiplier = TDSL.number scale in
       let%op y = (multiplier *. x) + 1. in
       Train.set_materialized y.value;
-      let ctx, routine = Context.compile ~name ctx (Train.forward y) Ir.Indexing.Empty in
+      let comp = Train.forward y in
+      let comp = { comp with Ir.Assignments.asgns = Block_comment (name, comp.asgns) } in
+      let ctx, routine = Train.to_routine ctx ~output_cd_file:true Ir.Indexing.Empty comp in
       let ctx = Context.run ctx routine in
       p "the routine retains its full label" (String.equal routine.Context.name name);
       p_alli "the long-named routine computes its expected values"
@@ -43,4 +48,6 @@ let () =
       String.is_substring (Generated.read name) ~substring:("void " ^ name ^ "("));
   p_all "both routines have all their lowering artifacts"
     (List.cartesian_product names [ ".cd"; ".ll"; "-unoptimized.ll" ])
-    ~f:(fun (name, ext) -> not (String.is_empty (Generated.read ~ext name)))
+    ~f:(fun (name, ext) -> not (String.is_empty (Generated.read ~ext name)));
+  p_all "both optional training dumps retain their full labels" names ~f:(fun name ->
+      String.is_substring (Generated.read ~ext:"-debug.cd" name) ~substring:name)

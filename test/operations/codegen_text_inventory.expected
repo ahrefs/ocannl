@@ -332,7 +332,7 @@ test/operations/reserved_routine_names.ml [run by @test/operations/runtest-reser
     "void " ^ "gh686_ordinary_name" ^ "("
     "void " ^ ... ^ "("
 test/operations/rng_operand_precision.ml [run by @test/operations/runtest-rng_operand_precision]
-test/operations/routine_artifact_paths.ml [run by @test/operations/runtest-routine_artifact_paths]
+test/operations/routine_artifact_paths.ml [run by @test/operations/runtest-routine_artifact_paths; also pins text this scan cannot name: untraced callback]
     "void " ^ ... ^ "("
 test/operations/runtime_integer_power.ml [run by @test/operations/runtest-runtime_integer_power]
     "__float2half(ocannl_pow_f32(__half2float("

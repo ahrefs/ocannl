@@ -113,7 +113,7 @@ let extension () =
       ".c"
 
 (** [path ?ext routine] is where the backend writes [routine]'s generated source. [?ext] overrides
-    the backend-derived extension, for a test pinning one backend's artifact specifically. *)
+    the backend-derived extension and can include a suffix such as [.part0] before the extension. *)
 let path ?ext routine =
   let ext = match ext with Some e -> e | None -> extension () in
   Utils.build_file (Utils.routine_artifact_stem routine ^ ext)
